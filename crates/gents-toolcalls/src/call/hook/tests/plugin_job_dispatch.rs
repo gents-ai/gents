@@ -78,6 +78,7 @@ impl Default for Options {
 
 struct Step0 {
     db: gents_inference::test_support::TestDb,
+    user: gents_store::identity::KeyIdentity,
     owner: gents_store::config_client::ConfigAccess,
     caller: Arc<dyn NodeIdentity>,
     home: tempfile::TempDir,
@@ -369,6 +370,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         .await;
     Step0 {
         db,
+        user,
         owner,
         caller,
         home,
@@ -1592,46 +1594,76 @@ async fn non_job_pause_ends_an_own_running_job_completed_paused() {
     step.finish().await;
 }
 
+/// How the runtime Node shows its hop cap to a later step whose Agent cannot
+/// see that Node: a cap the runtime may use, or a Node whose `runtime_reader`
+/// is revoked, which the hosting runtime still reads but may not use
+/// (`Identity.Household.runtimeMayUse`).
+#[derive(Clone, Copy, Debug)]
+enum NodeHopCap {
+    Hidden(Option<u32>),
+    Unusable,
+}
+
 impl Step0 {
-    /// Sets the runtime Node's hop cap (`None` leaves it unset) for a later step
-    /// whose Agent cannot see that Node. The runtime reads it as the hosting
-    /// node key, which document ACP cannot hide it from (gents#3747), so no
-    /// fixture builds a Node the runtime cannot read
-    /// (`plugin_job_dispatch_later_step_unreached`).
-    async fn observe_node_hop_cap(&self, cap: Option<u32>) {
+    async fn observe_node_hop_cap(&self, cap: NodeHopCap) {
         let node_did = self.db.node_identity.did();
         let visible = self.access().execute("{ Node { _docID } }").await.unwrap();
         assert_eq!(visible["data"]["Node"], json!([]), "{visible}");
-        if let Some(cap) = cap {
-            self.owner
-                .transact_write("test.plugin_job_hop_cap", |txn| {
-                    Box::pin(async move {
-                        let (_, mut node) = gents_documents::read_desired_state_record_in_txn(
-                            txn,
-                            gents_store::collection::Collection::Node,
-                            node_did,
-                            node_did,
-                        )
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("owned Node is unavailable"))?;
-                        node["max_request_hop"] = json!(cap);
-                        let plan = gents_documents::DesiredStateApplyPlan::new(vec![
-                            gents_documents::DesiredStateApplyDocument {
-                                collection: gents_store::collection::Collection::Node,
-                                add: node.clone(),
-                                update: node,
-                            },
-                        ])?;
-                        gents_documents::apply_desired_state_plan(
-                            txn,
-                            &plan,
-                            &gents_inference::resolved::ProviderProfilePolicy,
-                        )
-                        .await
+        match cap {
+            NodeHopCap::Hidden(None) => {}
+            NodeHopCap::Hidden(Some(cap)) => {
+                self.owner
+                    .transact_write("test.plugin_job_hop_cap", |txn| {
+                        Box::pin(async move {
+                            let (_, mut node) = gents_documents::read_desired_state_record_in_txn(
+                                txn,
+                                gents_store::collection::Collection::Node,
+                                node_did,
+                                node_did,
+                            )
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("owned Node is unavailable"))?;
+                            node["max_request_hop"] = json!(cap);
+                            let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+                                gents_documents::DesiredStateApplyDocument {
+                                    collection: gents_store::collection::Collection::Node,
+                                    add: node.clone(),
+                                    update: node,
+                                },
+                            ])?;
+                            gents_documents::apply_desired_state_plan(
+                                txn,
+                                &plan,
+                                &gents_inference::resolved::ProviderProfilePolicy,
+                            )
+                            .await
+                        })
                     })
-                })
+                    .await
+                    .unwrap();
+            }
+            NodeHopCap::Unusable => {
+                gents_store::config_client::ConfigAccess::local_as(
+                    self.node.clone(),
+                    node_did.parse().unwrap(),
+                )
+                .grant_node_permission(
+                    &self.user.did().parse().unwrap(),
+                    gents_store::config_client::NodePermission::DacRelationDelete,
+                )
                 .await
                 .unwrap();
+                let node = self.owner.execute("{ Node { _docID } }").await.unwrap();
+                self.owner
+                    .delete_actor_relationship(
+                        "Node",
+                        node["data"]["Node"][0]["_docID"].as_str().unwrap(),
+                        "runtime_reader",
+                        &node_did.parse().unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
         }
     }
 
@@ -1856,8 +1888,9 @@ async fn step0_adoptions_suffix_handles_and_keep_scratch_by_call_as_the_lean_mod
     }
 }
 
-/// A later step reads the runtime Node's hop cap as the runtime: the Agent's
-/// own Node visibility is not an unset cap.
+/// A later step uses the runtime Node's hop cap as the runtime: the Agent's
+/// own Node visibility is not an unset cap, and a Node the runtime may not use
+/// bounds every spawn at hop 0.
 #[tokio::test]
 async fn later_steps_read_the_runtime_hop_cap_as_the_lean_model_says() {
     use crate::background::job::driver::StepOutcome;
@@ -1865,8 +1898,11 @@ async fn later_steps_read_the_runtime_hop_cap_as_the_lean_model_says() {
 
     for case in gents_lean_vocab::families::plugin_job_dispatch_later_step::cases() {
         let input = &case.input;
-        assert!(input.cap_readable, "a served runtime reads its Node");
-        let cap = input.cap.map(|cap| u32::try_from(cap).unwrap());
+        let cap = if input.node_usable {
+            NodeHopCap::Hidden(input.cap.map(|cap| u32::try_from(cap).unwrap()))
+        } else {
+            NodeHopCap::Unusable
+        };
         let step = step0(
             adopting(),
             Options {

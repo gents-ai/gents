@@ -12,13 +12,12 @@ pub enum RuntimeAccountMetadataError {
     Access(#[from] ConfigClientError),
     #[error("decoding runtime-visible account metadata")]
     Decode,
-    #[error("runtime account read was not authorized")]
-    ReadNotAuthorized,
 }
 
 /// Resolve only the provider default account reference as the configured
-/// runtime, on this Agent transaction's native snapshot. DefraDB filters
-/// unreadable rows; the resolver uses this same runtime-visible set.
+/// runtime, on this Agent transaction's native snapshot, among the accounts
+/// the runtime may use (`Identity.Household.runtimeMayUse`); the resolver
+/// uses this same set.
 pub(crate) async fn runtime_default_oauth_account_ref(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -33,7 +32,8 @@ pub(crate) async fn runtime_default_oauth_account_ref(
 
 /// Reset scheduling observes only whether the selected enabled account was
 /// connected at the failed call. The held Node is bound to this managed
-/// Agent transaction, and native ACP still authorizes its metadata read.
+/// Agent transaction, and document ACP decides whether the runtime may still
+/// use the account.
 pub async fn runtime_oauth_account_served_before(
     txn: &ConfigApplyTxn<'_>,
     runtime: &dyn NodeIdentity,
@@ -73,24 +73,11 @@ async fn runtime_oauth_account_selection(
             }
             error => RuntimeAccountMetadataError::Access(error),
         })?;
-    let response = gents_store::graphql::into_data_envelope(response.data);
-    let selected = runtime_account_from_response(&response, node_did, provider, pick)
-        .map_err(|_| RuntimeAccountMetadataError::Decode)?;
-    let Some(selected) = selected else {
-        return Ok(None);
-    };
-    let decisions = txn
-        .observe_document_access(
-            &runtime,
-            "OAuthCredential",
-            std::slice::from_ref(&selected.doc_id),
-            defra_node::DocumentAccessMode::DelegatedRead,
-        )
+    let mut response = gents_store::graphql::into_data_envelope(response.data);
+    txn.retain_runtime_usable(&runtime, &mut response, "OAuthCredential")
         .await?;
-    match decisions.as_slice() {
-        [defra_node::DocumentAccessDecision::Allowed] => Ok(Some(selected)),
-        _ => Err(RuntimeAccountMetadataError::ReadNotAuthorized),
-    }
+    runtime_account_from_response(&response, node_did, provider, pick)
+        .map_err(|_| RuntimeAccountMetadataError::Decode)
 }
 
 #[cfg(test)]
@@ -329,7 +316,8 @@ mod tests {
             .delete_actor_relationship("OAuthCredential", &doc, "runtime_writer", &runtime_did)
             .await?;
         // Document ACP no longer grants the runtime the credential; the
-        // hosting node key still reads it past document ACP (gents#3747).
+        // hosting node key still reads it past document ACP (gents#3747), and
+        // may no longer use it (gents#3935).
         assert!(
             !gents_store::test_support::document_acp_reads(
                 &db.node,
@@ -360,10 +348,8 @@ mod tests {
             empty.is_ok(),
             case("visible-empty")["allowed"].as_bool().unwrap()
         );
-        // The Agent's transaction reads the runtime default as the hosting
-        // runtime, which still reads the credential past document ACP.
-        assert_eq!(empty?.as_deref(), Some("named"));
-        let still_served = agent
+        assert_eq!(empty?, None);
+        let unavailable = agent
             .transact_readonly("test.reset_account.revoked", |txn| {
                 Box::pin(async move {
                     super::runtime_oauth_account_served_before(
@@ -379,7 +365,7 @@ mod tests {
                 })
             })
             .await?;
-        assert!(still_served);
+        assert!(!unavailable);
         Ok(())
     }
 }
