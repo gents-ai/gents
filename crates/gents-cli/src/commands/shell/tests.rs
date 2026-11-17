@@ -4772,8 +4772,18 @@ async fn folder_rows_toggle_and_remove() {
     act(MenuAct::RemoveFolder(notes_at.clone())).await.unwrap();
     let none = read().await.unwrap();
 
+    // The temporary directory can lie under the user's home (a CI job's
+    // TMPDIR does), where the menu shows `~/...`; the abbreviation itself is
+    // checked against fixed homes below.
+    let user_home = allowed::user_home();
+    let shown = |path: &str| {
+        user_home
+            .as_deref()
+            .and_then(|home| std::path::Path::new(path).strip_prefix(home).ok())
+            .map_or_else(|| path.to_string(), |rest| format!("~/{}", rest.display()))
+    };
     let folder = |path: &str, access: &str, other: &str| MenuRow {
-        text: format!(" {path}   {access}"),
+        text: format!(" {}   {access}", shown(path)),
         tone: Tone::Plain,
         enter: None,
         d: Some(MenuAct::SetFolderAccess {

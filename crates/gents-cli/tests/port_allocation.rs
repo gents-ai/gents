@@ -18,6 +18,27 @@ fn unbound_port_is_reserved_across_test_processes() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Two CI runners on one machine give their jobs different TMPDIRs but share
+/// the host's ports: a process with another TMPDIR must still see the
+/// reservation (`TestPortReservation.tla`, `PerRunner`).
+#[test]
+fn reservation_holds_for_a_process_with_another_temp_directory() -> anyhow::Result<()> {
+    let port = ports::allocate_port()?;
+    let other_temp = tempfile::tempdir()?;
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .args(["allocate_in_child", "--exact", "--nocapture"])
+        .env("GENTS_TEST_RESERVED_PORT", port.to_string())
+        .env("TMPDIR", other_temp.path())
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "a child with another TMPDIR reused the reserved port: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
 #[test]
 fn allocate_in_child() -> anyhow::Result<()> {
     let Ok(reserved) = std::env::var("GENTS_TEST_RESERVED_PORT") else {

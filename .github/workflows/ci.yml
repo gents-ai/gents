@@ -245,7 +245,7 @@ jobs:
       - name: Check the live node backstop
         run: |
           shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh \
-            .github/scripts/setup-shellcheck.sh
+            .github/scripts/setup-shellcheck.sh .github/scripts/setup-ruff.sh
           python3 .github/scripts/test-host-runtime-service.py
 
       - name: Check Harbor runner syntax
@@ -291,6 +291,14 @@ jobs:
         run: |
           shellcheck .github/scripts/setup-lean-build-cache.sh
           python3 .github/scripts/test-setup-lean-build-cache.py
+
+      # A merge once dropped gate.py's `import shutil`; only the cache path,
+      # which no pull request ran, reached the missing name.
+      - name: Install ruff
+        run: .github/scripts/setup-ruff.sh
+
+      - name: Check the CI scripts for undefined names
+        run: ruff check --no-cache --select F821,F822,F823 scripts/ci .github/scripts scripts/evals
 
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
