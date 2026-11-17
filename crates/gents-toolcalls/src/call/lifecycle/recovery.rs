@@ -1748,13 +1748,32 @@ mod actor_read_tests {
             escape_graphql_string(&doc_id),
             escape_graphql_string(&parent.request().doc_id),
         );
-        let node_view = gents_store::config_client::ConfigAccess::local(node.clone())
-            .execute(&query)
-            .await;
-        if let Ok(response) = node_view {
-            assert_eq!(response["data"]["AgentToolCall"], serde_json::json!([]));
-            assert_eq!(response["data"]["AgentRequest"], serde_json::json!([]));
+        // Document ACP gives the Node no read of the User-owned tool call or
+        // its parent; the hosting node key still observes both past document
+        // ACP (gents#3747), so recovery discovers them as the selected Agent.
+        let node_did = node.node_identity_did().unwrap().to_owned();
+        for (collection, doc) in [
+            ("AgentToolCall", doc_id.as_str()),
+            ("AgentRequest", parent.request().doc_id.as_str()),
+        ] {
+            assert!(
+                !gents_store::test_support::document_acp_reads(&node, &node_did, collection, doc)
+                    .await,
+                "{collection}"
+            );
         }
+        let response = gents_store::config_client::ConfigAccess::local(node.clone())
+            .execute(&query)
+            .await
+            .unwrap();
+        assert_eq!(
+            response["data"]["AgentToolCall"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            response["data"]["AgentRequest"].as_array().map(Vec::len),
+            Some(1)
+        );
 
         let identities: Vec<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> =
             vec![std::sync::Arc::new(

@@ -215,13 +215,28 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         session_id: session,
     } = fixture;
     let node = db.node.clone();
+    // Document ACP gives the Node no read of the request; the hosting node key
+    // still observes it past document ACP (gents#3747).
     let node_view = gents_store::config_client::ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
             gents_store::graphql::escape_graphql_string(&request_id),
         ))
-        .await;
-    assert!(node_view.is_err() || node_view.unwrap()["data"]["AgentRequest"] == json!([]));
+        .await
+        .unwrap();
+    let request_doc = node_view["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("the hosting node key observes the request")
+        .to_owned();
+    assert!(
+        !gents_store::test_support::document_acp_reads(
+            &node,
+            db.node_identity.did(),
+            "AgentRequest",
+            &request_doc
+        )
+        .await
+    );
     {
         use gents_documents::apply_desired_state_plan;
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};

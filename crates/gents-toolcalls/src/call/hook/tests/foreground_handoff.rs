@@ -46,13 +46,29 @@ async fn background_request_observation_uses_selected_agent_authority() {
     let expected = hook.foreground_background_request(doc).await.unwrap();
     assert!(expected.is_some());
 
+    // Document ACP gives the Node no read of the tool call; the hosting node
+    // key still observes it past document ACP (gents#3747), so the selected
+    // Agent's authority, not the Node's read, is what the observation uses.
+    assert!(
+        !gents_store::test_support::document_acp_reads(
+            &node,
+            node.node_identity_did().unwrap(),
+            "AgentToolCall",
+            doc
+        )
+        .await
+    );
     let node_view = gents_store::config_client::ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
             gents_store::graphql::escape_graphql_string(doc),
         ))
-        .await;
-    assert!(node_view.is_err() || node_view.unwrap()["data"]["AgentToolCall"] == json!([]));
+        .await
+        .unwrap();
+    assert_eq!(
+        node_view["data"]["AgentToolCall"].as_array().map(Vec::len),
+        Some(1)
+    );
 
     let foreign = tokio::task::spawn_blocking(|| {
         gents_store::test_support::test_identity("foreground-observation-foreign")
