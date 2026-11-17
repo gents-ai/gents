@@ -85,7 +85,7 @@ pub enum ToolRootRefusal {
     /// Agent holds no `reader` relationship on it — the one cause a User grants
     /// away. Whether that is the cause is not decided here: the variant carries
     /// the facts, and [`tool_surface_reason`] answers.
-    #[error("{}", ReaderMissingText(self))]
+    #[error("{}", ReaderMissingText::of(self))]
     ReaderMissing {
         agent_did: String,
         /// The published root the grant names, as stored: what
@@ -122,10 +122,14 @@ impl ToolRootRefusal {
     /// How the node publishes the root over these tools, as the refusal saw it.
     pub fn publishing(&self) -> RootPublishing {
         match self {
-            Self::ReaderMissing { publishing, .. } => *publishing,
-            Self::Denied { publishing, .. } => *publishing,
-            // A denial the path never reached says nothing about the roots.
-            _ => RootPublishing::NoPolicy,
+            // The two variants a denial produced, each carrying what it saw.
+            Self::ReaderMissing { publishing, .. } | Self::Denied { publishing, .. } => *publishing,
+            // A refusal reached before the root policy decided anything says
+            // nothing about the roots; spelled out rather than caught by `_`, so
+            // a variant added later has to choose a premise.
+            Self::WrongAgentIdentity { .. }
+            | Self::NoExplicitRoot { .. }
+            | Self::ReResolved { .. } => RootPublishing::NoPolicy,
         }
     }
 
@@ -134,7 +138,10 @@ impl ToolRootRefusal {
         match self {
             Self::ReaderMissing { denial, .. } => *denial,
             Self::Denied { denial_kind, .. } => *denial_kind,
-            _ => RootDenialKind::Admitted,
+            // No policy decision was reached, so nothing was denied.
+            Self::WrongAgentIdentity { .. }
+            | Self::NoExplicitRoot { .. }
+            | Self::ReResolved { .. } => RootDenialKind::Admitted,
         }
     }
 }
@@ -195,21 +202,41 @@ pub fn tool_surface_reason(
 /// four spellings: root and home known, root known, home known, neither. It is
 /// its own value so the variant's `#[error]` stays a single reference and every
 /// other variant states itself in its own.
-pub struct ReaderMissingText<'a>(pub &'a ToolRootRefusal);
+pub struct ReaderMissingText<'a> {
+    agent_did: &'a str,
+    root: Option<&'a Path>,
+    home: Option<&'a Path>,
+}
 
-impl std::fmt::Display for ReaderMissingText<'_> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use gents_protocol::node_readiness as readiness;
+impl<'a> ReaderMissingText<'a> {
+    /// The reader cause's text from the facts it is made of, so a value that is
+    /// not [`ToolRootRefusal::ReaderMissing`] cannot reach it.
+    fn of(refusal: &'a ToolRootRefusal) -> Self {
         let ToolRootRefusal::ReaderMissing {
             agent_did,
             root,
             home,
             ..
-        } = self.0
+        } = refusal
         else {
-            return formatter
-                .write_str("agent has host tools under a workspace root it is not a reader of");
+            unreachable!("constructed for a ReaderMissing refusal");
         };
+        Self {
+            agent_did,
+            root: root.as_deref(),
+            home: home.as_deref(),
+        }
+    }
+}
+
+impl std::fmt::Display for ReaderMissingText<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use gents_protocol::node_readiness as readiness;
+        let Self {
+            agent_did,
+            root,
+            home,
+        } = self;
         match (root, home) {
             (Some(root), Some(home)) => formatter.write_str(
                 &readiness::workspace_root_reader_missing_message(
@@ -316,6 +343,9 @@ impl RootExecutionGuard {
         // cause rather than this match: a root the node publishes and enables
         // over the tools, plus a denial, is the missing reader.
         match covering.into_iter().next() {
+            // `PublishedEnabled` holds by construction: `published_roots_covering`
+            // keeps only enabled roots, so a covering root the Agent cannot read
+            // is one the node publishes and enables over its tools.
             Some(root) => ToolRootRefusal::ReaderMissing {
                 agent_did: self.agent_did.clone(),
                 root: Some(root),
