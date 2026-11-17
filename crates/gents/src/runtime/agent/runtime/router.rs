@@ -390,7 +390,6 @@ where
             EffectiveAgentAdmission::Unavailable {
                 public_reason,
                 diagnostic,
-                rejection_text,
             } => {
                 tracing::warn!(
                     request_id = %request.request_id,
@@ -406,7 +405,17 @@ where
                     node_did.as_str(),
                     request,
                     resolution.agent_did.as_str(),
-                    rejection_text,
+                    &unavailable_failure_reason(
+                        public_reason,
+                        if startup_diagnostic.is_some() {
+                            admission_observation.public_cause(&resolution.agent_did)
+                        } else {
+                            routed_snapshot
+                                .unavailable_agents
+                                .get(&resolution.agent_did)
+                                .and_then(|agent| agent.public_cause.clone())
+                        },
+                    ),
                 )
                 .await?;
             }
@@ -697,4 +706,86 @@ pub(super) fn format_pending_visibility_error(details: &[String]) -> String {
         "waiting for referenced control documents to become visible: {}",
         details.join("; ")
     )
+}
+
+fn unavailable_failure_reason(
+    reason: gents_protocol::node_readiness::AgentReadinessUnavailableReason,
+    cause: Option<gents_automation::triggers::runtime_snapshot::PublicUnavailableCause>,
+) -> String {
+    match cause {
+        Some(cause @ gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::WorkspaceRootReaderMissing(_))
+            if reason == gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing => cause.message(),
+        Some(cause) => format!("{}: {}", reason.public_message(), cause.message()),
+        None => reason.public_message().to_owned(),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn unavailable_requests_publish_only_typed_public_causes() {
+    use gents_automation::triggers::runtime_snapshot::PublicUnavailableCause;
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+    let private = "PRIVATE /home/operator/store token=secret provider-response ACP details";
+    let busy = anyhow::Error::new(gents_pack::plugin::store::PublishedPluginReadError::Busy)
+        .context(private);
+    let cause = PublicUnavailableCause::from_error(&busy);
+    assert_eq!(cause, Some(PublicUnavailableCause::PluginPublicationBusy));
+    let reasons = Reason::ALL;
+    for reason in reasons {
+        for cause in [None, cause.clone()] {
+            let public = unavailable_failure_reason(reason, cause.clone());
+            assert!(!public.contains("PRIVATE"));
+            assert!(!public.contains("secret"));
+            assert_eq!(
+                gents_protocol::node_readiness::unavailable_rejection_reason(&public),
+                Some(reason)
+            );
+            if cause.is_some() {
+                assert!(public.contains("plugin store is busy"));
+            } else {
+                assert_eq!(public, reason.public_message());
+            }
+        }
+    }
+    assert_eq!(
+        PublicUnavailableCause::from_error(&anyhow::anyhow!(private)),
+        None
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn merged_workspace_reader_refusal_keeps_typed_grant_text_without_private_context() {
+    use gents_automation::triggers::runtime_snapshot::PublicUnavailableCause;
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+    use gents_tools::surface::{RootDenialKind, RootPublishing, ToolRootRefusal};
+    let refusal = ToolRootRefusal::ReaderMissing {
+        agent_did: "did:key:reader-agent".into(),
+        root: Some("/published-workspace".into()),
+        tool_root: "/published-workspace/project".into(),
+        home: Some("/explicit-node-home".into()),
+        publishing: RootPublishing::PublishedEnabled,
+        denial: RootDenialKind::NoAllowedRoots,
+    };
+    let expected = refusal.to_string();
+    let error = anyhow::Error::new(refusal)
+        .context("PRIVATE provider body token=secret internal diagnostic");
+    let cause = PublicUnavailableCause::from_error(&error);
+    assert!(matches!(
+        &cause,
+        Some(PublicUnavailableCause::WorkspaceRootReaderMissing(_))
+    ));
+    let public = unavailable_failure_reason(Reason::WorkspaceRootReaderMissing, cause);
+    assert_eq!(public, expected);
+    assert!(public.contains("grant-reader --path /published-workspace --agent-did did:key:reader-agent --home /explicit-node-home"));
+    assert!(!public.contains("PRIVATE"));
+    assert!(!public.contains("token=secret"));
+    assert_eq!(
+        gents_protocol::node_readiness::unavailable_rejection_reason(&public),
+        Some(Reason::WorkspaceRootReaderMissing)
+    );
+    assert_eq!(
+        unavailable_failure_reason(Reason::WorkspaceRootReaderMissing, None),
+        Reason::WorkspaceRootReaderMissing.public_message()
+    );
 }

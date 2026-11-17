@@ -25,13 +25,19 @@ pub(super) fn is_degraded_startup_unavailable_reason(
     )
 }
 
-/// Demotes each agent whose tool surface fails to build to
-/// `tool_surface_unavailable`. Startup and the control watcher both run it
-/// on every resolved snapshot, so a reconcile cannot bring such an agent back
-/// runnable while its tools still fail to build.
-pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
+pub(in crate::runtime::agent::runtime) fn preserve_generation_for_surface_error(
+    error: &anyhow::Error,
+) -> bool {
+    gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
+}
+
+/// Admission shares the caller's bounded publication epoch; exhaustion
+/// demotes only the plugin surfaces still busy, never the whole node.
+pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents_until(
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
+    deadline: tokio::time::Instant,
+    defer_busy: bool,
 ) -> Result<()> {
     let mut agent_dids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
     agent_dids.sort();
@@ -46,11 +52,16 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
             .get(&agent_did)
             .ok_or_else(|| anyhow!("missing resolved agent {agent_did} during tool admission"))?;
         let tool_runtime = tool_runtime.for_agent(agent);
-        if let Err(error) = tool_surface.build_tools(&tool_runtime).await {
-            // Lean `Runtime.StartupDegraded.toolSurfaceReason` decides the cause
-            // from the facts the refusal carries: an enabled published root over
-            // the tools plus a denial is the missing reader, whose grant the
-            // text states; every other refusal is the generic unbuilt surface.
+        if let Err(error) = tool_surface
+            .build_tools_until(&tool_runtime, deadline)
+            .await
+        {
+            if defer_busy && preserve_generation_for_surface_error(&error) {
+                return Err(error)
+                    .context("plugin publication deferred; keeping the active runtime generation");
+            }
+            // Preserve B5's Lean-owned root-denial classification, and B12's
+            // typed publication cause. Raw error context stays diagnostic-only.
             let refusal = gents_tools::surface::tool_root_refusal(error.as_ref());
             let (publishing, denial) = refusal.map_or(
                 (
@@ -60,17 +71,8 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
                 |refusal| (refusal.publishing(), refusal.denial()),
             );
             let cause = gents_tools::surface::tool_surface_reason(publishing, denial);
-            let reason = match refusal {
-                Some(gents_tools::surface::ToolRootRefusal::ReaderMissing { .. })
-                    if cause
-                        == gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing =>
-                {
-                    let grant = refusal.map(ToString::to_string).unwrap_or_default();
-                    UnavailableAgent::new(cause, format!("building tool surface: {grant}"))
-                        .with_public_message(grant)
-                }
-                _ => UnavailableAgent::new(cause, format!("building tool surface: {error:#}")),
-            };
+            let reason = UnavailableAgent::new(cause, format!("building tool surface: {error:#}"))
+                .with_error_cause(&error);
             tracing::error!(
                 agent_did = %agent_did,
                 public_reason = ?reason.public_reason,
@@ -87,10 +89,26 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
     Ok(())
 }
 
+#[cfg(test)]
 pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
     agent: &Gents,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
+) -> Result<()> {
+    validate_startup_snapshot_until(
+        agent,
+        tool_runtime,
+        snapshot,
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+    )
+    .await
+}
+
+pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot_until(
+    agent: &Gents,
+    tool_runtime: &ToolRuntimeContext,
+    snapshot: &mut ResolvedRuntimeSnapshot,
+    deadline: tokio::time::Instant,
 ) -> Result<()> {
     snapshot.validate_node_readiness_source().with_context(|| {
         format!(
@@ -99,7 +117,7 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
         )
     })?;
 
-    demote_unbuildable_agents(tool_runtime, snapshot).await?;
+    demote_unbuildable_agents_until(tool_runtime, snapshot, deadline, false).await?;
 
     if snapshot.agents.is_empty() {
         let mut unavailable = snapshot
@@ -118,7 +136,11 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
 
         let blocking = unavailable
             .iter()
-            .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason.public_reason))
+            .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason.public_reason)
+                && !degraded_publication_failure(
+                    reason.public_reason == gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                    reason.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy),
+                ))
             .collect::<Vec<_>>();
         if !blocking.is_empty() {
             // Only the presentation-safe reason leaves this boundary.
@@ -257,4 +279,34 @@ async fn resolve_document_snapshot_with_tools(
     resolve_context: &DocumentResolveContext,
 ) -> Result<ResolvedRuntimeSnapshot> {
     crate::runtime::agent::resolve_document_runtime_snapshot(node, resolve_context).await
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[test]
+    fn surface_failure_disposition_replays_the_lean_owner() {
+        gents_lean_vocab::families::runtime_reconcile_surface_publication_keep_previous::replay(
+            |i| {
+                let error = if i.busy {
+                    anyhow::Error::new(gents_pack::plugin::store::PublishedPluginReadError::Busy)
+                } else {
+                    anyhow::anyhow!("plugin is missing")
+                }
+                .context("constructing surface");
+                preserve_generation_for_surface_error(&error)
+            },
+        );
+    }
+}
+
+fn degraded_publication_failure(surface_unavailable: bool, busy_cause: bool) -> bool {
+    surface_unavailable && busy_cause
+}
+
+#[cfg(test)]
+#[test]
+fn busy_only_all_unavailable_startup_replays_the_lean_owner() {
+    gents_lean_vocab::families::runtime_reconcile_surface_publication_degraded_publication_failure::replay(|i| degraded_publication_failure(i.surface_unavailable, i.busy_cause));
 }

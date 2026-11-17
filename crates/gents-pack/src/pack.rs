@@ -29,6 +29,7 @@ pub mod local;
 mod manifest_validation;
 pub mod materialize;
 pub mod node_packs;
+pub mod pin_moves;
 mod plugin;
 pub mod plugin_lifecycle;
 mod plugin_validation;
@@ -74,12 +75,13 @@ pub use installation::{
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
     prepare_hosted_document_pack_archive, read_installed_pack, record_plugin_retirement_as,
     record_plugin_store_change, record_plugin_store_change_as, record_staged_plugin_store_change,
-    referenced_pack_digests, remove_pack, tools_taking_installer_root, visible_plugin_selections,
-    DependencyVariableOverrides, DriftPolicy, HostedDocumentGraph, HostedPackPreparation,
-    InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, InstallerRootAgent,
-    PackAgentRoot, PackChangeError, PackIdentity, PackRemovalError, PackRootRecord, PackSource,
-    PackSourceHistory, PluginPinConflict, PluginSelection, PluginStoreChangeError,
-    PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
+    record_staged_plugin_store_change_with_pins, referenced_pack_digests, remove_pack,
+    tools_taking_installer_root, visible_plugin_selections, DependencyVariableOverrides,
+    DriftPolicy, HostedDocumentGraph, HostedPackPreparation, InstallReport, InstalledCatalogEntry,
+    InstalledPack, InstalledPackPlugin, InstallerRootAgent, PackAgentRoot, PackChangeError,
+    PackIdentity, PackRemovalError, PackRootRecord, PackSource, PackSourceHistory,
+    PluginPinConflict, PluginSelection, PluginStoreChangeError, PluginStoreLocation,
+    PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{
     prepare_document_pack_archive_with_provisioner,

@@ -301,6 +301,7 @@ impl ConfigCommandTool {
                 .plugins_pack_final(
                     if update { "update" } else { "install" },
                     &PackChangeInput {
+                        move_pin_tools: Vec::new(),
                         expected_digest: Some(distribution.digest().to_owned()),
                         ..PackChangeInput::of(coordinate)
                     },

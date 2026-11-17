@@ -47,6 +47,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.EvalRequestOutcome,
   `Proofs.Conformance.ToolArgumentFailure,
   `Proofs.Conformance.ParallelToolBatch,
+  `Proofs.Conformance.ScriptEffectBatch,
   `Proofs.Conformance.ConfigurationAffected,
   `Proofs.Conformance.ResponsesTermination,
   `Proofs.Conformance.NativeSpawn]

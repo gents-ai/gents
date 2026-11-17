@@ -21,6 +21,7 @@ use crate::pack::{PackChangeError, PackKind, PackManifest};
 /// What a documents pack install was asked for, as its engine reads it.
 #[derive(Clone, Debug)]
 pub struct DocumentsInstallRequest {
+    pub move_pin_tools: Vec<String>,
     /// The home whose asset cache, plugin store and install records the
     /// install uses.
     pub home: PathBuf,
@@ -427,6 +428,16 @@ pub async fn install_documents_pack_resolved_inner(
         }
         Err(refusal) => return Err(refusal),
     };
+    prepared
+        .prepare_pin_moves(
+            access,
+            owner,
+            &args.move_pin_tools,
+            &std::iter::once(pack.archive())
+                .chain(dependencies.iter().map(ResolvedPack::archive))
+                .collect::<Vec<_>>(),
+        )
+        .await?;
     ResolvedPack::record_graph_sources(&mut prepared, pack, &dependencies);
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
@@ -510,6 +521,7 @@ pub async fn install_documents_pack_resolved_inner(
             )?,
             install_review::inference_needs(&packs),
         )?;
+        preview["pin_moves"] = json!(prepared.pin_moves);
         preview["inference"] = json!(inference);
         preview["dependency_inference"] = json!(dependency_inference);
         preview["install_variables"] = json!(variables);

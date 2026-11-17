@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::plugin::executor::PluginExecutor;
+use crate::plugin::executor::{digest_in_pins, PluginExecutor};
 use crate::plugin::tool::PluginTool;
 pub use crate::test_support::{
     asking_plugin_wat, host_call_plugin_wat, installed_echo, installed_plugin,
@@ -20,6 +20,26 @@ fn staged_plugin_resolution_conforms_to_lean() {
             resolve_allowed: executor.resolve("team/plugin", None).is_ok(),
         }
     });
+}
+
+#[test]
+fn busy_plugin_resolution_preserves_the_typed_publication_cause() {
+    let (home, _) = installed_echo();
+    let executor = PluginExecutor::new(Some(home.path().to_owned()));
+    let guard = store::try_lock_store(home.path()).unwrap();
+    let error = anyhow::Error::new(executor.resolve("team/plugin", None).unwrap_err())
+        .context("building plugin tool");
+    assert!(store::PublishedPluginReadError::error_chain_is_busy(
+        error.as_ref()
+    ));
+    assert!(format!("{error:#}").contains("plugin store is busy"));
+    assert!(!format!("{error:#}").contains("not installed"));
+    drop(guard);
+    assert!(executor.resolve("team/plugin", None).is_ok());
+    let missing = executor.resolve("team/missing", None).unwrap_err();
+    assert!(!store::PublishedPluginReadError::error_chain_is_busy(
+        &missing
+    ));
 }
 
 fn tool_ref(digest: Option<&str>) -> PluginToolRef {
@@ -2392,4 +2412,17 @@ mod job_calls {
         );
         finish(admission).await;
     }
+}
+
+#[test]
+fn running_digest_must_belong_to_the_current_pin_set() {
+    gents_lean_vocab::families::plugin_publication_digest_authorized::replay(|i| {
+        let pins = i
+            .pinned_digests
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let refs = pins.iter().map(String::as_str).collect::<Vec<_>>();
+        digest_in_pins(&refs, &i.running_digest.to_string())
+    });
 }

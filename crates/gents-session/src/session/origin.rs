@@ -308,6 +308,27 @@ pub struct CreationOrigin {
     pub starter: Option<SessionLink>,
 }
 
+/// Whether `scope`'s session was opened by a plugin job, from its **verified**
+/// creation receipt.
+///
+/// This is the one question a workflow child's prompt needs answered, so it is
+/// asked narrowly and here: the answer comes from the same verified receipt
+/// `verified_creation_origin` reads, never from a string a caller supplied. A
+/// session with no verified receipt -- one a client opened -- is `false`, which
+/// is why an ordinary `agent_new` child is not told how a workflow collects its
+/// answer.
+pub async fn verified_plugin_job_child(
+    access: &ConfigAccess,
+    scope: &SessionScope,
+) -> Result<bool> {
+    Ok(matches!(
+        verified_creation_origin(access, scope)
+            .await?
+            .map(|origin| origin.cause),
+        Some(gents_protocol::session::SessionCreationCause::PluginJob)
+    ))
+}
+
 /// The verified creation of `scope`'s session; `None` when it carries no verified receipt,
 /// which is how a session a client opened looks.
 pub async fn verified_creation_origin(

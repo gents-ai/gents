@@ -181,6 +181,33 @@ async fn submit_create(
     if let Some(Value::String(command)) = receipt.pointer_mut("/host_root_access/user_command") {
         *command = with_target(command, home, graphql);
     }
+    if let Some(entries) = receipt.get_mut("not_copied").and_then(Value::as_array_mut) {
+        for entry in entries {
+            if let Some(command) = entry
+                .get("grant_command")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+            {
+                let target = home
+                    .map(|h| format!(" --home '{}'", h.to_string_lossy().replace('\'', "'\\''")))
+                    .unwrap_or_default();
+                let target = match graphql {
+                    Some(endpoint) => {
+                        format!("{target} --graphql '{}'", endpoint.replace('\'', "'\\''"))
+                    }
+                    None => target,
+                };
+                entry["grant_command"] = Value::String(command.replacen(
+                    "gents config tools set",
+                    &format!("gents config tools set{target}"),
+                    1,
+                ));
+                if !target.is_empty() {
+                    entry.as_object_mut().unwrap().remove("target_note");
+                }
+            }
+        }
+    }
     print_json(&receipt)
 }
 
@@ -628,6 +655,7 @@ mod tests {
         };
         let clone_outcome = create_agent(&access, owner, provision().await?, &clone_doc).await?;
         assert_eq!(clone_outcome["committed"], true);
+        assert!(clone_outcome.get("not_copied").is_none());
         let cloned_id = clone_outcome["agent_did"]
             .as_str()
             .context("cloned agent ID")?;

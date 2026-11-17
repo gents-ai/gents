@@ -120,7 +120,7 @@ async fn admit_client_claim(
 
 #[tokio::test]
 async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_restore() {
-    for (published_before_crash, persist_checkpoint) in [(0, false), (1, false), (2, true)] {
+    for (published_before_crash, persist_checkpoint) in [(0, false), (1, false), (2, false), (3, true)] {
         let (db, user, client, agent_config) = held_daemon_fixture("daemon-fold-checkpoint").await;
         let node = db.node.clone();
         let agent_access = held_daemon_agent_access(&db, &agent_config);
@@ -176,6 +176,10 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         );
         first.begin_owned_execution(&writer).await.unwrap();
         let input = [
+            (
+                "context".to_owned(),
+                "<context>\nYour profile's model: scripted.\n</context>".to_owned(),
+            ),
             ("prompt".to_owned(), head.content.clone()),
             (folded_key.clone(), folded.content.clone()),
         ];
@@ -204,10 +208,10 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             let prefix = vec![gents_inference::llm::message::Message::user(
                 "an earlier, larger history",
             )];
-            let suffix = vec![
-                gents_inference::llm::message::Message::user(head.content.clone()),
-                gents_inference::llm::message::Message::user(folded.content.clone()),
-            ];
+            let suffix = input
+                .iter()
+                .map(|(_, content)| gents_inference::llm::message::Message::user(content.clone()))
+                .collect::<Vec<_>>();
             let row = |_| gents_session::session::provider_context_reduction::ReplayRowAssociation {
                 source: None,
                 physical_header: None,

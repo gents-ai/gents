@@ -23,6 +23,7 @@ fn scope(home: &Path) -> ScopeArgs {
 
 async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
     crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
+        move_pin_tools: Vec::new(),
         package,
         inference_slots: Vec::new(),
         dependency_variables: Vec::new(),

@@ -343,7 +343,52 @@ impl PublishedPluginReadError {
     }
 }
 
-/// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
+/// Synchronous mutation entry points wait for a runtime's shared reconcile
+/// lease. Async owners must use lock_store_until rather than park a worker.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded polling for synchronous mutation callers; async owners use lock_store_until"
+)]
+pub fn wait_for_store(home: &Path) -> Result<StoreGuard> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        match try_lock_store_mode(home, true) {
+            Ok(guard) => return Ok(guard),
+            Err(PublishedPluginReadError::Busy) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(
+                    std::time::Duration::from_millis(100)
+                        .min(deadline.saturating_duration_since(std::time::Instant::now())),
+                );
+            }
+            Err(error) => {
+                return Err(error)
+                    .context("waiting for plugin publication writer lease (60s maximum)")
+            }
+        }
+    }
+}
+
+/// Async mutation acquisition is cancellation safe; dropping the future never
+/// leaves a blocking task acquiring an unobserved lease after shutdown.
+pub async fn lock_store_until(home: &Path, deadline: tokio::time::Instant) -> Result<StoreGuard> {
+    loop {
+        match try_lock_store_mode(home, true) {
+            Ok(guard) => return Ok(guard),
+            Err(PublishedPluginReadError::Busy) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep_until(
+                    deadline
+                        .min(tokio::time::Instant::now() + std::time::Duration::from_millis(100)),
+                )
+                .await;
+            }
+            Err(error) => {
+                return Err(error)
+                    .context("waiting for plugin publication writer lease (60s maximum)")
+            }
+        }
+    }
+}
+
 pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
     try_lock_store_mode(home, true).map_err(Into::into)
 }

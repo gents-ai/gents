@@ -1,0 +1,3 @@
+---- MODULE MCPluginSurfaceRecoveryDropsRetry ----
+EXTENDS PluginSurfaceRecovery
+====

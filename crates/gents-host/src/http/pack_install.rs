@@ -65,6 +65,7 @@ impl<'de> Deserialize<'de> for Archive {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InstallRequest {
+    move_pin_tools: Vec<String>,
     node_did: String,
     root: Archive,
     dependencies: Vec<Archive>,
@@ -210,6 +211,7 @@ pub async fn encode_install_request(
     let dependency_variables = args.dependency_variables.clone();
     let bind_agents = args.bind_agents.clone();
     let wire = args.wire.clone();
+    let move_pin_tools = args.move_pin_tools.clone();
     let (overwrite, keep, preview, force_rebind, grant_authority) = (
         args.edited == gents_protocol::operations::pack::EditedDocuments::Overwrite,
         args.edited == gents_protocol::operations::pack::EditedDocuments::Keep,
@@ -219,6 +221,7 @@ pub async fn encode_install_request(
     );
     tokio::task::spawn_blocking(move || {
         let body = encode_request(&root, &dependencies, |root, dependencies| InstallRequest {
+            move_pin_tools,
             node_did,
             root,
             dependencies,
@@ -438,6 +441,7 @@ async fn install_owned(
     } = received;
     let explicit = request.explicit;
     let args = DocumentsInstallRequest {
+        move_pin_tools: request.move_pin_tools.clone(),
         home: home.clone(),
         remote: false,
         inference_slots: request.inference_slots,

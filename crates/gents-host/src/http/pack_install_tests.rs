@@ -10,6 +10,7 @@ fn archive(name: &str) -> Arc<PackArchive> {
 
 fn body(root: &PackArchive, dependencies: &[Arc<PackArchive>], node_did: &str) -> Vec<u8> {
     encode_request(root, dependencies, |root, dependencies| InstallRequest {
+        move_pin_tools: Vec::new(),
         root_source: gents_pack::pack::PackSource::Local { file_name: None },
         dependency_sources: vec![
             gents_pack::pack::PackSource::Local { file_name: None };
@@ -203,4 +204,15 @@ fn archive_bytes_over_the_shared_pack_bound_are_refused_by_name() {
         MAX_BODY >= base64::encoded_len(MAX_ARCHIVE_BYTES, true).unwrap() + MAX_FIELD_BYTES,
         "the request body admits every archive closure within the shared bound"
     );
+}
+
+#[test]
+fn hosted_pin_move_selection_is_explicit_and_required_on_the_wire() {
+    let root = archive("documents_fixture");
+    let mut request: serde_json::Value = serde_json::from_slice(&body(&root, &[], NODE)).unwrap();
+    request["move_pin_tools"] = serde_json::json!(["named-A", "named-B"]);
+    let received = decode_request(&serde_json::to_vec(&request).unwrap(), NODE).unwrap();
+    assert_eq!(received.request.move_pin_tools, ["named-A", "named-B"]);
+    request.as_object_mut().unwrap().remove("move_pin_tools");
+    assert!(refusal(&serde_json::to_vec(&request).unwrap()).contains("move_pin_tools"));
 }

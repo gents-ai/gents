@@ -2,6 +2,7 @@ use gents_documents::test_support::{bootstrap_signed_test_node, set_test_default
 use gents_inference::test_support::install_test_agent_binding_with_access;
 
 const CAPTURED_EVENT_TARGETS: &[&str] = &[
+    gents_tools::surface::PLUGIN_PUBLICATION_WAIT_EVENT_TARGET,
     gents_store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
     crate::runtime::status::RECONCILE_PHASE_EVENT_TARGET,
     gents_session::session::REFUSAL_PROJECTION_EVENT_TARGET,

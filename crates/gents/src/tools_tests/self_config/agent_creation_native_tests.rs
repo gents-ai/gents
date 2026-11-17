@@ -715,6 +715,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         home: Some(plugin_home.path().to_owned()),
     };
     let args = gents_protocol::operations::pack::PackChangeInput {
+        move_pin_tools: Vec::new(),
         package: "fixture/native_echo_pack".into(),
         variables: Default::default(),
         inference_slots: Default::default(),
@@ -1810,6 +1811,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         home: None,
     };
     let args = gents_protocol::operations::pack::PackChangeInput {
+        move_pin_tools: Vec::new(),
         package: "fixture/native_child".into(),
         variables: Default::default(),
         inference_slots: std::collections::BTreeMap::from([("model".into(), "profile".into())]),

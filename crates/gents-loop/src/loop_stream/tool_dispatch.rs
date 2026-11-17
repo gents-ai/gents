@@ -1,3 +1,5 @@
+mod effect_batch;
+
 use super::*;
 
 pub fn tool_effect_dispatcher<H>(
@@ -67,106 +69,22 @@ where
         arguments: &'a str,
     ) -> crate::tool::BoxFuture<'a, Result<ToolOutcome, crate::tool_effects::ToolEffectError>> {
         Box::pin(async move {
-            use crate::tool_effects::ToolEffectError::{Fatal, Unavailable};
-            self.composed
-                .store(true, std::sync::atomic::Ordering::Release);
-            let result = async {
-                let scope = current_tool_runtime_context().ok_or_else(|| {
-                    Unavailable("tool effects require a request execution scope".to_owned())
-                })?;
-                scope_request_tool_execution_with_session(
-                    scope.deadline_at,
-                    scope.cancellation_token,
-                    scope.workspace_cwd,
-                    None,
-                    scope.session_id,
-                    async {
-                        let internal_id = self
-                            .hook
-                            .admit_tool_effect(&self.parent_internal_id, ordinal, name, arguments)
-                            .await
-                            .map_err(Unavailable)?;
-                        if let Some(outcome) =
-                            admit_tool_effect(self.tools.as_slice(), name, arguments)
-                        {
-                            let result = match self
-                                .hook
-                                .on_tool_admission_rejected(
-                                    name,
-                                    None,
-                                    &internal_id,
-                                    arguments,
-                                    &outcome,
-                                )
-                                .await
-                            {
-                                HookAction::Continue => Ok(outcome),
-                                HookAction::Terminate { reason } => Err(Fatal(reason)),
-                            };
-                            let cancelled = ToolOutcome::Cancelled;
-                            self.hook
-                                .finish_tool_effect(
-                                    &internal_id,
-                                    result.as_ref().err().map(|_| &cancelled),
-                                )
-                                .await
-                                .map_err(Fatal)?;
-                            return result;
-                        }
-                        let result = match self
-                            .hook
-                            .on_tool_call(name, None, &internal_id, arguments)
-                            .await
-                        {
-                            ToolCallHookAction::Terminate { reason } => Err(Fatal(reason)),
-                            ToolCallHookAction::Skip { reason } => {
-                                Ok(ToolOutcome::Completed(reason))
-                            }
-                            ToolCallHookAction::Continue => {
-                                // Once the before hook commits, await the effect to preserve ordering.
-                                let writer =
-                                    self.hook.foreground_live_output_writer(&internal_id).await;
-                                let session = self.hook.session_id().await;
-                                let outcome = dispatch_tool(
-                                    self.tools.as_slice(),
-                                    name,
-                                    arguments.to_owned(),
-                                    Some(writer),
-                                    session,
-                                )
-                                .await;
-                                match self
-                                    .hook
-                                    .on_tool_result(name, None, &internal_id, arguments, &outcome)
-                                    .await
-                                {
-                                    HookAction::Continue => Ok(outcome),
-                                    HookAction::Terminate { reason } => Err(Fatal(reason)),
-                                }
-                            }
-                        };
-                        let cancelled = ToolOutcome::Cancelled;
-                        self.hook
-                            .finish_tool_effect(
-                                &internal_id,
-                                result.as_ref().err().map(|_| &cancelled),
-                            )
-                            .await
-                            .map_err(Fatal)?;
-                        result
-                    },
-                )
-                .await
-            }
-            .await;
-            if let Err(Fatal(reason)) = &result {
-                self.fatal
-                    .lock()
-                    .await
-                    .get_or_insert_with(|| reason.clone());
-            }
-            result
+            let mut results = self
+                .effect_batch(vec![crate::tool_effects::ToolEffectCall {
+                    ordinal,
+                    name: name.to_owned(),
+                    arguments: arguments.to_owned(),
+                }])
+                .await;
+            results.remove(0)
         })
+    }
+
+    fn batch<'a>(
+        &'a self,
+        calls: Vec<crate::tool_effects::ToolEffectCall>,
+    ) -> crate::tool::BoxFuture<'a, Vec<crate::tool_effects::EffectResult>> {
+        Box::pin(self.effect_batch(calls))
     }
 
     fn definitions<'a>(&'a self) -> crate::tool::BoxFuture<'a, Vec<crate::tool::ToolDefinition>> {

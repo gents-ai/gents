@@ -1495,7 +1495,19 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
         "seed must not compact"
     );
     let seed_history = agent_history(&actors, session_id).await;
-    assert_eq!(seed_history.len(), 2, "one user and one provider assistant");
+    assert_eq!(
+        seed_history.len(),
+        3,
+        "one profile context, one user prompt and one provider assistant"
+    );
+    assert_eq!(
+        seed_history[0],
+        Message::user(format!(
+            "<context>\nYour profile's model: {CAPTURE_MODEL}.\n</context>"
+        ))
+    );
+    assert_eq!(seed_history[1], Message::user(SEED_MARKER));
+    assert!(matches!(seed_history[2], Message::Assistant { .. }));
 
     let follow_up_request_id = "request-threshold-follow-up";
     let follow_up_doc = submit_request(

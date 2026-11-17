@@ -26,7 +26,9 @@ async fn wait_for_agent_state(
     }
 }
 
-fn install_fixture_plugin(plugin_home: &std::path::Path) -> gents_pack::pack::PackIdentity {
+pub(super) fn install_fixture_plugin(
+    plugin_home: &std::path::Path,
+) -> gents_pack::pack::PackIdentity {
     let (_pack_guard, pack_root) =
         gents_pack::test_support::fixture_pack_copy("bind_plugin_fixture", &serde_json::json!({}));
     let (pack_bytes, _) = gents_pack::pack::archive::pack_dir(&pack_root).unwrap();

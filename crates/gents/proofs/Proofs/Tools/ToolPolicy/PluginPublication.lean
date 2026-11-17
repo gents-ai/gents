@@ -1,3 +1,5 @@
+import Proofs.Shared.Basic
+
 namespace ToolPolicy.PluginPublication
 
 inductive Phase where
@@ -35,5 +37,43 @@ theorem cancelled_observer_cannot_undo_publication :
 
 theorem rejected_local_stage_preserves_previous :
     installedNew [.localFailure] = false := rfl
+
+
+/-- A process holding the store's exclusive publication lock exposes no
+record to a reader. Only that typed contention is retryable, and only while
+this construction's original wait budget remains open. Neither retry nor
+budget exhaustion changes the selected coordinate or digest. -/
+def retry (busy budgetAvailable : Bool) : Bool := busy && budgetAvailable
+
+theorem permanent_failure_never_retries (budgetAvailable : Bool) :
+    retry false budgetAvailable = false := by simp [retry]
+
+theorem exhausted_budget_never_retries (busy : Bool) :
+    retry busy false = false := by simp [retry]
+
+theorem busy_with_budget_waits : retry true true = true := by decide
+
+end ToolPolicy.PluginPublication
+
+namespace ToolPolicy.PluginPublication
+
+/-- The native planner reads only explicitly named Tools IDs. Eligibility
+within those documents requires a replacement shipped by this archive and an
+existing pin. Selection is a query boundary, not a constant boolean model. -/
+def movePin (replacement pinned : Bool) : Bool := replacement && pinned
+
+theorem unshipped_pin_unchanged (pinned : Bool) :
+    movePin false pinned = false := by simp [movePin]
+
+theorem unpinned_selection_unchanged (replacement : Bool) :
+    movePin replacement false = false := by simp [movePin]
+
+/-- A constructed slot can execute only a digest in its current explicit
+pin set. Refreshing a stale slot cannot widen that set to installed bytes. -/
+def digestAuthorized (pinnedDigests : List Nat) (runningDigest : Nat) : Bool :=
+  pinnedDigests.contains runningDigest
+
+theorem revoked_digest_never_runs (digest : Nat) : digestAuthorized [] digest = false := by
+  simp [digestAuthorized]
 
 end ToolPolicy.PluginPublication

@@ -814,3 +814,58 @@ async fn readiness_binding_preflight_matches_model() {
         node.shutdown().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn typed_demotion_cause_is_retained_separately_and_cleared_by_slot_retirement() {
+    let (_db, owner, publisher) = test_publisher().await;
+    publisher.initialize("general").await.unwrap();
+    publisher.register_slot("general", 1).await.unwrap();
+    publisher
+        .send(|ack| Command::PublishSource {
+            source: ReadinessSource {
+                active_generation: 1,
+                default_agent_did: "general".into(),
+                entries: BTreeMap::from([(
+                    "general".into(),
+                    AgentReadinessSourceEntry {
+                        agent_did: "general".into(),
+                        dispatcher_present: true,
+                        unavailable_reason: None,
+                        startup_demoted: false,
+                        effective_inference: None,
+                    },
+                )]),
+                slot_generations: BTreeMap::from([("general".into(), 1)]),
+            },
+            ack,
+        })
+        .await
+        .unwrap();
+    let private = "private backend response /node/path token=secret".to_owned();
+    publisher
+        .demote_slot_with_cause(
+            "general",
+            1,
+            private.clone(),
+            Some(PublicUnavailableCause::PluginPublicationBusy),
+        )
+        .await
+        .unwrap();
+    let observation = publisher.observation();
+    assert_eq!(
+        observation.demotion_reason("general"),
+        Some(private.as_str())
+    );
+    assert_eq!(
+        observation.public_cause("general"),
+        Some(PublicUnavailableCause::PluginPublicationBusy)
+    );
+    assert!(!observation
+        .public_cause("general")
+        .unwrap()
+        .message()
+        .contains("secret"));
+    publisher.retire_slot("general", 1).await.unwrap();
+    assert_eq!(publisher.observation().public_cause("general"), None);
+    owner.close().await.unwrap();
+}

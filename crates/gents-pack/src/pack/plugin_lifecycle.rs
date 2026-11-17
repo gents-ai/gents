@@ -423,7 +423,7 @@ pub fn remove_local<P>(
     prepare_cache: impl FnOnce(&HomePackInstall) -> Result<P>,
     cleanup_cache: impl FnOnce(P) -> Result<()>,
 ) -> Result<LocalPackRemoval> {
-    let guard = store::try_lock_store(home)?;
+    let guard = store::wait_for_store(home)?;
     remove_local_locked(&guard, home, coordinate, prepare_cache, cleanup_cache)
 }
 
@@ -532,6 +532,30 @@ pub mod tests {
             super::super::read_home_install(home.path(), &installed.coordinate).unwrap(),
             Some(installed)
         );
+    }
+
+    #[tokio::test]
+    async fn install_issued_mid_reconcile_waits_then_publishes() {
+        let (_source, _, archive) = fixture("1.0.0", false);
+        let home = tempfile::tempdir().unwrap();
+        let reconcile = store::try_lock_store_shared(home.path()).unwrap();
+        let bindings = BTreeMap::new();
+        let mut installing = Box::pin(install(
+            home.path(),
+            &archive,
+            false,
+            None,
+            &bindings,
+            InstalledVia::Operator,
+            super::super::PackSource::Local { file_name: None },
+            |_, _| async { Ok(()) },
+        ));
+        assert!(futures::poll!(installing.as_mut()).is_pending());
+        drop(reconcile);
+        installing.await.unwrap();
+        let (record, _lease) =
+            store::read_published_record(home.path(), "fixture", "native_echo").unwrap();
+        assert_eq!(record.version, "1.0.0");
     }
 
     #[tokio::test]

@@ -601,7 +601,14 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     let uncallable = call(&tools, json!({"argv":["plugin","run","node/probe"]}))
         .await
         .unwrap_err();
-    assert!(uncallable.contains("is not installed"), "{uncallable}");
+    assert!(
+        uncallable.contains("node/probe has no installed-plugin record"),
+        "{uncallable}"
+    );
+    assert!(
+        !uncallable.contains("plugin store is busy"),
+        "absence is not contention: {uncallable}"
+    );
 }
 
 /// `plugin run` is one tool call of the plugin: a `data_calls` round is
