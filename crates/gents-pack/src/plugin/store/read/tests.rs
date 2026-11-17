@@ -160,8 +160,6 @@ fn a_captured_removed_home_is_missing_and_never_recreated() {
 
 #[test]
 fn acquisition_decisions_replay_the_lean_owner() {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
     let mut inputs = Vec::new();
     let mut actual = Vec::new();
     for bits in 0..16 {
@@ -175,23 +173,14 @@ fn acquisition_decisions_replay_the_lean_owner() {
         actual.push(acquire(observation));
     }
     let dir = gents_lean_contract::proofs_dir().unwrap();
-    gents_lean_contract::run_lake_build(&dir).unwrap();
-    let mut lean = Command::new("lake")
-        .args([
-            "env",
-            "lean",
-            "--run",
-            "Proofs/Conformance/PluginStoreHome.lean",
-        ])
-        .current_dir(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    writeln!(lean.stdin.take().unwrap(), "{}", serde_json::json!(inputs)).unwrap();
-    let output = lean.wait_with_output().unwrap();
-    assert!(output.status.success());
-    let expected: Vec<Decision> = serde_json::from_slice(&output.stdout).unwrap();
+    let output = gents_lean_contract::run_prepared_generator_with_input(
+        &dir,
+        "Proofs.Conformance.PluginStoreHome:olean",
+        "Proofs/Conformance/PluginStoreHome.lean",
+        &serde_json::json!(inputs).to_string(),
+    )
+    .unwrap();
+    let expected: Vec<Decision> = serde_json::from_str(&output).unwrap();
     assert_eq!(actual, expected);
 }
 

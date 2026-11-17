@@ -310,8 +310,6 @@ async fn a_later_fatal_result_cancels_and_settles_earlier_read() {
 
 #[test]
 fn script_effect_width_refines_the_existing_lean_read_prefix() {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
     let (dispatcher, _, _) = setup();
     let mut inputs = Vec::new();
     let mut actual = Vec::new();
@@ -342,23 +340,14 @@ fn script_effect_width_refines_the_existing_lean_read_prefix() {
         }
     }
     let dir = gents_lean_contract::proofs_dir().unwrap();
-    gents_lean_contract::run_lake_build(&dir).unwrap();
-    let mut lean = Command::new("lake")
-        .args([
-            "env",
-            "lean",
-            "--run",
-            "Proofs/Conformance/ScriptEffectBatch.lean",
-        ])
-        .current_dir(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    writeln!(lean.stdin.take().unwrap(), "{}", json!(inputs)).unwrap();
-    let output = lean.wait_with_output().unwrap();
-    assert!(output.status.success());
-    let expected: Vec<usize> = serde_json::from_slice(&output.stdout).unwrap();
+    let output = gents_lean_contract::run_prepared_generator_with_input(
+        &dir,
+        "Proofs.Conformance.ScriptEffectBatch:olean",
+        "Proofs/Conformance/ScriptEffectBatch.lean",
+        &json!(inputs).to_string(),
+    )
+    .unwrap();
+    let expected: Vec<usize> = serde_json::from_str(&output).unwrap();
     assert_eq!(actual, expected);
 }
 

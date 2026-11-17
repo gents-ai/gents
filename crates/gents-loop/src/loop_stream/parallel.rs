@@ -393,24 +393,15 @@ mod tests {
             actual.push(serde_json::json!({"length": read_prefix(calls, limit), "complete": complete, "ordered": ordered, "admitted": []}));
         }
         let proof_dir = gents_lean_contract::proofs_dir().expect("Lean proofs directory");
-        gents_lean_contract::run_lake_build(&proof_dir).expect("build Lean contract");
-        let mut lean = Command::new("lake")
-            .args([
-                "env",
-                "lean",
-                "--run",
-                "Proofs/Conformance/ParallelToolBatch.lean",
-            ])
-            .current_dir(proof_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("start Lean owner");
-        writeln!(lean.stdin.take().unwrap(), "{}", serde_json::json!(inputs)).unwrap();
-        let output = lean.wait_with_output().expect("run Lean owner");
-        assert!(output.status.success(), "Lean owner failed");
+        let output = gents_lean_contract::run_prepared_generator_with_input(
+            &proof_dir,
+            "Proofs.Conformance.ParallelToolBatch:olean",
+            "Proofs/Conformance/ParallelToolBatch.lean",
+            &serde_json::json!(inputs).to_string(),
+        )
+        .expect("build and run Lean owner");
         let mut expected: Vec<serde_json::Value> =
-            serde_json::from_slice(&output.stdout).expect("Lean results");
+            serde_json::from_str(&output).expect("Lean results");
         for case in &mut expected {
             case.as_object_mut().unwrap().remove("targets");
         }
@@ -584,15 +575,12 @@ mod control_tests {
         ] {
             let model_actions = actions.clone();
             let expected: Vec<usize> = tokio::task::spawn_blocking(move || {
-                use std::io::Write;
-                use std::process::{Command, Stdio};
                 let proof_dir = gents_lean_contract::proofs_dir().unwrap();
-                gents_lean_contract::run_lake_build(&proof_dir).unwrap();
-                let mut lean = Command::new("lake").args(["env", "lean", "--run", "Proofs/Conformance/ParallelToolBatch.lean"]).current_dir(proof_dir).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-                writeln!(lean.stdin.take().unwrap(), "{}", serde_json::json!([{"limit": 4, "calls": [], "accepted": [], "settled": [], "stop": "none", "actions": model_actions}])).unwrap();
-                let output = lean.wait_with_output().unwrap();
-                assert!(output.status.success());
-                let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                let output = gents_lean_contract::run_prepared_generator_with_input(
+                    &proof_dir, "Proofs.Conformance.ParallelToolBatch:olean", "Proofs/Conformance/ParallelToolBatch.lean",
+                    &serde_json::json!([{"limit":4,"calls":[],"accepted":[],"settled":[],"stop":"none","actions":model_actions}]).to_string(),
+                ).unwrap();
+                let value: serde_json::Value = serde_json::from_str(&output).unwrap();
                 serde_json::from_value(value[0]["admitted"].clone()).unwrap()
             }).await.unwrap();
             let hook = Arc::new(Hook {
@@ -726,19 +714,15 @@ mod control_tests {
     #[tokio::test]
     async fn later_termination_cancels_held_earlier_call() {
         let model: serde_json::Value = tokio::task::spawn_blocking(|| {
-            use std::io::Write;
-            use std::process::{Command, Stdio};
             let proof_dir = gents_lean_contract::proofs_dir().unwrap();
-            gents_lean_contract::run_lake_build(&proof_dir).unwrap();
-            let mut lean = Command::new("lake").args(["env", "lean", "--run", "Proofs/Conformance/ParallelToolBatch.lean"])
-                .current_dir(proof_dir).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-            writeln!(lean.stdin.take().unwrap(), "{}", serde_json::json!([
-                {"limit": 0, "calls": [], "accepted": [0, 1], "settled": [[1, 10]], "stop": "terminated", "actions": []},
-                {"limit": 0, "calls": [], "accepted": [0, 1], "settled": [[1, 10], [0, 0]], "stop": "terminated", "actions": []}
-            ])).unwrap();
-            let output = lean.wait_with_output().unwrap();
-            assert!(output.status.success());
-            serde_json::from_slice(&output.stdout).unwrap()
+            let output = gents_lean_contract::run_prepared_generator_with_input(
+                &proof_dir, "Proofs.Conformance.ParallelToolBatch:olean", "Proofs/Conformance/ParallelToolBatch.lean",
+                &serde_json::json!([
+                    {"limit":0,"calls":[],"accepted":[0,1],"settled":[[1,10]],"stop":"terminated","actions":[]},
+                    {"limit":0,"calls":[],"accepted":[0,1],"settled":[[1,10],[0,0]],"stop":"terminated","actions":[]}
+                ]).to_string(),
+            ).unwrap();
+            serde_json::from_str(&output).unwrap()
         }).await.unwrap();
         let hook = Arc::new(Hook {
             actions: vec!["run", "run"],

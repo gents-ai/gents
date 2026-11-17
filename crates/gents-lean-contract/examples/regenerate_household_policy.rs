@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{bail, ensure, Context, Result};
 use gents_protocol::schemas::{
@@ -74,32 +73,8 @@ fn bind(
     Ok(result)
 }
 
-fn build_models(proofs: &Path) -> Result<()> {
-    let build = Command::new("lake")
-        .args([
-            "build",
-            "Proofs.Store.Identity.Household",
-            "Proofs.Store.Identity.MailboxAccess",
-        ])
-        .current_dir(proofs)
-        .status()
-        .context("building native policy models")?;
-    ensure!(build.success(), "native policy model build failed");
-    Ok(())
-}
-
-fn run_lean(proofs: &Path, script: &str) -> Result<String> {
-    let output = Command::new("lake")
-        .args(["env", "lean", "--run", script])
-        .current_dir(proofs)
-        .output()
-        .with_context(|| format!("executing {script}"))?;
-    ensure!(
-        output.status.success(),
-        "native policy emitter {script} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(String::from_utf8(output.stdout)?)
+fn run_lean(proofs: &Path, target: &str, script: &str) -> Result<String> {
+    gents_lean_contract::run_prepared_generator(proofs, target, script)
 }
 
 fn main() -> Result<()> {
@@ -112,8 +87,11 @@ fn main() -> Result<()> {
     ensure!(args.next().is_none(), "unexpected additional argument");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let proofs = root.join("crates/gents/proofs");
-    build_models(&proofs)?;
-    let yaml = run_lean(&proofs, "GenerateHouseholdPolicy.lean")?;
+    let yaml = run_lean(
+        &proofs,
+        "Proofs.Store.Identity.Household:olean",
+        "GenerateHouseholdPolicy.lean",
+    )?;
     let parsed = acp::policy_yaml::parse_policy_yaml(&yaml).map_err(anyhow::Error::msg)?;
     let id = acp::policy_yaml::generate_policy_id(&parsed, 0);
     acp::policy_yaml::validate_policy_expressions(&parsed).map_err(anyhow::Error::msg)?;
@@ -125,7 +103,11 @@ fn main() -> Result<()> {
         acp::policy_yaml::parse_policy_yaml(&previous_yaml).map_err(anyhow::Error::msg)?;
     let previous_id = acp::policy_yaml::generate_policy_id(&previous_policy, 0);
     let old_ids = [AGENT_OWNERSHIP_POLICY_ID, previous_id.as_str()];
-    let mailbox_yaml = run_lean(&proofs, "GenerateMailboxPolicy.lean")?;
+    let mailbox_yaml = run_lean(
+        &proofs,
+        "Proofs.Store.Identity.MailboxAccess:olean",
+        "GenerateMailboxPolicy.lean",
+    )?;
     let mailbox_parsed =
         acp::policy_yaml::parse_policy_yaml(&mailbox_yaml).map_err(anyhow::Error::msg)?;
     acp::policy_yaml::validate_policy_expressions(&mailbox_parsed).map_err(anyhow::Error::msg)?;
