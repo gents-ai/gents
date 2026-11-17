@@ -143,13 +143,15 @@ theorem stripFigures_no_expansion (sizes : ResultSizes) (rows : List MessageRow)
   induction rows with
   | nil => simp [stripFigures]
   | cons row rest ih =>
-    cases hk : row.kind <;> simp only [stripFigures, hk]
-    · exact ih
-    · exact ih
-    · split
+    cases hk : row.kind with
+    | ordinary => simpa [stripFigures, hk] using ih
+    | assistantToolCalls calls => simpa [stripFigures, hk] using ih
+    | toolResult call key =>
+      simp only [stripFigures, hk]
+      split
       · rename_i h
-        have hs : stubs sizes _ = true := by
-          cases he : stubs sizes _ <;> simp_all [receiptEligible]
+        have hs : stubs sizes key = true := by
+          cases he : stubs sizes key <;> simp_all [receiptEligible]
         exact Nat.add_le_add ih (Nat.le_of_lt (stubEligible_no_expansion _ _ hs))
       · exact ih
 
