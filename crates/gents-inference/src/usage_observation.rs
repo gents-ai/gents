@@ -615,6 +615,40 @@ pub struct AccountUsageRead {
     pub backend_id: Option<String>,
     pub outcome: UsageRead,
     pub usage: Option<UsageView>,
+    /// The provider's own refusal, when one stands. Separate from `usage`
+    /// because a refusal establishes no percentage: an exhausted account with no
+    /// stated counter has no window to show at 100%.
+    #[serde(default)]
+    pub refusal: Option<UsageRefusalView>,
+}
+
+/// A standing provider refusal, as the provider stated it.
+///
+/// Every field is optional past the timestamp, because a refusal establishes only
+/// what it says: plain "free usage exhausted" gives no cap, no counter and no
+/// reset, and each unknown is `None` rather than 0 or a guess. This is the view
+/// all three read paths render, so the agent, the inventory and the desktop
+/// cannot disagree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageRefusalView {
+    /// RFC 3339, when the refusal was observed.
+    pub at: String,
+    /// The window the provider named, e.g. "rolling 24-hour". `None` when it
+    /// named none — the analytical 24-hour window is labelled separately, never
+    /// here as fact.
+    pub window: Option<String>,
+    /// The counter the provider reported, and the cap it named. Both `None`
+    /// together when the refusal stated no pair.
+    pub used: Option<u64>,
+    pub cap: Option<u64>,
+    /// RFC 3339, absolute only. A relative "refreshes in 24 hours" leaves this
+    /// `None`: a reset derived from the failure time is a guess.
+    pub resets_at: Option<String>,
+    /// How much this node has itself observed in the window, always an estimate.
+    pub consumed_by_node: Option<u64>,
+    /// A bounded excerpt of what the provider said, for an operator. Never the
+    /// whole body.
+    pub detail: String,
 }
 
 impl AccountUsageRead {
@@ -684,6 +718,7 @@ pub async fn read_node_usage(
                         backend_id: Some(backend.backend_id.clone()),
                         outcome: UsageRead::Disabled,
                         usage: None,
+                        refusal: None,
                     };
                     (entry, true)
                 }
@@ -744,6 +779,7 @@ fn account_entry(account: &crate::auth::credential::AccountSummary) -> AccountUs
         backend_id: None,
         outcome: UsageRead::Disabled,
         usage: None,
+        refusal: None,
     }
 }
 
