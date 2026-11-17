@@ -220,6 +220,7 @@ export type { ProviderAccountRemoveRequest } from "./generated/ProviderAccountRe
 export type { ProviderUsageReadRequest } from "./generated/ProviderUsageReadRequest.js";
 export type { AccountUsageView } from "./generated/AccountUsageView.js";
 export type { UsageWindowView } from "./generated/UsageWindowView.js";
+export type { UsageRefusalView } from "./generated/UsageRefusalView.js";
 export type { InferenceSetupState } from "./generated/InferenceSetupState.js";
 export type { InferenceSetupCatalog } from "./generated/InferenceSetupCatalog.js";
 export type { InferenceProviderOption } from "./generated/InferenceProviderOption.js";

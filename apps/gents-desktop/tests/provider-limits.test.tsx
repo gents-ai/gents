@@ -26,6 +26,8 @@ it("shows every account together, including an account with no configured backen
       readAt: null,
       readError: null,
       read: "read",
+      refusal: null,
+      refusalPartial: false,
     },
     {
       label: "Unbound personal",
@@ -37,6 +39,8 @@ it("shows every account together, including an account with no configured backen
       readAt: null,
       readError: null,
       read: "skipped_recent",
+      refusal: null,
+      refusalPartial: false,
     },
   ];
   render(<AllProviderLimits views={views} onRefresh={refresh} />);
@@ -83,6 +87,8 @@ it("draws each window as a meter, with its reset and source in a tooltip", () =>
       readAt: null,
       readError: null,
       read: "read",
+      refusal: null,
+      refusalPartial: false,
     },
   ];
   render(<AllProviderLimits views={views} onRefresh={vi.fn()} />);
@@ -140,6 +146,7 @@ it("shows a provider refusal above the meters, with only the fields it stated", 
       readAt: null,
       readError: null,
       read: "read",
+      refusalPartial: false,
       refusal,
     },
   ];
@@ -149,9 +156,7 @@ it("shows a provider refusal above the meters, with only the fields it stated", 
   expect(screen.getByText(/691,791 of 600,000/)).toBeTruthy();
   expect(screen.queryByText("100%")).toBeNull();
   /* the bounded excerpt is what the provider said, not a computed figure */
-  expect(
-    screen.getByText(/you have used all the included free usage/),
-  ).toBeTruthy();
+  expect(screen.getByText(/you have used all the included free usage/)).toBeTruthy();
 });
 
 it("never shows a window the provider did not state as its own", () => {
@@ -184,6 +189,7 @@ it("never shows a window the provider did not state as its own", () => {
       readAt: null,
       readError: null,
       read: "read",
+      refusalPartial: false,
       refusal: refusal(provenance),
     },
   ];
@@ -221,6 +227,8 @@ it("labels what the local count covers, and says when the search was truncated",
       readAt: null,
       readError: null,
       read: "read",
+      refusal: null,
+      refusalPartial: false,
       ...over,
     },
   ];
@@ -306,6 +314,7 @@ it("keeps the counter and cap even when the provider stated a reset", () => {
       readAt: null,
       readError: null,
       read: "read",
+      refusalPartial: false,
       refusal,
     },
   ];
@@ -345,6 +354,7 @@ it("says the reset when the provider stated one, and that none was stated otherw
       readAt: null,
       readError: null,
       read: "read",
+      refusalPartial: false,
       refusal: refusal(resetsAt),
     },
   ];

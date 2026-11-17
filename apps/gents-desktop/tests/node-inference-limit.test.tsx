@@ -30,6 +30,8 @@ const account = (
   readAt: null,
   readError: null,
   read: null,
+  refusal: null,
+  refusalPartial: false,
 });
 
 describe("an account's limit on the node's Inference card", () => {
