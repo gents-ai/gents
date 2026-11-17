@@ -2060,6 +2060,9 @@ const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-store/src/config_client/mod.rs", 1, "authorize_in_transaction, the one authorizer of requests inside a transaction"),
 ];
 
+/// What sends the request a closure builds through `send_resolving`.
+const RESOLVING_SENDERS: &[&str] = &["send_resolving", "endpoint_get_json", "endpoint_send"];
+
 #[derive(Default)]
 struct UnrecoveredAuthorizeVisitor {
     resolving: usize,
@@ -2079,11 +2082,17 @@ impl<'ast> Visit<'ast> for UnrecoveredAuthorizeVisitor {
         }
     }
 
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if !self.visit_resolving_call(call) {
+            visit::visit_expr_call(self, call);
+        }
+    }
+
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         if call.method == "authorize" && call.args.len() == 1 && self.resolving == 0 {
             self.sites += 1;
         }
-        if call.method == "send_resolving" {
+        if RESOLVING_SENDERS.contains(&call.method.to_string().as_str()) {
             self.visit_expr(&call.receiver);
             self.resolving += 1;
             for argument in &call.args {
@@ -2093,6 +2102,24 @@ impl<'ast> Visit<'ast> for UnrecoveredAuthorizeVisitor {
         } else {
             visit::visit_expr_method_call(self, call);
         }
+    }
+}
+
+impl UnrecoveredAuthorizeVisitor {
+    fn visit_resolving_call(&mut self, call: &ExprCall) -> bool {
+        if !path_name(call).is_some_and(|name| {
+            RESOLVING_SENDERS
+                .iter()
+                .any(|sender| name.ends_with(sender))
+        }) {
+            return false;
+        }
+        self.resolving += 1;
+        for argument in &call.args {
+            self.visit_expr(argument);
+        }
+        self.resolving -= 1;
+        true
     }
 }
 
@@ -2152,6 +2179,15 @@ fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
             0,
         ),
         ("fn f() { e.authorize_in_transaction(c.get(u), id); }", 0),
+        (
+            "fn f() { http_client::endpoint_get_json(&e, |e| e.authorize(c.get(u))); }",
+            0,
+        ),
+        (
+            "fn f() { endpoint_send(&e, |e| e.authorize(c.post(u))); }",
+            0,
+        ),
+        ("fn f() { other(&e, |e| e.authorize(c.post(u))); }", 1),
         (
             "fn f() { e.authorize(c.get(u)).and(e.send_resolving(|e| e.authorize(r))); }",
             1,
