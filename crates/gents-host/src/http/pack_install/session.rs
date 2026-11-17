@@ -412,10 +412,7 @@ async fn run_inner(
             "hosted pack session cannot wire plugins"
         );
         let node_did = state.node_did.clone();
-        Ok(
-            tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
-                .await??,
-        )
+        tokio::task::spawn_blocking(move || decode_install_request(request, &node_did)).await?
     }
     .await
     .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;

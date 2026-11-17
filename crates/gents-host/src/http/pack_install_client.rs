@@ -407,7 +407,7 @@ impl PackInstallSession {
                 error,
                 outcome,
                 class,
-            } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
+            } => Err(runtime_failure(&error, outcome, class.as_deref()).into()),
             _ => bail!("unexpected remote pack install effect response"),
         }
     }
@@ -443,7 +443,7 @@ impl PackInstallSession {
                 error,
                 outcome,
                 class,
-            } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
+            } => Err(runtime_failure(&error, outcome, class.as_deref()).into()),
             _ => bail!("unexpected remote pack install completion response"),
         }
     }
