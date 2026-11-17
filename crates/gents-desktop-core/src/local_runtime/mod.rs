@@ -33,7 +33,8 @@ const RUNTIME_STATE_FILE_NAME: &str = gents_store::local::home::RUNTIME_STATE_FI
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
 /// The recorded runtime endpoint may be stale or unresponsive.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
-/// Startup reports failure if the runtime never reaches serving readiness.
+/// Startup reports failure if the runtime never reaches serving readiness. A
+/// client wait bound; the user can retry.
 const SERVE_READY_TIMEOUT: Duration = Duration::from_secs(60);
 /// Space readiness probes while waiting for an external runtime to start.
 const SERVE_READY_POLL: Duration = Duration::from_millis(500);

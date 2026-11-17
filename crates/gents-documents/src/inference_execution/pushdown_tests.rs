@@ -1,4 +1,4 @@
-use super::InferenceExecution;
+use super::{InferenceExecution, InferenceRetryPolicy};
 
 #[test]
 fn execution_profiles_without_overrides_inherit_platform_defaults() {
@@ -44,4 +44,36 @@ fn execution_profiles_without_overrides_inherit_platform_defaults() {
     .expect("profile with explicit cap");
     assert_eq!(explicit.max_total_tokens, Some(50_000));
     assert!(explicit.validation_violations().is_empty());
+}
+
+#[test]
+fn retry_backoff_steps_fit_under_the_rate_limit_wait() {
+    let policy = |backoff_ms: Vec<i64>, max_rate_limit_wait_ms: Option<i64>| InferenceRetryPolicy {
+        node_did: "did:key:zNODE".into(),
+        retry_policy_id: "retry".into(),
+        backoff_ms: Some(backoff_ms),
+        max_rate_limit_wait_ms,
+        ..InferenceRetryPolicy::default()
+    };
+    let default_wait = gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT.as_millis() as i64;
+
+    assert!(policy(vec![1_000, default_wait], None)
+        .validation_violations()
+        .is_empty());
+    assert_eq!(
+        policy(vec![1_000, default_wait + 1], None).validation_violations(),
+        vec![format!(
+            "InferenceRetryPolicy retry backoff_ms entries must not exceed max_rate_limit_wait_ms ({default_wait})"
+        )]
+    );
+    assert!(policy(vec![600_000], Some(900_000))
+        .validation_violations()
+        .is_empty());
+    assert_eq!(
+        policy(vec![5_000, 30_000], Some(10_000)).validation_violations(),
+        vec![
+            "InferenceRetryPolicy retry backoff_ms entries must not exceed max_rate_limit_wait_ms (10000)"
+                .to_string()
+        ]
+    );
 }

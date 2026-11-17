@@ -145,7 +145,7 @@ fn parse_agent_did(value: &str) -> Result<String, String> {
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
-    /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
+    /// Node home to set up or open. Defaults to the folder chosen at setup, then ~/.gents.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     /// Agent to open or message instead of the node's default. See `gents config agent list`.
@@ -174,6 +174,9 @@ pub(crate) struct Cli {
     /// As on `init`: tests pass `file` so they never write login-keychain items.
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
+    /// As on `init`: the pack registry setup's core pack installs use.
+    #[arg(long, hide = true)]
+    pub(crate) registry: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -229,8 +232,8 @@ pub(crate) enum Command {
         hide = true
     )]
     Shell(ShellArgs),
-    /// Installed service definitions run `gents server --home`, so this name
-    /// outlives the binary that wrote them.
+    /// Installed service definitions run `gents server --home <HOME>
+    /// --system-log`, so this name outlives the binary that wrote them.
     #[command(name = "server", hide = true)]
     Server(ServeArgs),
     /// A running updater of another version runs the candidate's
@@ -352,10 +355,10 @@ pub(crate) enum DesktopCommand {
         about = "Preview or reset the managed home, desktop state, service and browser caches on this Mac; quit Gents first"
     )]
     Reset {
-        /// Managed home; defaults to GENTS_HOME, the desktop's reviewed home, then ~/.gents.
+        /// Managed home; defaults to the desktop's reviewed home, then ~/.gents.
         #[arg(long)]
         home: Option<PathBuf>,
-        /// Desktop client state; defaults to GENTS_DESKTOP_HOME, then the platform's app data folder.
+        /// Desktop client state; defaults to the platform's app data folder.
         #[arg(long)]
         desktop_home: Option<PathBuf>,
         /// Delete node/client/service data instead of backing it up; browser data is always cleared.

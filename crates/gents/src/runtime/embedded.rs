@@ -12,9 +12,11 @@ use crate::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
 use crate::{DocumentRuntimeOptions, Gents};
 use gents_store::{identity::KeyIdentity, identity::NodeIdentity, schema::ensure_runtime_schemas};
 
-// A full conformance run starts many embedded DefraDB nodes in parallel. On a
-// busy CI host, a healthy runtime can spend more than 60 seconds waiting for
-// startup and recovery I/O before it publishes its ready status row.
+/// Startup and shutdown bound for an embedded runtime. A full conformance run
+/// starts many embedded DefraDB nodes in parallel, and on a busy host a healthy
+/// runtime can spend more than 60 seconds on startup and recovery I/O before it
+/// publishes its ready status row. Expiry fails the boot clearly; this is a host
+/// mechanism bound, not configuration.
 pub const RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Node-owned services can hold `EmbeddedNode` handles briefly after shutdown.
@@ -186,7 +188,11 @@ impl EmbeddedHome {
             &store_lock,
         )
         .await?
-        .preflight(&store_key, Some(&did))
+        .preflight(
+            &store_key,
+            Some(&did),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
@@ -330,7 +336,11 @@ impl EmbeddedHome {
                 .context("trial store lock was released")?,
         )
         .await?
-        .preflight(&self.store_key, Some(&self.did))
+        .preflight(
+            &self.store_key,
+            Some(&self.did),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;

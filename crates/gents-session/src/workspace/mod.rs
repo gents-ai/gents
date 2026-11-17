@@ -48,7 +48,7 @@ pub use executor::{
 };
 pub use instructions::{
     instruction_body_for_request, instruction_context_section, live_instruction_context_section,
-    InstructionFile, InstructionManifest, DEFAULT_INSTRUCTION_PATHS,
+    InstructionFile, InstructionManifest, DEFAULT_INSTRUCTION_PATHS, INSTRUCTION_TEXT_BUDGET,
 };
 pub use journal::{
     action_journal_prefix_legal, recover_running, retry_allowed, ActionJournalEntry,
@@ -64,9 +64,8 @@ pub use runtime::{
 };
 
 pub use overlay::{
-    frozen_instruction_manifest_from_overlay, install_process_operator_tool_root,
-    request_workspace_cwd, require_under_ceiling, resolve_request_workspace_overlay_with_identity,
-    workspace_authority_file_mode,
+    frozen_instruction_manifest_from_overlay, request_workspace_cwd, require_under_ceiling,
+    resolve_request_workspace_overlay_with_identity, workspace_authority_file_mode,
 };
 pub(crate) use overlay::{
     validate_request_workspace_input_with_identity, validate_unbound_request_workspace_input,

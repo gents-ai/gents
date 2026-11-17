@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::goal::GoalLimits;
 use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 
 pub(super) mod fingerprint;
@@ -50,6 +51,7 @@ async fn stage_goal_backed_request(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
+    limits: GoalLimits,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&GoalCreationIdentity>,
     client_graph: Option<&std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
@@ -169,6 +171,7 @@ async fn stage_goal_backed_request(
         session_id,
         objective,
         token_budget,
+        limits,
         GoalState {
             status: GoalStatus::Active,
             blocked_audits: 0,
@@ -279,6 +282,7 @@ pub(crate) async fn submit_goal_backed_request(
                     session_id,
                     objective,
                     token_budget,
+                    GoalLimits::default(),
                     request,
                     None,
                     None,
@@ -303,6 +307,7 @@ pub(crate) async fn submit_goal_backed_request(
                 session_id,
                 objective,
                 token_budget,
+                GoalLimits::default(),
                 request,
             )
             .await;
@@ -319,6 +324,7 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
+    limits: GoalLimits,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
     stage_goal_backed_request_with_identity_in_txn(
@@ -327,6 +333,7 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
         session_id,
         objective,
         token_budget,
+        limits,
         request,
         None,
         None,
@@ -341,6 +348,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
+    limits: GoalLimits,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&GoalCreationIdentity>,
     client_graph: Option<&std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
@@ -351,6 +359,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
         session_id,
         objective,
         token_budget,
+        limits,
         request,
         identity,
         client_graph,
@@ -402,6 +411,7 @@ pub async fn submit_goal_backed_request_with_identity(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
+    limits: GoalLimits,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&dyn gents_store::identity::NodeIdentity>,
 ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
@@ -475,6 +485,7 @@ pub async fn submit_goal_backed_request_with_identity(
                     session_id,
                     objective,
                     token_budget,
+                    limits,
                     &create,
                     None,
                     None,
@@ -508,6 +519,7 @@ pub async fn submit_goal_backed_request_with_identity(
                 session_id,
                 objective,
                 token_budget,
+                limits,
                 recovery_request,
             )
             .await?
@@ -525,6 +537,7 @@ pub async fn submit_goal_backed_request_with_identity(
         session_id,
         objective,
         token_budget,
+        limits,
         recovery_request,
     )
     .await?

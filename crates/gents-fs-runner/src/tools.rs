@@ -5,6 +5,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use globset::GlobBuilder;
 
+#[cfg(feature = "test-seams")]
+use crate::blocker::TraversalBlocker;
 use crate::context::RunnerContext;
 use crate::output::{
     default_ignored_names, echoed_pattern, format_entries, format_grep_matches, render_tool_output,
@@ -18,9 +20,12 @@ use crate::traversal::{
     WalkState,
 };
 
+/// Walk budgets used because the host never sets them in a request. They bound one traversal's work on the host; `FileTools` limits cap the results, and the model narrows the path or pattern instead of raising these.
 const DEFAULT_MAX_ENTRIES_VISITED: usize = 200_000;
 const SEARCH_DIR_ENTRY_HINTS: usize = 10;
+/// Bytes one traversal may read; see `DEFAULT_MAX_ENTRIES_VISITED`.
 const DEFAULT_MAX_BYTES_READ: u64 = 128 * 1024 * 1024;
+/// Wall-clock budget of one traversal; see `DEFAULT_MAX_ENTRIES_VISITED`.
 const DEFAULT_MAX_WALL_MS: u64 = 15_000;
 const MAX_PATTERN_BYTES: usize = 4096;
 
@@ -76,10 +81,25 @@ pub fn execute_request_with_base(
     request: NativeFsRunnerRequest,
 ) -> Result<String> {
     let context = RunnerContext::new_with_base(root, base)?;
+    execute_in_context(&context, request)
+}
+
+#[cfg(feature = "test-seams")]
+pub fn execute_request_with_blocker(
+    root: PathBuf,
+    base: Option<PathBuf>,
+    request: NativeFsRunnerRequest,
+    blocker: Option<TraversalBlocker>,
+) -> Result<String> {
+    let context = RunnerContext::new_with_base(root, base)?.with_blocker(blocker);
+    execute_in_context(&context, request)
+}
+
+fn execute_in_context(context: &RunnerContext, request: NativeFsRunnerRequest) -> Result<String> {
     match request {
-        NativeFsRunnerRequest::ListFiles(args) => list_files(&context, args),
-        NativeFsRunnerRequest::Glob(args) => glob(&context, args),
-        NativeFsRunnerRequest::Grep(args) => grep(&context, args),
+        NativeFsRunnerRequest::ListFiles(args) => list_files(context, args),
+        NativeFsRunnerRequest::Glob(args) => glob(context, args),
+        NativeFsRunnerRequest::Grep(args) => grep(context, args),
     }
 }
 

@@ -1,6 +1,8 @@
 #[path = "inference.rs"]
 mod inference;
 
+pub(crate) use self::inference::LiveInferenceSettings;
+
 use anyhow::{Context, Result};
 use gents::runtime::embedded::EmbeddedHome;
 use gents::{DocumentRuntimeOptions, Gents};
@@ -47,6 +49,7 @@ pub(super) async fn spawn_live_node(
     name: &str,
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
+    inference: &LiveInferenceSettings,
 ) -> Result<(RunningNode, LiveAgentDocs, PathBuf)> {
     let tool_root = agent_root.join("tool-root");
     std::fs::create_dir_all(&tool_root)
@@ -59,11 +62,11 @@ pub(super) async fn spawn_live_node(
     let docs = seed_live_agent_documents(
         home,
         config_actor,
-        &node_did,
         name,
         &tool_root,
         backend,
         target_backend,
+        inference,
     )
     .await?;
     let agent = Gents::from_default_agent_documents(
@@ -97,11 +100,11 @@ pub(super) async fn spawn_live_node(
 async fn seed_live_agent_documents(
     home: &EmbeddedHome,
     config_actor: &PrincipalIdentity,
-    node_did: &str,
     agent_name: &str,
     tool_root: &std::path::Path,
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
+    inference: &LiveInferenceSettings,
 ) -> Result<LiveAgentDocs> {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::PackConfig;
@@ -110,10 +113,11 @@ async fn seed_live_agent_documents(
     };
     use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
     use serde_json::json;
-    let inference = inference::LiveInferenceSettings::from_env()?;
     let tool_root = tool_root
         .to_str()
         .context("fixture tool root is not UTF-8")?;
+    let node_did = home.identity.did().to_string();
+    let node_did = node_did.as_str();
     let config_actor_did = config_actor.did();
     anyhow::ensure!(
         home.node.node_identity_did() == Some(node_did),
@@ -322,6 +326,8 @@ fn live_backend_candidate(
         claude_platform: existing.and_then(|value| value.claude_platform),
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
+        client_version: None,
+        request_timeout_secs: None,
         max_concurrent: Some(2),
         max_queue_depth: Some(100),
         enabled: true,

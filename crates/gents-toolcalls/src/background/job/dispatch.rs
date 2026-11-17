@@ -51,7 +51,6 @@ use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_pack::plugin::store::InstalledPlugin;
 use gents_pack::plugin::store::PluginData;
 use gents_pack::plugin::PluginVerdict;
-use gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 use gents_protocol::job_settings::effective_ceiling;
 use gents_protocol::request_lifecycle::SessionMessageCause;
 use gents_protocol::tool_call::AwaitMode;
@@ -236,6 +235,7 @@ pub async fn run_step0(
             &runtime.home,
             matches!(output, JobStepOutput::Effects { .. }),
             None,
+            lifecycle.max_background_tool_calls(),
         );
         return refuse(lifecycle, class, refusal.code(), &message, &next).await;
     }
@@ -709,6 +709,7 @@ pub async fn adopt_step0(
                 &runtime.home,
                 false,
                 resume.map(|row| (row, resumed_by.as_deref())),
+                lifecycle.max_background_tool_calls(),
             );
             refuse(lifecycle, class, refusal.code(), &message, &next).await
         }
@@ -811,6 +812,7 @@ async fn refuse(
 
 /// The failure class, message and next call of a step 0 refusal. `resume` is
 /// the row a step-0 resume named and the address of the row that resumed it.
+#[allow(clippy::too_many_arguments)]
 fn step0_refusal(
     refusal: Refusal,
     detail: Option<PolicyDenialDetail>,
@@ -819,6 +821,7 @@ fn step0_refusal(
     home: &Path,
     effects: bool,
     resume: Option<(&str, Option<&str>)>,
+    background_limit: usize,
 ) -> (FailureClass, String, String) {
     let tool = binding.tool_name.as_str();
     let coordinate = binding.plugin.plugin.as_str();
@@ -850,7 +853,7 @@ fn step0_refusal(
         ),
         Refusal::BackgroundBudgetExceeded => (
             FailureClass::ServiceUnavailable,
-            format!("{tool} cannot be admitted because the parent request has reached the concurrent background capacity ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT})"),
+            format!("{tool} cannot be admitted because the parent request has reached the concurrent background capacity ceiling ({background_limit})"),
             format!("Next: wait for a background completion notification, then retry `{tool}`"),
         ),
         Refusal::DynamicCodeDisabled => {
@@ -929,6 +932,7 @@ fn step0_context(
         target_hops: Vec::new(),
         target_ids: Vec::new(),
         live_background: 0,
+        background_limit: u32::try_from(lifecycle.max_background_tool_calls()).unwrap_or(u32::MAX),
         started_by_job: caller.started_by_job,
         cwd_allowed: Vec::new(),
         within: Vec::new(),

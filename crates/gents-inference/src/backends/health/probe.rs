@@ -177,6 +177,7 @@ pub(super) async fn probe_selected_backends(
                                 &backend.endpoint,
                                 None,
                                 Some(&credential),
+                                backend.client_version.as_deref(),
                             ),
                         ))
                         .await
@@ -268,6 +269,7 @@ pub(super) async fn probe_selected_backends(
                             &backend.endpoint,
                             api_key.as_deref(),
                             None,
+                            backend.client_version.as_deref(),
                         ),
                     ))
                     .await

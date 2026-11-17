@@ -405,11 +405,19 @@ pub(crate) fn validate_tree_delta(
     Ok(())
 }
 
-pub(crate) fn capture_instruction_manifest(repo: &Path, base_sha: &str) -> Result<String> {
+pub(crate) fn capture_instruction_manifest(
+    repo: &Path,
+    base_sha: &str,
+    max_instruction_chars: usize,
+) -> Result<String> {
     let mut files = Vec::new();
     for path in DEFAULT_INSTRUCTION_PATHS {
         match git_show_blob(repo, base_sha, path)? {
-            Some(bytes) => files.push(InstructionFile::from_bytes(path, &bytes)),
+            Some(bytes) => files.push(InstructionFile::from_bytes(
+                path,
+                &bytes,
+                max_instruction_chars,
+            )),
             None => continue,
         }
     }

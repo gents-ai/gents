@@ -57,10 +57,6 @@ class IsolatedRuntimeRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "HOME must match"):
             self.check()
         self.env["HOME"] = str(self.account)
-        self.env["GENTS_HOME"] = str(self.fleet)
-        with self.assertRaisesRegex(ValueError, "must not set GENTS_HOME"):
-            self.check()
-        del self.env["GENTS_HOME"]
         (self.account / ".gents").mkdir()
         with self.assertRaisesRegex(ValueError, "persistent .gents"):
             self.check()

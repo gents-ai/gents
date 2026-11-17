@@ -746,6 +746,7 @@ pub fn render_task(
     prompt_template: &str,
     goal_objective_template: Option<&str>,
     goal_token_budget: Option<i64>,
+    goal_limits: gents_protocol::goal::GoalLimits,
     scope: &TemplateScope,
 ) -> Result<(String, Option<String>), String> {
     let prompt =
@@ -757,6 +758,7 @@ pub fn render_task(
     crate::task_goal_declaration::validate_task_goal_declaration(
         objective.as_deref(),
         goal_token_budget,
+        goal_limits,
     )
     .map_err(|error| format!("goal declaration: {error}"))?;
     Ok((prompt, objective))

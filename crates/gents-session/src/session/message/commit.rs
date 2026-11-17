@@ -570,6 +570,7 @@ async fn stage_agent_new_in_txn(
         PlannedWrite::Goal {
             objective,
             token_budget,
+            limits,
             ..
         } => {
             goals
@@ -579,6 +580,7 @@ async fn stage_agent_new_in_txn(
                     &create.session_id,
                     objective,
                     *token_budget,
+                    *limits,
                     &create,
                 )
                 .await?
@@ -709,6 +711,7 @@ pub async fn stage_planned_write_in_txn(
             create,
             objective,
             token_budget,
+            limits,
         } => {
             ensure_planned_hop_current(txn, create).await?;
             let enqueued = goals
@@ -718,6 +721,7 @@ pub async fn stage_planned_write_in_txn(
                     &plan.session_id,
                     objective,
                     *token_budget,
+                    *limits,
                     create,
                 )
                 .await?;

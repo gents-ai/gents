@@ -154,6 +154,9 @@ def admissionCases : List AdmissionCase :=
   , ⟨"full_background_budget_returns_capacity_refusal",
       { context with liveBackground := Background.maxBackgroundedPerParent }, stepZero,
       effects [] (some guestPin)⟩
+  , ⟨"configured_background_limit_returns_capacity_refusal",
+      { context with backgroundLimit := Background.backgroundLimit (some 3), liveBackground := 3 },
+      stepZero, effects [] (some guestPin)⟩
   , ⟨"absent_hop_cap_admits_deep_target",
       { context with maxHop := none, targetHop := fun target => if target == targetA then 100 else 0 },
       stepZero, effects [spawn "1:a" targetA] (some guestPin)⟩
@@ -217,6 +220,7 @@ theorem admission_regressions :
       , (some "plugin_job_depth_exceeded", none, 0)
       , (some "plugin_job_policy_denied", none, 0)
       , (some "plugin_job_stalled", none, 0)
+      , (some "background_tool_budget_exceeded", none, 0)
       , (some "background_tool_budget_exceeded", none, 0)
       , (none, some (.running, 1, 1), 0)
       , (none, some (.completed, 0, 0), 0)
@@ -370,7 +374,8 @@ private def contextJson (ctx : StepContext) : Json :=
     ("max_hop", toJson ctx.maxHop),
     ("target_hops", toJson (knownTargets.map fun t =>
       Json.mkObj [("target", targetJson t), ("hop", toJson (ctx.targetHop t))])),
-    ("live_background", toJson ctx.liveBackground), ("started_by_job", toJson ctx.startedByJob),
+    ("live_background", toJson ctx.liveBackground),
+    ("background_limit", toJson ctx.backgroundLimit), ("started_by_job", toJson ctx.startedByJob),
     ("cwd_allowed", toJson (knownCwds.filter ctx.cwdAllowed)),
     ("within", toJson ((knownCwds.flatMap fun base => knownCwds.filterMap fun cwd =>
       if ctx.within base cwd then some (Json.mkObj [("base", toJson base), ("cwd", toJson cwd)])

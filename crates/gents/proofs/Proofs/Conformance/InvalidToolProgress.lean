@@ -8,9 +8,10 @@ open Lean CompletionRetry.InvalidToolProgress
 structure Case where
   name : String
   outcomes : List Outcome
+  maxInvalidToolCalls : Nat := defaultLimit
   deriving Repr
 
-def cases : List Case :=
+def defaultLimitCases : List (String × List Outcome) :=
   [ ⟨"empty", []⟩
   , ⟨"invalid_arguments_charged", [.invalidArguments]⟩
   , ⟨"policy_denial_charged", [.policyDenied]⟩
@@ -28,6 +29,15 @@ def cases : List Case :=
       .ordinaryFailure,.invalidArguments]⟩
   , ⟨"success_after_exhaustion_not_dispatched",
       List.replicate 8 .policyDenied ++ [.success]⟩ ]
+
+def cases : List Case :=
+  defaultLimitCases.map (fun (name, outcomes) => { name := name, outcomes := outcomes }) ++
+  [ { name := "configured_limit_exhausts_on_third", maxInvalidToolCalls := 3,
+      outcomes := List.replicate 4 .invalidArguments }
+  , { name := "configured_limit_allows_past_default", maxInvalidToolCalls := 12,
+      outcomes := List.replicate 11 .policyDenied ++ [.success] }
+  , { name := "configured_limit_one_stops_first_invalid", maxInvalidToolCalls := 1,
+      outcomes := [.success, .unknownTool, .success] } ]
 
 private def outcomeCall : Outcome → Nat
   | .invalidArguments => 0
@@ -47,6 +57,7 @@ deriving instance ToJson for Outcome, CompletionRetry.RepeatedToolFailure.Action
 structure ComposedInput where
   name : String
   outcomes : List Outcome
+  maxInvalidToolCalls : Nat
   deriving ToJson
 
 structure ComposedOutput where
@@ -57,12 +68,15 @@ structure ComposedOutput where
 
 @[conformance_family]
 def composed : Family ComposedInput ComposedOutput where
-  inputs := cases.map fun c => { name := c.name, outcomes := c.outcomes }
+  inputs := cases.map fun c =>
+    { name := c.name, outcomes := c.outcomes, maxInvalidToolCalls := c.maxInvalidToolCalls }
   model := fun i =>
-    let (actions, ending) := CompletionRetry.RepeatedToolFailure.run {} (composedEvents i.outcomes)
+    let start : CompletionRetry.RepeatedToolFailure.Composed :=
+      { invalid := { limit := i.maxInvalidToolCalls } }
+    let (actions, ending) := CompletionRetry.RepeatedToolFailure.run start (composedEvents i.outcomes)
     { composedActions := actions
       composedEnding := ending
       composedInvalidUsed :=
-        CompletionRetry.RepeatedToolFailure.invalidUsed {} (composedEvents i.outcomes) }
+        CompletionRetry.RepeatedToolFailure.invalidUsed start (composedEvents i.outcomes) }
 
 end Conformance.InvalidToolProgressContracts

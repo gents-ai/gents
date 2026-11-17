@@ -147,8 +147,14 @@ impl AdmissionRegistry {
             terminal_failure_reason: None,
         };
         scope_request(context, async {
-            self.acquire_current_call_with_signer(connection, None, None, signer)
-                .await
+            self.acquire_current_call_with_signer(
+                connection,
+                None,
+                None,
+                gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+                signer,
+            )
+            .await
         })
         .await
     }
@@ -175,6 +181,7 @@ impl AdmissionRegistry {
         connection: &str,
         model_name: Option<&str>,
         profile_id: Option<&str>,
+        max_rate_limit_wait: std::time::Duration,
         agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> Result<AdmissionPermit, AdmissionError> {
         let context = current_context()?;
@@ -195,6 +202,7 @@ impl AdmissionRegistry {
             &self.inner.runtime_instance_id,
             model_name,
             profile_id,
+            max_rate_limit_wait,
             agent_signer,
         );
         if pending.backend_id.trim().is_empty() {

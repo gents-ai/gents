@@ -402,6 +402,12 @@ pub struct LoopConfig {
     pub provider_idle_timeout: Option<std::time::Duration>,
     pub deadline: Option<DateTime<Utc>>,
     pub max_turns: usize,
+    /// Invalid-argument, unknown-tool and policy-denied calls this execution
+    /// may make before it stops.
+    pub max_invalid_tool_calls: usize,
+    /// Identical failing dispatches of one call before further repeats are
+    /// intercepted.
+    pub repeated_tool_failure_limit: usize,
     pub output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
     pub folded_prompts: Vec<FoldedPrompt>,
     pub authored_input: Option<AuthoredInput>,

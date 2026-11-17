@@ -1,6 +1,7 @@
 //! Final, fresh `AgentRequest` authority check. Watcher delivery, replication,
 //! queue residence, and caller-authored lineage are not authority.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -185,11 +186,14 @@ pub async fn verify_fresh_local_self_request(
     }
     observation.hop_within_bound = request_hop_admitted(node, &row).await?;
     require_admitted_observation(observation, None)?;
+    // Local-self materialization creates this request with the default input
+    // and no workspace, so no operator tool ceiling applies to it.
     verify_request_input(
         node,
         &row,
         &admission,
         (identity.did() == target_agent_did).then_some(identity),
+        None,
     )
     .await?;
     row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
@@ -600,6 +604,7 @@ pub struct AgentRequestAdmissionVerifier {
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     enrollment: EnrollmentAuthorityHandle,
+    operator_tool_root: Option<PathBuf>,
 }
 
 impl AgentRequestAdmissionVerifier {
@@ -612,7 +617,14 @@ impl AgentRequestAdmissionVerifier {
             node,
             identity,
             enrollment,
+            operator_tool_root: None,
         }
+    }
+
+    /// The operator tool ceiling a request's workspace and cwd must stay under.
+    pub fn with_operator_tool_root(mut self, root: Option<PathBuf>) -> Self {
+        self.operator_tool_root = root;
+        self
     }
 
     pub async fn verify_fresh(
@@ -963,7 +975,14 @@ impl AgentRequestAdmissionVerifier {
             }
         }
         require_admitted_observation(observation, denied)?;
-        verify_request_input(&self.node, &row, &admission, agent_identity).await?;
+        verify_request_input(
+            &self.node,
+            &row,
+            &admission,
+            agent_identity,
+            self.operator_tool_root.as_deref(),
+        )
+        .await?;
         let client_claim = (allow_cross_actor_client_claim
             && admission.kind == AgentRequestAdmissionKind::Client)
             .then(|| ClientClaimAdmission { row: row.clone() });
@@ -992,6 +1011,7 @@ async fn verify_request_input(
     row: &AgentRequestRow,
     admission: &AgentRequestAdmissionRecord,
     agent_identity: Option<&dyn NodeIdentity>,
+    operator_tool_root: Option<&Path>,
 ) -> AdmissionResult<()> {
     use gents_protocol::request_input::QueueSource;
     let input = row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT);
@@ -1024,6 +1044,7 @@ async fn verify_request_input(
             agent_identity,
             &request,
             artifact_requested,
+            operator_tool_root,
         )
         .await
         .map_err(AgentRequestAdmissionError::denied)?;
@@ -1036,8 +1057,12 @@ async fn verify_request_input(
             "workspace admission requires the selected held Agent"
         )));
     } else {
-        crate::workspace::validate_unbound_request_workspace_input(&request, artifact_requested)
-            .map_err(AgentRequestAdmissionError::denied)?;
+        crate::workspace::validate_unbound_request_workspace_input(
+            &request,
+            artifact_requested,
+            operator_tool_root,
+        )
+        .map_err(AgentRequestAdmissionError::denied)?;
     }
     let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal
         && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl);

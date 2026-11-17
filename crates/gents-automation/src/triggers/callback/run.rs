@@ -452,6 +452,10 @@ pub(crate) fn apply_planner_deny(invocation: &mut CallbackInvocationDoc, reason:
     invocation.error = Some(reason.to_string());
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the writer's tool configuration bounds the workspace it freezes"
+)]
 pub async fn run_owned_invocation(
     node: &std::sync::Arc<EmbeddedNode>,
     access: &gents_store::config_client::ConfigAccess,
@@ -460,6 +464,7 @@ pub async fn run_owned_invocation(
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
     data_node: Option<&std::sync::Arc<EmbeddedNode>>,
+    snapshot: Option<&crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
 ) -> Result<()> {
     if !invocation_is_claimable(&invocation.owner_node_did, invocation)
         && invocation.lifecycle_state != LIFECYCLE_CLAIMED
@@ -524,6 +529,7 @@ pub async fn run_owned_invocation(
         ceiling,
         plugins,
         data_node,
+        snapshot,
     )
     .await
 }
@@ -569,6 +575,15 @@ pub(super) struct CallbackAccess<'a> {
     pub access: &'a gents_store::config_client::ConfigAccess,
 }
 
+/// A workspace this callback creates freezes its instructions with the writer
+/// Agent's `max_instruction_chars` from `snapshot`. A writer absent from
+/// `ActiveRuntimeSnapshot::tool_configs` (an unavailable Agent) has no resolved
+/// configuration, so its workspace takes the unset default
+/// `INSTRUCTION_TEXT_BUDGET`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the writer's tool configuration bounds the workspace it freezes"
+)]
 async fn execute_running_invocation(
     context: CallbackAccess<'_>,
     invocation: &mut CallbackInvocationDoc,
@@ -577,6 +592,7 @@ async fn execute_running_invocation(
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
     data_node: Option<&std::sync::Arc<EmbeddedNode>>,
+    snapshot: Option<&crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
 ) -> Result<()> {
     let CallbackAccess { node, access } = context;
     if callback.node_did != invocation.owner_node_did
@@ -789,6 +805,11 @@ async fn execute_running_invocation(
 
     persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
 
+    let max_instruction_chars = snapshot
+        .and_then(|snapshot| snapshot.tool_config(writer_agent))
+        .map_or(gents_session::workspace::INSTRUCTION_TEXT_BUDGET, |tools| {
+            tools.max_instruction_chars()
+        });
     if current_state(&journal, 0).is_none() {
         advance(&mut journal, 0, ActionJournalState::Validated);
         persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
@@ -836,6 +857,7 @@ async fn execute_running_invocation(
                 &invocation_id,
                 &correlation,
                 &route,
+                max_instruction_chars,
             )
         })
         .await
@@ -874,6 +896,7 @@ async fn execute_running_invocation(
             caused_by_invocation_id: invocation.invocation_id.clone(),
             caused_by_correlation: correlation.clone(),
             route: gents_protocol::trigger_delivery::HandoffRoute::from_fields(&invocation.input),
+            max_instruction_chars: Some(max_instruction_chars),
             documents: &mut docs,
         };
         execute_create_workspace_plan(&plan, &mut journal, &mut ctx)

@@ -75,6 +75,7 @@ def RetryCase.toJson (c : RetryCase) : String :=
     ++ "\"pre_now\":" ++ toString c.pre.now ++ ","
     ++ "\"pre_deadline\":" ++ jsonOptionalNat c.pre.deadline ++ ","
     ++ "\"pre_scheduled_wake\":" ++ jsonOptionalNat (phaseScheduledWake c.pre.phase) ++ ","
+    ++ "\"pre_max_wait\":" ++ jsonOptionalNat c.pre.budget.maxWait ++ ","
     ++ "\"expected_phase\":" ++ jsonOptionalPhase (c.post.map (·.phase)) ++ ","
     ++ "\"expected_transport_used\":" ++
       (c.post.map (fun state => toString state.transportUsed)).getD "null" ++ ","

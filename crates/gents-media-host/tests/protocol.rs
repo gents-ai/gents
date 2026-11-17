@@ -76,11 +76,10 @@ impl Drop for Helper {
 #[test]
 fn artifact_description_does_not_initialize_a_store_or_audio_device() {
     let root = tempfile::tempdir().unwrap();
-    let home = root.path().join("unopened");
     let output = Command::new(env!("CARGO_BIN_EXE_gents-media-host"))
         .arg("--describe")
-        .env("GENTS_HOME", &home)
-        .env("GENTS_DESKTOP_HOME", &home)
+        .env("HOME", root.path())
+        .env_remove("XDG_DATA_HOME")
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -96,7 +95,12 @@ fn artifact_description_does_not_initialize_a_store_or_audio_device() {
         description["maxPcmBytes"],
         gents_protocol::client_media::MAX_PCM_BYTES
     );
-    assert!(!home.exists());
+    let desktop = if cfg!(target_os = "macos") {
+        root.path().join("Library/Application Support/gents")
+    } else {
+        root.path().join(".local/share/gents")
+    };
+    assert!(!desktop.exists());
 }
 
 #[test]

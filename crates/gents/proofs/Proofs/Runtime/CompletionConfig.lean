@@ -23,6 +23,7 @@ structure Input where
   session : String := "session-456"
   request : String := "request-123"
   budget : Option Nat := none
+  maxWait : Option Int := none
   deriving ToJson
 
 structure Observation where
@@ -34,6 +35,7 @@ structure Observation where
   deadline : Option Int
   budget : Option Nat
   params : Option String
+  maxWait : Nat
   deriving ToJson
 
 def nonnegative (value : Option Int) : Option Nat :=
@@ -63,6 +65,13 @@ def params (input : Input) : Option String :=
   let agent := ReasoningCapabilities.authoritative ⟨!openAiKinds.contains input.provider, agent, none⟩
   merge agent (CompletionParameters.cache ⟨input.provider, input.session, input.request⟩)
 
+/-- The longest provider rate-limit wait, in milliseconds, the loop holds when
+the retry policy leaves it unset; a longer wait fails as the provider's usage
+limit (`CompletionRetry.Budget.maxWait`). It is `LONG_RATE_LIMIT_WAIT`. A
+call's recorded verdict uses the cap its agent resolves, set or not
+(`InferenceCall.ProviderLimit.verdict`), so the two agree for every cap. -/
+def defaultMaxWaitMs : Nat := 300000
+
 /-- Scheduled work has a longer transport ladder; an interactive override
 only affects interactive work. Positive authored delays survive validation,
 and resizing repeats the final delay instead of inventing a new cadence. -/
@@ -79,7 +88,9 @@ def resolve (input : Input) : Option Observation := do
       | some maximum => (List.range maximum).map fun index => (delays[index]?).getD (delays.getLast!)
     let resample := (nonnegative input.resample).getD (if interactive then 0 else 1)
     let empty := (nonnegative input.resample).getD 1
+    let maxWait := (input.maxWait.bind fun value =>
+      if value > 0 then some value.toNat else none).getD defaultMaxWaitMs
     some ⟨delays, resample, empty, input.repair.getD true, input.hops, input.deadline,
-      input.budget, params input⟩
+      input.budget, params input, maxWait⟩
 
 end Runtime.CompletionConfig

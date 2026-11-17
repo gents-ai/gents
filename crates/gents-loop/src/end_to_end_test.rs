@@ -323,6 +323,8 @@ pub(crate) fn test_loop_config() -> LoopConfig {
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 8,
+        max_invalid_tool_calls: crate::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: crate::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,

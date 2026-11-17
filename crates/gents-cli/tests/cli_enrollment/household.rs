@@ -15,7 +15,7 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
     let client_home = temp.path().join("client");
     let owner_home = temp.path().join("owner");
     let owner_home_arg = owner_home.to_str().context("owner home UTF-8")?;
-    let owner_env = [("GENTS_DESKTOP_HOME", owner_home_arg)];
+    let owner_env = [("HOME", owner_home_arg)];
     fs::create_dir_all(&runtime_home)?;
     let home = runtime_home.to_str().context("runtime home UTF-8")?;
     let init = run_cli_json_with_env(
@@ -36,7 +36,7 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
         &owner_env,
     )?;
     let owner_identity = gents_desktop_core::client::PrincipalIdentity::load_existing(
-        &DesktopPaths::from_root(owner_home.join("cli")),
+        &support::graphql::cli_client_paths(&owner_home, &[]),
     )?;
     let node_did = node_did_from_init(&init)?;
     let default_agent = agent_did_from_init(&init)?;
@@ -203,7 +203,7 @@ async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<(
     let runtime_home = temp.path().join("runtime");
     let owner_home = temp.path().join("owner");
     let owner_home_arg = owner_home.to_str().context("owner home UTF-8")?;
-    let owner_env = [("GENTS_DESKTOP_HOME", owner_home_arg)];
+    let owner_env = [("HOME", owner_home_arg)];
     fs::create_dir_all(&runtime_home)?;
     let home = runtime_home.to_str().context("runtime home UTF-8")?;
     let init = run_cli_json_with_env(
@@ -224,7 +224,7 @@ async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<(
         &owner_env,
     )?;
     let owner_identity = gents_desktop_core::client::PrincipalIdentity::load_existing(
-        &DesktopPaths::from_root(owner_home.join("cli")),
+        &support::graphql::cli_client_paths(&owner_home, &[]),
     )?;
     let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;

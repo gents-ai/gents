@@ -25,7 +25,6 @@ pub(crate) const TRACING_TARGET: &str = module_path!();
 /// and output so naming a session cannot compete indefinitely with requests.
 const RECENT_TITLE_LIMIT: usize = 5;
 const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
-const TITLE_GENERATION_TIMEOUT_SECS: u64 = 10;
 const TITLE_VISIBLE_MAX_TOKENS: u64 = 24;
 
 async fn flush_received_title_partial(context: &str) -> Result<()> {
@@ -282,6 +281,7 @@ where
         lifecycle.set_client_claim_admission(client_claim);
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
+        lifecycle.set_configured_max_request_retries(self.agent_config.max_request_retries);
         let expiry_clock = Arc::clone(&self.expiry_clock);
         match lifecycle
             .claim_with_identity_at(move || expiry_clock())
@@ -518,8 +518,10 @@ where
                     config.max_tokens =
                         title_max_tokens(config.additional_params.as_ref(), config.max_tokens);
                     config.max_turns = 1;
-                    config.retry_policy =
-                        gents_loop::completion_retry::CompletionRetryPolicy::no_retry();
+                    config.retry_policy = gents_loop::completion_retry::CompletionRetryPolicy {
+                        max_rate_limit_wait: config.retry_policy.max_rate_limit_wait,
+                        ..gents_loop::completion_retry::CompletionRetryPolicy::no_retry()
+                    };
                     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                         self.node.clone(),
                         identity::Did::new(request.agent_did.clone())?,
@@ -599,7 +601,7 @@ where
                 }
                 result = super::request::prepare_unless_interrupted(
                     interrupt_rx,
-                    tokio::time::timeout(Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS), run),
+                    tokio::time::timeout(self.agent_config.title_timeout, run),
                 ) => match result {
                     Some(result) => result,
                     None => {
@@ -627,7 +629,7 @@ where
                     flush_received_title_partial("provider timeout").await?;
                     last_error = Some(anyhow::anyhow!(
                         "title inference timed out after {}s",
-                        TITLE_GENERATION_TIMEOUT_SECS
+                        self.agent_config.title_timeout.as_secs()
                     ));
                 }
             }

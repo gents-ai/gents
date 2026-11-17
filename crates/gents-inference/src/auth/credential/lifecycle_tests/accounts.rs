@@ -87,6 +87,8 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
             auth: gents_documents::BackendAuth::NodeOAuth { account_ref: None },
             connect_timeout_secs: None,
             discovery_timeout_secs: None,
+            client_version: None,
+            request_timeout_secs: None,
             max_concurrent: None,
             max_queue_depth: None,
             enabled: true,

@@ -12,11 +12,28 @@ def validBudget : Option Int → Bool
   | none => true
   | some value => decide (0 < value ∧ value ≤ maxTokenBudget)
 
+/-- Unset is `Goals.blockedAuditThreshold`; a threshold of zero would block a
+Goal before its first audit. -/
+def validBlockedAuditThreshold : Option Int → Bool
+  | none => true
+  | some value => decide (0 < value ∧ value ≤ maxTokenBudget)
+
+/-- Unset is `Goals.maxInfrastructureRetries`; zero pauses on the first Failed
+or Dead request. -/
+def validMaxInfrastructureRetries : Option Int → Bool
+  | none => true
+  | some value => decide (0 ≤ value ∧ value ≤ maxTokenBudget)
+
+/-- The creation claim pins the Goal limits beside the budget, so a replay
+that asks for other limits conflicts instead of returning a Goal that keeps
+the earlier ones. Unset limits are the `Goals` defaults; only a Task sets them. -/
 structure Fingerprint where
   owner : Did
   session : SessionId
   objective : String
   tokenBudget : Option Int
+  blockedAuditThreshold : Option Int := none
+  maxInfrastructureRetries : Option Int := none
   deriving DecidableEq, Repr
 
 structure CreateRequest where
@@ -27,6 +44,8 @@ structure CreateRequest where
   objective : String
   objectiveNonempty : Bool
   tokenBudget : Option Int
+  blockedAuditThreshold : Option Int := none
+  maxInfrastructureRetries : Option Int := none
   goalTools : Bool
   goalCreate : Bool
   deriving DecidableEq, Repr
@@ -43,14 +62,18 @@ def createFingerprint (request : CreateRequest) : Fingerprint :=
   { owner := request.caller
   , session := request.currentSession
   , objective := TextNormalization.canonicalObjective request.objective
-  , tokenBudget := request.tokenBudget }
+  , tokenBudget := request.tokenBudget
+  , blockedAuditThreshold := request.blockedAuditThreshold
+  , maxInfrastructureRetries := request.maxInfrastructureRetries }
 
 def decideCreate (request : CreateRequest) (existing : Option Fingerprint) : CreateDisposition :=
   if !request.goalTools || !request.goalCreate then .denied
   else if request.requestedOwner != request.caller ||
       request.requestedSession != request.currentSession then .denied
   else if !request.objectiveNonempty || (TextNormalization.canonicalObjective request.objective).isEmpty ||
-      !validBudget request.tokenBudget then .invalid
+      !validBudget request.tokenBudget ||
+      !validBlockedAuditThreshold request.blockedAuditThreshold ||
+      !validMaxInfrastructureRetries request.maxInfrastructureRetries then .invalid
   else match existing with
   | none => .fresh
   | some fingerprint =>
@@ -81,10 +104,26 @@ theorem duplicate_create_is_idempotent (request : CreateRequest)
     (hsession : request.requestedSession = request.currentSession)
     (hobjective : request.objectiveNonempty = true)
     (htrimmed : (TextNormalization.canonicalObjective request.objective).isEmpty = false)
-    (hbudget : validBudget request.tokenBudget = true) :
+    (hbudget : validBudget request.tokenBudget = true)
+    (hthreshold : validBlockedAuditThreshold request.blockedAuditThreshold = true)
+    (hretries : validMaxInfrastructureRetries request.maxInfrastructureRetries = true) :
     decideCreate request (some (createFingerprint request)) = .idempotent := by
   rcases hcaps with ⟨hgoal, hcreate⟩
-  simp [decideCreate, hgoal, hcreate, howner, hsession, hobjective, htrimmed, hbudget]
+  simp [decideCreate, hgoal, hcreate, howner, hsession, hobjective, htrimmed, hbudget,
+    hthreshold, hretries]
+
+theorem replay_with_other_limits_conflicts (request : CreateRequest)
+    (existing : Fingerprint)
+    (hlimits : existing.blockedAuditThreshold ≠ request.blockedAuditThreshold ∨
+      existing.maxInfrastructureRetries ≠ request.maxInfrastructureRetries) :
+    decideCreate request (some existing) ≠ .idempotent := by
+  unfold decideCreate
+  split <;> simp_all
+  split <;> simp_all
+  split <;> simp_all
+  intro heq
+  subst heq
+  rcases hlimits with h | h <;> simp [createFingerprint] at h
 
 theorem invalid_budget_never_creates (request : CreateRequest)
     (existing : Option Fingerprint)
@@ -94,16 +133,46 @@ theorem invalid_budget_never_creates (request : CreateRequest)
   split <;> simp_all
   split <;> simp_all
 
+/-- A Task's Goal declaration. The limits are pinned on every Goal the Task
+creates or assigns; Goals the model creates with goal tools have no Task and
+keep the `Goals` defaults. -/
 structure TaskGoalDeclaration where
   goalObjective : Option String
   goalTokenBudget : Option Int
+  goalBlockedAuditThreshold : Option Int
+  goalMaxInfrastructureRetries : Option Int
   deriving DecidableEq, Repr
 
 def validTaskGoalDeclaration (declaration : TaskGoalDeclaration) : Bool :=
   match declaration.goalObjective with
-  | none => declaration.goalTokenBudget.isNone
+  | none =>
+      declaration.goalTokenBudget.isNone &&
+        declaration.goalBlockedAuditThreshold.isNone &&
+        declaration.goalMaxInfrastructureRetries.isNone
   | some objective =>
-      !(TextNormalization.canonicalObjective objective).isEmpty && validBudget declaration.goalTokenBudget
+      !(TextNormalization.canonicalObjective objective).isEmpty &&
+        validBudget declaration.goalTokenBudget &&
+        validBlockedAuditThreshold declaration.goalBlockedAuditThreshold &&
+        validMaxInfrastructureRetries declaration.goalMaxInfrastructureRetries
+
+theorem task_limits_require_goal_objective (declaration : TaskGoalDeclaration)
+    (hobjective : declaration.goalObjective = none)
+    (hlimits : declaration.goalBlockedAuditThreshold.isSome ∨
+      declaration.goalMaxInfrastructureRetries.isSome) :
+    validTaskGoalDeclaration declaration = false := by
+  unfold validTaskGoalDeclaration
+  rw [hobjective]
+  rcases hlimits with h | h <;>
+    cases hthreshold : declaration.goalBlockedAuditThreshold <;>
+    cases hretries : declaration.goalMaxInfrastructureRetries <;>
+    simp_all
+
+theorem valid_task_threshold_is_positive (declaration : TaskGoalDeclaration)
+    (threshold : Int) (hthreshold : declaration.goalBlockedAuditThreshold = some threshold)
+    (hvalid : validTaskGoalDeclaration declaration = true) :
+    0 < threshold := by
+  unfold validTaskGoalDeclaration at hvalid
+  split at hvalid <;> simp_all [validBlockedAuditThreshold]
 
 /-- The runtime-facing encoding is length-prefixed so the same node/Task/fire
 tuple deterministically recovers the same session and request retry identities
@@ -248,7 +317,7 @@ theorem invalid_task_goal_declaration_cannot_publish
   simp [decideTaskPublication, hinvalid]
 
 theorem task_without_goal_uses_ordinary_publication (nodeDid taskId fireKey : String) :
-    (decideTaskPublication ⟨none, none⟩ nodeDid taskId fireKey).mode = .ordinary := by
+    (decideTaskPublication ⟨none, none, none, none⟩ nodeDid taskId fireKey).mode = .ordinary := by
   simp [decideTaskPublication, validTaskGoalDeclaration]
 
 structure SubmissionState where

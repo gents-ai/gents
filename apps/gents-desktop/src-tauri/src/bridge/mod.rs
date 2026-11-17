@@ -49,15 +49,16 @@ pub(crate) fn context() -> tauri::Context<tauri::Wry> {
 pub fn run() {
     install_tracing(TracingConfig {
         filter: None,
-        console: std::env::var("GENTS_DESKTOP_CONSOLE_LOG")
-            .ok()
-            .is_some_and(|v| {
-                matches!(
-                    v.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            }),
+        console: std::env::args().skip(1).any(|arg| arg == "--console-log"),
     });
+    #[cfg(all(feature = "native-e2e", debug_assertions))]
+    let native_e2e = native_e2e_launch();
+    #[cfg(all(feature = "native-e2e", debug_assertions))]
+    let webview_store_id = native_e2e
+        .as_ref()
+        .and_then(|launch| launch.webview_store_id.clone());
+    #[cfg(not(all(feature = "native-e2e", debug_assertions)))]
+    let webview_store_id: Option<String> = None;
     // Before anything spawns a helper: a packaged launch puts its own copies
     // of the host's tools first on PATH, and an older bundled `xdg-open` can
     // open no browser at all while still reporting success.
@@ -66,7 +67,7 @@ pub fn run() {
 
     let context = context();
     #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
-    let context = native_local_e2e_context(context);
+    let context = native_local_e2e_context(context, native_e2e.as_ref());
     let mut context = context;
     let initial_windows: Vec<_> = context
         .config()
@@ -88,9 +89,18 @@ pub fn run() {
         .plugin(single_instance())
         .plugin(tauri_plugin_deep_link::init());
     #[cfg(target_os = "macos")]
-    let builder = builder.plugin(browser_store_lock());
+    let builder = builder.plugin(browser_store_lock(webview_store_id));
+    #[cfg(not(target_os = "macos"))]
+    let _ = webview_store_id;
+    let bridge_config = platform_bridge_config();
+    #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
+    let bridge_config = native_local_e2e_config(bridge_config, native_e2e.as_ref());
     let builder = builder
         .setup(move |app| {
+            #[cfg(all(feature = "native-e2e", debug_assertions))]
+            if let Some(launch) = native_e2e {
+                app.manage(launch);
+            }
             let telemetry_path = app
                 .path()
                 .app_config_dir()?
@@ -114,7 +124,7 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_fs::init())
-        .plugin(init(platform_bridge_config()))
+        .plugin(init(bridge_config))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
@@ -233,14 +243,33 @@ pub fn run() {
         });
 }
 
+/// Decodes a native-e2e build's `--native-e2e <json>` launch argument; a
+/// malformed one stops the launch rather than opening user data.
+#[cfg(all(feature = "native-e2e", debug_assertions))]
+fn native_e2e_launch() -> Option<gents_desktop_bridge::tauri_commands::e2e::NativeE2eLaunch> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--native-e2e" {
+            let raw = args.next().expect("--native-e2e requires a JSON value");
+            return Some(
+                gents_desktop_bridge::tauri_commands::e2e::NativeE2eLaunch::parse(&raw)
+                    .expect("valid --native-e2e launch configuration"),
+            );
+        }
+    }
+    None
+}
+
 #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
-fn native_local_e2e_context(mut context: tauri::Context<tauri::Wry>) -> tauri::Context<tauri::Wry> {
-    if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() == Some("1")
-        && std::env::var("GENTS_E2E_LOCAL_MODEL").is_ok()
-    {
-        let identifier = crate::browser_data::isolated_store_identifier()
-            .expect("valid isolated WebView store identifier")
-            .expect("native E2E requires an isolated WebView store");
+fn native_local_e2e_context(
+    mut context: tauri::Context<tauri::Wry>,
+    launch: Option<&gents_desktop_bridge::tauri_commands::e2e::NativeE2eLaunch>,
+) -> tauri::Context<tauri::Wry> {
+    if let Some(launch) = launch.filter(|launch| launch.local.is_some()) {
+        let identifier =
+            crate::browser_data::isolated_store_identifier(launch.webview_store_id.as_deref())
+                .expect("valid isolated WebView store identifier")
+                .expect("native E2E requires an isolated WebView store");
         for window in &mut context.config_mut().app.windows {
             window.data_store_identifier = Some(identifier);
         }
@@ -251,13 +280,15 @@ fn native_local_e2e_context(mut context: tauri::Context<tauri::Wry>) -> tauri::C
 /// Held for the process lifetime from before any webview opens the shared
 /// WebKit store, so no reset clears it under this desktop.
 #[cfg(target_os = "macos")]
-fn browser_store_lock<R>() -> tauri::plugin::TauriPlugin<R>
+fn browser_store_lock<R>(webview_store_id: Option<String>) -> tauri::plugin::TauriPlugin<R>
 where
     R: tauri::Runtime,
 {
     tauri::plugin::Builder::new("gents-browser-store")
-        .setup(|app, _api| {
-            app.manage(crate::browser_data::lock_store()?);
+        .setup(move |app, _api| {
+            app.manage(crate::browser_data::lock_store(
+                webview_store_id.as_deref(),
+            )?);
             Ok(())
         })
         .build()
@@ -271,9 +302,21 @@ where
     tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app))
 }
 
+/// `--desktop-home <PATH>` keeps the desktop client state in PATH instead of
+/// the platform's application data folder.
+fn launch_home_policy() -> HomePolicy {
+    std::env::args_os()
+        .skip(1)
+        .skip_while(|arg| arg != "--desktop-home")
+        .nth(1)
+        .map_or(HomePolicy::Default, |root| {
+            HomePolicy::FixedRoot(root.into())
+        })
+}
+
 fn platform_bridge_config() -> BridgeConfig {
-    let config = BridgeConfig {
-        home: HomePolicy::Default,
+    BridgeConfig {
+        home: launch_home_policy(),
         bootstrap: platform_bootstrap_policy(),
         app_meta: AppMeta {
             app_name: "Gents".into(),
@@ -283,34 +326,23 @@ fn platform_bridge_config() -> BridgeConfig {
         managed_server: platform_managed_server_policy(),
         client_host: cfg!(all(desktop, any(unix, windows))),
         store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::default(),
-    };
-    #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
-    let config = native_local_e2e_config(config);
-    config
+    }
 }
 
 #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
-fn native_local_e2e_config(config: BridgeConfig) -> BridgeConfig {
-    if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() != Some("1")
-        || std::env::var("GENTS_E2E_LOCAL_MODEL").is_err()
-    {
+fn native_local_e2e_config(
+    config: BridgeConfig,
+    launch: Option<&gents_desktop_bridge::tauri_commands::e2e::NativeE2eLaunch>,
+) -> BridgeConfig {
+    let Some(local) = launch.and_then(|launch| launch.local.as_ref()) else {
         return config;
-    }
-    let path = |name| {
-        let value = std::env::var_os(name)
-            .unwrap_or_else(|| panic!("{name} is required for local native E2E"));
-        let path = std::path::PathBuf::from(value);
-        assert!(path.is_absolute(), "{name} must be absolute");
-        path
     };
-    path(gents_desktop_core::client::DESKTOP_HOME_ENV);
     BridgeConfig {
+        home: HomePolicy::FixedRoot(local.desktop_home.clone()),
         bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
-            node_home: NodeHomePolicy::Fixed(path("GENTS_E2E_NODE_HOME")),
+            node_home: NodeHomePolicy::Fixed(local.node_home.clone()),
         },
-        store_key_custody: if std::env::var("GENTS_E2E_FILE_STORE_KEYS").ok().as_deref()
-            == Some("1")
-        {
+        store_key_custody: if local.file_store_keys {
             gents_store::local::store_key::StoreKeyCustodyChoice::File
         } else {
             config.store_key_custody

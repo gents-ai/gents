@@ -21,6 +21,7 @@ use tracing_subscriber::prelude::*;
 
 use gents_desktop_bridge::types::{DesktopBootstrapSummary, InitConfigStatus, SavedPeerView};
 
+pub(crate) use self::agent::LiveInferenceSettings;
 use self::agent::{spawn_live_node, RunningNode};
 use self::backend::LiveBackendConfig;
 pub(crate) use self::backend::LiveBackendOverride;
@@ -33,6 +34,16 @@ use self::workspace::seed_runner_node_home;
 
 const DEFAULT_DEPLOYMENT_LABEL: &str = "Fleet E2E Agent";
 const DEFAULT_NODE_NAME: &str = "fleet-e2e-agent";
+
+/// Runner settings the bridge runner's entry point parses from its arguments.
+#[derive(Debug, Default)]
+pub(crate) struct LiveFixtureOptions {
+    /// Keeps the fixture's temporary data root after shutdown.
+    pub(crate) retain_data: bool,
+    /// Serves the routes that reach past the desktop client into the fixture.
+    pub(crate) fixture_routes: bool,
+    pub(crate) inference: LiveInferenceSettings,
+}
 
 pub(crate) struct LiveBridgeFixture {
     tempdir: Mutex<Option<tempfile::TempDir>>,
@@ -50,6 +61,8 @@ pub(crate) struct LiveBridgeFixture {
     update_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     running_node: Mutex<Option<RunningNode>>,
     shutdown_started: AtomicBool,
+    retain_data: bool,
+    fixture_routes: bool,
     /// The node the runner's one frontend selected, as a window's selection.
     selected_node: std::sync::Mutex<Option<String>>,
 }
@@ -132,6 +145,10 @@ impl LiveBridgeFixture {
         &self.node_did
     }
 
+    pub(crate) fn fixture_routes(&self) -> bool {
+        self.fixture_routes
+    }
+
     pub(crate) fn deployment_label(&self) -> &str {
         &self.deployment_label
     }
@@ -202,7 +219,7 @@ impl LiveBridgeFixture {
 
         self.remote_core.shutdown().await?;
         self.desktop_core.shutdown().await?;
-        if std::env::var_os("GENTS_TAURI_LIVE_RETAIN_DATA").is_some() {
+        if self.retain_data {
             if let Some(tempdir) = self.tempdir.lock().await.take() {
                 let retained = tempdir.keep();
                 tracing::info!(path = %retained.display(), "retained live bridge fixture data");
@@ -214,9 +231,8 @@ impl LiveBridgeFixture {
     pub(crate) async fn start(
         backend_override: Option<LiveBackendOverride>,
         agent_target_backend_override: Option<LiveTargetBackendOverride>,
+        options: LiveFixtureOptions,
     ) -> Result<Arc<Self>> {
-        init_live_runner_tracing();
-
         let backend = LiveBackendConfig::resolve(backend_override.as_ref())?;
         let agent_target_backend =
             LiveBackendConfig::resolve_target(agent_target_backend_override.as_ref(), &backend)?;
@@ -254,6 +270,7 @@ impl LiveBridgeFixture {
             DEFAULT_NODE_NAME,
             &backend,
             agent_target_backend.as_ref(),
+            &options.inference,
         )
         .await?;
         let runtime_p2p = gents_store::identity::node_p2p(&runtime_home.node)
@@ -394,13 +411,13 @@ impl LiveBridgeFixture {
             update_task: Mutex::new(Some(update_task)),
             running_node: Mutex::new(Some(running_node)),
             shutdown_started: AtomicBool::new(false),
+            retain_data: options.retain_data,
+            fixture_routes: options.fixture_routes,
             selected_node: std::sync::Mutex::new(None),
         }))
     }
 
-    pub(crate) async fn start_desktop_only() -> Result<Arc<Self>> {
-        init_live_runner_tracing();
-
+    pub(crate) async fn start_desktop_only(options: LiveFixtureOptions) -> Result<Arc<Self>> {
         let tempdir = tempfile::tempdir()?;
         let remote_paths = DesktopPaths::from_root(tempdir.path().join("remote-empty"));
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
@@ -481,6 +498,8 @@ impl LiveBridgeFixture {
             update_task: Mutex::new(Some(update_task)),
             running_node: Mutex::new(None),
             shutdown_started: AtomicBool::new(false),
+            retain_data: options.retain_data,
+            fixture_routes: options.fixture_routes,
             selected_node: std::sync::Mutex::new(None),
         }))
     }
@@ -556,24 +575,18 @@ fn live_core_options() -> ClientCoreOptions {
     options
 }
 
-fn init_live_runner_tracing() {
-    static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    INIT.get_or_init(|| {
-        let filter = std::env::var("GENTS_DESKTOP_TEST_LOG")
-            .map(tracing_subscriber::EnvFilter::new)
-            .unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("warn,gents_desktop_tauri=info")
-            });
-        let _ = tracing_subscriber::registry()
-            .with(filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(false)
-                    .compact()
-                    .without_time(),
-            )
-            .try_init();
-    });
+/// Installs the runner's log output; the bridge runner's entry point calls it
+/// once with its `--log-filter`.
+pub(crate) fn init_live_runner_tracing(filter: &str) {
+    let _ = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(filter))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .compact()
+                .without_time(),
+        )
+        .try_init();
 }
 
 #[cfg(test)]
@@ -608,8 +621,12 @@ mod tests {
         let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
             let mock = MockChatEndpoint::start(MODEL_NAME, "ok").await?;
-            let fixture =
-                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None).await?;
+            let fixture = LiveBridgeFixture::start(
+                Some(mock.backend_override(MODEL_NAME)),
+                None,
+                Default::default(),
+            )
+            .await?;
             let result = skill_create_delete_case(fixture.as_ref()).await;
             fixture.shutdown().await?;
             result
@@ -621,8 +638,12 @@ mod tests {
         let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
             let mock = MockChatEndpoint::start_with_held_prompt(MODEL_NAME, "skill loaded").await?;
-            let fixture =
-                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None).await?;
+            let fixture = LiveBridgeFixture::start(
+                Some(mock.backend_override(MODEL_NAME)),
+                None,
+                Default::default(),
+            )
+            .await?;
             let result = slash_skill_chat_case(fixture.as_ref(), &mock).await;
             fixture.shutdown().await?;
             result

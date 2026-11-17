@@ -235,18 +235,18 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800}"#,
     )
     .await;
-    let _env = crate::auth::credential::test_support::TOKEN_URL_ENV
-        .lock()
-        .await;
-    std::env::set_var(
-        crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+    let _refreshing = crate::auth::credential::test_support::bearer_refreshing_at(
+        &node,
+        did,
+        crate::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        crate::auth::credential::OAuthRefreshKind::Claude,
+        crate::auth::claude::CLAUDE_OAUTH_PRODUCT,
         &url,
     );
     let client = ClaudeSubscriptionClient::build(std::sync::Arc::default(), node, did, None)
         .await
         .expect("client");
     let bearer = client.accounts[0].bearer.current_bearer().await;
-    std::env::remove_var(crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     assert_eq!(bearer.expect("token"), "access-NEW");
 
     let request = handle.await.expect("server");

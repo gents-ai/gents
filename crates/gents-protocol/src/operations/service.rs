@@ -51,6 +51,23 @@ pub enum ServiceLifecycleDecision {
     UpdateInProgress,
 }
 
+/// Lean `ServiceLifecycle.CallerObservation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceLifecycleCallerObservation {
+    NoRuntime,
+    Ancestor,
+    NotAncestor,
+    Unobservable,
+}
+
+impl ServiceLifecycleCallerObservation {
+    /// Lean `ServiceLifecycle.CallerObservation.callerRunsOnTarget`.
+    pub fn caller_runs_on_target(self) -> bool {
+        matches!(self, Self::Ancestor | Self::Unobservable)
+    }
+}
+
 /// Lean `ServiceLifecycle.admission`.
 pub fn decide(
     action: ServiceLifecycleAction,
@@ -70,10 +87,11 @@ pub fn decide(
 /// caller named it, so the next call can be shown whole.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ServiceLifecycleRefusal {
-    #[error("service {} would end the runtime executing your turn; submit `gents runtime service update --home {home}` and finish your turn after acceptance, then read `gents runtime service update-status` after reconnect. Use external administration for maintenance an update does not cover", .action.as_str())]
+    #[error("service {} {}; submit `gents runtime service update --home {home}` and finish your turn after acceptance, then read `gents runtime service update-status` after reconnect. Use external administration for maintenance an update does not cover", .action.as_str(), disruption(.observation))]
     WouldDisruptCaller {
         action: ServiceLifecycleAction,
         home: String,
+        observation: ServiceLifecycleCallerObservation,
     },
     #[error("managed runtime update {operation_id} is in progress and owns the service definition, so service {} waits; run `gents runtime service update-status --home {home} {operation_id}` to read it and resume its supervisor", .action.as_str())]
     UpdateInProgress {
@@ -81,6 +99,21 @@ pub enum ServiceLifecycleRefusal {
         home: String,
         operation_id: String,
     },
+}
+
+/// What a refusal says the action would do, from what the caller observed of
+/// the running job.
+fn disruption(observation: &ServiceLifecycleCallerObservation) -> &'static str {
+    match observation {
+        ServiceLifecycleCallerObservation::Unobservable => {
+            "may end the runtime executing your turn: this process's ancestry could not be read, so it is treated as running under that runtime"
+        }
+        ServiceLifecycleCallerObservation::NoRuntime
+        | ServiceLifecycleCallerObservation::Ancestor
+        | ServiceLifecycleCallerObservation::NotAncestor => {
+            "would end the runtime executing your turn"
+        }
+    }
 }
 
 impl ServiceLifecycleRefusal {

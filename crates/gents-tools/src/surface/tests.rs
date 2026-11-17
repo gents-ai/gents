@@ -232,12 +232,14 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -289,12 +291,14 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -345,12 +349,14 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -398,12 +404,14 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -449,12 +457,14 @@ fn selection_cli_tools_require_ceiling_entries() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -510,12 +520,14 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -570,6 +582,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_goal_creation: false,
@@ -580,6 +593,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             ],
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -721,6 +735,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -730,6 +745,7 @@ fn background_tool_allowlist_registers_r6_tools() {
                 "bash_unrestricted".to_string(),
                 "bash_unrestricted".to_string(),
             ],
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -776,12 +792,14 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: vec!["read_file".to_string()],
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -836,12 +854,14 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             command_output_limits: Default::default(),
             timeouts: Default::default(),
             file_limits: Default::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: false,
             enable_goal_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -2748,6 +2768,34 @@ async fn bash_schema_advertises_the_configured_background_lifetime() {
             "{description}"
         );
     }
+}
+
+#[test]
+fn configured_instruction_chars_reach_the_surface_and_unset_keeps_the_default() {
+    let ceiling = ToolCeiling::readwrite(temp_root("gents-instruction-chars"));
+    let config = |host: serde_json::Value| {
+        let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
+            "tools_id": "instructions", "node_did": "did:key:example", "host": host
+        }))
+        .unwrap();
+        AgentToolSurfaceConfig::from_tools_documents(
+            "instructions",
+            &tools,
+            &[],
+            &[],
+            &ceiling,
+            vec![],
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        config(serde_json::json!({"max_instruction_chars": 100})).max_instruction_chars(),
+        100
+    );
+    assert_eq!(
+        config(serde_json::json!({})).max_instruction_chars(),
+        gents_session::workspace::INSTRUCTION_TEXT_BUDGET
+    );
 }
 
 #[tokio::test]

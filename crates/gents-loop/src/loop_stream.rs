@@ -64,11 +64,14 @@ pub use contract::{
     TaggedMessage, TurnCompactionError, TurnCompactionOutcome, TurnCompactionRequest,
     TurnReductionCommit,
 };
+pub use invalid_tool_progress::DEFAULT_MAX_INVALID_TOOL_CALLS;
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
     OneShotNoVisibleOutput, OneShotProviderFailure,
 };
-pub use repeated_tool_failure::{REPEATED_TOOL_FAILURE_PREFIX, REPEATED_TOOL_SUCCESS_PREFIX};
+pub use repeated_tool_failure::{
+    DEFAULT_REPEATED_TOOL_FAILURE_LIMIT, REPEATED_TOOL_FAILURE_PREFIX, REPEATED_TOOL_SUCCESS_PREFIX,
+};
 pub use request_assembly::dispatch::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
 };
@@ -316,8 +319,10 @@ where
         if hook.is_none() {
             new_messages.extend(config.folded_prompts.iter().map(|row| TaggedMessage::unassociated(row.message.clone())));
         }
-        let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
-        let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolProgress::default();
+        let mut invalid_tool_progress =
+            invalid_tool_progress::InvalidToolProgress::new(config.max_invalid_tool_calls);
+        let mut repeated_tool_failure =
+            repeated_tool_failure::RepeatedToolProgress::new(config.repeated_tool_failure_limit);
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
@@ -530,7 +535,7 @@ where
                             dispatched_input_tokens,
                         ),
                         Err(failure) => {
-                            let failure = failure.classify();
+                            let failure = retry.read_failure(failure.classify(), Utc::now());
                             let directive =
                                 retry.on_pre_stream_failure(&failure, Utc::now(), config.deadline);
                             let backend_unavailable = crate::completion_retry::failure_class(&failure)
@@ -790,7 +795,7 @@ where
                         item
                     }
                     Err(failure) => {
-                        let failure = failure.classify();
+                        let failure = retry.read_failure(failure.classify(), Utc::now());
                         drop(stream);
                         // A usage limit or a model refusal is permanent while
                         // streaming too: resampling after partial output earns

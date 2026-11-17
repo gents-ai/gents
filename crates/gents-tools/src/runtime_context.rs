@@ -51,7 +51,6 @@ pub struct CurrentToolRuntimeContext {
     pub requester_did: Option<String>,
     pub node_did: Option<String>,
     pub agent_did: Option<String>,
-    pub(crate) request_id: Option<String>,
 }
 
 #[expect(
@@ -277,7 +276,6 @@ fn with_workspace(
         requester_did: scope.requester_did,
         node_did: scope.node_did,
         agent_did: scope.agent_did,
-        request_id: scope.request_id,
     }
 }
 
@@ -307,7 +305,6 @@ pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
         requester_did: scope.requester_did,
         node_did: scope.node_did,
         agent_did: scope.agent_did,
-        request_id: scope.request_id,
     })
 }
 

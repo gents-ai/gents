@@ -237,6 +237,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
 
     let limited_request_id = format!("show-limited-{}", Uuid::new_v4().simple());
     let failure = "provider usage limit reached (resets at 2030-01-01T00:00:00Z): The usage limit has been reached";
+    let usage_limited = gents_protocol::provider_limit::ProviderLimitVerdict::UsageLimited.as_str();
     graphql_query(
         &graphql,
         &format!(
@@ -252,6 +253,8 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     call_seq: 1, backend_id: "studios-cluster", agent_did: "parent-agent",
                     node_did: "{node_did}", call_kind: "inference", attempt: 1,
                     call_state: "failed", failure_reason: "{failure}",
+                    provider_limit: "{usage_limited}",
+                    provider_limit_resets_at: "2030-01-01T00:00:00Z",
                     queued_at: "2026-05-20T10:01:00Z", started_at: "2026-05-20T10:01:00Z",
                     ended_at: "2026-05-20T10:01:01Z"
                 }}) {{ _docID }}

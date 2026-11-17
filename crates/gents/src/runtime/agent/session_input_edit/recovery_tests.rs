@@ -62,6 +62,7 @@ async fn active_agents(
         backend_endpoint: String::new(),
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         claude_platform: None,
+        client_version: None,
         model_name: String::new(),
         profile_id: None,
         service_tier: None,
@@ -74,8 +75,14 @@ async fn active_agents(
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_inference::resolved::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_inference::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+        max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         stream_batch_ms: 0,
         stream_liveness_timeout: std::time::Duration::from_secs(5),
+        title_timeout: std::time::Duration::from_secs(
+            gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS,
+        ),
         provider_idle_timeout: std::time::Duration::from_secs(5),
         deadline_duration: std::time::Duration::from_secs(30),
         completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields::default(),
@@ -299,6 +306,7 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
         home.node.clone(),
         home.identity.clone(),
         Some(active_agents(&home).await),
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -402,6 +410,7 @@ async fn reconcile_until_verified(
         home.node.clone(),
         home.identity.clone(),
         Some(active_agents(home).await),
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);

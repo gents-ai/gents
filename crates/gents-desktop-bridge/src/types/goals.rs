@@ -49,6 +49,8 @@ pub struct GoalControlView {
     pub objective: String,
     pub status: String,
     pub token_budget: Option<String>,
+    pub blocked_audit_threshold: String,
+    pub max_infrastructure_retries: String,
     pub tokens_used: String,
     pub active_time_seconds: String,
     pub continuation_sequence: String,

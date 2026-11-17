@@ -18,6 +18,22 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_total_tokens: Option<i64>,
+    /// Invalid-argument, unknown-tool and policy-denied calls one execution
+    /// may make before it stops; default 8.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_invalid_tool_calls: Option<i64>,
+    /// Identical failing calls (same tool, arguments and error) dispatched
+    /// before further repeats are intercepted; default 3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub repeated_tool_failure_limit: Option<i64>,
+    /// Successors (operator reissues, background wake redrives) one request
+    /// lineage may take; the first claim pins it on the request. Zero allows
+    /// none; default 3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_request_retries: Option<i64>,
     /// Persistence batching cadence, not provider latency; default 1,000ms.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -30,6 +46,10 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub provider_idle_timeout_secs: Option<i64>,
+    /// Title-generation attempt timeout; default 10s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub title_timeout_secs: Option<i64>,
     /// Overall claimed-request duration, including tools; default 86,400s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -70,10 +90,17 @@ pub struct InferenceRetryPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub allow_repair: Option<bool>,
-    /// Default interactive successor ceiling; not a human approval gate.
+    /// Provider transport retries for interactive requests, in place of
+    /// `max_transport_retries`; not a successor-request ceiling.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub interactive_max_retries: Option<i64>,
+    pub interactive_max_transport_retries: Option<i64>,
+    /// Longest provider rate-limit wait the owned loop holds; a longer wait
+    /// fails the request as the provider's usage limit. Default 300,000ms;
+    /// `backoff_ms` steps may not exceed it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_rate_limit_wait_ms: Option<i64>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -100,6 +127,11 @@ impl InferenceExecution {
         for (name, value) in [
             ("max_turns", self.max_turns),
             ("max_total_tokens", self.max_total_tokens),
+            ("max_invalid_tool_calls", self.max_invalid_tool_calls),
+            (
+                "repeated_tool_failure_limit",
+                self.repeated_tool_failure_limit,
+            ),
             ("stream_batch_ms", self.stream_batch_ms),
             (
                 "stream_liveness_timeout_secs",
@@ -109,6 +141,7 @@ impl InferenceExecution {
                 "provider_idle_timeout_secs",
                 self.provider_idle_timeout_secs,
             ),
+            ("title_timeout_secs", self.title_timeout_secs),
             ("deadline_duration_secs", self.deadline_duration_secs),
         ] {
             if value.is_some_and(|value| value <= 0) {
@@ -116,6 +149,11 @@ impl InferenceExecution {
                     "InferenceExecution {execution_id} {name} must be positive"
                 ));
             }
+        }
+        if self.max_request_retries.is_some_and(|value| value < 0) {
+            violations.push(format!(
+                "InferenceExecution {execution_id} max_request_retries must be non-negative"
+            ));
         }
         if self
             .deadline_duration_secs
@@ -158,13 +196,22 @@ impl InferenceRetryPolicy {
         for (name, value) in [
             ("max_transport_retries", self.max_transport_retries),
             ("max_resample_retries", self.max_resample_retries),
-            ("interactive_max_retries", self.interactive_max_retries),
+            (
+                "interactive_max_transport_retries",
+                self.interactive_max_transport_retries,
+            ),
         ] {
             if value.is_some_and(|value| value < 0) {
                 violations.push(format!(
                     "InferenceRetryPolicy {retry_policy_id} {name} must be non-negative"
                 ));
             }
+        }
+
+        if self.max_rate_limit_wait_ms.is_some_and(|value| value <= 0) {
+            violations.push(format!(
+                "InferenceRetryPolicy {retry_policy_id} max_rate_limit_wait_ms must be positive"
+            ));
         }
 
         if self
@@ -174,6 +221,22 @@ impl InferenceRetryPolicy {
         {
             violations.push(format!(
                 "InferenceRetryPolicy {retry_policy_id} backoff_ms entries must be positive"
+            ));
+        }
+        let max_wait = self
+            .max_rate_limit_wait_ms
+            .filter(|value| *value > 0)
+            .unwrap_or(
+                i64::try_from(gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT.as_millis())
+                    .unwrap_or(i64::MAX),
+            );
+        if self
+            .backoff_ms
+            .as_ref()
+            .is_some_and(|values| values.iter().any(|value| *value > max_wait))
+        {
+            violations.push(format!(
+                "InferenceRetryPolicy {retry_policy_id} backoff_ms entries must not exceed max_rate_limit_wait_ms ({max_wait})"
             ));
         }
 

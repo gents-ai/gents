@@ -26,9 +26,17 @@ use resume::SessionResumePolicy;
 
 pub const NODE_DID_HEADER: &str = "x-node-did";
 
-const MCP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// Unset default of `RemoteServiceTools.connect_timeout_secs`.
+pub(crate) const MCP_CONNECT_TIMEOUT_SECS: u64 = 15;
 
-const MCP_LIST_TOOLS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Unset default of `RemoteServiceTools.discovery_timeout_secs`.
+pub(crate) const MCP_LIST_TOOLS_TIMEOUT_SECS: u64 = 30;
+
+const MCP_CONNECT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(MCP_CONNECT_TIMEOUT_SECS);
+
+const MCP_LIST_TOOLS_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(MCP_LIST_TOOLS_TIMEOUT_SECS);
 
 type ListToolsFuture = Pin<Box<dyn Future<Output = Result<ListToolsResult>> + Send + 'static>>;
 type CallToolFuture = Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send + 'static>>;
@@ -277,6 +285,7 @@ enum ParkAdmission {
     SafeReadRetry,
 }
 
+/// Closes pooled MCP connections idle this long. Callers reconnect transparently, so this is host connection hygiene, not agent behaviour; per-service timeouts live on `RemoteServiceTools`.
 pub const DEFAULT_MCP_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 impl McpPool {

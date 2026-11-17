@@ -66,7 +66,7 @@ impl ClientRouteManager {
             pairing_ready,
             last_run_elapsed,
             force,
-            gents_p2p::p2p_reconcile::intervals::sweep_interval(),
+            gents_p2p::p2p_reconcile::intervals::P2pIntervals::default().pairing_sweep,
         )
     }
 

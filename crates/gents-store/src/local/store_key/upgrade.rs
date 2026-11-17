@@ -384,17 +384,23 @@ async fn copy_and_verify(
     key: &StoreKey,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<()> {
-    let source =
-        RegolithStore::open_with_options(data, crate::local::storage_backend::regolith_options())?;
+    let source = RegolithStore::open_with_options(
+        data,
+        crate::local::storage_backend::regolith_options(
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        ),
+    )?;
     let result = async {
         if exists(stage)? {
             fs::remove_dir_all(stage)?;
         }
         fs::create_dir(stage)?;
         fs::set_permissions(stage, fs::metadata(data)?.permissions())?;
-        let target_options = crate::local::storage_backend::regolith_options()
-            .with_encryption_key(*key.0)
-            .with_isolation(regolith::IsolationLevel::SnapshotIsolation);
+        let target_options = crate::local::storage_backend::regolith_options(
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
+        .with_encryption_key(*key.0)
+        .with_isolation(regolith::IsolationLevel::SnapshotIsolation);
         let destination = RegolithStore::open_with_options(stage, target_options)?;
         let copied = copy_values(&source, &destination, progress).await;
         let closed = destination.close().await;
@@ -403,7 +409,10 @@ async fn copy_and_verify(
         closed?;
         let destination = RegolithStore::open_with_options(
             stage,
-            crate::local::storage_backend::regolith_options().with_encryption_key(*key.0),
+            crate::local::storage_backend::regolith_options(
+                crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )
+            .with_encryption_key(*key.0),
         )?;
         let verified = verify_values(&source, &destination, progress).await;
         let closed = destination.close().await;
@@ -464,12 +473,19 @@ async fn recheck_source(
     key: &StoreKey,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<bool> {
-    let source =
-        RegolithStore::open_with_options(data, crate::local::storage_backend::regolith_options())?;
+    let source = RegolithStore::open_with_options(
+        data,
+        crate::local::storage_backend::regolith_options(
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        ),
+    )?;
     let result = async {
         let destination = RegolithStore::open_with_options(
             stage,
-            crate::local::storage_backend::regolith_options().with_encryption_key(*key.0),
+            crate::local::storage_backend::regolith_options(
+                crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )
+            .with_encryption_key(*key.0),
         )?;
         let equal = values_equal(&source, &destination, progress).await;
         let closed = destination.close().await;

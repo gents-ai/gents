@@ -1542,7 +1542,52 @@ fn item_cfg_test(item: &syn::Item) -> bool {
         syn::Item::Use(item) => &item.attrs,
         _ => return false,
     };
-    cfg_test(attributes)
+    cfg_test(attributes) || attributes.iter().any(cfg_requires_test)
+}
+
+/// Whether a `#[cfg(..)]` compiles its item only under `test`: the predicate
+/// is `test` or an `all(..)` with a conjunct that requires it.
+fn cfg_requires_test(attribute: &syn::Attribute) -> bool {
+    attribute.path().is_ident("cfg")
+        && attribute
+            .parse_args::<syn::Meta>()
+            .is_ok_and(|predicate| predicate_requires_test(&predicate))
+}
+
+fn predicate_requires_test(predicate: &syn::Meta) -> bool {
+    match predicate {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|conjuncts| conjuncts.iter().any(predicate_requires_test)),
+        _ => false,
+    }
+}
+
+#[test]
+fn item_cfg_test_excludes_items_whose_cfg_requires_test() {
+    let syntax = syn::parse_file(
+        r#"
+        #[cfg(test)] fn a() {}
+        #[cfg(any(test, feature = "test-fixtures"))] fn b() {}
+        #[cfg(all(test, unix))] mod c {}
+        #[cfg(all(unix, all(target_os = "macos", test)))] fn d() {}
+        #[cfg(unix)] fn e() {}
+        #[cfg(any(test, unix))] fn f() {}
+        #[cfg(not(test))] fn g() {}
+        #[cfg(all(unix, not(test)))] fn h() {}
+        #[cfg(all(any(test, feature = "test-fixtures"), unix))] fn i() {}
+        fn j() {}
+        "#,
+    )
+    .expect("parse snippet");
+    let excluded = syntax.items.iter().map(item_cfg_test).collect::<Vec<_>>();
+    assert_eq!(
+        excluded,
+        [true, true, true, true, false, false, false, false, false, false]
+    );
 }
 
 impl<'ast> Visit<'ast> for RigPathVisitor {
@@ -2081,6 +2126,325 @@ fn ambient_context_skips_only_named_documented_statics() {
             "{source}"
         );
     }
+}
+
+/// Application code takes its behaviour from configuration documents and
+/// command-line flags, never from the process environment: an environment
+/// variable is invisible to the store, to other clients and to the model, and
+/// request context read from it is lost across a spawn. Build scripts and the
+/// Lean decoders, which link only into tests, are exempt. Entries name why each remaining production read stays or what
+/// replaces it; the list only shrinks (#1764).
+#[rustfmt::skip]
+const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("apps/gents-desktop/src-tauri/src/bin/bridge_runner.rs", 1, "presence of the provider API key variable a live backend names, checked at the bridge test runner's entry; the runtime reads the key itself"),
+    ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 1, "HOME: platform discovery, expands a leading ~ in a user-typed path"),
+    ("apps/gents-desktop/src-tauri/src/bridge/links.rs", 1, "APPIMAGE: AppImage probe deciding how links open from a packaged Linux build"),
+    ("crates/gents-chatgpt-login/src/lib.rs", 1, "CODEX_CA_CERT and SSL_CERT_FILE: standard custom CA bundle convention for the login HTTP client"),
+    ("crates/gents-cli/src/commands/chat/streaming.rs", 1, "NO_COLOR: standard convention disabling terminal colour"),
+    ("crates/gents-cli/src/commands/eval/frame.rs", 1, "NO_COLOR: standard convention disabling terminal colour"),
+    ("crates/gents-cli/src/commands/init.rs", 1, "HOME: platform discovery for the default tool root"),
+    ("crates/gents-cli/src/commands/job/promote.rs", 1, "JAVY: tool discovery for the javy compiler, like PATH"),
+    ("crates/gents-cli/src/commands/pack/registry.rs", 1, "GENTS_REGISTRY_TOKEN: registry credential kept out of argv and shell history"),
+    ("crates/gents-cli/src/commands/pack/scenario/load.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
+    ("crates/gents-cli/src/commands/pack/scenario/setup.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
+    ("crates/gents-cli/src/commands/pack/wire.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
+    ("crates/gents-cli/src/desired_state/load.rs", 1, "desired-state ${VAR} interpolation: the manifest names operator-supplied variables"),
+    ("crates/gents-desktop-bridge/src/host_browser.rs", 4, "BROWSER, PATH, APPDIR and APPIMAGE: platform browser discovery and the AppImage probe"),
+    ("crates/gents-desktop-bridge/src/package_tools.rs", 6, "PATH, APPDIR, APPIMAGE and launcher overrides: AppImage probe restoring the host environment for host programs"),
+    ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 4, "GENTS_BIN, PATH, APPDIR and APPIMAGE: discovery of the gents executable and the AppImage probe"),
+    ("crates/gents-desktop-core/src/local_runtime/mod.rs", 1, "HOME: platform discovery of the user home for the local runtime service"),
+    ("crates/gents-desktop/src/main.rs", 2, "GENTS_DESKTOP_TAURI_BIN and PATH: discovery of the desktop executable"),
+    ("crates/gents-documents/src/inference_backend.rs", 1, "reads the variable an InferenceBackend document names as its API key source (auth kind environment)"),
+    ("crates/gents-eval/src/optimization/driver.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
+    ("crates/gents-eval/src/runner/embedded/executor/install.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
+    ("crates/gents-eval/src/runner/freeze/pack.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
+    ("crates/gents-host/src/serve.rs", 2, "the secret named by the metrics token flag, and HOME for home discovery"),
+    ("crates/gents-inference/src/clients/claude_messages/transport.rs", 2, "HTTPS_PROXY/https_proxy and NO_PROXY: standard proxy convention for the Claude Messages transport"),
+    ("crates/gents-pack/src/operations/pack.rs", 2, "pack variables whose declared source is the operator's environment"),
+    ("crates/gents-pack/src/pack/install_flow.rs", 1, "pack variables whose declared source is the operator's environment"),
+    ("crates/gents-pack/src/pack/interpolate.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
+    ("crates/gents-pack/src/plugin/host_imports.rs", 2, "passes the variables an installed plugin's consented manifold env access names into its sandbox"),
+    ("crates/gents-service/src/native_service.rs", 7, "HOME, XDG_CONFIG_HOME, PATH, APPDIR and APPIMAGE: platform discovery of the service unit paths and the AppImage probe"),
+    ("crates/gents-service/src/telemetry.rs", 1, "OTEL_EXPORTER_OTLP_* and OTEL_SERVICE_NAME: standard OpenTelemetry convention"),
+    ("crates/gents-session/src/workspace/adapter.rs", 1, "inherits the process environment for a managed git child, minus the git variables it overrides"),
+    ("crates/gents-tools/src/native/native_runner.rs", 1, "GENTS_FS_RUNNER: discovery of the filesystem runner executable"),
+    ("crates/gents-tools/src/ux_preview.rs", 1, "GENTS_UX_PREVIEW_ASSETS: discovery of the preview renderer assets outside an installed layout"),
+    ("crates/gents-tools/src/ux_preview/browser.rs", 1, "PATH: platform discovery of a system browser"),
+    ("crates/gents/examples/serve_default_agent.rs", 1, "example program configured by its environment; not shipped"),
+];
+
+#[derive(Default)]
+struct EnvironmentReadVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for EnvironmentReadVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Some(name) = path_name(call) {
+            let mut segments = name.rsplit("::");
+            let function = segments.next().unwrap_or_default();
+            if segments.next() == Some("env")
+                && matches!(function, "var" | "var_os" | "vars" | "vars_os")
+            {
+                self.sites += 1;
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+}
+
+fn environment_read_sites(syntax: &syn::File) -> usize {
+    let mut visitor = EnvironmentReadVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn runtime_environment_reads_only_shrink() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .filter(|(relative, _)| !relative.ends_with("build.rs"))
+        .filter(|(relative, _)| !test_only_decoder_source(relative))
+        .map(|(relative, syntax)| (relative, environment_read_sites(&syntax)))
+        .filter(|(_, sites)| *sites > 0)
+        .collect::<BTreeMap<_, _>>();
+    let allowed = ENVIRONMENT_READ_ALLOWLIST
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new environment read(s); take the value from a configuration document or a flag"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} environment reads exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} environment reads; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|(path, count)| format!("    (\"{path}\", {count}, \"<reason>\"),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "runtime environment read ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn environment_reads_count_calls_outside_test_items() {
+    let syntax = syn::parse_file(
+        r#"
+        fn a() { let _ = std::env::var("A"); let _ = env::var_os("B"); }
+        fn b() { for _ in std::env::vars() {} let _ = env!("C"); let _ = option_env!("D"); }
+        fn c() { let _ = var("E"); std::env::set_var("F", "1"); }
+        #[cfg(test)]
+        fn d() { let _ = std::env::var("G"); }
+        #[cfg(test)]
+        mod tests { fn e() { let _ = std::env::var("H"); } }
+        #[cfg(all(test, unix))]
+        mod unix_tests { fn f() { let _ = std::env::var("I"); } }
+        "#,
+    )
+    .expect("parse snippet");
+    assert_eq!(environment_read_sites(&syntax), 3);
+}
+
+/// Configuration and request context travel as explicit arguments or fields
+/// on the owner that already reaches the reader, never in a process-wide
+/// static: a static is shared by every node and Agent in the process, so the
+/// last writer wins for all of them. This counts non-test `static` items whose
+/// type is interior-mutable or lazily initialised, and every `static mut`.
+/// Entries name why each remaining static is a genuine process singleton (set
+/// once at the entry point or a fixed property of the build, the same for every
+/// Agent) or what owner replaces it; the list only shrinks (#1764).
+#[rustfmt::skip]
+const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 2, "BROWSER: the one AppKit in-app browser view, touched only on the main thread; APPLIED: last applied browser command sequence, ordering async commands onto that view"),
+    ("apps/gents-desktop/src-tauri/src/bridge/notifications.rs", 1, "WAITING: count of notification waiter threads in this app process, bounding them at MAX_WAITING"),
+    ("apps/gents-desktop/src-tauri/src/bridge/plugin_window/placement.rs", 1, "PLACES: cache of the app's plugin-windows.json placements; one desktop app per process"),
+    ("apps/gents-desktop/src-tauri/src/bridge/swipe.rs", 1, "SCROLL_ROOM: per-view scroll edges the AppKit swipe monitor reads; one monitor per app process"),
+    ("apps/gents-desktop/src-tauri/src/bridge/windows.rs", 1, "NEXT_WINDOW: counter naming each new window of this app process"),
+    ("crates/gents-automation/src/lifecycle_hooks.rs", 2, "BUNDLED and SELECTION: the build's fixed callback composition; nodes compare attached extensions by address, so every attachment must receive the same Arc"),
+    ("crates/gents-desktop-bridge/src/runtime_setup.rs", 1, "TAURI_RUNTIME: the desktop process's one Tokio runtime, installed at its entry point"),
+    ("crates/gents-desktop-bridge/src/snapshot/runtime.rs", 1, "STARTERS: memo of each session's resolved starter link keyed by its evidence, a pure read cache"),
+    ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 2, "INSTALL_LOCK and INSTALL_ATTEMPT: serialise and name copies of the gents executable into one shared install location"),
+    ("crates/gents-desktop-core/src/local_runtime/mod.rs", 1, "CLIENT: shared HTTP connection pool to the local runtime"),
+    ("crates/gents-eval/src/authoring/dossier.rs", 1, "COLLECTIONS: parse of the compiled-in canonical SDL, a build constant"),
+    ("crates/gents-host/src/http/pack_watch.rs", 1, "WATCH_SLOTS: host ceiling of 16 concurrent pack watch streams per process"),
+    ("crates/gents-host/src/http/version.rs", 1, "VERSION: the serving binary's build metadata, installed once at its entry point"),
+    ("crates/gents-host/src/p2p_status.rs", 1, "CLIENT: shared HTTP connection pool for P2P status probes"),
+    ("crates/gents-inference/src/admission/config.rs", 1, "FINGERPRINT_KEY: random per-process HMAC key that must never persist, so fingerprints cannot test candidate credentials"),
+    ("crates/gents-inference/src/auth/credential/bearer.rs", 1, "REGISTRY: weak map sharing one live OAuth bearer per node and credential id, so concurrent refreshes do not race"),
+    ("crates/gents-inference/src/clients/claude_messages/bedrock.rs", 1, "PROFILES: cache of Bedrock inference profile listings keyed by route"),
+    ("crates/gents-inference/src/clients/claude_messages/fixtures.rs", 2, "QUEUE and FIXTURE_LOCK: SSE fixtures compiled only under test or the test-fixtures feature"),
+    ("crates/gents-inference/src/clients/claude_messages/google.rs", 1, "TOKENS: cache of Google access tokens keyed by credential digest"),
+    ("crates/gents-inference/src/clients/claude_messages/transport.rs", 2, "SHARED: connection pools built once from the process proxy environment; GZIP_LATCHED_OFF: latch after a peer rejects gzip"),
+    ("crates/gents-lean-contract/src/lib.rs", 2, "PROCESS_STDOUT_CACHE and PROCESS_LOAD_MUTEX: memo of the Lean contract run in a test-only decoder crate"),
+    ("crates/gents-lean-vocab/src/lib.rs", 1, "LEAN_CONTRACT_SNAPSHOT: memo of the Lean snapshot in a test-only decoder crate"),
+    ("crates/gents-migration/src/engine.rs", 1, "ENSURE_LOCK: serialises migration of stores opened by the desktop and runtime paths in one process"),
+    ("crates/gents-migration/src/registry.rs", 4, "BASELINE_SCHEMAS, BASELINE_ROOTS, DEFAULT_BASELINE and DEFAULT_REGISTRY: lazily built compiled-in migration data"),
+    ("crates/gents-p2p/src/p2p_reconcile/enrollment_store.rs", 1, "GATES: weak per-node enrollment decision locks keyed by node address"),
+    ("crates/gents-pack/src/pack/registry.rs", 1, "DOWNLOAD_TURN: one registry download at a time per process, because the registry rejects overlapping downloads from one address"),
+    ("crates/gents-pack/src/plugin/allowed/protected.rs", 1, "PROTECTED: union of the reserved approval files of every home this process opened; a write guard that only grows, never a per-Agent choice"),
+    ("crates/gents-pack/src/plugin/script_engine.rs", 1, "ENGINE: the process's one sealed JS engine"),
+    ("crates/gents-pack/src/plugin/ux/lint.rs", 10, "compiled regular expressions and token sets of the page lint rules"),
+    ("crates/gents-pack/src/plugin/wasi_runtime.rs", 1, "RUNTIME: the plugin WASI executor shared by plugin call threads"),
+    ("crates/gents-protocol/src/failure_text.rs", 5, "compiled redaction regular expressions"),
+    ("crates/gents-protocol/src/graphql/transport.rs", 1, "CLIENT: shared GraphQL HTTP connection pool"),
+    ("crates/gents-service/src/home_state.rs", 2, "UNIT_TEST_PROCESS and ROOT: throwaway homes compiled only under test or the test-home-guard feature"),
+    ("crates/gents-session/src/exec/process/registry.rs", 2, "NEXT_EXEC_ID and ACTIVE_EXECS: registry of child processes this process spawned, for reaping"),
+    ("crates/gents-session/src/request/admission.rs", 1, "DEFAULT_REQUEST_INPUT: the constant default RequestInput"),
+    ("crates/gents-session/src/request/lifecycle/queue/atomic_inputs.rs", 1, "GATES: weak per-node, per-session queue completion locks"),
+    ("crates/gents-session/src/session/output/replay_capture.rs", 1, "LIMITER: log rate limit of one call site"),
+    ("crates/gents-store/src/config_client/common.rs", 1, "LAST_RECREATE_IDENTITY_NANOS: process-local monotonic clock for recreate identities"),
+    ("crates/gents-store/src/config_client/graphql.rs", 1, "CLIENT: shared GraphQL HTTP connection pool"),
+    ("crates/gents-store/src/config_client/subscription.rs", 1, "CLIENT: shared subscription HTTP connection pool"),
+    ("crates/gents-store/src/config_client/txn/gate.rs", 1, "GATES: weak per-node mutation write gates keyed by node address"),
+    ("crates/gents-store/src/identity.rs", 1, "TYPED_KEYS: cache of public keys decoded from DIDs, a pure function of the DID"),
+    ("crates/gents-store/src/identity/request_receipt.rs", 1, "DEFAULT_REQUEST_INPUT: the constant default RequestInput"),
+    ("crates/gents-store/src/node_extension.rs", 1, "TABLE: extensions attached to each live node, keyed by node address"),
+    ("crates/gents-store/src/service.rs", 1, "BUILD: digest of the running executable, computed once"),
+    ("crates/gents-toolcalls/src/call/lifecycle/recovery.rs", 1, "WARNED: log rate limit for unresolved parent warnings"),
+    ("crates/gents-toolcalls/src/plugin/executor.rs", 1, "DECLARATION: constant callback planner plugin declaration"),
+    ("crates/gents-toolcalls/src/plugin/model_calls.rs", 1, "LIMITERS: plugin model call semaphores keyed by backend and its max_concurrent, so each backend's configured limit is shared by every caller"),
+    ("crates/gents-tools/src/builtin/self_config/configuration_discovery/text.rs", 5, "compiled redaction regular expressions"),
+    ("crates/gents-tools/src/native/command_observability.rs", 2, "POLICY_REJECTIONS and CREDENTIAL_INSPECTION_FAILURES: process metrics counters"),
+    ("crates/gents-tools/src/native/native_runner.rs", 1, "SELF_RUNNER_ENABLED: property of the binary, set once at the entry point of the gents CLI and desktop app"),
+];
+
+const PROCESS_STATIC_TYPES: &[&str] = &[
+    "Mutex",
+    "RwLock",
+    "OnceLock",
+    "OnceCell",
+    "LazyLock",
+    "LazyCell",
+    "Lazy",
+    "Semaphore",
+];
+
+fn names_process_state(ty: &syn::Type) -> bool {
+    struct TypeNames(bool);
+    impl<'ast> Visit<'ast> for TypeNames {
+        fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+            let name = segment.ident.to_string();
+            if PROCESS_STATIC_TYPES.contains(&name.as_str()) || name.starts_with("Atomic") {
+                self.0 = true;
+            }
+            visit::visit_path_segment(self, segment);
+        }
+    }
+    let mut names = TypeNames(false);
+    names.visit_type(ty);
+    names.0
+}
+
+#[derive(Default)]
+struct ProcessStaticVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for ProcessStaticVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_static(&mut self, item: &'ast syn::ItemStatic) {
+        if matches!(item.mutability, syn::StaticMutability::Mut(_)) || names_process_state(&item.ty)
+        {
+            self.sites += 1;
+        }
+        visit::visit_item_static(self, item);
+    }
+}
+
+fn process_static_sites(syntax: &syn::File) -> usize {
+    let mut visitor = ProcessStaticVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn process_wide_statics_only_shrink() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .map(|(relative, syntax)| (relative, process_static_sites(&syntax)))
+        .filter(|(_, sites)| *sites > 0)
+        .collect::<BTreeMap<_, _>>();
+    let allowed = PROCESS_STATIC_ALLOWLIST
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new process-wide static(s); pass the value as an argument or a field on its owner"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} process-wide statics exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} process-wide statics; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|(path, count)| format!("    (\"{path}\", {count}, \"<reason>\"),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "process-wide static ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn process_statics_count_interior_mutable_statics_outside_test_items() {
+    let syntax = syn::parse_file(
+        r##"
+        static A: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        static B: AtomicU64 = AtomicU64::new(0);
+        static mut C: u8 = 0;
+        fn f() { static D: OnceLock<Arc<u8>> = OnceLock::new(); }
+        static E: std::sync::LazyLock<Option<RwLock<u8>>> = std::sync::LazyLock::new(|| None);
+        static F: &[&str] = &["Mutex"];
+        static G: u64 = 0;
+        const H: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        fn g() { let _ = r#"static I: RwLock<u8> = RwLock::new(0);"#; }
+        thread_local! { static J: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
+        #[cfg(test)]
+        static K: OnceLock<u8> = OnceLock::new();
+        #[cfg(test)]
+        mod tests { static L: AtomicBool = AtomicBool::new(false); }
+        "##,
+    )
+    .expect("parse snippet");
+    assert_eq!(process_static_sites(&syntax), 5);
 }
 
 /// Functions that write a file with `fs::write` and then give that path an
@@ -4301,6 +4665,132 @@ fn crate_dependency_violations(
     violations
 }
 
+/// Sources of the Lean decoders, which link only into tests
+/// (`test_only_decoders_link_only_into_tests`).
+fn test_only_decoder_source(relative: &str) -> bool {
+    TEST_ONLY_DECODERS
+        .iter()
+        .any(|name| relative.starts_with(&format!("crates/{name}/")))
+}
+
+/// Normal or build dependencies on a Lean decoder that could reach a shipped
+/// build: each must be optional and enabled only by `test-fixtures`.
+fn test_only_decoder_violations(
+    name: &str,
+    manifest: &toml::Table,
+    inherited: &toml::Table,
+) -> Vec<String> {
+    if TEST_ONLY_DECODERS.contains(&name) {
+        return Vec::new();
+    }
+    let mut tables = vec![manifest];
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        tables.extend(targets.values().filter_map(toml::Value::as_table));
+    }
+    let features = manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .cloned()
+        .unwrap_or_default();
+    let mut violations = Vec::new();
+    for table in tables {
+        for kind in ["dependencies", "build-dependencies"] {
+            let Some(dependencies) = table.get(kind).and_then(toml::Value::as_table) else {
+                continue;
+            };
+            for (key, specification) in dependencies {
+                let dependency = package_name(key, specification, inherited);
+                if !TEST_ONLY_DECODERS.contains(&dependency.as_str()) {
+                    continue;
+                }
+                if kind == "build-dependencies"
+                    || specification.get("optional").and_then(toml::Value::as_bool) != Some(true)
+                {
+                    violations.push(format!(
+                        "{name} [{kind}] names {dependency} unconditionally"
+                    ));
+                    continue;
+                }
+                let enabling = [format!("dep:{key}"), key.clone()];
+                for (feature, members) in &features {
+                    let enables = members.as_array().is_some_and(|members| {
+                        members
+                            .iter()
+                            .filter_map(toml::Value::as_str)
+                            .any(|member| enabling.iter().any(|enabled| enabled == member))
+                    });
+                    if enables && feature != "test-fixtures" {
+                        violations.push(format!(
+                            "{name} feature {feature} enables {dependency} outside test-fixtures"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    violations
+}
+
+#[test]
+fn test_only_decoders_link_only_into_tests() {
+    let root = repo_root();
+    let workspace = toml_file(&root.join("Cargo.toml"));
+    let inherited = workspace["workspace"]
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .cloned()
+        .unwrap_or_default();
+    let mut violations = Vec::new();
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let manifest = toml_file(
+            &root
+                .join(member.as_str().expect("member path"))
+                .join("Cargo.toml"),
+        );
+        let name = manifest["package"]["name"]
+            .as_str()
+            .expect("package name")
+            .to_string();
+        violations.extend(test_only_decoder_violations(&name, &manifest, &inherited));
+    }
+    assert!(
+        violations.is_empty(),
+        "Lean decoders must stay out of shipped builds:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn test_only_decoder_fence_flags_shipped_dependencies() {
+    let check = |manifest: &str| {
+        let manifest: toml::Table = manifest.parse().expect("parse snippet");
+        test_only_decoder_violations("x", &manifest, &toml::Table::new()).len()
+    };
+    assert_eq!(check("[dev-dependencies]\ngents-lean-vocab = \"1\"\n"), 0);
+    assert_eq!(
+        check(
+            "[features]\ntest-fixtures = [\"dep:gents-lean-vocab\"]\n\
+             [dependencies]\ngents-lean-vocab = { version = \"1\", optional = true }\n"
+        ),
+        0
+    );
+    assert_eq!(check("[dependencies]\ngents-lean-vocab = \"1\"\n"), 1);
+    assert_eq!(
+        check(
+            "[features]\ndefault = [\"dep:gents-lean-contract\"]\n\
+             [dependencies]\ngents-lean-contract = { version = \"1\", optional = true }\n"
+        ),
+        1
+    );
+    assert_eq!(
+        check("[target.'cfg(unix)'.build-dependencies]\ngents-lean-vocab = \"1\"\n"),
+        1
+    );
+}
+
 #[test]
 fn crate_dependencies_follow_the_layers() {
     let root = repo_root();
@@ -4710,8 +5200,8 @@ fn error_holder_fence_reads_holdings_and_wire_names() {
 /// Every other integration test is a module of that binary: each extra target
 /// relinks the crate's whole dependency graph. This allowlist only shrinks.
 const SEPARATE_TEST_TARGETS: &[(&str, &str)] = &[
-    // Sets GENTS_PAIRING_SWEEP_MS for the process, changing the sweep cadence
-    // of every runtime started after it.
+    // Holds no process-wide state since its runtimes take the pairing sweep
+    // as an argument; fold it into the crate's integration binary.
     ("gents", "e2e_triggers"),
     // A source scanner that links no runtime crate; run alone while editing ratchets.
     ("gents", "write_owner_structure"),

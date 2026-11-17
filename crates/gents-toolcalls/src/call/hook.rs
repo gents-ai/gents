@@ -50,11 +50,22 @@ pub struct BackgroundToolRegistry {
     inner: Arc<BackgroundToolRegistryInner>,
 }
 
-#[derive(Default)]
 struct BackgroundToolRegistryInner {
     tools: RapidHashMap<String, Arc<dyn ToolDyn>>,
     allowlist: Vec<String>,
     timeouts: gents_tools::surface::BackgroundTimeouts,
+    max_background_tool_calls: usize,
+}
+
+impl Default for BackgroundToolRegistryInner {
+    fn default() -> Self {
+        Self {
+            tools: RapidHashMap::new(),
+            allowlist: Vec::new(),
+            timeouts: Default::default(),
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
+        }
+    }
 }
 
 impl BackgroundToolRegistry {
@@ -79,6 +90,7 @@ impl BackgroundToolRegistry {
                 tools: registry_tools,
                 allowlist,
                 timeouts: Default::default(),
+                max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
             }),
         }
     }
@@ -93,6 +105,7 @@ impl BackgroundToolRegistry {
         Self {
             inner: Arc::new(BackgroundToolRegistryInner {
                 timeouts: config.timeouts.clone(),
+                max_background_tool_calls: config.max_background_tool_calls,
                 ..inner
             }),
         }
@@ -100,6 +113,11 @@ impl BackgroundToolRegistry {
 
     pub(crate) fn timeouts(&self) -> &gents_tools::surface::BackgroundTimeouts {
         &self.inner.timeouts
+    }
+
+    /// The Agent's `host.max_background_tool_calls`, resolved.
+    pub(crate) fn max_background_tool_calls(&self) -> usize {
+        self.inner.max_background_tool_calls
     }
 
     pub(crate) fn get(&self, tool_name: &str) -> Option<Arc<dyn ToolDyn>> {
@@ -1489,7 +1507,9 @@ impl DefraSessionHook {
                     && recorded_arguments == args,
                 "plugin effect dispatch does not match its admitted input"
             );
-            return Ok(lifecycle);
+            return Ok(lifecycle.with_max_background_tool_calls(
+                self.background_tool_registry.max_background_tool_calls(),
+            ));
         }
         let registered = self
             .state
@@ -1551,7 +1571,8 @@ impl DefraSessionHook {
             deadline_at,
             await_mode,
         )?
-        .with_selected_tool_identity(selected))
+        .with_selected_tool_identity(selected)
+        .with_max_background_tool_calls(self.background_tool_registry.max_background_tool_calls()))
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]

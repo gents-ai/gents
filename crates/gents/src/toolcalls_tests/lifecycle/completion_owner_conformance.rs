@@ -497,7 +497,18 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
             successor["retry_count"].as_u64(),
             model.post_retry_count.map(|v| v as u64)
         );
-        assert_eq!(successor["max_retries"], max_retries);
+        // The successor's first claim pins the budget it inherits from its source.
+        assert!(successor["max_retries"].is_null(), "{}", case.name);
+        assert_eq!(
+            gents_session::request::retry_budget::claim_pin(
+                true,
+                0,
+                true,
+                source["max_retries"].as_i64()
+            )
+            .unwrap(),
+            max_retries as u64
+        );
         assert!(successor["backend_id"].is_null(), "{}", case.name);
         assert!(successor["deadline"].is_null(), "{}", case.name);
     }

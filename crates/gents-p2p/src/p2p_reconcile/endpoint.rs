@@ -8,6 +8,8 @@ use tokio_util::sync::CancellationToken;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 
+use super::intervals::P2pIntervals;
+
 #[derive(Debug, thiserror::Error)]
 pub enum EndpointError {
     #[error("invalid advertised GraphQL URL: {0}")]
@@ -146,18 +148,20 @@ pub async fn run_endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     graphql_url: Option<String>,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     if let Some(url) = &graphql_url {
         validate_advertised_graphql_url(url)?;
     }
-    endpoint_heartbeat(node, identity, graphql_url, cancel).await
+    endpoint_heartbeat(node, identity, graphql_url, intervals, cancel).await
 }
 
 async fn endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     graphql_url: Option<String>,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     let Some(p2p) = gents_store::identity::node_p2p(&node) else {
@@ -168,7 +172,7 @@ async fn endpoint_heartbeat(
         return Ok(());
     };
 
-    let mut interval = tokio::time::interval(super::intervals::endpoint_interval());
+    let mut interval = tokio::time::interval(intervals.endpoint_heartbeat);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut published = None;
 

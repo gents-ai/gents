@@ -24,6 +24,7 @@ import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group, Unfold } from "./rows";
 import { ToolsSummary, ToolsUsedBy } from "./ToolsSummary";
 import {
+  BACKGROUND_TOOL_CALL_LIMIT,
   BASH_OUTPUT_LIMIT,
   FILE_LIMITS,
   TOOL_LIMIT_DEFAULTS,
@@ -112,6 +113,15 @@ export function parseAdvancedTools(
   if (typeof bashOutputLimit === "number" && bashOutputLimit > BASH_OUTPUT_LIMIT.max)
     throw new Error(
       `${BASH_OUTPUT_LIMIT.label} must be at most ${BASH_OUTPUT_LIMIT.max.toLocaleString("en-US")}`,
+    );
+  const backgroundCallLimit = advanced.host?.max_background_tool_calls;
+  positiveWholeNumber(BACKGROUND_TOOL_CALL_LIMIT.label, backgroundCallLimit);
+  if (
+    typeof backgroundCallLimit === "number" &&
+    backgroundCallLimit > BACKGROUND_TOOL_CALL_LIMIT.max
+  )
+    throw new Error(
+      `${BACKGROUND_TOOL_CALL_LIMIT.label} must be at most ${BACKGROUND_TOOL_CALL_LIMIT.max}`,
     );
   boundedSeconds(
     "Bash timeout",

@@ -886,6 +886,7 @@ fn callback_result_only_after_workspace_docs_are_durable() {
         integrator_principal: "did:key:zI".into(),
         caused_by_invocation_id: "inv-1".into(),
         caused_by_correlation: "corr-1".into(),
+        max_instruction_chars: Some(gents_session::workspace::INSTRUCTION_TEXT_BUDGET),
         documents: &mut docs,
         route: Default::default(),
     };

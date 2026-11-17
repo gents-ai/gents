@@ -5,13 +5,11 @@ use crate::support::homes;
 #[test]
 fn artifact_description_does_not_open_a_client_store() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("unopened-client");
     let homes = homes::ProcessHomes::under(temp.path());
+    let home = homes.desktop_root();
     let output = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .arg("--describe")
         .envs(homes.env())
-        .env("GENTS_DESKTOP_HOME", &home)
-        .env("GENTS_HOME", &home)
         .current_dir(temp.path())
         .output()
         .unwrap();

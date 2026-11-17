@@ -162,6 +162,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
                 "denied-invocation",
                 "denied-correlation",
                 &Default::default(),
+                gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             )
         })
         .await??

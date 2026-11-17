@@ -131,6 +131,7 @@ pub(super) fn render_request_context_message(
         frozen_instruction_manifest,
         gents_session::workspace::request_workspace_cwd(request).as_deref(),
         tool_config.host_tools().read_root(),
+        tool_config.max_instruction_chars(),
     ))
 }
 
@@ -138,11 +139,13 @@ fn assemble_request_context_message(
     frozen_instruction_manifest: Option<&str>,
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
+    max_instruction_chars: usize,
 ) -> Option<Message> {
     gents_session::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,
+        max_instruction_chars,
     )
     .map(|body| Message::user(format!("<context>\n{body}\n</context>")))
 }
@@ -753,6 +756,7 @@ pub(super) mod tests {
             openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             claude_platform: None,
+            client_version: None,
             backend_auth: gents_documents::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
             service_tier: None,
@@ -765,9 +769,16 @@ pub(super) mod tests {
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
+            max_invalid_tool_calls: gents_inference::resolved::DEFAULT_MAX_INVALID_TOOL_CALLS,
+            repeated_tool_failure_limit:
+                gents_inference::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+            max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
             stream_batch_ms: 0,
             stream_liveness_timeout: Duration::from_secs(5),
             deadline_duration: Duration::from_secs(30),
+            title_timeout: Duration::from_secs(
+                gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS,
+            ),
             provider_idle_timeout: Duration::from_secs(
                 gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
             ),

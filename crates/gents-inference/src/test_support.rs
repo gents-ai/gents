@@ -150,7 +150,7 @@ pub fn resolved_agent(
     use crate::resolved::{
         MaxTurnsProvenance, ResolvedAgent, ResolvedConfiguration, DEFAULT_CONTEXT_WINDOW,
         DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME,
-        DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+        DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS, DEFAULT_TITLE_TIMEOUT_SECS,
     };
     use gents_documents::inference_defaults::{
         DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -180,6 +180,7 @@ pub fn resolved_agent(
         backend_endpoint: "http://127.0.0.1:1/v1".to_string(),
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         claude_platform: None,
+        client_version: None,
         model_name: DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
@@ -191,9 +192,13 @@ pub fn resolved_agent(
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: crate::resolved::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: crate::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+        max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+        title_timeout: Duration::from_secs(DEFAULT_TITLE_TIMEOUT_SECS),
         deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
         completion_retry: Default::default(),
         sampling: Default::default(),

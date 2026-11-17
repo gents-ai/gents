@@ -106,8 +106,13 @@ async fn release(access: gents_store::config_client::ConfigAccess) {
 /// Gents is the consent to what they request, so nothing is asked. A pack
 /// that cannot be installed is reported with the command that installs it
 /// later; it never fails the init.
-pub(crate) async fn install(home: &Path, engineer: &str, archives: Archives<'_>) -> Value {
-    install_each(home, engineer, archives, &CorePack::ALL).await
+pub(crate) async fn install(
+    home: &Path,
+    engineer: &str,
+    archives: Archives<'_>,
+    registry: Option<&str>,
+) -> Value {
+    install_each(home, engineer, archives, &CorePack::ALL, registry).await
 }
 
 /// Records that `home`'s setup still has its core packs to install. Written
@@ -147,7 +152,11 @@ pub(crate) fn not_installed(home: &Path) -> Result<Vec<CorePack>> {
 /// Continues a setup that stopped before it installed every core pack: each
 /// one the home lacks is installed as init leaves it, under init's consent.
 /// The home's own store is opened, so its node is stopped first.
-pub(crate) async fn install_missing(home: &Path, archives: Archives<'_>) -> Result<Value> {
+pub(crate) async fn install_missing(
+    home: &Path,
+    archives: Archives<'_>,
+    registry: Option<&str>,
+) -> Result<Value> {
     let missing = not_installed(home)?;
     if missing.is_empty() {
         return Ok(json!({"installed": [], "not_installed": []}));
@@ -163,7 +172,7 @@ pub(crate) async fn install_missing(home: &Path, archives: Archives<'_>) -> Resu
     release(access).await;
     let engineer = engineer?
         .context("this home's default agent is not the Engineer, so it has no core packs")?;
-    Ok(install_each(home, &engineer, archives, &missing).await)
+    Ok(install_each(home, &engineer, archives, &missing, registry).await)
 }
 
 async fn install_each(
@@ -171,6 +180,7 @@ async fn install_each(
     engineer: &str,
     archives: Archives<'_>,
     packs: &[CorePack],
+    registry: Option<&str>,
 ) -> Value {
     eprintln!("\nThe Engineer starts with the core packs this release carries:");
     for &pack in packs {
@@ -180,7 +190,17 @@ async fn install_each(
     let mut not_installed = Vec::new();
     for &pack in packs {
         let wiring = core_packs::init_wiring(pack);
-        match apply(home, engineer, pack, archives, wiring, Consent::Init).await {
+        match apply(
+            home,
+            engineer,
+            pack,
+            archives,
+            wiring,
+            Consent::Init,
+            registry,
+        )
+        .await
+        {
             Ok(mut report) if wiring != core_packs::enabled_wiring(pack) => {
                 let command = enable_command(home, pack);
                 eprintln!(
@@ -436,6 +456,7 @@ pub(crate) async fn enable(
     home: &Path,
     archives: Archives<'_>,
     packs: &[CorePack],
+    registry: Option<&str>,
 ) -> Result<Value> {
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
     let served = access.local_node().is_none();
@@ -457,7 +478,17 @@ pub(crate) async fn enable(
     let mut failed = Vec::new();
     for &pack in packs {
         let wiring = core_packs::enabled_wiring(pack);
-        match apply(home, &engineer, pack, archives, wiring, Consent::Explicit).await {
+        match apply(
+            home,
+            &engineer,
+            pack,
+            archives,
+            wiring,
+            Consent::Explicit,
+            registry,
+        )
+        .await
+        {
             Ok(report) => enabled.push(report),
             // A pack that installed and then failed a later step is on the
             // node; enabling it again finishes it.
@@ -493,6 +524,7 @@ async fn apply(
     archives: Archives<'_>,
     wiring: Wiring,
     consent: Consent,
+    registry: Option<&str>,
 ) -> Result<Value> {
     let coordinate = pack.coordinate();
     let installed = gents_pack::pack::read_home_install(home, coordinate)?;
@@ -515,7 +547,8 @@ async fn apply(
             (stored.header.digest, Origin::Release)
         }
     };
-    let source = gents_pack::pack::resolved_pack::resolve_pack_source(&digest, None, home).await?;
+    let source =
+        gents_pack::pack::resolved_pack::resolve_pack_source(&digest, registry, home).await?;
     let requested = gents_pack::pack::plugin_wire::requested_authority(source.manifest(), &[])?;
     // One held access installs the pack, grants its agents, wires its
     // plugins and attaches its skills; its node is drained before the next
@@ -544,10 +577,9 @@ async fn apply(
                 .map(|slot| format!("{}={profile}", slot.name))
                 .collect();
             install_as_engineer(
-                &access,
-                &owner,
-                home,
-                engineer,
+                engineer_config(&access, &owner, home, engineer, registry)
+                    .await?
+                    .as_ref(),
                 &format!("{coordinate}@{}", source.manifest().version),
                 source.digest(),
                 &slots,
@@ -758,7 +790,7 @@ pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
         .iter()
         .map(|name| core_pack(&home, name))
         .collect::<Result<Vec<_>>>()?;
-    let report = enable(&home, archives, &packs).await?;
+    let report = enable(&home, archives, &packs, args.registry.as_deref()).await?;
     crate::print_json(&report)?;
     anyhow::ensure!(
         report["failed"].as_array().is_none_or(Vec::is_empty),
@@ -767,7 +799,7 @@ pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
     Ok(())
 }
 
-/// Installs `package` at `digest` as the Engineer `engineer`, so the pack's
+/// Installs `package` at `digest` through the Engineer's `config` tool, so the pack's
 /// documents are the Engineer's: it reads them, references them and removes
 /// the pack again. The consent to what the plugins ask for is the caller's;
 /// the Engineer's pack authority is what grants it (Lean
@@ -775,10 +807,7 @@ pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
 /// inference slot is bound to the Engineer's own profile, deferred while its
 /// backend is disabled (Lean `Pack.CorePacks.slotBinding`).
 async fn install_as_engineer(
-    access: &gents_store::config_client::ConfigAccess,
-    owner: &str,
-    home: &Path,
-    engineer: &str,
+    config: &dyn gents_loop::tool::ToolDyn,
     package: &str,
     digest: &str,
     slots: &[String],
@@ -787,8 +816,7 @@ async fn install_as_engineer(
     for slot in slots {
         argv.extend(["--inference-slot", slot.as_str()]);
     }
-    let receipt = engineer_config(access, owner, home, engineer)
-        .await?
+    let receipt = config
         .call(
             json!({ "argv": argv }).to_string(),
             &gents_loop::tool::ToolCallEnvelope::default(),
@@ -834,6 +862,7 @@ async fn engineer_config(
     owner: &str,
     home: &Path,
     engineer: &str,
+    registry: Option<&str>,
 ) -> Result<Box<dyn gents_loop::tool::ToolDyn>> {
     use gents_tools::builtin::self_config;
     let node = access
@@ -872,6 +901,7 @@ async fn engineer_config(
             preview: held.self_config_preview.unwrap_or(false),
             enable_pack_install: held.enable_pack_install.unwrap_or(false),
             enable_pack_authority: held.enable_pack_authority.unwrap_or(false),
+            registry_url: registry.map(str::to_owned),
             ..Default::default()
         },
         std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
@@ -1203,7 +1233,7 @@ mod tests {
             assert_eq!(pack.state, expected, "{listed:?}");
         }
 
-        let enabled = enable(home.path(), &archives, &CorePack::ALL)
+        let enabled = enable(home.path(), &archives, &CorePack::ALL, None)
             .await
             .unwrap();
         assert_eq!(enabled["failed"], json!([]), "{enabled}");
@@ -1338,7 +1368,7 @@ mod tests {
             )),
             "{listed:?}"
         );
-        let report = enable(home.path(), &archives, &[CorePack::Web])
+        let report = enable(home.path(), &archives, &[CorePack::Web], None)
             .await
             .unwrap();
         assert_eq!(report["failed"], json!([]), "{report}");
@@ -1356,7 +1386,7 @@ mod tests {
         let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
             .await
             .unwrap();
-        let config = engineer_config(&access, &owner, home.path(), &engineer)
+        let config = engineer_config(&access, &owner, home.path(), &engineer, None)
             .await
             .unwrap();
 

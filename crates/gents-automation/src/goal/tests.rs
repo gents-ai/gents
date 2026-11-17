@@ -554,6 +554,7 @@ async fn goal_and_claim_publication_links_match_lean() {
                 let doc = if mode == "fresh" {
                     let staged = stage_goal_and_claim(
                         txn, runtime.did(), "links-session", "Finish work", None,
+                        gents_protocol::goal::GoalLimits::default(),
                         GoalState { status: GoalStatus::Active, blocked_audits: 0,
                             wrapup_requested: false, wrapup_completed: false },
                         "2026-11-04T00:00:00Z", None, None,

@@ -124,7 +124,7 @@ async fn client_main(args: Args) -> Result<()> {
             );
             DesktopPaths::from_root(home)
         }
-        None => DesktopPaths::discover()?,
+        None => DesktopPaths::discover(None)?,
     };
     #[cfg(any(unix, windows))]
     return if args.serve {

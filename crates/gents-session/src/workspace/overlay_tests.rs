@@ -337,7 +337,8 @@ fn empty_bound_overlay_does_not_live_walk_writer_tree() {
     assert!(crate::workspace::instruction_body_for_request(
         frozen,
         Some(&nested),
-        Some(&placement_path)
+        Some(&placement_path),
+        crate::workspace::INSTRUCTION_TEXT_BUDGET,
     )
     .is_none());
 
@@ -345,10 +346,22 @@ fn empty_bound_overlay_does_not_live_walk_writer_tree() {
         super::frozen_instruction_manifest_from_overlay(None),
         Some(&nested),
         Some(&placement_path),
+        crate::workspace::INSTRUCTION_TEXT_BUDGET,
     )
     .unwrap();
     assert!(live.contains("live-writer-instructions"));
     assert!(live.contains("nested-live-instructions"));
+
+    let bounded = crate::workspace::instruction_body_for_request(
+        None,
+        Some(&nested),
+        Some(&placement_path),
+        "live-writer".len(),
+    )
+    .unwrap();
+    assert!(bounded.contains("live-writer"));
+    assert!(!bounded.contains("live-writer-instructions"));
+    assert!(!bounded.contains("nested-live-instructions"));
 }
 
 #[test]
@@ -572,6 +585,7 @@ pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixtur
         integrator_principal: did.clone(),
         caused_by_invocation_id: "artifact-invocation".into(),
         caused_by_correlation: "artifact-correlation".into(),
+        max_instruction_chars: Some(crate::workspace::INSTRUCTION_TEXT_BUDGET),
         documents: &mut documents,
         route: Default::default(),
     };
@@ -693,20 +707,20 @@ async fn admission_workspace_validation_checks_scope_and_cwd_without_writes() {
     let before = fx.node.execute(query).await;
     assert!(!before.has_errors(), "{:?}", before.errors);
     let request = fx.owner.request().clone();
-    super::validate_request_workspace_input(&fx.node, &request, false)
+    super::validate_request_workspace_input(&fx.node, &request, false, None)
         .await
         .unwrap();
     let mut escaped = request.clone();
     escaped.input.cwd = Some(fx._dir.path().to_string_lossy().into_owned());
     assert!(
-        super::validate_request_workspace_input(&fx.node, &escaped, false)
+        super::validate_request_workspace_input(&fx.node, &escaped, false, None)
             .await
             .is_err()
     );
     let mut foreign = request;
     foreign.workspace_owner_node_did = Some("did:key:foreign".into());
     assert!(
-        super::validate_request_workspace_input(&fx.node, &foreign, false)
+        super::validate_request_workspace_input(&fx.node, &foreign, false, None)
             .await
             .is_err()
     );

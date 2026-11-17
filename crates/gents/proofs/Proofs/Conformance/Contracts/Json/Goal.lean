@@ -22,6 +22,7 @@ structure GoalDecisionCase where
   infrastructureRetries : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
+  maxInfrastructureRetries : Nat := Goals.maxInfrastructureRetries
 
 def terminalName : Goals.RequestTerminal → String
   | .completed => "completed"
@@ -123,6 +124,22 @@ def goalDecisionCases : List GoalDecisionCase :=
       sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
       requestIsWrapup := true, infrastructureRetries := 2,
       wrapupRequested := true, wrapupCompleted := false }
+  , { name := "configured_retry_limit_retries_past_default", status := .active, terminal := .failed,
+      sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 2,
+      wrapupRequested := false, wrapupCompleted := false, maxInfrastructureRetries := 3 }
+  , { name := "configured_retry_limit_pauses_at_bound", status := .active, terminal := .dead,
+      sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 3,
+      wrapupRequested := false, wrapupCompleted := false, maxInfrastructureRetries := 3 }
+  , { name := "zero_retry_limit_pauses_first_failure", status := .active, terminal := .failed,
+      sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 0,
+      wrapupRequested := false, wrapupCompleted := false, maxInfrastructureRetries := 0 }
+  , { name := "zero_retry_limit_abandons_failed_wrapup", status := .budgetLimited, terminal := .failed,
+      sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
+      requestIsWrapup := true, infrastructureRetries := 0,
+      wrapupRequested := true, wrapupCompleted := false, maxInfrastructureRetries := 0 }
   , { name := "paused_is_inactive", status := .paused, terminal := .completed,
       sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
       requestIsWrapup := false, infrastructureRetries := 0,
@@ -154,12 +171,13 @@ def goalDecision : Family GoalDecisionCase Goals.Decision where
   inputs := goalDecisionCases
   model := fun w => Goals.decide w.status w.terminal w.sessionIdle w.childExists
     w.budgetReached w.hasActivity w.requestIsWrapup w.infrastructureRetries
-    w.wrapupRequested w.wrapupCompleted
+    w.wrapupRequested w.wrapupCompleted w.maxInfrastructureRetries
 
 structure GoalTransitionCase where
   name : String
   pre : Goals.State
   action : Goals.Action
+  blockedAuditThreshold : Nat := Goals.blockedAuditThreshold
 
 def goalCaseState (status : Goals.Status) (audits : Nat := 0)
     (requested : Bool := false) (completed : Bool := false) : Goals.State :=
@@ -221,6 +239,12 @@ def goalTransitionCases : List GoalTransitionCase :=
       action := .cleanTurn }
   , { name := "clean_turn_rejected_while_blocked", pre := goalCaseState .blocked 3,
       action := .cleanTurn }
+  , { name := "configured_threshold_keeps_third_audit_active", pre := goalCaseState .active 2,
+      action := .blockedAudit .sameCondition, blockedAuditThreshold := 4 }
+  , { name := "configured_threshold_blocks_at_bound", pre := goalCaseState .active 3,
+      action := .blockedAudit .sameCondition, blockedAuditThreshold := 4 }
+  , { name := "threshold_one_blocks_first_audit", pre := goalCaseState .active,
+      action := .blockedAudit .newCondition, blockedAuditThreshold := 1 }
   ]
 
 inductive GoalActionWire where
@@ -276,6 +300,7 @@ structure GoalTransitionInput where
   preWrapupRequested : Bool
   preWrapupCompleted : Bool
   action : GoalActionWire
+  blockedAuditThreshold : Nat
   deriving Lean.ToJson
 
 /-- A rejected step leaves the goal as it was, so the observed state after a
@@ -293,12 +318,12 @@ def goalTransition : Family GoalTransitionInput GoalTransitionOutput where
   inputs := goalTransitionCases.map fun w =>
     { name := w.name, preStatus := w.pre.status, preBlockedAudits := w.pre.blockedAudits
     , preWrapupRequested := w.pre.wrapupRequested, preWrapupCompleted := w.pre.wrapupCompleted
-    , action := GoalActionWire.ofModel w.action }
+    , action := GoalActionWire.ofModel w.action, blockedAuditThreshold := w.blockedAuditThreshold }
   model := fun i =>
     let pre : Goals.State :=
       { status := i.preStatus, blockedAudits := i.preBlockedAudits
       , wrapupRequested := i.preWrapupRequested, wrapupCompleted := i.preWrapupCompleted }
-    let result := Goals.step? pre i.action.toModel
+    let result := Goals.step? pre i.action.toModel i.blockedAuditThreshold
     let post := result.getD pre
     { accepted := result.isSome, status := post.status, blockedAudits := post.blockedAudits
     , wrapupRequested := post.wrapupRequested, wrapupCompleted := post.wrapupCompleted }
@@ -309,12 +334,14 @@ structure GoalCreateCase where
   existing : Option GoalAutomation.Fingerprint
 
 def createRequest (owner session objective : String) (budget : Option Int := none)
-    (goalTools : Bool := true) (goalCreate : Bool := true) :
+    (goalTools : Bool := true) (goalCreate : Bool := true)
+    (threshold : Option Int := none) (retries : Option Int := none) :
     GoalAutomation.CreateRequest :=
   { caller := owner, currentSession := session
   , requestedOwner := owner, requestedSession := session
   , objective := objective, objectiveNonempty := !objective.isEmpty
-  , tokenBudget := budget, goalTools := goalTools, goalCreate := goalCreate }
+  , tokenBudget := budget, blockedAuditThreshold := threshold
+  , maxInfrastructureRetries := retries, goalTools := goalTools, goalCreate := goalCreate }
 
 def goalCreateCases : List GoalCreateCase :=
   let base := createRequest "did:a" "session-a" "ship feature"
@@ -325,6 +352,8 @@ def goalCreateCases : List GoalCreateCase :=
   let canonical : GoalAutomation.Fingerprint :=
     { owner := "did:a", session := "session-a"
     , objective := "ship feature", tokenBudget := none }
+  let pinned := createRequest "did:a" "session-a" "ship feature" (threshold := some 5)
+    (retries := some 4)
   [ { name := "authorized_fresh", request := base, existing := none }
   , { name := "authorized_duplicate_idempotent", request := base,
       existing := some (GoalAutomation.createFingerprint base) }
@@ -359,6 +388,22 @@ def goalCreateCases : List GoalCreateCase :=
   , { name := "overflow_budget_invalid",
       request := createRequest "did:a" "session-a" "ship"
         (some (GoalAutomation.maxTokenBudget + 1)), existing := none }
+  , { name := "pinned_limits_fresh", request := pinned, existing := none }
+  , { name := "pinned_limits_duplicate_idempotent", request := pinned,
+      existing := some (GoalAutomation.createFingerprint pinned) }
+  , { name := "duplicate_conflicting_limits", request := pinned,
+      existing := some canonical }
+  , { name := "duplicate_dropping_limits_conflicts", request := base,
+      existing := some (GoalAutomation.createFingerprint pinned) }
+  , { name := "zero_retry_limit_valid",
+      request := createRequest "did:a" "session-a" "ship" (retries := some 0),
+      existing := none }
+  , { name := "zero_threshold_invalid",
+      request := createRequest "did:a" "session-a" "ship" (threshold := some 0),
+      existing := none }
+  , { name := "negative_retry_limit_invalid",
+      request := createRequest "did:a" "session-a" "ship" (retries := some (-1)),
+      existing := none }
   ]
 
 structure TaskGoalPublicationCase where
@@ -373,29 +418,42 @@ def taskGoalPublicationCases : List TaskGoalPublicationCase :=
   let taskId := "feature-implementation"
   let fireKey := "schedule:2026-09-02T12:00:00Z"
   [ { name := "absent_goal_uses_ordinary_publication", nodeDid, taskId, fireKey
-      declaration := ⟨none, none⟩ }
+      declaration := ⟨none, none, none, none⟩ }
   , { name := "objective_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", none⟩ }
+      declaration := ⟨some "implement feature", none, none, none⟩ }
   , { name := "positive_budget_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some 1000⟩ }
+      declaration := ⟨some "implement feature", some 1000, none, none⟩ }
   , { name := "maximum_budget_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some GoalAutomation.maxTokenBudget⟩ }
+      declaration := ⟨some "implement feature", some GoalAutomation.maxTokenBudget, none, none⟩ }
   , { name := "same_task_fire_is_scoped_to_other_node",
       nodeDid := "did:key:z-other-feature-owner", taskId, fireKey
-      declaration := ⟨some "implement feature", none⟩ }
+      declaration := ⟨some "implement feature", none, none, none⟩ }
   , { name := "blank_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "", none⟩ }
+      declaration := ⟨some "", none, none, none⟩ }
   , { name := "whitespace_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "   ", none⟩ }
+      declaration := ⟨some "   ", none, none, none⟩ }
   , { name := "budget_without_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨none, some 1000⟩ }
+      declaration := ⟨none, some 1000, none, none⟩ }
   , { name := "zero_budget_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some 0⟩ }
+      declaration := ⟨some "implement feature", some 0, none, none⟩ }
   , { name := "negative_budget_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some (-1)⟩ }
+      declaration := ⟨some "implement feature", some (-1), none, none⟩ }
   , { name := "overflow_budget_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature",
-        some (GoalAutomation.maxTokenBudget + 1)⟩ }
+        some (GoalAutomation.maxTokenBudget + 1), none, none⟩ }
+  , { name := "goal_limits_use_atomic_goal_publication", nodeDid, taskId,
+      fireKey := "schedule:2026-09-03T12:00:00Z"
+      declaration := ⟨some "implement feature", none, some 5, some 4⟩ }
+  , { name := "zero_retry_limit_uses_atomic_goal_publication", nodeDid, taskId, fireKey
+      declaration := ⟨some "implement feature", none, none, some 0⟩ }
+  , { name := "threshold_without_objective_cannot_publish", nodeDid, taskId, fireKey
+      declaration := ⟨none, none, some 5, none⟩ }
+  , { name := "retry_limit_without_objective_cannot_publish", nodeDid, taskId, fireKey
+      declaration := ⟨none, none, none, some 4⟩ }
+  , { name := "zero_threshold_cannot_publish", nodeDid, taskId, fireKey
+      declaration := ⟨some "implement feature", none, some 0, none⟩ }
+  , { name := "negative_retry_limit_cannot_publish", nodeDid, taskId, fireKey
+      declaration := ⟨some "implement feature", none, none, some (-1)⟩ }
   ]
 
 def budgetWire (budget : Option Int) : Option Lean.Json := budget.map Lean.toJson
@@ -408,15 +466,21 @@ structure GoalFingerprintWire where
   session : String
   objective : String
   tokenBudget : Option Lean.Json
+  blockedAuditThreshold : Option Int
+  maxInfrastructureRetries : Option Int
   deriving Lean.ToJson
 
 def GoalFingerprintWire.ofModel (f : GoalAutomation.Fingerprint) : GoalFingerprintWire :=
   { owner := f.owner, session := f.session, objective := f.objective
-  , tokenBudget := budgetWire f.tokenBudget }
+  , tokenBudget := budgetWire f.tokenBudget
+  , blockedAuditThreshold := f.blockedAuditThreshold
+  , maxInfrastructureRetries := f.maxInfrastructureRetries }
 
 def GoalFingerprintWire.toModel (f : GoalFingerprintWire) : GoalAutomation.Fingerprint :=
   { owner := f.owner, session := f.session, objective := f.objective
-  , tokenBudget := budgetOfWire f.tokenBudget }
+  , tokenBudget := budgetOfWire f.tokenBudget
+  , blockedAuditThreshold := f.blockedAuditThreshold
+  , maxInfrastructureRetries := f.maxInfrastructureRetries }
 
 /-- A token budget is a JSON number: the overflow case carries
 `maxTokenBudget + 1`, which no signed 64-bit wire integer holds. -/
@@ -429,6 +493,8 @@ structure GoalCreateInput where
   objective : String
   objectiveNonempty : Bool
   tokenBudget : Option Lean.Json
+  blockedAuditThreshold : Option Int
+  maxInfrastructureRetries : Option Int
   goalTools : Bool
   goalCreate : Bool
   existingFingerprint : Option GoalFingerprintWire
@@ -438,16 +504,20 @@ def GoalCreateInput.ofCase (w : GoalCreateCase) : GoalCreateInput :=
   { name := w.name, caller := w.request.caller, currentSession := w.request.currentSession
   , requestedOwner := w.request.requestedOwner, requestedSession := w.request.requestedSession
   , objective := w.request.objective, objectiveNonempty := w.request.objectiveNonempty
-  , tokenBudget := budgetWire w.request.tokenBudget, goalTools := w.request.goalTools
-  , goalCreate := w.request.goalCreate
+  , tokenBudget := budgetWire w.request.tokenBudget
+  , blockedAuditThreshold := w.request.blockedAuditThreshold
+  , maxInfrastructureRetries := w.request.maxInfrastructureRetries
+  , goalTools := w.request.goalTools, goalCreate := w.request.goalCreate
   , existingFingerprint := w.existing.map GoalFingerprintWire.ofModel }
 
 def GoalCreateInput.request (i : GoalCreateInput) : GoalAutomation.CreateRequest :=
   { caller := i.caller, currentSession := i.currentSession
   , requestedOwner := i.requestedOwner, requestedSession := i.requestedSession
   , objective := i.objective, objectiveNonempty := i.objectiveNonempty
-  , tokenBudget := budgetOfWire i.tokenBudget, goalTools := i.goalTools
-  , goalCreate := i.goalCreate }
+  , tokenBudget := budgetOfWire i.tokenBudget
+  , blockedAuditThreshold := i.blockedAuditThreshold
+  , maxInfrastructureRetries := i.maxInfrastructureRetries
+  , goalTools := i.goalTools, goalCreate := i.goalCreate }
 
 deriving instance Lean.ToJson for GoalAutomation.CreateDisposition
 
@@ -471,6 +541,8 @@ structure TaskGoalDeclarationInput where
   name : String
   goalObjective : Option String
   goalTokenBudget : Option Lean.Json
+  goalBlockedAuditThreshold : Option Int
+  goalMaxInfrastructureRetries : Option Int
   deriving Lean.ToJson
 
 structure TaskGoalDeclarationOutput where
@@ -481,10 +553,13 @@ structure TaskGoalDeclarationOutput where
 def taskGoalDeclaration : Family TaskGoalDeclarationInput TaskGoalDeclarationOutput where
   inputs := taskGoalPublicationCases.map fun w =>
     { name := w.name, goalObjective := w.declaration.goalObjective
-    , goalTokenBudget := budgetWire w.declaration.goalTokenBudget }
+    , goalTokenBudget := budgetWire w.declaration.goalTokenBudget
+    , goalBlockedAuditThreshold := w.declaration.goalBlockedAuditThreshold
+    , goalMaxInfrastructureRetries := w.declaration.goalMaxInfrastructureRetries }
   model := fun i =>
     { declarationValid := GoalAutomation.validTaskGoalDeclaration
-        ⟨i.goalObjective, budgetOfWire i.goalTokenBudget⟩ }
+        ⟨i.goalObjective, budgetOfWire i.goalTokenBudget, i.goalBlockedAuditThreshold,
+          i.goalMaxInfrastructureRetries⟩ }
 
 structure TaskGoalPublicationInput where
   name : String
@@ -493,16 +568,22 @@ structure TaskGoalPublicationInput where
   fireKey : String
   goalObjective : Option String
   goalTokenBudget : Option Lean.Json
+  goalBlockedAuditThreshold : Option Int
+  goalMaxInfrastructureRetries : Option Int
   deriving Lean.ToJson
 
 def TaskGoalPublicationInput.ofCase (w : TaskGoalPublicationCase) : TaskGoalPublicationInput :=
   { name := w.name, nodeDid := w.nodeDid, taskId := w.taskId, fireKey := w.fireKey
   , goalObjective := w.declaration.goalObjective
-  , goalTokenBudget := budgetWire w.declaration.goalTokenBudget }
+  , goalTokenBudget := budgetWire w.declaration.goalTokenBudget
+  , goalBlockedAuditThreshold := w.declaration.goalBlockedAuditThreshold
+  , goalMaxInfrastructureRetries := w.declaration.goalMaxInfrastructureRetries }
 
 def TaskGoalPublicationInput.publication (i : TaskGoalPublicationInput) :
     GoalAutomation.TaskPublication :=
-  GoalAutomation.decideTaskPublication ⟨i.goalObjective, budgetOfWire i.goalTokenBudget⟩
+  GoalAutomation.decideTaskPublication
+    ⟨i.goalObjective, budgetOfWire i.goalTokenBudget, i.goalBlockedAuditThreshold,
+      i.goalMaxInfrastructureRetries⟩
     i.nodeDid i.taskId i.fireKey
 
 structure TaskGoalPublicationIdentity where
@@ -536,11 +617,13 @@ structure TaskGoalPublicationMaterialized where
   durableGoal : Bool
   deriving Lean.ToJson
 
-/-- The production materializer scenario publishes one scheduled goal Task on
-its own node; it builds the positive-budget declaration. -/
+/-- The production materializer scenario publishes scheduled goal Tasks on
+its own node; it builds the positive-budget and the goal-limits declarations,
+whose distinct fires open distinct Goals. -/
 def taskGoalPublicationMaterializedCases : List TaskGoalPublicationCase :=
   taskGoalPublicationCases.filter fun w =>
-    w.name ∈ ["positive_budget_uses_atomic_goal_publication"]
+    w.name ∈ ["positive_budget_uses_atomic_goal_publication",
+      "goal_limits_use_atomic_goal_publication"]
 
 @[conformance_family]
 def taskGoalPublicationMaterialized :
@@ -799,10 +882,11 @@ structure GoalReadinessGateCase where
   input : Input
 
 private def activeInput (terminal : Goals.RequestTerminal) (retries : Nat := 0)
-    (budget : Bool := false) (child : Bool := false) (idle : Bool := true) : Input :=
+    (budget : Bool := false) (child : Bool := false) (idle : Bool := true)
+    (maxRetries : Nat := Goals.maxInfrastructureRetries) : Input :=
   { status := .active, terminal, sessionIdle := idle, childExists := child,
     budgetReached := budget, hasActivity := true, requestIsWrapup := false, retries,
-    wrapupRequested := false, wrapupCompleted := false }
+    wrapupRequested := false, wrapupCompleted := false, maxRetries }
 
 private def pendingWrapupInput (terminal : Goals.RequestTerminal) (retries : Nat) : Input :=
   { status := .budgetLimited, terminal, sessionIdle := true, childExists := false,
@@ -861,6 +945,11 @@ def goalReadinessGateCases : List GoalReadinessGateCase :=
       settled := true, cause := .goalControlUnavailable, input := activeInput .completed 0 (child := true) }
   , { name := "busy_session_never_continues", observation := .unavailable,
       settled := true, cause := .attempt, input := activeInput .completed (idle := false) }
+  , { name := "configured_retry_limit_charges_past_default", observation := .ready true,
+      settled := true, cause := .attempt, input := activeInput .failed 2 (maxRetries := 3) }
+  , { name := "zero_retry_limit_pauses_goal_control_failure", observation := .ready true,
+      settled := true, cause := .goalControlUnavailable,
+      input := activeInput .completed 0 (maxRetries := 0) }
   ]
 
 inductive GoalObservationWire where
@@ -924,6 +1013,7 @@ structure ReadinessGateInput where
   infrastructureRetries : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
+  maxInfrastructureRetries : Nat
   deriving Lean.ToJson
 
 def ReadinessGateInput.ofCase (w : GoalReadinessGateCase) : ReadinessGateInput :=
@@ -933,7 +1023,8 @@ def ReadinessGateInput.ofCase (w : GoalReadinessGateCase) : ReadinessGateInput :
   , childExists := w.input.childExists, budgetReached := w.input.budgetReached
   , hasActivity := w.input.hasActivity, requestIsWrapup := w.input.requestIsWrapup
   , infrastructureRetries := w.input.retries, wrapupRequested := w.input.wrapupRequested
-  , wrapupCompleted := w.input.wrapupCompleted }
+  , wrapupCompleted := w.input.wrapupCompleted
+  , maxInfrastructureRetries := w.input.maxRetries }
 
 def ReadinessGateInput.toObservation (i : ReadinessGateInput) : Observation :=
   i.observation.toModel i.newerThanTerminal
@@ -942,7 +1033,8 @@ def ReadinessGateInput.toInput (i : ReadinessGateInput) : Input :=
   { status := i.status, terminal := i.terminal, sessionIdle := i.sessionIdle
   , childExists := i.childExists, budgetReached := i.budgetReached, hasActivity := i.hasActivity
   , requestIsWrapup := i.requestIsWrapup, retries := i.infrastructureRetries
-  , wrapupRequested := i.wrapupRequested, wrapupCompleted := i.wrapupCompleted }
+  , wrapupRequested := i.wrapupRequested, wrapupCompleted := i.wrapupCompleted
+  , maxRetries := i.maxInfrastructureRetries }
 
 structure ReadinessGateOutput where
   readiness : Readiness

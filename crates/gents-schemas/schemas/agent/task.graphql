@@ -8,6 +8,8 @@ type Task @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248
     emit_outcome: Boolean
     goal_objective_template: String
     goal_token_budget: Int
+    goal_blocked_audit_threshold: Int
+    goal_max_infrastructure_retries: Int
     hooks: JSON
     enabled: Boolean @index
     output_schema_ref: String

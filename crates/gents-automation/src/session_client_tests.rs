@@ -58,6 +58,7 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
                 "task-session",
                 "finish work",
                 None,
+                gents_protocol::goal::GoalLimits::default(),
                 &request,
                 Some(agent.as_ref()),
             )
@@ -135,6 +136,7 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
             "task-session",
             "finish work",
             None,
+            gents_protocol::goal::GoalLimits::default(),
             &attempt,
             Some(signer),
         )
@@ -233,6 +235,7 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
                 "task-session",
                 "finish work",
                 None,
+                gents_protocol::goal::GoalLimits::default(),
                 &request,
                 Some(agent.as_ref()),
             )
@@ -552,6 +555,8 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         goal_id: None,
         goal_objective: None,
         goal_token_budget: None,
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         goal_assignment_applied: false,
         emit_outcome: false,
         queued_serial: false,

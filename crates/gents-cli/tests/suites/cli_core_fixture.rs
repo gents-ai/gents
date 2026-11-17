@@ -98,7 +98,6 @@ impl LiveCli {
         let mut child = Command::new(cli_bin())
             .env("HOME", &home)
             .env("RUST_LOG", "error")
-            .env_remove("GENTS_SYSTEM_LOG")
             .current_dir(&home)
             .args(["server", "--http-port", &port.to_string()])
             .stdout(Stdio::piped())

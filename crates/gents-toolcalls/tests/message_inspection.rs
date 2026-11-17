@@ -350,6 +350,7 @@ impl gents_session::session::message::SessionMessageGoals for ReadWorkerGoal {
         _session_id: &str,
         _objective: &str,
         _token_budget: Option<i64>,
+        _limits: gents_protocol::goal::GoalLimits,
         _request: &gents_protocol::request_admission::AgentRequestCreate,
     ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
         anyhow::bail!("session inspection stages no request")

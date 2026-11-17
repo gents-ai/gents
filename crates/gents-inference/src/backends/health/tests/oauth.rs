@@ -583,12 +583,19 @@ async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_
     }
 }
 
-struct TokenUrlOverrideGuard(&'static str);
-
-impl Drop for TokenUrlOverrideGuard {
-    fn drop(&mut self) {
-        std::env::remove_var(self.0);
-    }
+fn claude_bearer_refreshing_at(
+    node: &std::sync::Arc<defra_node::Node>,
+    did: &str,
+    url: &str,
+) -> std::sync::Arc<crate::auth::credential::DbCredentialBearer> {
+    bearer_refreshing_at(
+        node,
+        did,
+        crate::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        crate::auth::credential::OAuthRefreshKind::Claude,
+        crate::auth::claude::CLAUDE_OAUTH_PRODUCT,
+        url,
+    )
 }
 
 #[tokio::test]
@@ -621,18 +628,12 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
     claude.endpoint = models.endpoint();
     oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
 
-    // TOKEN_URL_ENV is process-global; serialize changes to its override.
-    let _env = TOKEN_URL_ENV.lock().await;
-    let _guard = TokenUrlOverrideGuard(crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     let (url, server) = one_shot_token_server(
         200,
         r#"{"access_token":"access-REFRESHED","refresh_token":"refresh-ROTATED","expires_in":28800}"#,
     )
     .await;
-    std::env::set_var(
-        crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
-        &url,
-    );
+    let _bearer = claude_bearer_refreshing_at(&node, did, &url);
     let outcome = probe_backends_cycle(
         &node,
         &client,
@@ -719,8 +720,6 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
     oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
     oauth_backend_observation(&user_access, &runtime_access, &next, "unknown").await;
 
-    let _env = TOKEN_URL_ENV.lock().await;
-    let _guard = TokenUrlOverrideGuard(crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     let (received_tx, _received) = oneshot::channel();
     let (_never_release, release_rx) = oneshot::channel();
     let (url, _server) = crate::auth::credential::test_support::gated_token_server(
@@ -729,10 +728,7 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
         Some((received_tx, release_rx)),
     )
     .await;
-    std::env::set_var(
-        crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
-        &url,
-    );
+    let _bearer = claude_bearer_refreshing_at(&node, did, &url);
     let outcome = tokio::time::timeout(
         Duration::from_secs(30),
         probe_backends_cycle(
@@ -814,22 +810,18 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
 #[tokio::test]
 async fn subscription_probe_preserves_typed_refresh_rejections() {
     let models = ModelsListener::start();
-    let _env = TOKEN_URL_ENV.lock().await;
-    for (provider, override_env, kind, forbidden_event) in [
+    for (provider, kind, forbidden_event) in [
         (
             crate::auth::claude::CLAUDE_OAUTH_PROVIDER,
-            crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
             crate::backends::provider::BackendProviderKind::ClaudeCliSubscription,
             "subscriptionNotEntitled",
         ),
         (
             crate::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-            gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
             crate::backends::provider::BackendProviderKind::ChatGptCodex,
             "probeFail",
         ),
     ] {
-        let _guard = TokenUrlOverrideGuard(override_env);
         for (status, body, event) in [
             (401, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
             (400, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
@@ -856,7 +848,14 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             backend.node_did = did.clone();
             oauth_backend_configuration(&user_access, &backend).await;
             let (url, server) = one_shot_token_server(status, body).await;
-            std::env::set_var(override_env, url);
+            let _bearer = bearer_refreshing_at(
+                &node,
+                &did,
+                provider,
+                crate::backends::health::oauth::oauth_refresh_kind(kind),
+                crate::backends::health::oauth::oauth_product(kind),
+                &url,
+            );
             let health = BackendHealthMap::new();
             let outcome = probe_backends_cycle(
                 &node,

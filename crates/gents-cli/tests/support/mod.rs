@@ -205,19 +205,23 @@ impl UserSeededHome {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
         let node = std::sync::Arc::new(
-            gents_store::local::store_key::persistent_builder(&data, &key)?
-                // The home's own projector, as its runtime and CLI open it,
-                // projects published documents' native source edges.
-                .with_document_projector(gents_store::local::document_projector(
-                    runtime.clone(),
-                    std::sync::Arc::new(ceiling),
-                )?)
-                .with_node_identity_did(node_did)
-                .with_node_acp_enabled()
-                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
-                .build()
-                .await
-                .context("opening the identity-only home")?,
+            gents_store::local::store_key::persistent_builder(
+                &data,
+                &key,
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )?
+            // The home's own projector, as its runtime and CLI open it,
+            // projects published documents' native source edges.
+            .with_document_projector(gents_store::local::document_projector(
+                runtime.clone(),
+                std::sync::Arc::new(ceiling),
+            )?)
+            .with_node_identity_did(node_did)
+            .with_node_acp_enabled()
+            .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await
+            .context("opening the identity-only home")?,
         );
         let access = gents_store::config_client::ConfigAccess::Graphql(
             gents_store::config_client::GraphqlEndpoint::as_principal(&url, client.did())

@@ -108,7 +108,7 @@ Examples:
   gents init --backend-preset claude-cli-subscription   # then: gents accounts login claude
   gents init --write
   gents init --yolo
-  gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
+  gents init --inference-url http://HOST:PORT/v1 --model-name MODEL --write
   gents init --defra-query-collection AgentRequest
   gents init --identity-only
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
@@ -338,6 +338,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                 commands::start::StartArgs {
                     home: cli.home,
                     store_key_custody: cli.store_key_custody,
+                    registry: cli.registry,
                     agent: cli.agent,
                     print: cli.print,
                     steer: cli.steer,
@@ -390,7 +391,15 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     if let Some(home) = read_only_home {
         gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
     }
-    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
+    let system_log = match &command {
+        Command::Server(args) => args.system_log,
+        Command::PrepareRuntime(args) => args.serve.system_log,
+        Command::Runtime {
+            command: RuntimeCommand::Server(args),
+        } => args.system_log,
+        _ => false,
+    };
+    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER, system_log)?;
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
@@ -657,7 +666,11 @@ async fn resolve_config_access_inner(
     let config = read_init_config(&home_dir)?.context("home is not initialized")?;
     let runtime_identity = load_initialized_home_identity(&home_dir, &config)?;
     let protected = protected
-        .preflight(&store_key, Some(runtime_identity.did()))
+        .preflight(
+            &store_key,
+            Some(runtime_identity.did()),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
         .await?;
     // Offline client writes are signed by the client key and travel through
     // this owned node's loopback endpoint, as `gents init` publishes them.
@@ -732,7 +745,9 @@ pub(crate) async fn persistent_node_builder(
     gents_store::local::storage_backend::reject_legacy_store(data_dir)?;
     let key = gents_store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
     Ok(gents_store::local::store_key::persistent_builder(
-        data_dir, &key,
+        data_dir,
+        &key,
+        gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
     )?)
 }
 

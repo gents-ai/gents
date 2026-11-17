@@ -3,8 +3,12 @@ use crate::live_output::{COMMAND_OUTPUT_META_PREFIX, COMMAND_OUTPUT_VOLATILE_FIE
 use crate::tool_call_lifecycle::{FailureClass, ToolOutcome};
 use crate::truncation::floor_char_boundary;
 
-const FAILURE_LIMIT: u32 = 3;
+/// Identical failing dispatches before further repeats are intercepted, when
+/// `InferenceExecution.repeated_tool_failure_limit` is unset.
+pub const DEFAULT_REPEATED_TOOL_FAILURE_LIMIT: usize = 3;
+/// Lean `RepeatedToolFailure.suppressionLimit`: one notice, then stop. A fixed protocol, not a budget.
 const SUPPRESSION_LIMIT: u32 = 2;
+/// Lean `RepeatedToolSuccess.limit`, fixed by the model.
 const SUCCESS_LIMIT: u32 = 8;
 /// Bounds the error included in the notice and stop reason; the full error
 /// identity still determines whether dispatched calls failed identically.
@@ -35,19 +39,34 @@ struct Streak {
     count: u32,
 }
 
-#[derive(Default)]
 pub(super) struct RepeatedToolProgress {
     streak: Option<Streak>,
     suppressed: u32,
+    failure_limit: u32,
+}
+
+impl Default for RepeatedToolProgress {
+    fn default() -> Self {
+        Self::new(DEFAULT_REPEATED_TOOL_FAILURE_LIMIT)
+    }
 }
 
 impl RepeatedToolProgress {
+    /// A limit beyond `u32::MAX` saturates; the streak count cannot exceed it.
+    pub(super) fn new(failure_limit: usize) -> Self {
+        Self {
+            streak: None,
+            suppressed: 0,
+            failure_limit: u32::try_from(failure_limit).unwrap_or(u32::MAX),
+        }
+    }
+
     fn repeats_streak(&self, tool: &str, args: &str) -> bool {
         self.streak.as_ref().is_some_and(|streak| {
             streak.kind == StreakKind::Failure
                 && streak.tool == tool
                 && streak.args == args
-                && streak.count >= FAILURE_LIMIT
+                && streak.count >= self.failure_limit
         })
     }
 
@@ -62,7 +81,8 @@ impl RepeatedToolProgress {
     }
 
     pub(super) fn reset(&mut self) {
-        *self = Self::default();
+        self.streak = None;
+        self.suppressed = 0;
     }
 
     pub(super) fn record_dispatched(
@@ -96,17 +116,15 @@ impl RepeatedToolProgress {
                 streak.excerpt = error_excerpt(text).to_owned();
             }
             _ => {
-                *self = Self {
-                    streak: Some(Streak {
-                        kind,
-                        tool: tool.to_owned(),
-                        args: args.to_owned(),
-                        identity,
-                        excerpt: error_excerpt(text).to_owned(),
-                        count: 1,
-                    }),
-                    suppressed: 0,
-                };
+                self.suppressed = 0;
+                self.streak = Some(Streak {
+                    kind,
+                    tool: tool.to_owned(),
+                    args: args.to_owned(),
+                    identity,
+                    excerpt: error_excerpt(text).to_owned(),
+                    count: 1,
+                });
             }
         }
     }

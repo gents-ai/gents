@@ -32,12 +32,19 @@ fn bridge_config() -> BridgeConfig {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let host_root = dirs::data_local_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("gents-fixture-host");
-    let domain_home = std::env::var_os("FIXTURE_DOMAIN_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| host_root.join("domain"));
+    run_with_domain_home(None);
+}
+
+/// Runs the fixture host with the domain plugin's data directory, which the
+/// desktop entry point takes from `--domain-home`; absent, it lives under the
+/// platform's local data directory.
+pub fn run_with_domain_home(domain_home: Option<PathBuf>) {
+    let domain_home = domain_home.unwrap_or_else(|| {
+        dirs::data_local_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("gents-fixture-host")
+            .join("domain")
+    });
     let _ = std::fs::create_dir_all(&domain_home);
 
     install_tracing(TracingConfig {

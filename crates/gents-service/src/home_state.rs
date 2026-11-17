@@ -74,12 +74,12 @@ pub fn is_default_home(home_dir: &Path) -> bool {
     default.is_ok_and(|default| canonical(home_dir) == canonical(&default))
 }
 
-/// What `gents` opens with neither `--home` nor `GENTS_HOME`.
-pub fn default_home_ignoring_env() -> Result<PathBuf> {
+/// What `gents` opens with no `--home`.
+pub fn default_home() -> Result<PathBuf> {
     #[cfg(test)]
     let default = Ok::<_, gents_store::local::home::HomeError>(default_home_dir());
     #[cfg(not(test))]
-    let default = gents_store::local::home::default_home_ignoring_env();
+    let default = gents_store::local::home::default_home_dir();
     Ok(default?)
 }
 
@@ -340,6 +340,8 @@ fn client_signed_endpoint(
 }
 
 /// The CLI is a separate client principal, even when desktop and CLI share a user home.
+/// It lives under the default desktop root, which follows the user's `HOME`; a
+/// desktop started with `--desktop-home` does not move it.
 pub fn cli_identity_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
     Ok(cli_identity_paths_under(&desktop_paths()?))
 }
@@ -352,7 +354,7 @@ fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
             homes.path().join("desktop"),
         ));
     }
-    gents_desktop_core::client::DesktopPaths::discover()
+    gents_desktop_core::client::DesktopPaths::discover(None)
 }
 
 fn cli_identity_paths_under(

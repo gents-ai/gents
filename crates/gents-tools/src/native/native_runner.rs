@@ -14,9 +14,17 @@ const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const _: () =
     assert!(gents_fs_runner::MAX_RESPONSE_BYTES + 64 * 1024 < MAX_NATIVE_RUNNER_OUTPUT_BYTES);
 const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
+/// Per-call cap on the filesystem runner, applied under the request deadline. It stops a stuck or pathological walk; the model narrows the path or pattern rather than raising it.
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
+/// Whether the running executable dispatches the native filesystem runner and
+/// the plugin builder as its own subcommands. It describes the binary, not an
+/// agent or a runtime: each entry point that embeds those subcommands sets it
+/// once before starting its runtime, and nothing clears it, so it is a genuine
+/// process singleton.
 static SELF_RUNNER_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// Marks the running executable as its own native filesystem runner and plugin
+/// builder; called only from a binary's entry point.
 pub fn enable_self_runner() {
     SELF_RUNNER_ENABLED.store(true, Ordering::Relaxed);
 }
@@ -62,6 +70,8 @@ fn fs_runner_timed_out_error(
 pub(crate) struct NativeFsRunner {
     root: PathBuf,
     base: PathBuf,
+    #[cfg(all(test, feature = "test-seams"))]
+    blocker: Option<std::sync::Arc<gents_fs_runner::TraversalBlocker>>,
 }
 
 impl NativeFsRunner {
@@ -69,6 +79,8 @@ impl NativeFsRunner {
         Self {
             root: context.root(),
             base: context.base(),
+            #[cfg(all(test, feature = "test-seams"))]
+            blocker: context.runner_blocker(),
         }
     }
 
@@ -100,7 +112,17 @@ impl NativeFsRunner {
         tool_name: &'static str,
     ) -> Result<String, ToolError> {
         let runner = resolve_runner_command(&self.effective_root(), &self.effective_base())?;
+        #[cfg(all(test, feature = "test-seams"))]
+        let runner = self.with_blocker_args(runner);
         self.run_resolved(request, tool_name, runner).await
+    }
+
+    #[cfg(all(test, feature = "test-seams"))]
+    fn with_blocker_args(&self, mut runner: RunnerCommand) -> RunnerCommand {
+        if let Some(blocker) = &self.blocker {
+            runner.argv.extend(blocker.to_args());
+        }
+        runner
     }
 
     async fn run_resolved(

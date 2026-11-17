@@ -24,6 +24,8 @@ type Goal @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248
     wrapup_requested: Boolean @index
     wrapup_completed: Boolean @index
     infrastructure_retry_count: Int
+    blocked_audit_threshold: Int
+    max_infrastructure_retries: Int
     last_failure: String
     completion_evidence: String
     auto_resume_at_reset: Boolean

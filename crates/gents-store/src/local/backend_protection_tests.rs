@@ -32,10 +32,14 @@ async fn existing_unbound_store_without_provenance_is_left_untouched() -> anyhow
         ),
         "",
     );
-    let node = super::store_key::persistent_builder(&data, &key)?
-        .with_node_identity_did(did.clone())
-        .build()
-        .await?;
+    let node = super::store_key::persistent_builder(
+        &data,
+        &key,
+        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )?
+    .with_node_identity_did(did.clone())
+    .build()
+    .await?;
     node.add_collection(&unbound).await?;
     let created = node.execute(r#"mutation { create_InferenceBackend(input:{node_did:"legacy", backend_id:"b", name:"old", provider_kind:"OpenAiCompatible", endpoint:"https://provider.example", auth:{kind:"api_key",key:"legacy-secret"}}) {_docID} }"#).await;
     anyhow::ensure!(
@@ -62,10 +66,14 @@ async fn existing_unbound_store_without_provenance_is_left_untouched() -> anyhow
             .is_ok(),
         denied
     );
-    let node = super::store_key::persistent_builder(&data, &key)?
-        .with_node_identity_did(did)
-        .build()
-        .await?;
+    let node = super::store_key::persistent_builder(
+        &data,
+        &key,
+        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )?
+    .with_node_identity_did(did)
+    .build()
+    .await?;
     let retained = node.execute("{ InferenceBackend { auth } }").await;
     anyhow::ensure!(
         !retained.has_errors(),
@@ -147,7 +155,11 @@ async fn an_uncheckable_copy_leaves_the_original_store_untouched() -> anyhow::Re
         .await?;
     ProtectedBackendStore::open(&data, &key, &lock)
         .await?
-        .preflight(&key, Some(&did))
+        .preflight(
+            &key,
+            Some(&did),
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
         .await?;
     tokio::fs::remove_file(data.join(super::store_compat::COMPATIBILITY_STAMP)).await?;
     tokio::fs::write(data.join("MANIFEST"), b"unreadable fixture manifest").await?;
@@ -155,7 +167,11 @@ async fn an_uncheckable_copy_leaves_the_original_store_untouched() -> anyhow::Re
     let before = tokio::task::spawn_blocking(move || store_bytes(&original)).await??;
     let error = ProtectedBackendStore::open(&data, &key, &lock)
         .await?
-        .preflight(&key, Some(&did))
+        .preflight(
+            &key,
+            Some(&did),
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
         .await
         .err()
         .context("a failed copy must refuse the original")?;

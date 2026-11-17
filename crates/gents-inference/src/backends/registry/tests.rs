@@ -911,6 +911,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
         &endpoint,
         None,
         Some(&credential),
+        None,
     )
     .await?;
 

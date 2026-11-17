@@ -1282,8 +1282,12 @@ impl TitleFixture {
                 },
             )]),
         );
-        let mut model =
-            gents_inference::admission::AdmittedCompletionModel::new(model, registry, "scripted");
+        let mut model = gents_inference::admission::AdmittedCompletionModel::new(
+            model,
+            registry,
+            "scripted",
+            self.agent_config.completion_retry.max_rate_limit_wait(),
+        );
         model.agent_signer = self.agent_config.agent_identity.managed_agent_signer();
         model
     }
@@ -1354,6 +1358,7 @@ impl TitleFixture {
             openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:1/v1".into(),
             claude_platform: None,
+            client_version: None,
             backend_auth: gents_documents::BackendAuth::Unauthenticated,
             model_name: "scripted".into(),
             service_tier: None,
@@ -1366,9 +1371,16 @@ impl TitleFixture {
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
+            max_invalid_tool_calls: gents_inference::resolved::DEFAULT_MAX_INVALID_TOOL_CALLS,
+            repeated_tool_failure_limit:
+                gents_inference::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+            max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
             stream_batch_ms: 0,
             stream_liveness_timeout: Duration::from_secs(60),
             deadline_duration: Duration::from_secs(120),
+            title_timeout: Duration::from_secs(
+                gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS,
+            ),
             provider_idle_timeout: Duration::from_secs(
                 gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
             ),
@@ -2832,6 +2844,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         provider,
         registry,
         format!("{backend}:connection"),
+        fixture.agent_config.completion_retry.max_rate_limit_wait(),
     );
     model.agent_signer = fixture.agent_config.agent_identity.managed_agent_signer();
     let parent_state = |access: ConfigAccess, doc: String| async move {
@@ -2857,7 +2870,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
     );
     let request_id = gents_store::graphql::escape_graphql_string(&fixture.title.request_id);
     let response = fixture.agent_access()
-        .execute(&format!("{{ InferenceCall(filter: {{ request_id: {{ _eq: \"{request_id}\" }} }}) {{ call_kind call_state failure_reason }} }}"))
+        .execute(&format!("{{ InferenceCall(filter: {{ request_id: {{ _eq: \"{request_id}\" }} }}) {{ call_kind call_state failure_reason provider_limit provider_limit_resets_at }} }}"))
         .await
         .unwrap();
     let rows = response["data"]["InferenceCall"].as_array().unwrap();
@@ -2870,13 +2883,12 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
             reason.starts_with("provider usage limit reached (resets at "),
             "{reason}"
         );
-        let Some(gents_loop::provider_limit::ProviderLimit::UsageExhausted(limit)) =
-            gents_loop::provider_limit::classify_provider_limit(reason, chrono::Utc::now())
-        else {
-            panic!("recorded reason is not a usage limit: {reason}");
-        };
+        assert_eq!(row["provider_limit"], "usage_limited", "{row}");
+        let recorded_reset = row["provider_limit_resets_at"]
+            .as_str()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok());
         assert_eq!(
-            limit.resets_at.map(|at| at.timestamp()),
+            recorded_reset.map(|at| at.timestamp()),
             Some(resets_at.timestamp())
         );
     }

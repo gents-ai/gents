@@ -2644,7 +2644,6 @@ impl OwnedCaptureFixture {
             parent_request_doc_id: Some(parent_doc.into()),
             root_request_id: parent_id.into(),
             retry_count: 1,
-            max_retries: 3,
         });
         let create =
             build_signed_client_request(&self.access, spec, RequestSigner::Identity(&self.user))

@@ -348,6 +348,7 @@ pub fn context(
             .map(|binding| (binding.wire.clone(), target(&binding.target)))
             .collect(),
         live_background: c.live_background,
+        background_limit: c.background_limit,
         started_by_job: c.started_by_job,
         cwd_allowed: c.cwd_allowed.clone(),
         within: c

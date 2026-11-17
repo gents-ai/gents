@@ -12,6 +12,7 @@ use super::CallbackEngine;
 #[cfg(test)]
 mod saturation_tests;
 
+/// Concurrent callback plugin invocations in this process. Claimed invocations beyond it wait for a permit, so the cap trades latency for bounded CPU and memory and never drops work.
 pub(super) const PLUGIN_CALLBACK_CONCURRENCY: usize = 32;
 
 /// Process-local execution accounting is separate from the durable claim:
@@ -132,6 +133,9 @@ impl CallbackWorkers {
                         ceiling.as_deref(),
                         &plugins,
                         Some(&node),
+                        // Only plugin handlers are dispatched here, and they
+                        // never create a workspace.
+                        None,
                     )
                     .await?;
                 }
@@ -168,6 +172,10 @@ impl CallbackEngine {
                 return Ok(());
             }
         }
+        let snapshot = self
+            .snapshots
+            .as_ref()
+            .map(|snapshots| snapshots.borrow().clone());
         run_owned_invocation(
             &self.node,
             &access,
@@ -176,6 +184,7 @@ impl CallbackEngine {
             self.ceiling.as_deref(),
             &self.plugins,
             Some(&self.node),
+            snapshot.as_deref(),
         )
         .await
     }

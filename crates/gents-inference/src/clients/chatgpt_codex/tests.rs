@@ -69,7 +69,8 @@ async fn routing_affinity_isolates_concurrent_executions_without_capture() {
                 .body(Bytes::from_static(b"{}"))
                 .unwrap();
             let original_headers = other.headers().clone();
-            let other = crate::clients::xai_grok::XaiGrokOAuthPolicy.patch_request_body(other);
+            let other =
+                crate::clients::xai_grok::XaiGrokOAuthPolicy::default().patch_request_body(other);
             assert_eq!(other.headers(), &original_headers);
 
             let mut later = HeaderMap::new();
@@ -338,11 +339,11 @@ async fn injects_fresh_bearer_on_each_request() {
 
 #[test]
 fn chatgpt_codex_headers_advertise_codex_version_and_sse_accept() {
-    let headers = build_chatgpt_codex_headers(Some("acct_123"), true).unwrap();
+    let headers = build_chatgpt_codex_headers(Some("acct_123"), true, None).unwrap();
 
     assert_eq!(
         headers.get("version").and_then(|value| value.to_str().ok()),
-        Some(chatgpt_codex_client_version().as_str())
+        Some(chatgpt_codex_client_version(None).as_str())
     );
     assert_eq!(
         headers.get("accept").and_then(|value| value.to_str().ok()),
@@ -380,6 +381,20 @@ fn default_client_version_supports_gpt_6_1_sol_catalog() {
     // Codex rust-v0.160.0, a956835d020762cb2b570053af06f643a11c0ecc:
     // models-manager/models.json gates gpt-6.1-sol at 0.153.0.
     assert!(parse(CHATGPT_CODEX_CLIENT_VERSION) >= parse("0.153.0"));
+}
+
+#[test]
+fn configured_client_version_replaces_the_built_in_default() {
+    let headers = build_chatgpt_codex_headers(None, false, Some("9.9.9")).unwrap();
+
+    assert_eq!(
+        headers.get("version").and_then(|value| value.to_str().ok()),
+        Some("9.9.9")
+    );
+    assert_eq!(
+        chatgpt_codex_client_version(None),
+        CHATGPT_CODEX_CLIENT_VERSION
+    );
 }
 
 #[test]

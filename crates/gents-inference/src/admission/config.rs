@@ -45,6 +45,7 @@ pub(crate) fn backend_connection_fingerprint(fields: &BackendFields) -> String {
         &fields.backend_endpoint,
         &fields.backend_auth,
         &fields.claude_platform,
+        &fields.client_version,
     ))
     .expect("backend connection fields serialize");
     process_keyed_fingerprint(&encoded)

@@ -1,18 +1,16 @@
 //! The native service lifecycle every client calls. A direct action is
 //! admitted here before it reaches the service manager; a managed update is
 //! `service_update`'s operation and has its own gates.
-use std::path::Path;
-
 use gents_protocol::operations::service::{
-    decide, ServiceLifecycleAction, ServiceLifecycleDecision, ServiceLifecycleRefusal,
+    decide, ServiceLifecycleAction, ServiceLifecycleCallerObservation, ServiceLifecycleDecision,
+    ServiceLifecycleRefusal,
 };
 
 use crate::args::ServiceAction;
 use crate::native_service::{CommandRunner, NativeServiceManager, NativeServiceStatus};
 use crate::network_settings::NetworkSettings;
 
-/// The runtime home whose shell launched this process, when a runtime did.
-pub const CALLER_RUNTIME_HOME_ENV: &str = "GENTS_CALLER_RUNTIME_HOME";
+mod ancestry;
 
 /// A refusal, or the service manager's own failure unchanged: callers that
 /// classify a native failure (a pending background approval) still find it.
@@ -66,46 +64,23 @@ impl ServiceAction {
     }
 }
 
-fn caller_runs_on(home: &Path, origin: Option<&Path>) -> bool {
-    origin.is_some_and(|origin| {
-        matches!(
-            (std::fs::canonicalize(origin), std::fs::canonicalize(home)),
-            (Ok(origin), Ok(home)) if origin == home
-        )
-    })
-}
-
-fn admit_from<R>(
+/// What this process observes about the service manager's running job. A
+/// service manager that cannot be asked fails the action, as it would fail
+/// the action itself.
+fn observe_caller<R>(
     manager: &NativeServiceManager<R>,
-    action: ServiceLifecycleAction,
-    origin: Option<&Path>,
-) -> Result<(), ServiceLifecycleError>
+) -> anyhow::Result<ServiceLifecycleCallerObservation>
 where
     R: CommandRunner,
 {
-    let home = manager.home();
-    let pending = if action.contends_with_update() {
-        manager.pending_update()?
-    } else {
-        None
-    };
-    let named_home = || home.display().to_string();
-    match decide(action, caller_runs_on(home, origin), pending.is_some()) {
-        ServiceLifecycleDecision::Admitted => Ok(()),
-        ServiceLifecycleDecision::WouldDisruptCaller => Err(ServiceLifecycleError::Refused(
-            ServiceLifecycleRefusal::WouldDisruptCaller {
-                action,
-                home: named_home(),
-            },
-        )),
-        ServiceLifecycleDecision::UpdateInProgress => Err(ServiceLifecycleError::Refused(
-            ServiceLifecycleRefusal::UpdateInProgress {
-                action,
-                home: named_home(),
-                operation_id: pending.map(|id| id.to_string()).unwrap_or_default(),
-            },
-        )),
-    }
+    Ok(match manager.job_pid()? {
+        None => ServiceLifecycleCallerObservation::NoRuntime,
+        Some(job) => match ancestry::is_ancestor(job) {
+            Some(true) => ServiceLifecycleCallerObservation::Ancestor,
+            Some(false) => ServiceLifecycleCallerObservation::NotAncestor,
+            None => ServiceLifecycleCallerObservation::Unobservable,
+        },
+    })
 }
 
 /// Whether `action` on this manager's home may run now, for a caller that
@@ -117,19 +92,61 @@ pub fn admit<R>(
 where
     R: CommandRunner,
 {
-    let origin = std::env::var_os(CALLER_RUNTIME_HOME_ENV).map(std::path::PathBuf::from);
-    admit_from(manager, action, origin.as_deref())
+    let home = manager.home();
+    let observation = if action.disrupts() {
+        Some(observe_caller(manager)?)
+    } else {
+        None
+    };
+    let caller_runs_on_target =
+        observation.is_some_and(ServiceLifecycleCallerObservation::caller_runs_on_target);
+    let pending = if action.contends_with_update() {
+        manager.pending_update()?
+    } else {
+        None
+    };
+    let named_home = || home.display().to_string();
+    match decide(action, caller_runs_on_target, pending.is_some()) {
+        ServiceLifecycleDecision::Admitted => Ok(()),
+        ServiceLifecycleDecision::WouldDisruptCaller => {
+            let Some(observation) = observation else {
+                unreachable!("Lean `ServiceLifecycle.admission` refuses only a caller observed on the target");
+            };
+            Err(ServiceLifecycleError::Refused(
+                ServiceLifecycleRefusal::WouldDisruptCaller {
+                    action,
+                    home: named_home(),
+                    observation,
+                },
+            ))
+        }
+        ServiceLifecycleDecision::UpdateInProgress => Err(ServiceLifecycleError::Refused(
+            ServiceLifecycleRefusal::UpdateInProgress {
+                action,
+                home: named_home(),
+                operation_id: pending.map(|id| id.to_string()).unwrap_or_default(),
+            },
+        )),
+    }
 }
 
-/// Refuses the managed update's helper when a runtime's own shell launched
-/// it: the helper restarts that runtime.
-pub fn refuse_update_from_its_runtime(home: &Path) -> Result<(), ServiceLifecycleRefusal> {
-    let origin = std::env::var_os(CALLER_RUNTIME_HOME_ENV).map(std::path::PathBuf::from);
-    if caller_runs_on(home, origin.as_deref()) {
-        return Err(ServiceLifecycleRefusal::WouldDisruptCaller {
-            action: ServiceLifecycleAction::Restart,
-            home: home.display().to_string(),
-        });
+/// Refuses the managed update's helper when it runs under the job it
+/// restarts.
+pub fn refuse_update_from_its_runtime<R>(
+    manager: &NativeServiceManager<R>,
+) -> Result<(), ServiceLifecycleError>
+where
+    R: CommandRunner,
+{
+    let observation = observe_caller(manager)?;
+    if observation.caller_runs_on_target() {
+        return Err(ServiceLifecycleError::Refused(
+            ServiceLifecycleRefusal::WouldDisruptCaller {
+                action: ServiceLifecycleAction::Restart,
+                home: manager.home().display().to_string(),
+                observation,
+            },
+        ));
     }
     Ok(())
 }
@@ -188,7 +205,9 @@ where
 #[cfg(test)]
 mod tests {
     use gents_lean_vocab::families;
-    use gents_protocol::operations::service::{decide, ServiceLifecycleAction};
+    use gents_protocol::operations::service::{
+        decide, ServiceLifecycleAction, ServiceLifecycleCallerObservation,
+    };
 
     #[test]
     fn lifecycle_admission_matches_lean() {
@@ -198,8 +217,31 @@ mod tests {
         families::service_lifecycle_action_contends_with_update::replay(|i| {
             ServiceLifecycleAction::contends_with_update(i.action)
         });
+        families::service_lifecycle_caller_observation_caller_runs_on_target::replay(|i| {
+            ServiceLifecycleCallerObservation::caller_runs_on_target(i.caller_observation)
+        });
         families::service_lifecycle_admission::replay(|i| {
             decide(i.action, i.caller_runs_on_target, i.update_pending)
         });
+    }
+
+    #[test]
+    fn a_refusal_says_whether_the_caller_was_seen_under_the_runtime() {
+        let refusal = |observation| {
+            gents_protocol::operations::service::ServiceLifecycleRefusal::WouldDisruptCaller {
+                action: ServiceLifecycleAction::Stop,
+                home: "/node".into(),
+                observation,
+            }
+            .to_string()
+        };
+        let ancestor = refusal(ServiceLifecycleCallerObservation::Ancestor);
+        assert!(ancestor.contains("would end the runtime executing your turn"));
+        let unobservable = refusal(ServiceLifecycleCallerObservation::Unobservable);
+        assert!(unobservable.contains("ancestry could not be read"));
+        assert!(!unobservable.contains("would end"));
+        for text in [ancestor, unobservable] {
+            assert!(text.contains("gents runtime service update --home /node"));
+        }
     }
 }

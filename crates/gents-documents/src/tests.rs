@@ -458,13 +458,17 @@ fn tools_validation_reports_every_violation() {
     let doc: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "invalid-tools",
         "node_did": "did:test:test",
-        "host": {"bash": {"mode": "ReadOnly", "max_output_chars": 0}},
+        "host": {"max_instruction_chars": 262145,
+            "bash": {"mode": "ReadOnly", "max_output_chars": 0}},
         "agents": {"target_ids": [""]}
     }))
     .unwrap();
 
     let violations = doc.validation_violations();
-    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert_eq!(violations.len(), 3, "{violations:?}");
+    assert!(violations
+        .iter()
+        .any(|error| error == "host.max_instruction_chars must be at most 262144"));
     assert!(violations
         .iter()
         .any(|error| error.contains("agents.target_ids")));

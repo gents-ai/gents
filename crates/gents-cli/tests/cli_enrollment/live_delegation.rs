@@ -52,10 +52,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
     let owner_home = home_dir.join("owner");
     fs::create_dir_all(&runtime_home)?;
     let home = runtime_home.to_str().context("runtime home UTF-8")?;
-    let owner_env = [(
-        "GENTS_DESKTOP_HOME",
-        owner_home.to_str().context("owner home UTF-8")?,
-    )];
+    let owner_env = [("HOME", owner_home.to_str().context("owner home UTF-8")?)];
     let init = run_cli_json_with_env(
         &runtime_home,
         &[

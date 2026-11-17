@@ -6,6 +6,140 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A failed InferenceCall records the provider-limit verdict in
+  `provider_limit` (`throttled` or `usage_limited`) and, for a usage limit with
+  a reported reset, `provider_limit_resets_at`, in the same write as its
+  `failure_reason`. The verdict uses the Agent's `max_rate_limit_wait_ms`, the
+  cap the owned loop holds, so a throttle the Agent waits out is no longer
+  recorded as a usage limit, and one beyond a lower cap is. Title, access-review
+  and compaction calls also hold the Agent's cap instead of the five-minute
+  default. Blocked turns, a Goal's usage-limit stop and its resume at the reset
+  read these fields instead of the failure text (#3923).
+- Breaking: `GENTS_REGISTRY` is no longer read. `gents server --registry URL`
+  chooses the registry an Agent's `config pack` commands resolve and search
+  from; the config tool still takes no per-call registry. `gents init`, bare
+  `gents` setup, `gents config pack starter`, `pack prune` and `automation job
+  promote` gain `--registry`, as every other pack and plugin command has.
+  Without the flag the public registry is used. An installed service runs
+  without `--registry`, so its Agents use the public registry.
+- Breaking: `gents service install`, `stop`, `restart` and `uninstall`, and
+  a managed update's helper, refuse to run when the service's running job is
+  an ancestor of the calling process, which they observe from the service
+  manager and the operating system instead of `GENTS_CALLER_RUNTIME_HOME`.
+  Where that ancestry cannot be read (a sandboxed command, a platform other
+  than macOS or Linux) they refuse while the job runs. Agent commands no
+  longer receive `GENTS_CALLER_RUNTIME_HOME`, `GENTS_CALLER_SESSION_ID` or
+  `GENTS_CALLER_REQUEST_ID`, and a managed update submitted from an Agent's
+  shell no longer posts "Runtime update complete" or "Runtime update failed"
+  to the submitting session; read `gents service update-status` instead.
+  Update receipts no longer carry `session_id` or `request_id` (#3922).
+- On macOS, setup and repair no longer report the service log as out of date
+  after a managed update, so they no longer rewrite the LaunchAgent (and
+  possibly restart the runtime) for it. A lifecycle refusal for a caller whose ancestry
+  cannot be read now says so instead of claiming the action would end the
+  caller's runtime.
+- Breaking: `GENTS_DESKTOP_HOME` is no longer read. The desktop app takes
+  `--desktop-home PATH` as a launch argument; `gents-desktop init` and
+  `gents runtime desktop reset` keep their `--desktop-home`, and
+  `gents-client-host` its `--home`. Without one, desktop state is in the
+  platform's app data folder. The CLI's own client key always lives under that
+  default desktop home, which follows `HOME`, so a desktop started with another
+  `--desktop-home` cannot provision a managed home.
+- Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
+  node home; without it commands use the folder chosen at setup, then `~/.gents`.
+  The macOS uninstall script takes `--home DIR` instead.
+- Task `goal_blocked_audit_threshold` (positive, default 3) and
+  `goal_max_infrastructure_retries` (non-negative, default 2) replace the fixed
+  Goal limits for the Goals a Task creates. Every Goal a Task creates pins them,
+  including Task messages to an Agent. A Task that sets either without a goal
+  objective is rejected. Goals a person starts or the model creates keep the
+  defaults. Goal snapshots and the desktop's Goal view report both, and the
+  desktop Tasks panel edits them. A Goal's creation claim records both beside
+  its token budget, so a replayed creation that asks for other limits
+  conflicts, as one with another budget does.
+- InferenceExecution `max_invalid_tool_calls` (positive, default 8) and
+  `repeated_tool_failure_limit` (positive, default 3) replace the fixed loop
+  guards that end a turn after invalid or repeatedly failing tool calls. The
+  desktop profile editor sets both.
+- Breaking: InferenceRetryPolicy `interactive_max_retries` is renamed
+  `interactive_max_transport_retries`; a stored value under the old name no
+  longer applies. InferenceRetryPolicy `max_rate_limit_wait_ms` (positive,
+  default 300000) caps how long one provider throttle is waited out.
+- Plugin `limits.max_rounds` (default 64, at most 256) replaces the fixed
+  plugin round limit; a plugin may only raise it.
+- Breaking: P2P timing and the store's block cache are `gents server` flags
+  instead of environment variables: `--p2p-registry-heartbeat-ms`,
+  `--p2p-pairing-sweep-ms`, `--p2p-endpoint-heartbeat-ms` and
+  `--p2p-registry-stale-ms` (positive, defaults unchanged) replace
+  `GENTS_REGISTRY_HEARTBEAT_MS`, `GENTS_PAIRING_SWEEP_MS`,
+  `GENTS_ENDPOINT_HEARTBEAT_MS` and `GENTS_REGISTRY_STALE_MS`;
+  `--block-cache-mb` (positive, default 512) replaces `GENTS_BLOCK_CACHE_MB`;
+  and `--p2p-network-id` (not blank, default `default`) replaces
+  `GENTS_NETWORK_ID` as the registry partition.
+- Breaking: `gents server --system-log` replaces `GENTS_SYSTEM_LOG=1`. The
+  installed launchd and systemd definitions pass the flag, and a definition
+  without it gains it from `gents service repair` or a managed update.
+- Breaking: `gents init` and the interactive backend setup take the inference
+  endpoint only from `--inference-url` (or a preset); `INFERENCE_ENDPOINT` is
+  no longer read.
+- The desktop's console logging is the `--console-log` launch argument instead
+  of `GENTS_DESKTOP_CONSOLE_LOG`, and product telemetry reads
+  `GENTS_UMAMI_ENDPOINT` and `GENTS_UMAMI_WEBSITE_ID` only when the app is
+  built, not from the running app's environment.
+- Each Agent's request admission now checks a request's workspace and working
+  directory against that Agent's own operator tool root, instead of the root
+  the most recently started Agent in the process installed for all of them.
+- Test switches no longer reach shipped code through the environment:
+  `GENTS_FS_RUNNER_BLOCK_*`, `GENTS_TEST_STALL_AFTER_CLIENT_ACCESS`, the OAuth
+  token and device URL overrides (`GENTS_CLAUDE_OAUTH_TOKEN_URL`,
+  `GENTS_XAI_OAUTH_TOKEN_URL`, `GENTS_XAI_OAUTH_DEVICE_URL`,
+  `CODEX_REFRESH_TOKEN_URL_OVERRIDE`), the desktop's `GENTS_NATIVE_E2E` and
+  `GENTS_E2E_*` launch settings, the bridge runner's `GENTS_TAURI_LIVE`,
+  `GENTS_TAURI_LIVE_RETAIN_DATA`, `GENTS_DESKTOP_TEST_LOG`,
+  `GENTS_DESKTOP_LIVE_INFERENCE` and `GENTS_DESKTOP_LIVE_*BACKEND_*` reads, and
+  the fixture host's `FIXTURE_DOMAIN_HOME` are removed. Native E2E builds take
+  one `--native-e2e <json>` launch argument, the bridge runner takes
+  `--fixture-routes`, `--retain-data`, `--log-filter` and
+  `--inference-settings`, the fixture host takes `--domain-home`, and the
+  filesystem runner and `gents server` take hidden test flags; the test
+  harnesses map their own variables to these arguments.
+- The filesystem runner's `--block-*` flags and `gents server
+  --stall-after-client-access` exist only in builds with the `test-seams`
+  cargo feature of `gents-fs-runner`, `gents-host` and `gents-cli`. Release
+  builds reject them as unknown arguments.
+- InferenceRetryPolicy `max_rate_limit_wait_ms` is now the live threshold
+  between a provider throttle and its usage limit: a provider wait beyond it
+  fails the request as usage-limited (with its reset time) even when transport
+  retries remain, and `backoff_ms` steps may not exceed it.
+- Tools `host.max_background_tool_calls` (1 to 8, default 8) bounds the background
+  calls one request holds at once: bash runs, remote service calls and plugin jobs
+  together. A call past it is refused with `background_tool_budget_exceeded`, which
+  now reports the configured limit. 8 stays the host ceiling because the store's
+  contention retries are sized from it.
+- Tools `host.max_instruction_chars` (default 32768, at most 262144) bounds the
+  workspace AGENTS.md bytes placed in provider context, replacing the fixed
+  budget. A workspace freezes its instructions with its writer Agent's value at
+  creation and keeps them; a later change applies to new workspaces and to live
+  instruction discovery. The desktop Tools editor sets it.
+- Breaking: the successor budget of a request lineage (operator reissues and
+  background wake redrives) is InferenceExecution `max_request_retries`
+  (non-negative, default 3, zero allows none) instead of a value clients sign.
+  `AgentRequest.max_retries` is no longer signed or written by clients: a
+  request's first claim pins it from the claiming Agent's configuration, a
+  retry successor inherits its parent's pin, and title and access-review
+  requests take zero. A request that never reached a claim may still be
+  reissued by an operator but is not redriven automatically.
+  `ReissueReceipt.max_retries` is absent until the lineage has been claimed.
+- InferenceExecution `title_timeout_secs` (default 10s) bounds one title-generation
+  attempt, replacing the fixed title timeout. InferenceBackend `request_timeout_secs`
+  (default 120s) bounds one plugin model call through that backend, replacing the fixed
+  plugin model timeout. Both are positive integers, validated where the documents are.
+- InferenceBackend `client_version` sets the wire client version that ChatGPT Codex and
+  Grok OAuth backends advertise to their provider, replacing the `GENTS_CHATGPT_CODEX_CLIENT_VERSION`
+  and `GENTS_XAI_GROK_CLIENT_VERSION` environment overrides. Unset, the built-in version of
+  that client is used. It is a non-empty string without whitespace, validated where the
+  document is. Connection tests run before a backend is saved, and the sign-in probes of the
+  CLI, use the built-in version.
 - An application pairing no longer reinstalls its collections on authority
   read before its author lost the P2P mutation grant: each install re-reads
   the author's authority after the operations before it, and a change to the

@@ -116,6 +116,7 @@ pub fn test_agent_with_identity(
         openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         claude_platform: None,
+        client_version: None,
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         model_name: gents_inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
@@ -128,6 +129,9 @@ pub fn test_agent_with_identity(
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_inference::resolved::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_inference::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+        max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -135,6 +139,7 @@ pub fn test_agent_with_identity(
         deadline_duration: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
+        title_timeout: Duration::from_secs(gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(
             gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
@@ -466,6 +471,73 @@ pub async fn bind_managed_agent_backend(
         model_name,
     )
     .await;
+}
+
+/// Gives the managed Agent's inference profile an `InferenceExecution` with
+/// `max_request_retries`, after `bind_managed_agent_backend`.
+pub async fn set_managed_agent_max_request_retries(
+    db: &super::TestDb,
+    fixture: &super::ManagedAgentFixture,
+    execution_id: &str,
+    max_request_retries: i64,
+) {
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    use gents_store::collection::Collection;
+
+    let owner = db.node_identity.did();
+    let agent_did = fixture.binding.agent_did.as_str();
+    fixture
+        .access
+        .transact_signed_conflict_rebuild("test.set_managed_agent_max_request_retries", |txn| {
+            Box::pin(async move {
+                let (_, agent) =
+                    read_desired_state_record_in_txn(txn, Collection::Agent, owner, agent_did)
+                        .await?
+                        .expect("managed test Agent must exist");
+                let profile_id = agent["inference_profile_id"]
+                    .as_str()
+                    .expect("managed Agent inference profile")
+                    .to_owned();
+                let (_, mut profile) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::InferenceProfile,
+                    owner,
+                    &profile_id,
+                )
+                .await?
+                .expect("managed Agent profile must be bound");
+                profile["execution_id"] = execution_id.into();
+                let execution = serde_json::json!({
+                    "node_did": owner,
+                    "execution_id": execution_id,
+                    "max_request_retries": max_request_retries,
+                });
+                let plan = DesiredStateApplyPlan::new(
+                    [
+                        (Collection::InferenceExecution, execution),
+                        (Collection::InferenceProfile, profile),
+                    ]
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+                )?;
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .expect("set managed Agent max_request_retries as held user");
 }
 
 pub async fn bind_selected_managed_agent_backend(

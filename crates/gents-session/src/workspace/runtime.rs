@@ -233,6 +233,7 @@ pub async fn seal_on_writer_success(
             caused_by_invocation_id: workspace.caused_by_invocation_id.clone(),
             caused_by_correlation: workspace.caused_by_correlation.clone(),
             route: workspace.route.clone(),
+            max_instruction_chars: None,
             documents: &mut docs,
         };
         execute_seal_workspace_plan(&plan, &mut journal, &mut ctx)
@@ -299,6 +300,7 @@ pub async fn integrate_on_integrator_success(
             caused_by_invocation_id: workspace.caused_by_invocation_id.clone(),
             caused_by_correlation: workspace.caused_by_correlation.clone(),
             route: workspace.route.clone(),
+            max_instruction_chars: None,
             documents: &mut docs,
         };
         execute_integrate_workspace_plan(&plan, &mut journal, &mut ctx)
@@ -352,6 +354,7 @@ pub async fn cleanup_workspace(
             caused_by_invocation_id: workspace.caused_by_invocation_id.clone(),
             caused_by_correlation: workspace.caused_by_correlation.clone(),
             route: workspace.route.clone(),
+            max_instruction_chars: None,
             documents: &mut docs,
         };
         execute_cleanup_workspace_plan(&plan, &mut journal, &mut ctx)

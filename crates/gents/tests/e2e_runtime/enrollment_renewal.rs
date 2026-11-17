@@ -6,6 +6,7 @@
 use std::time::Duration;
 use tokio::time::Instant;
 
+use gents_p2p::p2p_reconcile::intervals::P2pIntervals;
 use gents_p2p::p2p_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
     GraphqlEnrollmentStore,
@@ -189,12 +190,14 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         server.node.clone(),
         server.node_identity.clone(),
         server_owner,
+        P2pIntervals::default(),
         cancel.clone(),
     ));
     let pairing_task = tokio::spawn(run_pairing_reconciler(
         server.node.clone(),
         server.node_identity.clone(),
         server_authority,
+        P2pIntervals::default(),
         cancel.clone(),
     ));
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -234,6 +237,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         member.node.clone(),
         member.node_identity.clone(),
         member_owner,
+        P2pIntervals::default(),
         cancel.clone(),
     ));
     let deadline = Instant::now() + Duration::from_secs(110);
@@ -304,6 +308,7 @@ async fn re_enrolling_an_active_member_renews_its_lease_in_place() {
         server.node.clone(),
         server.node_identity.clone(),
         owner,
+        P2pIntervals::default(),
         cancel.clone(),
     ));
 

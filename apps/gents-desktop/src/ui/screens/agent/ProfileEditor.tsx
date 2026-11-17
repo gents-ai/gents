@@ -185,9 +185,13 @@ export function ProfileEditor({
         repetitionPenalty,
         maxTurns,
         maxTotalTokens,
+        maxInvalidToolCalls,
+        repeatedToolFailureLimit,
+        maxRequestRetries,
         streamBatchMs,
         streamLivenessSecs,
         providerIdleSecs,
+        titleTimeoutSecs,
         deadlineSecs,
       } = profileNumbers(next, profileContext(next));
       const sampling = deployment.inferenceSampling.find(
@@ -233,9 +237,13 @@ export function ProfileEditor({
             execution_id: next.executionId.trim(),
             max_turns: maxTurns,
             max_total_tokens: maxTotalTokens,
+            max_invalid_tool_calls: maxInvalidToolCalls,
+            repeated_tool_failure_limit: repeatedToolFailureLimit,
+            max_request_retries: maxRequestRetries,
             stream_batch_ms: streamBatchMs,
             stream_liveness_timeout_secs: streamLivenessSecs,
             provider_idle_timeout_secs: providerIdleSecs,
+            title_timeout_secs: titleTimeoutSecs,
             deadline_duration_secs: deadlineSecs,
             retry_policy_id: next.retryPolicyId.trim() || null,
           }
@@ -261,9 +269,13 @@ export function ProfileEditor({
     key:
       | "maxTurns"
       | "maxTotalTokens"
+      | "maxInvalidToolCalls"
+      | "repeatedToolFailureLimit"
+      | "maxRequestRetries"
       | "streamBatchMs"
       | "streamLivenessSecs"
       | "providerIdleSecs"
+      | "titleTimeoutSecs"
       | "deadlineSecs",
     value: string,
   ) => {
@@ -571,6 +583,48 @@ export function ProfileEditor({
           onChange={(v) => setExecution("maxTotalTokens", v)}
         />
         <NumberRow
+          id={id("max-invalid-tool-calls")}
+          label={PROFILE_NUMBERS.maxInvalidToolCalls.label}
+          error={problems.maxInvalidToolCalls}
+          value={
+            editedExecution.has("maxInvalidToolCalls")
+              ? d.draft.maxInvalidToolCalls
+              : d.draft.maxInvalidToolCalls ||
+                (executionDefaults.maxInvalidToolCalls == null
+                  ? ""
+                  : String(executionDefaults.maxInvalidToolCalls))
+          }
+          onChange={(v) => setExecution("maxInvalidToolCalls", v)}
+        />
+        <NumberRow
+          id={id("repeated-tool-failure-limit")}
+          label={PROFILE_NUMBERS.repeatedToolFailureLimit.label}
+          error={problems.repeatedToolFailureLimit}
+          value={
+            editedExecution.has("repeatedToolFailureLimit")
+              ? d.draft.repeatedToolFailureLimit
+              : d.draft.repeatedToolFailureLimit ||
+                (executionDefaults.repeatedToolFailureLimit == null
+                  ? ""
+                  : String(executionDefaults.repeatedToolFailureLimit))
+          }
+          onChange={(v) => setExecution("repeatedToolFailureLimit", v)}
+        />
+        <NumberRow
+          id={id("max-request-retries")}
+          label={PROFILE_NUMBERS.maxRequestRetries.label}
+          error={problems.maxRequestRetries}
+          value={
+            editedExecution.has("maxRequestRetries")
+              ? d.draft.maxRequestRetries
+              : d.draft.maxRequestRetries ||
+                (executionDefaults.maxRequestRetries == null
+                  ? ""
+                  : String(executionDefaults.maxRequestRetries))
+          }
+          onChange={(v) => setExecution("maxRequestRetries", v)}
+        />
+        <NumberRow
           id={id("batch")}
           label={PROFILE_NUMBERS.streamBatchMs.label}
           error={problems.streamBatchMs}
@@ -611,6 +665,20 @@ export function ProfileEditor({
                   : String(executionDefaults.providerIdleSecs))
           }
           onChange={(v) => setExecution("providerIdleSecs", v)}
+        />
+        <NumberRow
+          id={id("title-timeout")}
+          label={PROFILE_NUMBERS.titleTimeoutSecs.label}
+          error={problems.titleTimeoutSecs}
+          value={
+            editedExecution.has("titleTimeoutSecs")
+              ? d.draft.titleTimeoutSecs
+              : d.draft.titleTimeoutSecs ||
+                (executionDefaults.titleTimeoutSecs == null
+                  ? ""
+                  : String(executionDefaults.titleTimeoutSecs))
+          }
+          onChange={(v) => setExecution("titleTimeoutSecs", v)}
         />
         <NumberRow
           id={id("deadline")}
@@ -654,9 +722,13 @@ export function ProfileEditor({
           executionId: id("execution"),
           maxTurns: id("max-turns"),
           maxTotalTokens: id("max-total"),
+          maxInvalidToolCalls: id("max-invalid-tool-calls"),
+          repeatedToolFailureLimit: id("repeated-tool-failure-limit"),
+          maxRequestRetries: id("max-request-retries"),
           streamBatchMs: id("batch"),
           streamLivenessSecs: id("liveness"),
           providerIdleSecs: id("provider-idle"),
+          titleTimeoutSecs: id("title-timeout"),
           deadlineSecs: id("deadline"),
         }}
         saveLabel={draftMode ? "Create" : undefined}

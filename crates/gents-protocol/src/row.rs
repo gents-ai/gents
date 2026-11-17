@@ -211,6 +211,10 @@ pub struct AgentRequestRow {
     pub deadline: Option<String>,
     #[serde(default)]
     pub retry_count: Option<i64>,
+    /// The lineage's successor budget. The runtime writes it at the request's
+    /// first claim (`gents_session::request::retry_budget::claim_pin`); clients
+    /// never sign it. The field stays mutable for that write, so afterwards
+    /// only document ACP keeps a writer with update rights from changing it.
     #[serde(default)]
     pub max_retries: Option<i64>,
     #[serde(default)]
@@ -345,6 +349,10 @@ pub struct GoalRow {
     pub wrapup_completed: Option<bool>,
     #[serde(default)]
     pub infrastructure_retry_count: Option<i64>,
+    #[serde(default)]
+    pub blocked_audit_threshold: Option<i64>,
+    #[serde(default)]
+    pub max_infrastructure_retries: Option<i64>,
     #[serde(default)]
     pub last_failure: Option<String>,
     #[serde(default)]

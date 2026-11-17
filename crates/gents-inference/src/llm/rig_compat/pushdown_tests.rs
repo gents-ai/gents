@@ -51,7 +51,7 @@ fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        33,
+        36,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_failure_class_bridge_matches_vocabulary();
@@ -96,6 +96,9 @@ fn completion_retry_lean_witness_cases_hold() {
             "empty_sample_retry_independent_of_transport",
             "empty_sample_retry_exhausted",
             "empty_sample_retry_respects_deadline",
+            "transport_wait_beyond_max_wait_is_usage_limited",
+            "transport_wait_within_max_wait_backs_off",
+            "transport_wait_beyond_max_wait_without_budget_is_usage_limited",
         ]),
         "CompletionRetry witness names drifted"
     );
@@ -158,6 +161,11 @@ fn completion_retry_lean_witness_cases_hold() {
             "account_hops_exhausted_is_terminal_for_policy" => {
                 assert_eq!(case.expected_phase.as_deref(), Some("exhausted"));
                 assert_account_hops_exhausted(case);
+            }
+            "transport_wait_beyond_max_wait_is_usage_limited"
+            | "transport_wait_within_max_wait_backs_off"
+            | "transport_wait_beyond_max_wait_without_budget_is_usage_limited" => {
+                assert_provider_wait_respects_max_wait(case);
             }
             _ => {}
         }
@@ -435,6 +443,7 @@ fn assert_selected_delay_past_deadline_fails_fast(case: &LeanCompletionRetryCase
         max_empty_resample: 0,
         allow_repair: true,
         account_hops: 0,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
     });
     let now = now();
     let deadline = now + chrono::Duration::seconds(10);
@@ -457,6 +466,7 @@ fn assert_deadline_behind_clock_fails_fast(case: &LeanCompletionRetryCase) {
         max_empty_resample: 0,
         allow_repair: true,
         account_hops: 0,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
     });
     let now = now();
     match state.pre_stream(
@@ -481,6 +491,7 @@ fn assert_deterministic_400_repairs(_case: &LeanCompletionRetryCase) {
         max_empty_resample: 2,
         allow_repair: true,
         account_hops: 0,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
     });
     let text = parse_400_text("json-parse");
     assert!(matches!(
@@ -504,6 +515,7 @@ fn assert_resample_budget_outlives_ladder(_case: &LeanCompletionRetryCase) {
         max_empty_resample: 3,
         allow_repair: true,
         account_hops: 0,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
     });
 
     for attempt in 0..3 {
@@ -534,6 +546,7 @@ fn assert_resample_exhausts_on_its_own_budget(_case: &LeanCompletionRetryCase) {
         max_empty_resample: 2,
         allow_repair: true,
         account_hops: 0,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
     });
 
     for attempt in 0..2 {
@@ -565,6 +578,7 @@ fn assert_repair_second_time_illegal(case: &LeanCompletionRetryCase) {
         max_empty_resample: 0,
         allow_repair: true,
         account_hops: 0,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
     });
     state.mark_repair_used();
     let text = parse_400_text("used");
@@ -701,6 +715,89 @@ fn assert_context_overflow_compacts_once() {
     ));
 }
 
+/// A modeled transport wake is the provider's rate-limit wait from `pre_now`
+/// against the budget's `maxWait`, both in seconds. The witness without budget
+/// has spent its transport retries: a policy with no transport steps.
+fn assert_provider_wait_respects_max_wait(case: &LeanCompletionRetryCase) {
+    let wait = Duration::from_secs(
+        (case.pre_scheduled_wake.expect("modeled retry wake") - case.pre_now) as u64,
+    );
+    let cap = Duration::from_secs(case.pre_max_wait.expect("modeled max wait"));
+    let policy = CompletionRetryPolicy {
+        max_rate_limit_wait: cap,
+        ..scheduled_like_policy()
+    };
+    let policy = if case.name.ends_with("_without_budget_is_usage_limited") {
+        CompletionRetryPolicy {
+            transport_backoff: Vec::new(),
+            ..policy
+        }
+    } else {
+        policy
+    };
+    let now = now();
+    let error = InferenceError::RateLimited {
+        retry_after: Some(wait),
+    };
+    let mut state = CompletionRetryState::new(policy);
+    let failure = state.read_failure(classified(&error, "rate limited"), now);
+    match case.expected_phase.as_deref() {
+        Some("failed_permanent") => {
+            match &failure.error {
+                InferenceError::UsageLimited(limit) => assert_eq!(
+                    limit.resets_at,
+                    Some(now + chrono::Duration::from_std(wait).expect("modeled wait")),
+                    "{}",
+                    case.name
+                ),
+                other => panic!("{}: expected a usage limit, got {other:?}", case.name),
+            }
+            assert_eq!(
+                failure_class(&failure),
+                FailureClass::Permanent,
+                "{}",
+                case.name
+            );
+            for directive in [
+                state.on_pre_stream_failure(&failure, now, None),
+                state.pre_stream(&error, "rate limited", now, None),
+            ] {
+                match directive {
+                    PreStreamDirective::Fail { reason } => assert!(
+                        reason.starts_with("provider usage limit reached (resets at "),
+                        "{}: {reason}",
+                        case.name
+                    ),
+                    other => panic!(
+                        "{}: expected a usage-limit failure, got {other:?}",
+                        case.name
+                    ),
+                }
+            }
+            assert_eq!(state.retry_count(), 0, "{}", case.name);
+        }
+        Some("backing_off") => {
+            assert!(
+                matches!(failure.error, InferenceError::RateLimited { retry_after } if retry_after == Some(wait)),
+                "{}: {:?}",
+                case.name,
+                failure.error
+            );
+            match state.on_pre_stream_failure(&failure, now, None) {
+                PreStreamDirective::RetryAfter {
+                    delay,
+                    kind: RetryKind::Transport,
+                } => assert!(delay <= cap, "{}", case.name),
+                other => panic!(
+                    "{}: expected a held transport wait, got {other:?}",
+                    case.name
+                ),
+            }
+        }
+        other => panic!("{}: unexpected modeled phase {other:?}", case.name),
+    }
+}
+
 fn scheduled_like_policy() -> CompletionRetryPolicy {
     CompletionRetryPolicy {
         transport_backoff: vec![
@@ -712,6 +809,7 @@ fn scheduled_like_policy() -> CompletionRetryPolicy {
         max_empty_resample: 1,
         allow_repair: true,
         account_hops: 0,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
     }
 }
 

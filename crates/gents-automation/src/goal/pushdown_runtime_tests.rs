@@ -220,6 +220,7 @@ fn test_agent_with_identity(
         openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         claude_platform: None,
+        client_version: None,
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         model_name: gents_inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
@@ -232,6 +233,9 @@ fn test_agent_with_identity(
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_inference::resolved::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_inference::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+        max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -239,6 +243,7 @@ fn test_agent_with_identity(
         deadline_duration: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
+        title_timeout: Duration::from_secs(gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(
             gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
@@ -1356,6 +1361,9 @@ async fn seed_failed_call_from_access(
     ended_at: &str,
     failure_reason: &str,
 ) {
+    let (_, provider_limit, provider_limit_resets_at) =
+        crate::goal::blocked_turn::permit_recorded(failure_reason, chrono::Utc::now());
+    let (provider_limit, provider_limit_resets_at) = (&provider_limit, &provider_limit_resets_at);
     access.transact_write("test.goal_failed_call", |txn| {
         Box::pin(async move {
             let response = txn.execute_with_variables(
@@ -1365,7 +1373,8 @@ async fn seed_failed_call_from_access(
                     "session_id": SESSION, "agent_did": agent.did(), "backend_id": format!("{}:backend", agent.did()),
                     "call_seq": 1, "call_kind": call_kind, "attempt": attempt, "call_state": "failed",
                     "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
-                    "ended_at": ended_at, "failure_reason": failure_reason}}),
+                    "ended_at": ended_at, "failure_reason": failure_reason,
+                    "provider_limit": provider_limit, "provider_limit_resets_at": provider_limit_resets_at}}),
             ).await?;
             let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
             txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
@@ -3519,7 +3528,7 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
     let (_user, agent, access) = goal_recovery_actors(&db, "usage-limited-request", "failed").await;
     let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
     let parent = &request["data"]["AgentRequest"][0];
-    let reason = gents_loop::provider_limit::persisted_failure_reason(
+    let (reason, _, _) = crate::goal::blocked_turn::permit_recorded(
         r#"HttpError: Invalid status code 402 Payment Required with message: {"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#,
         chrono::Utc::now(),
     );

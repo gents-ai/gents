@@ -462,7 +462,8 @@ async fn inference_retry_policy_fields_round_trip() {
         backoff_ms: Some(vec![1_000, 5_000, 30_000]),
         max_resample_retries: Some(2),
         allow_repair: Some(false),
-        interactive_max_retries: Some(2),
+        interactive_max_transport_retries: Some(2),
+        max_rate_limit_wait_ms: Some(120_000),
         ..Default::default()
     };
     let backend: gents_documents::InferenceBackend = serde_json::from_value(serde_json::json!({

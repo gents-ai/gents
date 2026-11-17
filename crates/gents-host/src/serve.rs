@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use axum::{routing::get, Router};
 use gents::defra_node::Node as EmbeddedNode;
 use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState};
+use gents_p2p::p2p_reconcile::intervals::P2pIntervals;
 use gents_store::{identity::KeyIdentity, identity::NodeIdentity};
 use gents_tools::mcp::pool::McpPool;
 use serde_json::{json, Value};
@@ -492,13 +493,14 @@ async fn wait_for_embedded_http_bind(
     }
 }
 
-async fn stall_after_client_access_for_tests() -> Result<()> {
-    let Some(path) = std::env::var_os("GENTS_TEST_STALL_AFTER_CLIENT_ACCESS") else {
+#[cfg(feature = "test-seams")]
+async fn stall_after_client_access(path: Option<&Path>) -> Result<()> {
+    let Some(path) = path else {
         return Ok(());
     };
-    tokio::fs::File::open(&path)
+    tokio::fs::File::open(path)
         .await
-        .with_context(|| format!("opening the configured startup stall {path:?}"))?;
+        .with_context(|| format!("opening the configured startup stall {}", path.display()))?;
     Ok(())
 }
 
@@ -620,8 +622,9 @@ async fn serve_foreground(
     }
     let _post_open_keychain_prompt_guard =
         gents_service::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
+    let block_cache_bytes = resolve_block_cache_bytes(&args)?;
     let protected_backend = protected_backend
-        .preflight(&backend_store_key, Some(identity.did()))
+        .preflight(&backend_store_key, Some(identity.did()), block_cache_bytes)
         .await?;
     let effective_tool_ceiling = args
         .tool_ceiling
@@ -657,6 +660,10 @@ async fn serve_foreground(
     }
 
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
+    let p2p_intervals = resolve_p2p_intervals(&args)?;
+    let p2p_network_id = resolve_p2p_network_id(&args)?;
+    let registry_url = resolve_registry(&args)?;
+    let system_log = args.system_log;
     if let Some(config) = p2p_config.as_ref() {
         crate::p2p_relay::log_relay_mode_diagnostics(
             args.p2p_relay_mode
@@ -816,7 +823,8 @@ async fn serve_foreground(
             .await
             .context("claiming the readiness this home's previous process left behind")?;
         client_access_ready.store(true, std::sync::atomic::Ordering::Release);
-        stall_after_client_access_for_tests().await?;
+        #[cfg(feature = "test-seams")]
+        stall_after_client_access(args.stall_after_client_access.as_deref()).await?;
         gents_store::local::store_key::upgrade::finish(&data_dir)?;
         let schema = gents_p2p::p2p_reconcile::read_client_replicated_schema(node.clone())
             .await
@@ -848,6 +856,10 @@ async fn serve_foreground(
                 tool_ceiling,
                 plugin_home: Some(home_dir.clone()),
                 backend_health: Some(backend_health.clone()),
+                p2p_intervals,
+                p2p_network_id,
+                system_log,
+                registry_url,
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,
@@ -1144,12 +1156,7 @@ async fn serve_foreground(
                 tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");
             }
 
-            let notices = gents_service::service_update::watch_notices(runtime_configuration_probe.clone(), home_dir.clone());
-            tokio::select! {
-                result = runtime.join() => result,
-                _ = notices => unreachable!("the notice observer remains scoped to the serving runtime"),
-            }
-
+            runtime.join().await
         }
         .await;
         outcome
@@ -1554,6 +1561,57 @@ fn validate_p2p_admission_config(
     Ok(())
 }
 
+fn positive_millis(flag: &str, value: Option<u64>) -> Result<Option<Duration>> {
+    match value {
+        Some(0) => anyhow::bail!("--{flag} must be > 0"),
+        Some(ms) => Ok(Some(Duration::from_millis(ms))),
+        None => Ok(None),
+    }
+}
+
+fn resolve_block_cache_bytes(args: &ServeArgs) -> Result<usize> {
+    match args.block_cache_mb {
+        None => Ok(gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES),
+        Some(0) => anyhow::bail!("--block-cache-mb must be > 0"),
+        Some(mib) => usize::try_from(mib)
+            .ok()
+            .and_then(|mib| mib.checked_mul(1024 * 1024))
+            .context("--block-cache-mb exceeds the addressable size"),
+    }
+}
+
+fn resolve_p2p_intervals(args: &ServeArgs) -> Result<P2pIntervals> {
+    Ok(P2pIntervals::with_overrides(
+        positive_millis("p2p-registry-heartbeat-ms", args.p2p_registry_heartbeat_ms)?,
+        positive_millis("p2p-pairing-sweep-ms", args.p2p_pairing_sweep_ms)?,
+        positive_millis("p2p-endpoint-heartbeat-ms", args.p2p_endpoint_heartbeat_ms)?,
+        positive_millis("p2p-registry-stale-ms", args.p2p_registry_stale_ms)?,
+    ))
+}
+
+fn resolve_p2p_network_id(args: &ServeArgs) -> Result<Option<String>> {
+    match args.p2p_network_id.as_deref() {
+        None => Ok(None),
+        Some(raw) => {
+            let network_id = raw.trim();
+            if network_id.is_empty() {
+                anyhow::bail!("--p2p-network-id must not be blank");
+            }
+            Ok(Some(network_id.to_owned()))
+        }
+    }
+}
+
+fn resolve_registry(args: &ServeArgs) -> Result<Option<String>> {
+    match args.registry.as_deref() {
+        None => Ok(None),
+        Some(raw) if raw.trim().is_empty() => anyhow::bail!("--registry must not be blank"),
+        Some(raw) => Ok(Some(gents_pack::pack::registry::resolve_registry_url(
+            Some(raw.trim()),
+        ))),
+    }
+}
+
 fn log_p2p_admission_config(config: &defra_node::P2PConfig) {
     tracing::info!(
         max_pending_dags = config.sync.max_pending_dags,
@@ -1661,6 +1719,68 @@ mod server_key_tests {
             Some(Command::Server(args)) => args,
             _ => panic!("expected `server`"),
         }
+    }
+
+    #[test]
+    fn p2p_intervals_default_and_reject_zero_overrides() {
+        let defaults = resolve_p2p_intervals(&parse_server(&[])).unwrap();
+        assert_eq!(defaults, P2pIntervals::default());
+
+        let overridden = resolve_p2p_intervals(&parse_server(&[
+            "--p2p-registry-heartbeat-ms",
+            "1000",
+            "--p2p-pairing-sweep-ms",
+            "500",
+        ]))
+        .unwrap();
+        assert_eq!(overridden.registry_heartbeat, Duration::from_millis(1000));
+        assert_eq!(overridden.endpoint_heartbeat, Duration::from_millis(1000));
+        assert_eq!(overridden.registry_stale_after, Duration::from_millis(3000));
+
+        let error =
+            resolve_p2p_intervals(&parse_server(&["--p2p-pairing-sweep-ms", "0"])).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("--p2p-pairing-sweep-ms must be > 0"));
+    }
+
+    #[test]
+    fn p2p_network_id_is_trimmed_and_rejects_blank() {
+        assert_eq!(resolve_p2p_network_id(&parse_server(&[])).unwrap(), None);
+        assert_eq!(
+            resolve_p2p_network_id(&parse_server(&["--p2p-network-id", " lab "])).unwrap(),
+            Some("lab".to_owned())
+        );
+        let error = resolve_p2p_network_id(&parse_server(&["--p2p-network-id", "  "])).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("--p2p-network-id must not be blank"));
+    }
+
+    #[test]
+    fn registry_is_trimmed_and_rejects_blank() {
+        assert_eq!(resolve_registry(&parse_server(&[])).unwrap(), None);
+        assert_eq!(
+            resolve_registry(&parse_server(&["--registry", " http://127.0.0.1:9/ "])).unwrap(),
+            Some("http://127.0.0.1:9".to_owned())
+        );
+        let error = resolve_registry(&parse_server(&["--registry", "  "])).unwrap_err();
+        assert!(error.to_string().contains("--registry must not be blank"));
+    }
+
+    #[test]
+    fn block_cache_defaults_and_rejects_zero() {
+        assert_eq!(
+            resolve_block_cache_bytes(&parse_server(&[])).unwrap(),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES
+        );
+        assert_eq!(
+            resolve_block_cache_bytes(&parse_server(&["--block-cache-mb", "128"])).unwrap(),
+            128 * 1024 * 1024
+        );
+        let error =
+            resolve_block_cache_bytes(&parse_server(&["--block-cache-mb", "0"])).unwrap_err();
+        assert!(error.to_string().contains("--block-cache-mb must be > 0"));
     }
 
     #[cfg(unix)]

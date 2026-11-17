@@ -376,7 +376,7 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::json!({}).to_string()))
         }
         ("POST", "/desktop/test-fixture/remove-peer") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let request = decode::<PeerIdRequest>(&request.body, "decoding peer removal")?;
             let removed = fixture
                 .desktop_core()
@@ -394,7 +394,7 @@ pub(super) async fn handle_request(
             ))
         }
         ("POST", "/desktop/test-fixture/drift-remote-return-route") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let desktop_address = fixture
                 .desktop_core()
                 .p2p()
@@ -415,7 +415,7 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("GET", "/desktop/test-fixture/remote-replicators") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
@@ -663,10 +663,10 @@ pub(super) async fn handle_request(
         }
         // Test-only: write to the runtime as the desktop User for the propagation witness.
         ("POST", "/desktop/test-fixture/remote-save-agent") => {
-            if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
+            if !fixture.fixture_routes() {
                 return Ok(HttpResponse::json_error(
                     "403 Forbidden",
-                    "remote-save-agent is only available in live test mode (GENTS_TAURI_LIVE=1)",
+                    "remote-save-agent is only available when the runner serves --fixture-routes",
                 ));
             }
             let req =
@@ -678,10 +678,10 @@ pub(super) async fn handle_request(
             ))
         }
         ("POST", "/desktop/test-fixture/clear-client-store") => {
-            if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
+            if !fixture.fixture_routes() {
                 return Ok(HttpResponse::json_error(
                     "403 Forbidden",
-                    "clear-client-store is only available in live test mode (GENTS_TAURI_LIVE=1)",
+                    "clear-client-store is only available when the runner serves --fixture-routes",
                 ));
             }
             for node_did in fixture.desktop_core().stores().node_dids() {
@@ -696,17 +696,17 @@ pub(super) async fn handle_request(
         // Test-only projection of the remote node's P2P admin API; must keep
         // the same wire shapes as a deployed runtime's HTTP client.
         ("GET", "/p2p/info") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let addresses = fixture.runtime_p2p()?.listen_addresses().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&addresses)?))
         }
         ("GET", "/p2p/active-peers") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let peers = fixture.runtime_p2p()?.connected_peers().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&peers)?))
         }
         ("POST", "/p2p/connect") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let addresses = decode::<Vec<String>>(&request.body, "decoding P2P connect")?;
             for address in addresses {
                 fixture.runtime_p2p()?.connect_peer(&address).await?;
@@ -714,12 +714,12 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/replicators") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/p2p/replicators") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let request =
                 decode::<ReplicatorRequest>(&request.body, "decoding P2P replicator install")?;
             let filters = serde_json::from_value(request.filters)
@@ -737,7 +737,7 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("DELETE", "/p2p/replicators") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let request = decode::<DeleteReplicatorRequest>(
                 &request.body,
                 "decoding P2P replicator teardown",
@@ -749,19 +749,19 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/collections") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let collections = fixture.runtime_p2p()?.get_collections().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&collections)?))
         }
         ("POST", "/p2p/collections") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection install")?;
             fixture.runtime_p2p()?.add_collections(collections).await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("DELETE", "/p2p/collections") => {
-            require_live_fixture()?;
+            require_live_fixture(fixture)?;
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection teardown")?;
             fixture
@@ -934,9 +934,9 @@ where
     serde_json::from_str::<T>(body).context(context.to_string())
 }
 
-fn require_live_fixture() -> Result<()> {
-    if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
-        anyhow::bail!("test fixture route requires GENTS_TAURI_LIVE=1");
+fn require_live_fixture(fixture: &LiveBridgeFixture) -> Result<()> {
+    if !fixture.fixture_routes() {
+        anyhow::bail!("test fixture route requires the runner's --fixture-routes");
     }
     Ok(())
 }

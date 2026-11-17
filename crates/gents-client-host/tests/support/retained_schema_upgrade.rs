@@ -80,6 +80,8 @@ pub async fn exercise() -> Result<()> {
         "reasoning_output_tokens",
         "provider_total_tokens",
         "usage_completeness",
+        "provider_limit",
+        "provider_limit_resets_at",
     ] {
         ensure!(
             after.fields.iter().any(|field| field.name == name),
@@ -193,9 +195,6 @@ async fn start(binary: &Path, paths: &DesktopPaths) -> Result<Child> {
             )
             .env(),
         )
-        .env("GENTS_HOME", paths.root().join("unused-runtime"))
-        .env("GENTS_DESKTOP_HOME", paths.root())
-        .env_remove("GENTS_SYSTEM_LOG")
         .args(["--serve", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::null())

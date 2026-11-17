@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
+use gents_protocol::provider_limit::ProviderLimitVerdict;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
@@ -21,8 +21,56 @@ pub(crate) struct FailedCall {
     pub(crate) agent_did: Option<String>,
     pub(crate) call_kind: Option<String>,
     pub(crate) failure_reason: Option<String>,
+    pub(crate) provider_limit: Option<ProviderLimitVerdict>,
+    pub(crate) provider_limit_resets_at: Option<String>,
     pub(crate) queued_at: Option<String>,
     pub(crate) started_at: Option<String>,
+}
+
+/// A failed call's recorded provider usage limit: its failure reason, which
+/// the permit rendered from the limit, and the reset the provider reported.
+pub(crate) struct CallUsageLimit<'a> {
+    pub(crate) reason: &'a str,
+    pub(crate) resets_at: Option<DateTime<Utc>>,
+}
+
+/// What the admission permit records for a failed call whose provider error
+/// rendered as `text`, under the default rate-limit wait cap: the failure
+/// reason, the verdict and the reset. A recorded rendering yields the verdict
+/// and reset it was rendered from.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) fn permit_recorded(
+    text: &str,
+    now: DateTime<Utc>,
+) -> (String, Option<ProviderLimitVerdict>, Option<String>) {
+    let (reason, limit) = gents_inference::admission::recovery_fixtures::recorded_failure(
+        text,
+        now,
+        gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+    );
+    (
+        reason,
+        limit.map(|limit| limit.verdict),
+        limit
+            .and_then(|limit| limit.resets_at)
+            .map(|at| at.to_rfc3339()),
+    )
+}
+
+impl FailedCall {
+    /// The provider usage limit that stopped this call, as its admission
+    /// permit recorded the owned loop's verdict under the agent's
+    /// rate-limit wait cap.
+    pub(crate) fn usage_limit(&self) -> Option<CallUsageLimit<'_>> {
+        (self.provider_limit == Some(ProviderLimitVerdict::UsageLimited)).then(|| CallUsageLimit {
+            reason: self.failure_reason.as_deref().unwrap_or_default(),
+            resets_at: self
+                .provider_limit_resets_at
+                .as_deref()
+                .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+                .map(|at| at.with_timezone(&Utc)),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -56,7 +104,6 @@ pub(crate) fn blocked_turn_from(
     accounts: &[AccountSummary],
     request: &AgentRequestRow,
     call: Option<&FailedCall>,
-    now: DateTime<Utc>,
 ) -> Option<BlockedTurn> {
     if !matches!(
         request.lifecycle_state,
@@ -71,11 +118,9 @@ pub(crate) fn blocked_turn_from(
     let profiles = references.agent_profiles(agent_did);
     let stopped_by_call = call.and_then(|call| {
         let text = call.failure_reason.as_deref()?;
-        let (reason, resets_at) = match classify_provider_limit(text, now) {
-            Some(ProviderLimit::UsageExhausted(limit)) => {
-                (BlockedReason::UsageLimit, limit.resets_at)
-            }
-            _ => match account_failure_state(text)? {
+        let (reason, resets_at) = match call.usage_limit() {
+            Some(limit) => (BlockedReason::UsageLimit, limit.resets_at),
+            None => match account_failure_state(text)? {
                 "disabled" => (BlockedReason::AccountDisabled, None),
                 "removed from this node" => (BlockedReason::AccountRemoved, None),
                 "signed out (expired or revoked)" => (BlockedReason::AccountSignedOut, None),
@@ -188,7 +233,6 @@ pub async fn blocked_turn(
         &accounts,
         &request,
         call.as_ref(),
-        Utc::now(),
     ))
 }
 
@@ -234,7 +278,7 @@ pub async fn blocked_goal_turn(
         })
         .await?;
     Ok(stopped.and_then(|(_, references, request, call)| {
-        blocked_turn_from(&references, &accounts, &request, call.as_ref(), Utc::now())
+        blocked_turn_from(&references, &accounts, &request, call.as_ref())
     }))
 }
 
@@ -315,7 +359,7 @@ pub(crate) async fn last_failed_call_in_txn(
                 filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _eq: "{request_id}" }}, call_state: {{ _eq: "failed" }} }},
                 order: [{{ ended_at: DESC }}, {{ attempt: DESC }}],
                 limit: 1
-            ) {{ backend_id agent_did call_kind failure_reason queued_at started_at }}
+            ) {{ backend_id agent_did call_kind failure_reason provider_limit provider_limit_resets_at queued_at started_at }}
         }}"#
     );
     let response = txn.execute(&query).await?;

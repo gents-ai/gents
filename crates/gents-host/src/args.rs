@@ -75,10 +75,21 @@ pub struct ServeArgs {
         help = "Fail instead of displaying macOS Keychain access dialogs"
     )]
     pub no_keychain_prompts: bool,
+    #[arg(
+        long,
+        help = "Send diagnostics to the system log (os_log or journald) instead of stderr, which then carries only the exit error. The native service definition sets it"
+    )]
+    pub system_log: bool,
     #[arg(skip)]
     pub keychain_startup_approval: bool,
     #[arg(long, hide = true)]
     pub data_dir: Option<PathBuf>,
+    /// Startup waits after client access opens until this path opens for
+    /// reading, so a test can observe a runtime serving clients before it is
+    /// ready; a FIFO holds it until the test opens the writing end.
+    #[cfg(feature = "test-seams")]
+    #[arg(long, hide = true, value_name = "PATH")]
+    pub stall_after_client_access: Option<PathBuf>,
     #[arg(
         long,
         help = "HTTP listen address. Defaults to the home's network.json (`gents runtime service install --http-addr`), else 127.0.0.1"
@@ -176,6 +187,12 @@ pub struct ServeArgs {
     pub p2p_secret_key_path: Option<PathBuf>,
     #[arg(
         long,
+        value_name = "MIB",
+        help = "Store block cache size in MiB (must be > 0). Defaults to 512"
+    )]
+    pub block_cache_mb: Option<u64>,
+    #[arg(
+        long,
         value_enum,
         help = "P2P relay mode. Defaults to the home's network.json, else disabled"
     )]
@@ -216,6 +233,34 @@ pub struct ServeArgs {
         help = "Per-peer P2P rate-limit refill rate in tokens per second (must be finite and > 0)"
     )]
     pub p2p_rate_limit_rate: Option<f64>,
+    #[arg(
+        long,
+        help = "P2P registry heartbeat interval in milliseconds (must be > 0). Defaults to 30000"
+    )]
+    pub p2p_registry_heartbeat_ms: Option<u64>,
+    #[arg(
+        long,
+        help = "P2P pairing sweep interval in milliseconds (must be > 0). Defaults to 30000"
+    )]
+    pub p2p_pairing_sweep_ms: Option<u64>,
+    #[arg(
+        long,
+        help = "P2P endpoint heartbeat interval in milliseconds (must be > 0). Defaults to the registry heartbeat"
+    )]
+    pub p2p_endpoint_heartbeat_ms: Option<u64>,
+    #[arg(
+        long,
+        help = "P2P registry staleness threshold in milliseconds (must be > 0). Defaults to three registry heartbeats"
+    )]
+    pub p2p_registry_stale_ms: Option<u64>,
+    #[arg(
+        long,
+        value_name = "NETWORK_ID",
+        help = "P2P network id that partitions this runtime's registry entries (must not be blank). Defaults to default"
+    )]
+    pub p2p_network_id: Option<String>,
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
+    pub registry: Option<String>,
     #[arg(
         long = "apply-root",
         value_name = "ROOT",

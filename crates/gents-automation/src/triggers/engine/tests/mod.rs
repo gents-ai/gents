@@ -442,6 +442,8 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         output_schema_ref: None,
         hooks: Vec::new(),
     }
@@ -614,6 +616,7 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
         openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:0/v1".to_string(),
         claude_platform: None,
+        client_version: None,
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         model_name: gents_inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
@@ -626,6 +629,9 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_inference::resolved::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_inference::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+        max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -633,6 +639,7 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
         deadline_duration: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
+        title_timeout: Duration::from_secs(gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(
             gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),

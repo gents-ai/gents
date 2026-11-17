@@ -22,7 +22,9 @@ pub(super) struct Lineage {
     pub(super) root_request_id: String,
     pub(super) parent_doc_id: String,
     pub(super) retry_count: i64,
-    pub(super) max_retries: i64,
+    /// The parent's pin, which the successor's first claim inherits; absent
+    /// when the parent never reached a claim.
+    pub(super) max_retries: Option<i64>,
 }
 
 impl Lineage {
@@ -32,7 +34,6 @@ impl Lineage {
             parent_request_doc_id: Some(self.parent_doc_id.clone()),
             root_request_id: self.root_request_id.clone(),
             retry_count: self.retry_count,
-            max_retries: self.max_retries,
         }
     }
 
@@ -291,7 +292,7 @@ fn refuse(
             Err(RequestOperationError::RetryBudgetExhausted {
                 request_id,
                 retry_count: lineage.retry_count - 1,
-                max_retries: lineage.max_retries,
+                max_retries: lineage.max_retries.unwrap_or_default(),
             })
         }
         ReissueDecision::RefuseDeadlineClosed => {

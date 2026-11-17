@@ -148,6 +148,7 @@ impl ToolCallLifecycle {
         let requester_did = self.requester_did.clone();
         let message_sequence = self.message_sequence;
         let parent_tool_call_id = self.tool_call_id.clone();
+        let limit = self.max_background_tool_calls();
         let deadline_at = admission.deadline_at;
         let tool_name = admission.tool_name;
         let persisted_selected = admission.selected_tool_identity;
@@ -280,7 +281,7 @@ impl ToolCallLifecycle {
                         rows.len() == 1 && rows[0]["spawned_by_tool_call_doc_id"].is_null()),
                         "spawned admission lost its exact running accepted parent");
                     let request_row = &crate::call::hook::persistence::reserve_background_slot_in_txn(
-                        txn, &request_doc_id, crate::call::hook::persistence::BackgroundSlot::Requested,
+                        txn, &request_doc_id, crate::call::hook::persistence::BackgroundSlot::Requested, limit,
                         "node_did session_id request_id requester_did lifecycle_state execution_generation execution_lease_expires_at interrupt_requested_at",
                     ).await?;
                     anyhow::ensure!(

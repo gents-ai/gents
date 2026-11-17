@@ -279,6 +279,8 @@ pub async fn claim_applied_in(
                     .field(fields::GOAL_ID)
                     .field(fields::GOAL_OBJECTIVE)
                     .field(fields::GOAL_TOKEN_BUDGET)
+                    .field(fields::GOAL_BLOCKED_AUDIT_THRESHOLD)
+                    .field(fields::GOAL_MAX_INFRASTRUCTURE_RETRIES)
                     .field(fields::GOAL_ASSIGNMENT_APPLIED),
             )
             .filter(Filter::eq(fields::OWNER_DID, &request.node_did))

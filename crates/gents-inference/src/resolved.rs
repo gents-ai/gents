@@ -23,6 +23,11 @@ pub use gents_loop::compaction::{
     MAX_COMPACTION_SUMMARY_FILE_LIST_MAX, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
 };
 pub const DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS: u64 = 300;
+/// Unset `title_timeout_secs` default: one title-generation attempt is bounded by this.
+pub const DEFAULT_TITLE_TIMEOUT_SECS: u64 = 10;
+pub use gents_loop::loop_stream::{
+    DEFAULT_MAX_INVALID_TOOL_CALLS, DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+};
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
 /// A static builder has no persisted configuration documents. Managed agents
@@ -85,6 +90,7 @@ pub struct ResolvedAgent {
     pub backend_endpoint: String,
     pub backend_auth: gents_documents::BackendAuth,
     pub claude_platform: Option<gents_documents::ClaudePlatform>,
+    pub client_version: Option<String>,
     pub model_name: String,
     pub profile_id: Option<String>,
     pub service_tier: Option<ServiceTier>,
@@ -99,9 +105,13 @@ pub struct ResolvedAgent {
     pub compaction: Option<gents_documents::CompactionConfig>,
     pub compaction_inference: Option<ResolvedInference>,
     pub max_total_tokens: Option<u64>,
+    pub max_invalid_tool_calls: usize,
+    pub repeated_tool_failure_limit: usize,
+    pub max_request_retries: u64,
     pub stream_batch_ms: u64,
     pub stream_liveness_timeout: Duration,
     pub provider_idle_timeout: Duration,
+    pub title_timeout: Duration,
     pub deadline_duration: Duration,
     pub completion_retry: CompletionRetryProfileFields,
     pub sampling: SamplingConfig,
@@ -169,6 +179,38 @@ impl ResolvedInference {
                 .as_ref()
                 .and_then(|execution| execution.max_turns),
         )
+    }
+
+    pub fn max_invalid_tool_calls(&self) -> Result<usize> {
+        positive_inference_limit(
+            self.execution
+                .as_ref()
+                .and_then(|execution| execution.max_invalid_tool_calls),
+            DEFAULT_MAX_INVALID_TOOL_CALLS,
+            "max_invalid_tool_calls",
+        )
+    }
+
+    pub fn repeated_tool_failure_limit(&self) -> Result<usize> {
+        positive_inference_limit(
+            self.execution
+                .as_ref()
+                .and_then(|execution| execution.repeated_tool_failure_limit),
+            DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+            "repeated_tool_failure_limit",
+        )
+    }
+
+    pub fn max_request_retries(&self) -> Result<u64> {
+        match self
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.max_request_retries)
+        {
+            None => Ok(gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES),
+            Some(value) => u64::try_from(value)
+                .map_err(|_| anyhow::anyhow!("max_request_retries must be non-negative")),
+        }
     }
 
     pub fn sampling_config(&self) -> Result<SamplingConfig> {
@@ -380,9 +422,16 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("compaction", &self.compaction)
             .field("compaction_inference", &self.compaction_inference)
             .field("max_total_tokens", &self.max_total_tokens)
+            .field("max_invalid_tool_calls", &self.max_invalid_tool_calls)
+            .field(
+                "repeated_tool_failure_limit",
+                &self.repeated_tool_failure_limit,
+            )
+            .field("max_request_retries", &self.max_request_retries)
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("stream_liveness_timeout", &self.stream_liveness_timeout)
             .field("provider_idle_timeout", &self.provider_idle_timeout)
+            .field("title_timeout", &self.title_timeout)
             .field("deadline_duration", &self.deadline_duration)
             .field("completion_retry", &self.completion_retry)
             .field("sampling", &self.sampling)
@@ -925,6 +974,7 @@ mod tests {
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             backend_auth: gents_documents::BackendAuth::Unauthenticated,
             claude_platform: None,
+            client_version: None,
             model_name: DEFAULT_MODEL_NAME.to_string(),
             service_tier: None,
             resolved_reasoning_efforts: None,
@@ -936,9 +986,13 @@ mod tests {
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
+            max_invalid_tool_calls: DEFAULT_MAX_INVALID_TOOL_CALLS,
+            repeated_tool_failure_limit: DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+            max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+            title_timeout: Duration::from_secs(DEFAULT_TITLE_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
