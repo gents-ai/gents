@@ -845,11 +845,11 @@ impl NodePacks<'_> {
         let home = self
             .home
             .context("assets and plugins packs live in the node home")?;
-        let lock_home = home.to_owned();
-        let guard =
-            tokio::task::spawn_blocking(move || crate::plugin::store::try_lock_store(&lock_home))
-                .await
-                .context("plugin store lock task did not finish")??;
+        let guard = crate::plugin::store::lock_store_until(
+            home,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        )
+        .await?;
         let (namespace, _) = registry::split_pack_coordinate(coordinate);
         let plugins: BTreeSet<String> = record
             .plugins

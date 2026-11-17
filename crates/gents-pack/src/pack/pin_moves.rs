@@ -17,8 +17,8 @@ pub struct PluginPinMove {
     after: Tools,
 }
 
-fn move_pin(named: bool, replacement: bool, pinned: bool) -> bool {
-    named && replacement && pinned
+fn move_pin(replacement: bool, pinned: bool) -> bool {
+    replacement && pinned
 }
 
 impl PluginPinMove {
@@ -66,11 +66,9 @@ fn plan(
         .flatten()
     {
         let replacement = replacements.get(&reference.plugin);
-        if move_pin(
-            named.contains(&before.tools_id),
-            replacement.is_some(),
-            reference.digest.is_some(),
-        ) {
+        if named.contains(&before.tools_id)
+            && move_pin(replacement.is_some(), reference.digest.is_some())
+        {
             reference.digest = replacement.cloned();
         }
     }
@@ -108,7 +106,7 @@ pub async fn prepare(
                             })?;
                     let before: Tools = serde_json::from_value(value)?;
                     let satisfied = before.integrations.as_ref().and_then(|i| i.plugins.as_ref()).into_iter().flatten()
-                        .any(|reference| move_pin(named.contains(id), replacements.contains_key(&reference.plugin), reference.digest.is_some()));
+                        .any(|reference| move_pin(replacements.contains_key(&reference.plugin), reference.digest.is_some()));
                     let edit = plan(before, named, replacements);
                     anyhow::ensure!(
                         satisfied,
@@ -155,7 +153,7 @@ mod tests {
     #[test]
     fn pin_move_replays_the_lean_owner() {
         gents_lean_vocab::families::tool_policy_plugin_publication_move_pin::replay(|i| {
-            move_pin(i.named, i.replacement, i.pinned)
+            move_pin(i.replacement, i.pinned)
         });
     }
 
