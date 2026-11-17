@@ -283,8 +283,11 @@ pub(super) async fn resolve_startup_until(
     let requires_publication = resolved_snapshot.tool_surfaces.values().any(|surface| surface.has_plugin_tools())
         || resolved_snapshot.unavailable_agents.values().any(|unavailable| unavailable.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy));
     let publication = if super::context::needs_publication_fence(requires_publication) {
-        match gents_tools::surface::publication_guard_until(tool_runtime.plugin_home(), deadline)
-            .await
+        match gents_tools::surface::pinned_publication_guard_until(
+            tool_runtime.plugin_store_pin(),
+            deadline,
+        )
+        .await
         {
             Ok(guard) => {
                 resolved_snapshot = match resolve_startup_snapshot(agent).await {
@@ -296,13 +299,21 @@ pub(super) async fn resolve_startup_until(
                 };
                 guard
             }
-            Err(error) if snapshot::preserve_generation_for_surface_error(&error) => {
+            Err(gents_pack::plugin::store::PublishedPluginReadError::StoreAbsent(
+                gents_pack::plugin::store::StoreAbsent::Missing,
+            )) if tool_runtime
+                .plugin_store_pin()
+                .is_some_and(|pin| !pin.is_captured()) =>
+            {
+                None
+            }
+            Err(gents_pack::plugin::store::PublishedPluginReadError::Busy) => {
                 runtime_status.request_publication_recovery();
                 None
             }
             Err(error) => {
                 runtime_status.publish_error(&format!("{error:#}")).await;
-                return Err(error);
+                return Err(error.into());
             }
         }
     } else {
@@ -321,6 +332,11 @@ pub(super) async fn resolve_startup_until(
     }
     if resolved_snapshot.unavailable_agents.values().any(|unavailable| unavailable.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy)) {
         runtime_status.request_publication_recovery();
+    }
+    if publication.is_some() {
+        if let Some(pin) = tool_runtime.plugin_store_pin() {
+            pin.validate()?;
+        }
     }
     drop(publication);
     log_recovery(

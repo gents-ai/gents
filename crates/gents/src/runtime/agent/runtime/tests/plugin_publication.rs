@@ -1382,8 +1382,8 @@ async fn real_policy_publication_recovery(
                 if surface.has_plugin_tools() {
                     // Short injected duration, identical cancellable wait owner;
                     // the real production failure policy is deliberately used.
-                    let _guard = gents_tools::surface::publication_guard_until(
-                        runtime.plugin_home(),
+                    let _guard = gents_tools::surface::pinned_publication_guard_until(
+                        runtime.plugin_store_pin(),
                         tokio::time::Instant::now() + Duration::from_millis(5),
                     )
                     .await?;
@@ -1529,4 +1529,143 @@ async fn real_policy_publication_recovery(
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn startup_with_never_captured_store_demotes_only_the_plugin_agent() {
+    for builder_path in [true, false] {
+        for existing_home in [false, true] {
+            let backend = "backend-never-captured-startup";
+            let fixture = plugin_runtime_fixture(
+                "never-captured-startup",
+                backend,
+                "http://127.0.0.1:8118/v1",
+            )
+            .await
+            .unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let home = root.path().join("home");
+            if existing_home {
+                std::fs::create_dir(&home).unwrap();
+            }
+            let plugin_ref = serde_json::json!({
+                "plugin": "fixture/list_files",
+                "digest": format!("sha256:{}", "a".repeat(64)),
+            });
+            let (agent, plugin_did, free_did) = if builder_path {
+                let mut agent = crate::Gents::builder()
+                    .node(fixture.node.clone())
+                    .identity(fixture.runtime.clone())
+                    .backend_admission(fixture.admission())
+                    .tool_ceiling(ToolCeiling::meta_only())
+                    .plugin_home(home.clone())
+                    .agent("plugin")
+                    .backend_id(backend)
+                    .done()
+                    .agent("free")
+                    .backend_id(backend)
+                    .done()
+                    .build()
+                    .await
+                    .unwrap();
+                assert!(agent.document_runtime_context().is_none());
+                let plugin_did = agent.default_agent_did().to_owned();
+                let free_did = agent
+                    .agents
+                    .iter()
+                    .find(|pair| pair.agent.agent_did != plugin_did)
+                    .unwrap()
+                    .agent
+                    .agent_did
+                    .clone();
+                // The builder exposes no plugin selector: attach the real
+                // public surface configuration to its built agent, not a
+                // fabricated runtime snapshot or document resolve context.
+                let pair = agent
+                    .agents
+                    .iter_mut()
+                    .find(|pair| pair.agent.agent_did == plugin_did)
+                    .unwrap();
+                pair.tools = Arc::new(
+                    gents_tools::surface::AgentToolSurfaceConfig::from_selection(
+                        &plugin_did,
+                        gents_tools::surface::ResolvedToolSelection {
+                            plugin_tools: vec![serde_json::from_value(plugin_ref.clone()).unwrap()],
+                            ..Default::default()
+                        },
+                        &ToolCeiling::meta_only(),
+                        Vec::new(),
+                    )
+                    .unwrap(),
+                );
+                (agent, plugin_did, free_did)
+            } else {
+                let plugin_did = fixture.node_binding.default_agent_did.clone().unwrap();
+                let free_did = choose_spare_default(&fixture, &plugin_did).await;
+                let tools: Tools = serde_json::from_value(serde_json::json!({
+                    "tools_id": format!("{plugin_did}:tools"),
+                    "node_did": fixture.runtime.did(),
+                    "integrations": {"plugins": [plugin_ref]},
+                }))
+                .unwrap();
+                gents_documents::write_tools_document(
+                    &fixture.user_access,
+                    &tools,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .unwrap();
+                let agent = crate::Gents::from_default_agent_documents(
+                    fixture.node.clone(),
+                    fixture.runtime.clone(),
+                    crate::runtime::agent::DocumentRuntimeOptions {
+                        backend_admission: Some(fixture.admission()),
+                        tool_ceiling: ToolCeiling::meta_only(),
+                        plugin_home: Some(home.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+                (agent, plugin_did, free_did)
+            };
+            let runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
+                fixture.node.clone(),
+                Default::default(),
+                Default::default(),
+                "localhost",
+                None,
+                agent.node_did(),
+                Some(fixture.runtime.clone()),
+            )
+            .with_plugins(agent.plugins().clone());
+            assert!(!runtime.plugin_store_pin().unwrap().is_captured());
+            if builder_path {
+                let initial = super::super::startup::snapshot::resolve_startup_snapshot(&agent)
+                    .await
+                    .unwrap();
+                assert!(initial.tool_surfaces[&plugin_did].has_plugin_tools());
+            }
+            let status = RuntimeStatusHandle::new(fixture.node.clone(), agent.node_did());
+            status
+                .initialize_startup(agent.default_agent_did())
+                .await
+                .unwrap();
+            let (_, snapshot) = super::super::startup::resolve_startup_until(
+                &agent,
+                &runtime,
+                &status,
+                tokio::time::Instant::now() + STALL_CEILING,
+            )
+            .await
+            .expect("missing never-captured store must not abort unrelated agents");
+            assert!(snapshot.agents.contains_key(&free_did));
+            assert!(!snapshot.agents.contains_key(&plugin_did));
+            assert_eq!(snapshot.unavailable_agents[&plugin_did].public_reason,
+                gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable);
+            assert!(!runtime.plugin_store_pin().unwrap().is_captured());
+            assert!(!home.join("plugins").exists());
+            assert_eq!(home.exists(), existing_home);
+        }
+    }
 }
