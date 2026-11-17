@@ -396,7 +396,7 @@ async fn four_one_second_reads_wall_clock() {
 
 #[tokio::test(start_paused = true)]
 async fn unavailable_reservation_preserves_reason_and_full_vector_at_every_position() {
-    for ordinal in [1, 2] {
+    for ordinal in [1, 2, 5, 6] {
         let (mut dispatcher, mut hook, events) = setup();
         drop(dispatcher.hook);
         Arc::get_mut(&mut hook).unwrap().fail_reservation = Some(ordinal);
@@ -405,28 +405,28 @@ async fn unavailable_reservation_preserves_reason_and_full_vector_at_every_posit
             scope_request_tool_execution(None, Default::default(), dispatcher.batch(calls(6)))
                 .await;
         assert_eq!(results.len(), 6);
+        let group_start = if ordinal <= 4 { 1 } else { 5 };
+        let group_end = if ordinal <= 4 { 4 } else { 6 };
         for (index, result) in results.iter().enumerate() {
-            if index < (ordinal - 1) as usize {
+            let id = index as u32 + 1;
+            if id < group_start || id > group_end {
+                assert_eq!(result.as_ref().unwrap().model_facing_text(), id.to_string());
+            } else if id < ordinal {
                 assert!(matches!(result, Ok(ToolOutcome::Cancelled)));
-            } else if index < 4 {
+            } else {
                 assert!(
                     matches!(result, Err(ToolEffectError::Unavailable(reason)) if reason == &format!("reservation {ordinal} unavailable"))
-                );
-            } else {
-                assert_eq!(
-                    result.as_ref().unwrap().model_facing_text(),
-                    (index + 1).to_string()
                 );
             }
         }
         assert!(dispatcher.fatal.lock().await.is_none());
         let events = events.lock().unwrap();
-        assert!(!events
-            .iter()
-            .any(|e| (1..=4).any(|i| *e == format!("start:{i}"))));
-        assert!(events.contains(&"start:5".to_owned()));
-        for earlier in 1..ordinal {
+        assert!(!(group_start..=group_end).any(|i| events.contains(&format!("start:{i}"))));
+        for earlier in group_start..ordinal {
             assert!(events.contains(&format!("finish:{earlier}:true")));
+        }
+        if ordinal < group_end {
+            assert!(!events.contains(&format!("reserve:{}", ordinal + 1)));
         }
     }
 }

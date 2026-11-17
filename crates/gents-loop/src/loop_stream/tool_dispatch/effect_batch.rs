@@ -192,59 +192,63 @@ where
                             }
                         }
                     }
-                    if let Some(Unavailable(reason)) = &failure {
-                        if width == 1 {
-                            results.push(Err(Unavailable(reason.clone())));
-                            continue;
-                        }
-                        let group_end = results.len() + width;
-                        // A reservation failed: no body in this read group has started.
-                        // Preserve the same nonfatal reason at every failure position.
-                        for item in admitted {
-                            if let Some(ready) = item.ready {
-                                results.push(ready);
-                            } else {
-                                let cleanup = self
-                                    .hook
-                                    .finish_tool_effect(
-                                        &item.internal_id,
-                                        Some(&ToolOutcome::Cancelled),
-                                    )
-                                    .await;
-                                match cleanup {
-                                    Ok(()) => results.push(Ok(ToolOutcome::Cancelled)),
-                                    Err(error) => {
-                                        self.fatal
-                                            .lock()
-                                            .await
-                                            .get_or_insert_with(|| error.clone());
-                                        results.push(Err(Fatal(error)));
+                    match failure {
+                        Some(Unavailable(reason)) => {
+                            if width == 1 {
+                                results.push(Err(Unavailable(reason)));
+                                continue;
+                            }
+                            let group_end = results.len() + width;
+                            let mut cleanup_failed = false;
+                            // No body in this read group has started.
+                            for item in admitted {
+                                if let Some(ready) = item.ready {
+                                    results.push(ready);
+                                } else {
+                                    let cleanup = self
+                                        .hook
+                                        .finish_tool_effect(
+                                            &item.internal_id,
+                                            Some(&ToolOutcome::Cancelled),
+                                        )
+                                        .await;
+                                    match cleanup {
+                                        Ok(()) => results.push(Ok(ToolOutcome::Cancelled)),
+                                        Err(error) => {
+                                            cleanup_failed = true;
+                                            self.fatal
+                                                .lock()
+                                                .await
+                                                .get_or_insert_with(|| error.clone());
+                                            results.push(Err(Fatal(error)));
+                                        }
                                     }
                                 }
                             }
+                            results.resize_with(group_end, || Err(Unavailable(reason.clone())));
+                            if cleanup_failed {
+                                break;
+                            }
+                            continue;
                         }
-                        results.resize_with(group_end, || Err(Unavailable(reason.clone())));
-                        if results.iter().any(|result| matches!(result, Err(Fatal(_)))) {
+                        Some(Fatal(reason)) => {
+                            for item in admitted {
+                                if let Some(ready) = item.ready {
+                                    results.push(ready);
+                                } else {
+                                    let cleanup = self
+                                        .finish_effect(
+                                            &item.internal_id,
+                                            Err(Fatal(reason.clone())),
+                                        )
+                                        .await;
+                                    results.push(cleanup);
+                                }
+                            }
+                            results.push(Err(Fatal(reason)));
                             break;
                         }
-                        continue;
-                    }
-                    if let Some(error) = failure {
-                        let Fatal(reason) = &error else {
-                            unreachable!("unavailable handled above");
-                        };
-                        for item in admitted {
-                            if let Some(ready) = item.ready {
-                                results.push(ready);
-                            } else {
-                                let cleanup = self
-                                    .finish_effect(&item.internal_id, Err(Fatal(reason.clone())))
-                                    .await;
-                                results.push(cleanup);
-                            }
-                        }
-                        results.push(Err(error));
-                        break;
+                        None => {}
                     }
                     let token = scope.cancellation_token.child_token();
                     let outputs = join_all(group.iter().zip(admitted).map(|(call, item)| {
