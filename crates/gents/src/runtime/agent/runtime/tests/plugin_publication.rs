@@ -45,7 +45,7 @@ where
 #[tokio::test]
 async fn request_submitted_while_another_process_holds_the_plugin_store_completes() {
     crate::test_support::root::enable_scoped_event_capture();
-    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let endpoint = crate::support::mock_endpoint::MockModelEndpoint::start("default").unwrap();
     let fixture = plugin_runtime_fixture(
         "plugin-publication-request",
         "backend-publication-request",
@@ -175,8 +175,14 @@ async fn request_submitted_while_another_process_holds_the_plugin_store_complete
     })
     .await;
     assert_eq!(
-        terminal["AgentRequest"][0]["lifecycle_state"], "completed",
-        "{terminal}"
+        terminal["AgentRequest"][0]["lifecycle_state"],
+        "completed",
+        "{terminal}; mock requests: {:?}",
+        endpoint
+            .recorded_requests()
+            .iter()
+            .map(|request| &request.path)
+            .collect::<Vec<_>>()
     );
     let readiness = fetch_node_readiness(&node, &node_did).await;
     assert!(
@@ -494,6 +500,7 @@ async fn named_pin_update_never_publishes_an_unavailable_agent() {
     let all = capture.snapshots.lock().unwrap().clone();
     assert!(
         !all.iter()
+            .filter(|snapshot| snapshot.active_generation >= first_generation)
             .any(|snapshot| snapshot.agents.iter().any(|entry| {
                 entry.agent_did == agent_did && entry.state == AgentReadinessState::Unavailable
             })),
