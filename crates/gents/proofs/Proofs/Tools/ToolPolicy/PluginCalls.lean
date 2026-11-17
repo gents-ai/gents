@@ -82,13 +82,13 @@ def describable (toolAccess selected : Bool) : Bool := toolAccess && selected
 /-- Presentation does not change the surface a composing plugin discovers or
 calls; dispatcher availability and child admission are still mandatory. -/
 theorem presentation_preserves_description (toolAccess selected hidden : Bool) :
-    describable toolAccess (ToolPresentation.admissionDecision selected hidden false == .allowed) =
+    describable toolAccess (decide (ToolPresentation.admissionDecision selected hidden false = .allowed)) =
       describable toolAccess selected := by
   cases selected <;> simp [ToolPresentation.admissionDecision]
 
 theorem presentation_preserves_child_admission (selected hidden admitted : Bool)
     (route : DispatchRoute) :
-    childAdmissible (ToolPresentation.admissionDecision selected hidden false == .allowed) route admitted =
+    childAdmissible (decide (ToolPresentation.admissionDecision selected hidden false = .allowed)) route admitted =
       childAdmissible selected route admitted := by
   cases selected <;> simp [ToolPresentation.admissionDecision]
 
