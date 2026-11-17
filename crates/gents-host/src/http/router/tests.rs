@@ -1175,9 +1175,17 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
         grant_authority: false,
         wire: Vec::new(),
     };
-    crate::http::pack_install_client::install_remote(&endpoint, &owner, &pack, &[], &args, true)
-        .await
-        .unwrap();
+    crate::http::pack_install_client::install_remote(
+        &endpoint,
+        &owner,
+        &pack,
+        &[],
+        &args,
+        true,
+        gents_protocol::build_info::BuildInfo::current(Vec::new()),
+    )
+    .await
+    .unwrap();
     let rows = home
         .access
         .execute("{ Tools {tools_id integrations _version {cid}} }")

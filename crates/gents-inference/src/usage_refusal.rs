@@ -112,17 +112,6 @@ pub async fn refusal_for_backend(
     backend: &gents_documents::inference_backend::InferenceBackend,
     now: DateTime<Utc>,
 ) -> Option<UsageRefusalView> {
-    refusal_for_backend_within(access, backend, now, usize::MAX).await
-}
-
-/// The same, with the operator excerpt bounded as a caller asks. Every read path
-/// but this one takes the classifier's own bound.
-pub async fn refusal_for_backend_within(
-    access: &gents_store::config_client::ConfigAccess,
-    backend: &gents_documents::inference_backend::InferenceBackend,
-    now: DateTime<Utc>,
-    detail_limit: usize,
-) -> Option<UsageRefusalView> {
     let since = evidence_since(now);
     let backend_id = gents_store::graphql::escape_graphql_string(&backend.backend_id);
     let since_text = gents_store::graphql::escape_graphql_string(&since.to_rfc3339());
@@ -158,7 +147,10 @@ pub async fn refusal_for_backend_within(
             failure_reason: row["failure_reason"].as_str().map(str::to_owned),
         });
     }
-    standing_refusal(&calls, now, saw_usage.then_some(consumed), detail_limit)
+    // The classifier's detail is already bounded (`DETAIL_MAX_CHARS`), so the
+    // view takes it as it is rather than truncating a second time: the agent
+    // JSON, the account inventory and the desktop show the same excerpt.
+    standing_refusal(&calls, now, saw_usage.then_some(consumed), usize::MAX)
 }
 
 /// Evidence read as one Agent: the calls this backend made that this Agent's

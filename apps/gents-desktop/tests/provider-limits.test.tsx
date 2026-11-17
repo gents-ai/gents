@@ -108,3 +108,82 @@ it("holds the panel's shape while the first read is out, not saying none were re
   expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
   expect(screen.getByText("No account limits have been reported.")).toBeInTheDocument();
 });
+
+/* A refusal is the provider's own statement that the account is out, so it must
+   show above the meters — an exhausted account can have no window to fill. */
+it("shows a provider refusal above the meters, with only the fields it stated", () => {
+  const refusal = {
+    at: new Date().toISOString(),
+    window: "rolling 24-hour",
+    used: 691_791,
+    cap: 600_000,
+    resetsAt: null,
+    consumedByNode: 1200,
+    detail: "you have used all the included free usage for this account",
+    windowProvenance: "provider_reported",
+    evidenceWindowHours: 24,
+  };
+  const views = [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: ["grok"],
+      /* an exhausted account with no window at all: the percentages say
+         nothing, which is exactly why the banner cannot be a percentage */
+      windows: [],
+      plan: null,
+      note: "unknown",
+      readAt: null,
+      readError: null,
+      read: "read",
+      refusal,
+    },
+  ];
+  render(<AllProviderLimits views={views} onRefresh={async () => {}} />);
+  expect(screen.getByText("Out of quota")).toBeTruthy();
+  /* the stated counter and cap, never a derived percentage */
+  expect(screen.getByText(/691,791 of 600,000/)).toBeTruthy();
+  expect(screen.queryByText("100%")).toBeNull();
+  /* the bounded excerpt is what the provider said, not a computed figure */
+  expect(
+    screen.getByText(/you have used all the included free usage/),
+  ).toBeTruthy();
+});
+
+it("says the reset when the provider stated one, and that none was stated otherwise", () => {
+  const refusal = (resetsAt: string | null) => ({
+    at: new Date().toISOString(),
+    window: null,
+    used: null,
+    cap: null,
+    resetsAt,
+    consumedByNode: null,
+    detail: "free usage exhausted",
+    windowProvenance: "analytical",
+    evidenceWindowHours: 24,
+  });
+  const view = (resetsAt: string | null) => [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: [],
+      windows: [],
+      plan: null,
+      note: null,
+      readAt: null,
+      readError: null,
+      read: "read",
+      refusal: refusal(resetsAt),
+    },
+  ];
+  const { unmount } = render(
+    <AllProviderLimits
+      views={view(new Date(Date.now() + 3_600_000).toISOString())}
+      onRefresh={async () => {}}
+    />,
+  );
+  expect(screen.getByText(/Resets/)).toBeTruthy();
+  unmount();
+  render(<AllProviderLimits views={view(null)} onRefresh={async () => {}} />);
+  expect(screen.getByText(/No reset stated/)).toBeTruthy();
+});
