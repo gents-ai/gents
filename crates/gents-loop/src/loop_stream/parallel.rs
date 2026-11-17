@@ -328,8 +328,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
 
     use super::{ordered_indices, read_prefix};
 
