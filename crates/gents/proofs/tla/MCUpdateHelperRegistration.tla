@@ -1,0 +1,4 @@
+---- MODULE MCUpdateHelperRegistration ----
+EXTENDS UpdateHelperRegistration
+
+====

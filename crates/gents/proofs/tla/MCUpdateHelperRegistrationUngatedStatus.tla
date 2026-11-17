@@ -1,0 +1,4 @@
+---- MODULE MCUpdateHelperRegistrationUngatedStatus ----
+EXTENDS UpdateHelperRegistration
+
+====

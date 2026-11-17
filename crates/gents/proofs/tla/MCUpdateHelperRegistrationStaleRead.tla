@@ -1,0 +1,4 @@
+---- MODULE MCUpdateHelperRegistrationStaleRead ----
+EXTENDS UpdateHelperRegistration
+
+====

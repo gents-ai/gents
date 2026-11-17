@@ -29,6 +29,43 @@ def step (phase : Phase) : Action → Option Phase
   | .verify ready => if phase = .installed ∧ ready then some .healthy else none
   | .fail => if phase ≠ .healthy ∧ phase ≠ .failed then some .failed else none
 
+inductive Registrant where
+  | submitter | status
+  deriving DecidableEq, Repr
+
+inductive HelperRegistration where
+  | register | helperOwns | finished | submitterOwns
+  deriving DecidableEq, Repr
+
+/-- Whether a caller registers an operation's update helper job, decided under
+the operation's `helper.lock` on the receipt read under it. The lock's holder is
+either the helper, from its start through the terminal cleanup that removes its
+job definition, or a registrant deciding this same question; before
+acknowledgement that registrant can only be the submitter (`statusTakesLock`).
+So a caller that cannot take the lock leaves registration to its holder.
+External premise: the lock is an OS advisory lock, which the kernel drops when
+its holder exits. A finished operation's helper only retires again. Before
+acknowledgement the submitter owns registration and waits for the helper
+itself. -/
+def helperRegistration (caller : Registrant) (lockTaken : Bool) (phase : Phase) :
+    HelperRegistration :=
+  if !lockTaken then .helperOwns
+  else match phase, caller with
+    | .healthy, _ | .failed, _ => .finished
+    | .staged, .status | .registered, .status => .submitterOwns
+    | _, _ => .register
+
+/-- Whether a status reader takes the operation's `helper.lock` for the phase it
+read before locking. Before acknowledgement only the submitter and the helper
+may contend for the lock, so a submitter that cannot take it knows the helper
+holds it; submitters of one home are serialized by their submission lock. A
+stale pre-lock read there can only skip a registration that a later status read
+or the submitter performs. -/
+def statusTakesLock (phase : Phase) : Bool :=
+  match phase with
+  | .accepted | .retired | .released | .backedUp | .installed => true
+  | _ => false
+
 /-- A different executable may migrate before readiness; it is never rolled
 back after a startup attempt or publication of its service definition: a
 reboot/external start can open that definition after helper death. Reconfiguration of the identical digest may be
@@ -52,4 +89,22 @@ theorem installation_requires_cold_backup (phase : Phase) (unchanged : Bool) (ne
     phase = .backedUp ∧ unchanged = true := by
   simp only [step] at h
   split at h <;> simp_all
+
+theorem register_requires_lock_and_live_phase (caller : Registrant) (lockTaken : Bool)
+    (phase : Phase) (h : helperRegistration caller lockTaken phase = .register) :
+    lockTaken = true ∧ phase ≠ .healthy ∧ phase ≠ .failed := by
+  cases caller <;> cases lockTaken <;> cases phase <;> simp_all [helperRegistration]
+
+theorem status_registers_only_acknowledged_operations (lockTaken : Bool) (phase : Phase)
+    (h : helperRegistration .status lockTaken phase = .register) :
+    phase ≠ .staged ∧ phase ≠ .registered := by
+  cases lockTaken <;> cases phase <;> simp_all [helperRegistration]
+
+theorem status_takes_lock_only_where_it_registers (phase : Phase) :
+    statusTakesLock phase = true ↔ helperRegistration .status true phase = .register := by
+  cases phase <;> simp [statusTakesLock, helperRegistration]
+
+theorem finished_phases_have_no_successor (action : Action) :
+    step .healthy action = none ∧ step .failed action = none := by
+  cases action <;> simp [step]
 end RuntimeReconcile.UpdateHandoff
