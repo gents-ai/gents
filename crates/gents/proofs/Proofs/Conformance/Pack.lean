@@ -134,6 +134,19 @@ private def narrow : Job :=
 
 private def skill : List String := ["create-workflow"]
 
+/-- All mode pairs and sufficient/insufficient target sets, including a repeated
+wire. Refusals leave the state available for a subsequent compatible wire. -/
+private def policyWiringScripts : List WiringScript :=
+  [.off, .check, .run].flatMap fun existingMode =>
+    [.off, .check, .run].flatMap fun incomingMode =>
+      [[], ["a"], ["a", "b"], ["b", "a"]].map fun incomingTargets =>
+        let existing := block ["a", "b"] existingMode ["a"]
+        let incoming := block ["a", "b"] incomingMode incomingTargets
+        let step := wireStep runner (reviewed := some incoming) (skills := skill)
+        ⟨s!"preserve or refuse {repr existingMode}/{repr incomingMode}/{repr incomingTargets}",
+          wiredWith (some existing) ["a", "b"],
+          [step, step, wireStep runner (reviewed := some existing)]⟩
+
 @[conformance_family]
 def pluginWiring : Family WiringScript (List (Option Outcome)) where
   inputs :=
@@ -152,7 +165,7 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
           (reviewed := some (block ["wf-read-only"] .check ["wf-read-only"] ["gents/rhai_workflows"]))]⟩
     , ⟨"a later wiring never widens the block", wiredWith (some narrow) ["a", "c"],
         [wireStep runner (reviewed := some
-          { block ["b", "c"] .check ["b", "c"] with maxLive := 8 })]⟩
+          { block ["b", "c"] .off ["c"] with maxLive := 8 })]⟩
     , ⟨"a later wiring cannot raise the dynamic mode",
         wiredWith (some (block ["a"] .check)) ["a"],
         [wireStep runner (reviewed := some (block ["a"] .run))]⟩
@@ -241,6 +254,7 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
     , ⟨"a target the Agent held before the wiring leaves with the block",
         { fresh with targets := ["reviewer"] },
         [wireStep runner (reviewed := some (block ["reviewer"])), unwireStep runner]⟩ ]
+    ++ policyWiringScripts
   model := fun script => runWiring script.start script.steps
 
 end Wiring

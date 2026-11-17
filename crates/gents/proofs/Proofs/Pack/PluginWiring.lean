@@ -11,8 +11,8 @@ start, and the skills in its Context. Unwiring takes them back.
 A plugin entry may carry a job block: the ceiling within which the plugin runs
 job steps. A block comes from the block the installer reviewed, or from the
 defaults over the packs whose targets are wired in. An existing block is never
-widened by a later wiring: bounds only fall, the dynamic mode only falls, and
-the targets dynamic scripts may reach only shrink. Targets and trusted packs
+widened by a later wiring: bounds only fall, while existing dynamic mode and dynamic targets are preserved.
+An existing policy insufficient for the incoming block refuses the entire wiring. Targets and trusted packs
 are the additions a wiring is for.
 
 Nothing records which wiring added a target or a skill, so unwiring decides
@@ -113,6 +113,13 @@ structure Outcome where
 def addMissing (list items : List String) : List String :=
   items.foldl (fun list item => if item ∈ list then list else list ++ [item]) list
 
+/-- A pack cannot alter operator dynamic authority. Wiring requires the existing
+mode to cover the incoming mode, and every incoming dynamic target to be already
+authorized. Even inactive target lists are preserved rather than intersected. -/
+def policySufficient (existing incoming : Job) : Bool :=
+  decide (incoming.policy.dynamic.rank ≤ existing.policy.dynamic.rank)
+    && incoming.policy.dynamicTargets.all (· ∈ existing.policy.dynamicTargets)
+
 def merge (existing incoming : Job) : Job :=
   { agentTargets := addMissing existing.agentTargets incoming.agentTargets
     maxLive := min existing.maxLive incoming.maxLive
@@ -121,11 +128,8 @@ def merge (existing incoming : Job) : Job :=
     resultBytes := min existing.resultBytes incoming.resultBytes
     maxWallSecs := min existing.maxWallSecs incoming.maxWallSecs
     policy :=
-      { dynamic :=
-          if incoming.policy.dynamic.rank < existing.policy.dynamic.rank
-          then incoming.policy.dynamic else existing.policy.dynamic
-        dynamicTargets :=
-          existing.policy.dynamicTargets.filter (· ∈ incoming.policy.dynamicTargets)
+      { dynamic := existing.policy.dynamic
+        dynamicTargets := existing.policy.dynamicTargets
         trustedPacks := addMissing existing.policy.trustedPacks incoming.policy.trustedPacks } }
 
 /-- The block written when packs are wired in and nobody reviewed one: the
@@ -172,6 +176,8 @@ def wiredJob (surface : Surface) (plugin : Plugin) (reviewed : Option Job)
   match incomingJob plugin reviewed sources with
   | none => some (priorJob surface plugin, surface.targets)
   | some incoming =>
+    if (priorJob surface plugin).any (fun existing => !policySufficient existing incoming) then none
+    else
     let base := match priorJob surface plugin with
       | some existing => merge existing incoming
       | none => incoming
@@ -323,9 +329,13 @@ theorem unwire_keeps_enabled (surface : Surface) (plugin : Plugin) (skills : Lis
           · simp only [Option.some.injEq] at h; subst h; rfl
           · exact absurd h (by simp)
 
-/-- A later wiring never widens the block an earlier one left: every bound
-falls or stays, the dynamic mode falls or stays, and dynamic scripts reach no
-target they could not reach before. -/
+/-- Compatible wiring preserves both dynamic authority fields exactly. -/
+theorem merge_preserves_dynamic_policy (existing incoming : Job) :
+    (merge existing incoming).policy.dynamic = existing.policy.dynamic
+      ∧ (merge existing incoming).policy.dynamicTargets = existing.policy.dynamicTargets := by
+  exact ⟨rfl, rfl⟩
+
+/-- A later wiring never widens bounds or changes existing dynamic authority. -/
 theorem merge_never_widens (existing incoming : Job) :
     (merge existing incoming).maxLive ≤ existing.maxLive
       ∧ (merge existing incoming).maxSpawns ≤ existing.maxSpawns
@@ -334,16 +344,39 @@ theorem merge_never_widens (existing incoming : Job) :
       ∧ (merge existing incoming).maxWallSecs ≤ existing.maxWallSecs
       ∧ (merge existing incoming).policy.dynamic.rank ≤ existing.policy.dynamic.rank
       ∧ (merge existing incoming).policy.dynamicTargets ⊆ existing.policy.dynamicTargets := by
-  refine ⟨Nat.min_le_left _ _, Nat.min_le_left _ _, Nat.min_le_left _ _, Nat.min_le_left _ _,
-    Nat.min_le_left _ _, ?_, (List.filter_sublist _).subset⟩
-  simp only [merge]
-  split
-  · omega
-  · exact Nat.le_refl _
+  exact ⟨Nat.min_le_left _ _, Nat.min_le_left _ _, Nat.min_le_left _ _, Nat.min_le_left _ _,
+    Nat.min_le_left _ _, Nat.le_refl _, List.Subset.refl _⟩
 
 theorem merge_keeps_off (existing incoming : Job) (h : existing.policy.dynamic = .off) :
-    (merge existing incoming).policy.dynamic = .off := by
-  simp [merge, h, Dynamic.rank]
+    (merge existing incoming).policy.dynamic = .off := h
+
+/-- An incompatible existing policy refuses before any wiring can be published. -/
+theorem wire_refuses_insufficient_policy (surface : Surface) (plugin : Plugin)
+    (reviewed : Option Job) (skills : List String) (sources : List Source)
+    (existing incoming : Job)
+    (hprior : priorJob surface plugin = some existing)
+    (hincoming : incomingJob plugin reviewed sources = some incoming)
+    (hpolicy : policySufficient existing incoming = false) :
+    wire surface plugin reviewed skills sources = none := by
+  simp [wire, wiredJob, hprior, hincoming, hpolicy]
+
+/-- A narrower mode is never raised by merging or silently accepted. -/
+theorem policySufficient_refuses_narrower (existing incoming : Job)
+    (h : existing.policy.dynamic.rank < incoming.policy.dynamic.rank) :
+    policySufficient existing incoming = false := by
+  simp [policySufficient, Nat.not_le.mpr h]
+
+/-- Missing even one requested dynamic target refuses the policy. -/
+theorem policySufficient_refuses_missing_target (existing incoming : Job) (target : String)
+    (hin : target ∈ incoming.policy.dynamicTargets)
+    (hout : target ∉ existing.policy.dynamicTargets) :
+    policySufficient existing incoming = false := by
+  have h : incoming.policy.dynamicTargets.all (· ∈ existing.policy.dynamicTargets) = false := by
+    apply Bool.eq_false_iff.mpr
+    intro hall
+    have := List.all_eq_true.mp hall target hin
+    simp [hout] at this
+  simp [policySufficient, h]
 
 /-- Consent never enables dynamic scripts on a block that is `off`. -/
 theorem consent_keeps_off (coordinate : String) (outcome : Outcome) (job : Job)
