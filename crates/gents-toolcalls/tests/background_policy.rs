@@ -14,6 +14,9 @@ use gents_toolcalls::test_support::background_hook::{
 struct NamedPendingTool(String);
 
 impl ToolDyn for NamedPendingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.0.clone()
     }
@@ -36,6 +39,9 @@ impl ToolDyn for NamedPendingTool {
 struct NoisyTool(String);
 
 impl ToolDyn for NoisyTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.0.clone()
     }
@@ -84,7 +90,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
             "max_wait_timeout_secs": 1}]}
     }))
     .unwrap();
-    let remote_name = gents_tools::mcp::meta::flat_tool_name("search", "query");
+    let remote_name = gents_documents::RemoteTools::flat_tool_name("search", "query");
     let config = gents_tools::surface::BackgroundToolConfig {
         allowlist: vec!["bash".into(), remote_name.clone()],
         timeouts: gents_tools::surface::ToolTimeouts::from_document(&tools).background,

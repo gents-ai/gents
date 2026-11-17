@@ -14,6 +14,8 @@ use super::{AgentToolSurfaceConfig, RuntimeToolAvailability, ToolPolicySurface, 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSurfaceExplanation {
     pub tool_names: Vec<String>,
+    pub advertised_tool_names: Vec<String>,
+    pub hidden_tool_names: Vec<String>,
     pub policy: ToolSurfacePolicyTrace,
     pub included: BTreeMap<String, Vec<String>>,
     pub excluded: BTreeMap<String, Vec<String>>,
@@ -94,8 +96,15 @@ impl ToolSurfaceExplanation {
                 "ToolCeiling currently clamps host-native file/bash/CLI tools only; built-in read tools can still be model-callable.",
             );
         }
+        for name in &surface.hidden_tool_names {
+            if !tool_names.contains(name) {
+                builder.warn("hidden_tool_unavailable", format!("hidden_tool_names entry {name:?} is not in the effective granted surface; it grants nothing"));
+            }
+        }
         builder.finish(
             tool_names,
+            surface.advertised_tool_names(),
+            surface.hidden_tool_names.clone(),
             ToolSurfacePolicyTrace {
                 requested: policy_summary(config.agent_policy()),
                 ceiling: policy_summary(config.ceiling_policy()),
@@ -190,9 +199,13 @@ impl ExplanationBuilder {
     fn finish(
         self,
         tool_names: Vec<String>,
+        advertised_tool_names: Vec<String>,
+        hidden_tool_names: Vec<String>,
         policy: ToolSurfacePolicyTrace,
     ) -> ToolSurfaceExplanation {
         ToolSurfaceExplanation {
+            advertised_tool_names,
+            hidden_tool_names,
             tool_names,
             policy,
             included: into_vec_map(self.included),
@@ -250,10 +263,11 @@ fn explain_meta(
     if surface.include_meta_tools {
         builder.include_many(
             "meta_mcp",
-            crate::mcp::meta::presented_tool_names(
-                surface.remote_tools.as_ref().unwrap_or(&Default::default()),
-                &surface.allowed_mcp_service_ids,
-            ),
+            surface
+                .remote_tools
+                .as_ref()
+                .unwrap_or(&Default::default())
+                .invocation_names(&surface.allowed_mcp_service_ids),
         );
         if surface.allowed_mcp_service_ids.is_empty() {
             builder.warn(
@@ -264,9 +278,9 @@ fn explain_meta(
         return;
     }
 
-    let configured = config.remote_tools().map(|remote| {
-        crate::mcp::meta::presented_tool_names(remote, config.allowed_mcp_service_ids())
-    });
+    let configured = config
+        .remote_tools()
+        .map(|remote| remote.invocation_names(config.allowed_mcp_service_ids()));
     for name in configured.unwrap_or_else(|| {
         META_TOOL_NAMES
             .iter()

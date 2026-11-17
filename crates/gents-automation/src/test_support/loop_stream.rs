@@ -195,6 +195,9 @@ pub struct EchoTool {
 }
 
 impl ToolDyn for EchoTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.clone()
     }
@@ -221,6 +224,9 @@ pub struct CountingTool {
 }
 
 impl ToolDyn for CountingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.clone()
     }
@@ -251,6 +257,9 @@ pub struct FixedTool {
 }
 
 impl ToolDyn for FixedTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.clone()
     }

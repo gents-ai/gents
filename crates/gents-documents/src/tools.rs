@@ -14,6 +14,7 @@ use gents_loop::tool_policy::{CommandExecutionMode, CommandNetworkMode};
 pub use gents_protocol::row::RetiredKey;
 
 mod persistence;
+mod presentation;
 
 pub use persistence::{write_tools_document, write_tools_document_in_txn, ToolsWriteError};
 
@@ -59,6 +60,14 @@ pub struct Tools {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     #[schemars(transform = crate::accepts_null)]
     pub tags: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub hidden_tool_names: Vec<String>,
 }
 
 /// Access to the host running the agent, with nested capability settings.
@@ -751,6 +760,19 @@ impl Tools {
             }
         }
         let mut errors = Vec::new();
+        names(
+            &mut errors,
+            "hidden_tool_names",
+            self.hidden_tool_names.iter().map(String::as_str),
+            true,
+        );
+        for name in &self.hidden_tool_names {
+            if name.trim() != name {
+                errors.push(format!(
+                    "hidden_tool_names requires exact invocation names, not {name:?}"
+                ));
+            }
+        }
         if let Some(host) = &self.host {
             if let Some(files) = &host.files {
                 at_most(

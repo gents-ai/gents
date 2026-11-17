@@ -19,6 +19,7 @@ use gents_documents::{BashMode, FileToolMode};
 #[derive(Clone)]
 pub struct AgentToolSurfaceConfig {
     host_tools: ToolSet,
+    hidden_tool_names: Vec<String>,
     root_execution_guard: Option<super::RootExecutionGuard>,
     enable_meta_tools: bool,
     enable_goal_tools: bool,
@@ -69,6 +70,7 @@ impl AgentToolSurfaceConfig {
         agent_policy.self_config_categories = EndpointScope::none();
         Self {
             host_tools: ToolSet::meta_only(),
+            hidden_tool_names: Vec::new(),
             root_execution_guard: None,
             enable_meta_tools: true,
             enable_goal_tools: true,
@@ -145,6 +147,8 @@ impl AgentToolSurfaceConfig {
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
         let merged = gents_documents::merge_datastore_tool_surfaces(tools, surfaces)?;
+        // Failure is reachable only by an unvalidated write; validated configuration already enforces this.
+        tools.validate_hidden_tools(&merged)?;
         let mut resolved = ResolvedToolSelection::from_document(tools)?;
         resolved.write_tools = merged.write_tools;
         resolved.query_tools = merged.query_tools;
@@ -187,6 +191,7 @@ impl AgentToolSurfaceConfig {
             &ToolPolicySurface::runtime_all(),
         );
         let ResolvedToolSelection {
+            hidden_tool_names,
             file_tools: requested_file_tools,
             file_tool_root,
             bash: requested_bash,
@@ -298,7 +303,7 @@ impl AgentToolSurfaceConfig {
                                 }
                                 gents_documents::RemoteToolStyle::Flat => {
                                     service.background_tool_names.iter().any(|tool| {
-                                        crate::mcp::meta::flat_tool_name(
+                                        gents_documents::RemoteTools::flat_tool_name(
                                             &service.mcp_service_id,
                                             tool,
                                         ) == *name
@@ -335,6 +340,7 @@ impl AgentToolSurfaceConfig {
         });
 
         Ok(Self {
+            hidden_tool_names,
             host_tools,
             root_execution_guard,
             enable_meta_tools: static_policy.meta,
@@ -539,6 +545,7 @@ impl AgentToolSurfaceConfig {
         );
 
         ToolSurface {
+            hidden_tool_names: self.hidden_tool_names.clone(),
             host_tools: self.host_tools.clone(),
             root_execution_guard: self.root_execution_guard.clone(),
             include_meta_tools,
@@ -727,6 +734,7 @@ impl std::fmt::Debug for AgentToolSurfaceConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentToolSurfaceConfig")
             .field("host_tools", &self.host_tools)
+            .field("hidden_tool_names", &self.hidden_tool_names)
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("enable_goal_tools", &self.enable_goal_tools)
             .field("enable_goal_creation", &self.enable_goal_creation)

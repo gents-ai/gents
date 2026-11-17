@@ -91,6 +91,9 @@ struct PreInferenceBlockingTool {
 }
 
 impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "pre_inference_block".into()
     }
@@ -98,8 +101,7 @@ impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition>
-    {
+    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition> {
         Box::pin(async move {
             self.entered.notify_one();
             std::future::pending().await
@@ -109,10 +111,7 @@ impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> gents_loop::tool::BoxFuture<
-        'a,
-        Result<String, gents_loop::tool::ToolError>,
-    > {
+    ) -> gents_loop::tool::BoxFuture<'a, Result<String, gents_loop::tool::ToolError>> {
         Box::pin(async { unreachable!("the pre-inference window never dispatches a tool") })
     }
 }
@@ -208,8 +207,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(PreInferenceBlockingTool {
             entered: entered.clone(),
-        })
-            as Box<dyn gents_loop::tool::ToolDyn>]),
+        }) as Box<dyn gents_loop::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,
@@ -363,13 +361,14 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         request.execution_origin.as_deref(),
     )
     .expect("a created request carries a canonical execution origin");
-    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request.clone(),
-        agent_config.deadline_duration.as_secs(),
-        origin,
-        agent_config.backend_id.clone().unwrap_or_default(),
-    );
+    let mut lifecycle =
+        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            request.clone(),
+            agent_config.deadline_duration.as_secs(),
+            origin,
+            agent_config.backend_id.clone().unwrap_or_default(),
+        );
     lifecycle
         .bind_managed_agent(agent_config.agent_identity.as_ref())
         .unwrap();
@@ -400,8 +399,9 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         "the window under test runs before execution begins: {claimed}"
     );
 
-    let (interrupt_tx, mut interrupt_rx) =
-        tokio::sync::watch::channel::<Option<gents_session::request::interrupt::InterruptIntent>>(None);
+    let (interrupt_tx, mut interrupt_rx) = tokio::sync::watch::channel::<
+        Option<gents_session::request::interrupt::InterruptIntent>,
+    >(None);
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let _observer = tokio_util::task::AbortOnDropHandle::new(
         gents_session::request::interrupt::spawn_request_interrupt_observer(
@@ -647,8 +647,9 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     std::fs::write(dir.join(".git/info/attributes"), "* filter=park\n").unwrap();
     let index_before = std::fs::read(dir.join(".git/index")).unwrap();
 
-    let (interrupt_tx, mut interrupt_rx) =
-        tokio::sync::watch::channel::<Option<gents_session::request::interrupt::InterruptIntent>>(None);
+    let (interrupt_tx, mut interrupt_rx) = tokio::sync::watch::channel::<
+        Option<gents_session::request::interrupt::InterruptIntent>,
+    >(None);
     let dest = dir.to_path_buf();
     let hashing = tokio::spawn(async move {
         super::super::request::prepare_unless_interrupted(

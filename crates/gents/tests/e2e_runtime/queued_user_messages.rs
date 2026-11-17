@@ -18,6 +18,9 @@ struct Gate {
 }
 
 impl ToolDyn for Gate {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "hold_turn".into()
     }

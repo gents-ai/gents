@@ -177,6 +177,7 @@ impl RuntimeContext {
             agent_config.as_ref(),
             tool_surface.as_ref(),
             &allowed_targets,
+            &loop_tools,
         );
         let preamble = prompt_builder.preamble().to_string();
         if tool_surface.includes_skills() && !agent_config.skills.is_empty() {
