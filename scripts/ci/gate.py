@@ -653,21 +653,33 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         matrix = [entry for entry in matrix if entry["job"] in jobs]
         if archived:
             # At most one slice per crate with tests, so every slice runs some.
-            count = min(count, len([package for package in archived if package not in NO_TESTS]))
+            tested_crates = len([package for package in archived if package not in NO_TESTS])
+            count = min(count, tested_crates)
             # One slice runs in the build job itself: no archive transfer, which
             # from the minisforums costs more than the tests (1.24 GB: 3.5 min
             # up, 14 min down in dispatch 43775099812).
             single = count == 1
             mode = test_cache_mode(single)
             groups = host_groups("portable")
-            # The build takes the role's labels alone, so any free portable
-            # runner picks it up. Each host keeps its own test-result store
-            # and the cached slice reads and records only there
-            # (TestCache.lean `skip_sound_on_any_host`).
             go = bool(AFTERBURNER & set(archived))
-            archives.append({"archive": ARCHIVE, **placement("portable"), "run": single,
-                             "packages": " ".join(archived), "timeout": 150 if single else 90,
-                             "test_cache": mode, "go": go})
+            entry = {"archive": ARCHIVE, "run": single, "packages": " ".join(archived),
+                     "timeout": 150 if single else 90, "test_cache": mode, "go": go}
+            # The slice that runs in the build job splits into one hash
+            # partition per host group: each partition's job builds the
+            # archive from its own host's compiler cache and kept target tree
+            # and runs its tests against that host's test-result store
+            # (TestCache.lean `skip_sound_on_any_host`). A test's partition is
+            # a hash of its name, so it lands on the same host group, and in
+            # the same store, run after run. Without host groups the build
+            # takes the role's labels alone and any free portable runner
+            # picks it up.
+            partitions = min(len(groups), tested_crates) if single else 0
+            if partitions > 1:
+                archives += [{**entry, **placement("portable", host_group=groups[index - 1]),
+                              "partition": index, "partitions": partitions}
+                             for index in range(1, partitions + 1)]
+            else:
+                archives.append({**entry, **placement("portable")})
             # Slices alternate between host groups, so one run's slices split across hosts.
             shards = [] if single else [
                 {"archive": ARCHIVE, "index": index, "count": count, "timeout": 90, "go": go,
@@ -1145,9 +1157,14 @@ def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix
     return verdict == "ok"
 
 
-def archive_listing(archive, workspace, extract=None):
+def partition_arguments(entry):
+    """The nextest partition of a partitioned build's own slice, else none."""
+    return ["--partition", f"hash:{entry['partition']}/{entry['partitions']}"] if entry.get("partition") else []
+
+
+def archive_listing(archive, workspace, extract=None, partition=()):
     arguments = ["cargo", "nextest", "list", "--archive-file", str(archive), "--workspace-remap",
-                 str(workspace), "--message-format", "json", "--run-ignored", "all"]
+                 str(workspace), "--message-format", "json", "--run-ignored", "all", *partition]
     if extract:
         arguments += ["--extract-to", str(extract), "--extract-overwrite"]
     raw = subprocess.run(arguments, cwd=workspace, check=True, stdout=subprocess.PIPE).stdout
@@ -1168,8 +1185,11 @@ def listed_tests(archive, workspace, listing=None):
 
 
 def runnable(listing):
-    """Binary id -> the names of its tests a slice runs (ignored ones are not)."""
-    return {suite["binary-id"]: sorted(name for name, case in suite["testcases"].items() if not case.get("ignored"))
+    """Binary id -> the names of its tests a slice runs: not ignored, and in the
+    listing's partition (nextest lists the others as a `partition` mismatch)."""
+    def runs(case):
+        return not case.get("ignored") and case.get("filter-match", {}).get("status", "matches") == "matches"
+    return {suite["binary-id"]: sorted(name for name, case in suite["testcases"].items() if runs(case))
             for suite in listing["rust-suites"].values()}
 
 
@@ -1191,7 +1211,7 @@ def plan_test_cache(entry, archive, source, output, name):
     """Decide which tests the slices run and write the decisions beside the archive."""
     started = time.time()
     extract = extract_dir("plan")
-    listing = archive_listing(archive, source, extract)
+    listing = archive_listing(archive, source, extract, partition_arguments(entry))
     tests = runnable(listing)
     binaries = {"nextest": nextest_version(), "binaries": {
         suite["binary-id"]: {"relative": os.path.relpath(os.path.realpath(suite["binary-path"]),
@@ -1247,14 +1267,71 @@ def doctests(packages):
     return found
 
 
-def run_build(selection, name):
+def run_build(selection, name, partition=None):
     """Build every selected crate's tests once, in one Cargo invocation, into a nextest archive.
 
     In CI the build runs from a worktree under RUNNER_TEMP that the runner removes
     after the job, so a test binary can only reach source files through the
-    runtime paths a shard remaps to its own checkout.
+    runtime paths a shard remaps to its own checkout. `build:<name>:<partition>`
+    runs only that partition of the tests; `build:<name>` (`make gate`) runs them all.
     """
-    entry = next(entry for entry in selection["archives"] if entry["archive"] == name)
+    entries = [entry for entry in selection["archives"] if entry["archive"] == name]
+    if partition is None:
+        entry = {key: value for key, value in entries[0].items() if key not in ("partition", "partitions")}
+    else:
+        entry = next((entry for entry in entries if entry.get("partition") == partition), None)
+        if entry is None:
+            fail(f"build {name}:{partition} is not selected by this plan")
+    lean = LeanContract.start() if entry.get("run") else None
+    try:
+        build_and_run(entry, name, lean)
+    finally:
+        if lean:
+            lean.stop()
+
+
+class LeanContract:
+    """The Lean conformance contract the Lean-backed tests load, built beside
+    the Rust compile rather than before it (rust-runner `lean-contract: deferred`):
+    it took 2.5 to 10 minutes ahead of the compile in PR #3926's runs. Tests
+    must not start before it is built: they would each build it on first use
+    under a shared lock, with their output captured."""
+
+    TARGET = "Proofs.Conformance.Contracts:olean"
+
+    def __init__(self, process, log):
+        self.process, self.log, self.started = process, log, time.time()
+
+    @classmethod
+    def start(cls):
+        if not shutil.which("lake"):
+            return None
+        log = tempfile.NamedTemporaryFile(prefix="gate-lean-contract-", suffix=".log", delete=False)
+        print(f"\n$ lake build {cls.TARGET} (beside the Rust compile; output in {log.name})", flush=True)
+        process = subprocess.Popen(["lake", "build", cls.TARGET], cwd=ROOT / PROOFS, stdout=log,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
+        return cls(process, log)
+
+    def wait(self):
+        """True once the contract is built; on failure, its output and the gate's error."""
+        code = self.process.wait()
+        self.log.close()
+        verdict = "ok" if code == 0 else f"exit {code}"
+        results.append((f"lake build {self.TARGET}", verdict, "", time.time() - self.started))
+        if code != 0:
+            sys.stdout.write(Path(self.log.name).read_text(errors="replace")[-20000:])
+            print(f"::error::lake build {self.TARGET}: {verdict}", flush=True)
+        return code == 0
+
+    def stop(self):
+        if self.process.poll() is None:
+            os.killpg(self.process.pid, signal.SIGTERM)
+            self.process.wait()
+        self.log.close()
+        Path(self.log.name).unlink(missing_ok=True)
+
+
+def build_and_run(entry, name, lean):
     packages = entry["packages"].split()
     source = ROOT
     if os.environ.get("GITHUB_ACTIONS") and os.environ.get("RUNNER_TEMP"):
@@ -1305,10 +1382,14 @@ def run_build(selection, name):
         print(f"::error::{problem}", flush=True)
     results.append((f"check {name} archive", "ok" if not problems else "; ".join(problems),
                     f"{total} tests listed, {ignored} ignored", time.time() - started))
-    if not problems and entry.get("run"):
+    if not problems and entry.get("run") and (lean is None or lean.wait()):
         # The whole archive, on this runner, from this job's own checkout.
         os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
-        arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
+        arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci",
+                     *partition_arguments(entry)]
+        if entry.get("partition"):
+            # Names this partition's records apart from its sibling's (test_cache.record_run).
+            os.environ["GATE_SLICE"] = str(entry["partition"])
         if os.environ.get("RUST_TEST_THREADS"):
             arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
         if entry.get("test_cache", "off") == "off":
@@ -1433,12 +1514,12 @@ def kept_target():
 
 
 def run(selection, job):
-    if job.startswith("shard:") and job.count(":") == 2:
-        _, name, index = job.split(":")
-        if f"shard:{name}" not in selection["jobs"]:
-            print(f"gate: shard:{name} is not selected by this plan; nothing to do")
+    if job.startswith(("shard:", "build:")) and job.count(":") == 2:
+        prefix, name, index = job.split(":")
+        if f"{prefix}:{name}" not in selection["jobs"]:
+            print(f"gate: {prefix}:{name} is not selected by this plan; nothing to do")
             return
-        run_shard(selection, name, int(index))
+        (run_shard if prefix == "shard" else run_build)(selection, name, int(index))
         return
     if job not in selection["jobs"]:
         print(f"gate: {job} is not selected by this plan; nothing to do")
@@ -1534,6 +1615,11 @@ def emit(selection):
                 extra += "; the native client journey" if entry.get("journey") else ""
                 handle.write(f"- `{entry['job']}`: {entry['packages'] or 'no crates of its own'}{extra}\n")
             for entry in selection["archives"]:
+                if entry.get("partition"):
+                    handle.write(f"- `build:{entry['archive']}:{entry['partition']}`, running partition "
+                                 f"{entry['partition']} of {entry['partitions']} on {entry['runs_on'][-1]}: "
+                                 f"{entry['packages']}\n")
+                    continue
                 handle.write(f"- `build:{entry['archive']}`, then {len(selection['shards'])} "
                              f"`shard:{entry['archive']}` slices: {entry['packages']}\n")
 
