@@ -213,6 +213,7 @@ pub struct PreparedDependency {
 }
 
 pub struct PreparedDocumentPackInstall {
+    pub pin_moves: Vec<super::super::pin_moves::PluginPinMove>,
     pub installation_doc_id: Option<String>,
     pub agent_bindings: super::super::PackAgentBindings,
     pub(crate) node_binding: Option<gents_documents::ConfigurationNodeBinding>,
@@ -279,6 +280,32 @@ pub(super) fn agent_slot_or_did(
         .iter()
         .find(|(_, binding)| binding.agent_did == agent_did)
         .map_or_else(|| agent_did.to_owned(), |(slot, _)| slot.clone())
+}
+
+impl PreparedDocumentPackInstall {
+    pub async fn prepare_pin_moves(
+        &mut self,
+        access: &ConfigAccess,
+        owner: &str,
+        tools: &[String],
+        archives: &[&PackArchive],
+    ) -> Result<()> {
+        let replaced_tools = std::iter::once(&self.config)
+            .chain(self.dependencies.iter().map(|d| &d.config))
+            .flat_map(|config| &config.tools);
+        for replaced in replaced_tools {
+            anyhow::ensure!(!tools.contains(&replaced.tools_id),
+                "Tools {:?} is replaced by the pack graph; change its pin in the pack instead of --move-pin-tools", replaced.tools_id);
+        }
+        self.pin_moves = super::super::pin_moves::prepare(
+            access,
+            owner,
+            tools,
+            &super::super::pin_moves::replacement_digests(archives.iter().copied())?,
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 impl PreparedDocumentPackInstall {
@@ -1445,6 +1472,7 @@ async fn prepare_document_pack_install_inner(
         hosted.map(|facts| &facts.plugin_digests),
     )?;
     Ok(PreparedDocumentPackInstall {
+        pin_moves: Vec::new(),
         installation_doc_id,
         agent_bindings,
         node_binding: node_binding.cloned(),
@@ -1808,6 +1836,7 @@ pub async fn install_prepared_document_graph(
         access,
         owner,
         stages,
+        prepared.pin_moves.clone(),
         DocumentGraphPolicy {
             drift: policy,
             profiles: profile_policy,
@@ -1943,6 +1972,7 @@ pub(super) struct StageRecord {
 /// The same document graph reconstructed by the host and the client.
 #[derive(Clone)]
 pub struct HostedDocumentGraph {
+    pin_moves: Vec<super::super::pin_moves::PluginPinMove>,
     identities: Vec<PackIdentity>,
     documents: Vec<Vec<gents_documents::DesiredStateApplyDocument>>,
     records: Vec<StageRecord>,
@@ -1992,6 +2022,7 @@ pub(super) fn hosted_document_graph_from_stages(
         records.push(stage.record());
     }
     Ok(HostedDocumentGraph {
+        pin_moves: prepared.pin_moves.clone(),
         identities,
         documents,
         records,
@@ -2012,6 +2043,7 @@ pub async fn apply_hosted_document_graph(
     policy: DriftPolicy,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<Vec<InstallReport>> {
+    super::super::pin_moves::apply(txn, owner, &graph.pin_moves, profile_policy).await?;
     if !graph.plugin_root {
         return apply_document_graph_in_txn(
             txn,
@@ -2183,10 +2215,15 @@ pub(super) async fn apply_document_graph_in_txn(
     Ok(reports)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fenced install inputs plus explicit pin edits"
+)]
 pub(super) async fn install_document_graph(
     access: &ConfigAccess,
     owner: &str,
     stages: Vec<DocumentPackStage>,
+    pin_moves: Vec<super::super::pin_moves::PluginPinMove>,
     policy: DocumentGraphPolicy,
     home: Option<&Path>,
     consent: bool,
@@ -2290,6 +2327,7 @@ pub(super) async fn install_document_graph(
         let records = stages.iter().map(DocumentPackStage::record).collect::<Vec<_>>();
         let result = access
             .transact_write_with_finality("pack.document_graph.install", |txn| {
+                let pin_moves = &pin_moves;
                 let documents = documents.clone();
                 let identities = &identities;
                 let records = &records;
@@ -2344,6 +2382,7 @@ pub(super) async fn install_document_graph(
                     })
                     .await
                     .map_err(anyhow::Error::from)??;
+                    super::super::pin_moves::apply(txn, owner, pin_moves, policy.profiles).await?;
                     apply_document_graph_in_txn(
                         txn,
                         owner,
@@ -2434,6 +2473,7 @@ pub async fn install_documents_with_plugins(
         access,
         owner,
         vec![stage],
+        Vec::new(),
         DocumentGraphPolicy {
             drift: policy,
             profiles: profile_policy,

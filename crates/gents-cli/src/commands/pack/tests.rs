@@ -309,6 +309,7 @@ fn document_install_args(
     inference_slots: Vec<String>,
 ) -> PackInstallArgs {
     PackInstallArgs {
+        move_pin_tools: Vec::new(),
         package: spec.to_str().unwrap().to_owned(),
         inference_slots,
         dependency_variables: Vec::new(),

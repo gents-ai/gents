@@ -463,6 +463,16 @@ pub async fn install_remote(
         &overrides,
     )
     .await?;
+    prepared
+        .prepare_pin_moves(
+            &access,
+            owner,
+            &args.move_pin_tools,
+            &std::iter::once(pack.archive())
+                .chain(dependencies.iter().map(|d| d.archive()))
+                .collect::<Vec<_>>(),
+        )
+        .await?;
     gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(
         &mut prepared,
         pack,

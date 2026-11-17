@@ -164,10 +164,18 @@ impl PackInstaller {
         self.packs(&access).pin_conflicts(distribution).await
     }
 
-    /// Refuses an install that replaces a plugin some Tools pins to another
-    /// digest, as the Tools edit that moves the first such pin.
-    async fn require_pins_follow(&self, distribution: &Distribution) -> anyhow::Result<()> {
-        let conflicts = self.pin_conflicts(distribution).await?;
+    /// Refuses unacknowledged pin conflicts, naming the atomic update option.
+    async fn require_pins_follow(
+        &self,
+        distribution: &Distribution,
+        args: &PackChangeInput,
+    ) -> anyhow::Result<()> {
+        let conflicts = self
+            .pin_conflicts(distribution)
+            .await?
+            .into_iter()
+            .filter(|conflict| !args.move_pin_tools.contains(&conflict.tools))
+            .collect::<Vec<_>>();
         let Some(first) = conflicts.first() else {
             return Ok(());
         };
@@ -179,7 +187,7 @@ impl PackInstaller {
             .collect::<BTreeSet<_>>();
         Err(command::CommandGuidance {
             message: format!(
-                "nothing was installed: Tools {:?} of agent {} pins {} at {}, and this install replaces it with {}. Move the pin with the tools update below, then repeat this call.{}",
+                "nothing was installed: Tools {:?} of agent {} pins {} at {}, and this install replaces it with {}. Repeat this update with --move-pin-tools naming each Tools ID you intend to change; the pins and install commit together.{}",
                 first.tools,
                 first.agent,
                 first.plugin,
@@ -194,7 +202,7 @@ impl PackInstaller {
                     )
                 }
             ),
-            next_call: pin_move_call(first),
+            next_call: json!({"argv":["pack","update",args.package,"--move-pin-tools",first.tools],"options":{"digest":distribution.digest()}}),
         }
         .into())
     }
@@ -279,7 +287,7 @@ impl PackInstaller {
             distribution.digest(),
         )
         .map_err(|error| Self::refusal(operation, &args.package, words, error))?;
-        self.require_pins_follow(&distribution).await?;
+        self.require_pins_follow(&distribution, &args).await?;
         if distribution.is_documents() {
             let access = self.core.access()?;
             gents_pack::operations::pack::admit_edited(

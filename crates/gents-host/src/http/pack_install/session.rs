@@ -410,6 +410,16 @@ async fn run_inner(
             &overrides,
         )
         .await?;
+        prepared
+            .prepare_pin_moves(
+                &access,
+                &state.node_did,
+                &received.request.move_pin_tools,
+                &std::iter::once(received.root.archive())
+                    .chain(received.dependencies.iter().map(|d| d.archive()))
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
         gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(
             &mut prepared,
             &received.root,

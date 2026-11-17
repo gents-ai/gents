@@ -4,3 +4,5 @@ import Proofs.Conformance.Family
 
 attribute [conformance_function] ToolPolicy.PluginPublication.retry
 attribute [conformance_function] RuntimeReconcile.SurfacePublication.keepPrevious
+attribute [conformance_function] ToolPolicy.PluginPublication.movePin
+attribute [conformance_function] RuntimeReconcile.SurfacePublication.retryProposal

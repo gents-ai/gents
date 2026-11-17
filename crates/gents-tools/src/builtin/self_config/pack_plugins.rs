@@ -30,13 +30,20 @@ impl PackInstaller {
         let plan = packs
             .plan_plugins(operation, args, distribution, node_binding.as_ref())
             .await?;
+        let pin_moves = gents_pack::pack::pin_moves::prepare(
+            &access,
+            self.core.node_did(),
+            &args.move_pin_tools,
+            &gents_pack::pack::pin_moves::replacement_digests([distribution.archive()])?,
+        )
+        .await?;
         let ready = plan.blockers.is_empty() && plan.missing_slots.is_empty();
         if !commit {
             return Ok(ordered! {
-                "committed": false,
+                "committed": false, "pin_moves": pin_moves,
                 "ready": ready,
                 "operation": operation,
-                "apply_with": ready.then(|| json!({"argv":["pack",operation,distribution.pinned_spec(&args.package)],"options":{"digest":distribution.digest(),"inference-slot":args.inference_slots.iter().map(|(name,profile)|format!("{name}={profile}")).collect::<Vec<_>>()}})),
+                "apply_with": ready.then(|| json!({"argv":["pack",operation,distribution.pinned_spec(&args.package)],"options":{"move-pin-tools":args.move_pin_tools,"digest":distribution.digest(),"inference-slot":args.inference_slots.iter().map(|(name,profile)|format!("{name}={profile}")).collect::<Vec<_>>()}})),
                 "operator_action": (!plan.blockers.is_empty()).then_some("Resolve installation_blockers through their existing owners. Plugin authority or increased limits require operator approval of this exact artifact through the plugin grant owner; model input cannot grant it. Repeat this pinned preview after approval."),
                 "installation_blockers": plan.blockers,
                 "missing_inference_slots": plan.missing_slots,
@@ -55,7 +62,8 @@ impl PackInstaller {
             .await?;
         self.fence_bindings(&inference.bindings).await?;
         let installed = packs
-            .install_plugins(
+            .install_plugins_with_pins(
+                pin_moves,
                 distribution,
                 &inference.bindings,
                 self.core.identity().ok(),

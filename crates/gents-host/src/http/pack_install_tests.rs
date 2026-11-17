@@ -10,6 +10,7 @@ fn archive(name: &str) -> Arc<PackArchive> {
 
 fn body(root: &PackArchive, dependencies: &[Arc<PackArchive>], node_did: &str) -> Vec<u8> {
     encode_request(root, dependencies, |root, dependencies| InstallRequest {
+        move_pin_tools: Vec::new(),
         root_source: gents_pack::pack::PackSource::Local { file_name: None },
         dependency_sources: vec![
             gents_pack::pack::PackSource::Local { file_name: None };

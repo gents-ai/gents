@@ -1897,6 +1897,7 @@ fn documents_archive() -> crate::pack::archive::PackArchive {
 
 fn prepared() -> PreparedDocumentPackInstall {
     PreparedDocumentPackInstall {
+        pin_moves: Vec::new(),
         installation_doc_id: None,
         agent_bindings: BTreeMap::new(),
         node_binding: None,
@@ -3943,6 +3944,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         &access,
         owner,
         initial,
+        Vec::new(),
         documents::DocumentGraphPolicy {
             drift: DriftPolicy::Refuse,
             profiles: &gents_inference::resolved::ProviderProfilePolicy,
@@ -3967,6 +3969,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         &access,
         owner,
         replacement,
+        Vec::new(),
         documents::DocumentGraphPolicy {
             drift: DriftPolicy::Refuse,
             profiles: &gents_inference::resolved::ProviderProfilePolicy,

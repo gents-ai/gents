@@ -417,6 +417,7 @@ impl NodePacks<'_> {
                 self.resolve_named(
                     "get",
                     &PackChangeInput {
+                        move_pin_tools: Vec::new(),
                         variables: change.variables.clone(),
                         ..PackChangeInput::of(coordinate)
                     },
@@ -504,6 +505,17 @@ impl NodePacks<'_> {
             &crate::operations::pack::dependency_overrides(&change.variables),
         )
         .await?;
+        prepared
+            .prepare_pin_moves(
+                self.access,
+                self.node_did,
+                &change.move_pin_tools,
+                &std::iter::once(distribution)
+                    .chain(dependencies)
+                    .map(Distribution::archive)
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
         for source in std::iter::once(distribution).chain(dependencies) {
             prepared
                 .sources
@@ -668,6 +680,30 @@ impl NodePacks<'_> {
         node_binding: Option<ConfigurationNodeBinding>,
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
     ) -> Result<plugin_lifecycle::InstalledHomePack, InstallError> {
+        self.install_plugins_with_pins(
+            Vec::new(),
+            distribution,
+            bindings,
+            actor,
+            node_binding,
+            profile_policy,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "plugin install inputs plus explicit reviewed pin edits"
+    )]
+    pub async fn install_plugins_with_pins(
+        &self,
+        pin_moves: Vec<super::pin_moves::PluginPinMove>,
+        distribution: &Distribution,
+        bindings: &PackInferenceBindings,
+        actor: Option<::identity::Did>,
+        node_binding: Option<ConfigurationNodeBinding>,
+        profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
+    ) -> Result<plugin_lifecycle::InstalledHomePack, InstallError> {
         let home = self
             .home
             .context("plugins and assets packs require a runtime plugin home")?;
@@ -697,6 +733,7 @@ impl NodePacks<'_> {
                     },
                     Some(&identity),
                     super::PluginStageContext {
+                        pin_moves: &pin_moves,
                         node_binding: node_binding.as_ref(),
                         changes: Some(&changes),
                         retired: false,

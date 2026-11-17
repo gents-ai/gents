@@ -433,7 +433,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack list  options: limit, cursor; shows installed and locally stored versions",
                 "pack get PACKAGE  a name, sha256:<hex>, a built .pack path, or a pack directory as ./DIR",
                 "pack preview install|update PACKAGE [--inference-slot NAME=PROFILE_ID ...] [--var NAME=VALUE ...]",
-                "pack install|update PACKAGE  the same pairs, options.digest from the preview, options.edited (overwrite|keep) for live-edited documents",
+                "pack install|update PACKAGE  the same pairs, options.digest from the preview, options.edited (overwrite|keep) for live-edited documents; --move-pin-tools TOOLS_ID explicitly moves existing shipped-plugin pins atomically with the install (repeat for each Tools ID)",
                 "pack [preview] remove PACKAGE [--with-collections]  options.edited",
                 "pack [preview] wire PACKAGE [--remove]  options.agent; selects its plugins",
                 "pack scaffold NAME  options: namespace (default gents), kind (documents|assets|plugins), template, language, page (true adds a page)",

@@ -18,6 +18,7 @@ use serde_json::json;
 /// The engine's request for `args`, with its home resolved.
 pub(crate) fn install_request(args: &PackInstallArgs) -> DocumentsInstallRequest {
     DocumentsInstallRequest {
+        move_pin_tools: args.move_pin_tools.clone(),
         home: gents_service::home_state::resolve_home_dir(args.scope.home.as_deref()),
         remote: args.scope.graphql.is_some(),
         inference_slots: args.inference_slots.clone(),
@@ -413,6 +414,18 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 {
                     preview["inference_needs"] = needs;
                 }
+                if !args.move_pin_tools.is_empty() {
+                    let (access, owner) = resolve_scope_owner(&args.scope).await?;
+                    preview["pin_moves"] = serde_json::to_value(
+                        gents_pack::pack::pin_moves::prepare(
+                            &access,
+                            &owner,
+                            &args.move_pin_tools,
+                            &gents_pack::pack::pin_moves::replacement_digests([pack.archive()])?,
+                        )
+                        .await?,
+                    )?;
+                }
                 return Ok(crate::print_json(&preview)?);
             }
             let slot_owner =
@@ -447,6 +460,24 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 .await?;
                 return Ok(crate::print_json(&result)?);
             }
+            let pin_moves = match &notification_scope {
+                Some((access, owner)) => {
+                    gents_pack::pack::pin_moves::prepare(
+                        access,
+                        owner,
+                        &args.move_pin_tools,
+                        &gents_pack::pack::pin_moves::replacement_digests([pack.archive()])?,
+                    )
+                    .await?
+                }
+                None => {
+                    anyhow::ensure!(
+                        args.move_pin_tools.is_empty(),
+                        "--move-pin-tools requires a node configuration store"
+                    );
+                    Vec::new()
+                }
+            };
             let notify_scope = notification_scope.clone();
             let notify_home = home.clone();
             let result = gents_pack::pack::plugin_lifecycle::install(
@@ -461,13 +492,14 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                     let home = notify_home;
                     async move {
                         if let Some((access, owner)) = notify_scope {
-                            gents_pack::pack::record_staged_plugin_store_change(
+                            gents_pack::pack::record_staged_plugin_store_change_with_pins(
                                 &access,
                                 &owner,
                                 &home,
                                 &identity.coordinate,
                                 Some(&identity),
                                 &changes,
+                                &pin_moves,
                                 &gents_inference::resolved::ProviderProfilePolicy,
                             )
                             .await

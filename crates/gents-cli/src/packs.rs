@@ -87,6 +87,7 @@ pub async fn install(
     root_agents: Option<Vec<String>>,
 ) -> Result<Value, PackChangeError> {
     capture_report(command::install(PackInstallArgs {
+        move_pin_tools: Vec::new(),
         package,
         inference_slots,
         dependency_variables: Vec::new(),
@@ -364,6 +365,7 @@ pub async fn update(
     edited: EditedDocuments,
 ) -> Result<Value, PackChangeError> {
     capture_report(command::update::update(PackUpdateArgs {
+        move_pin_tools: Vec::new(),
         package,
         inference_slots: Vec::new(),
         scope: scope(home),

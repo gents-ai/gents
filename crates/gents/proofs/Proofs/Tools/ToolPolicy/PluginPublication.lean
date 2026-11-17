@@ -54,3 +54,21 @@ theorem exhausted_budget_never_retries (busy : Bool) :
 theorem busy_with_budget_waits : retry true true = true := by decide
 
 end ToolPolicy.PluginPublication
+
+namespace ToolPolicy.PluginPublication
+
+/-- An install may move only an explicitly named Tools document's existing
+pin for a plugin shipped by its reviewed archive graph. An unpinned selection
+is not converted into a grant, nor are unrelated Tools implicitly edited. -/
+def movePin (named replacement pinned : Bool) : Bool := named && replacement && pinned
+
+theorem unnamed_pin_unchanged (replacement pinned : Bool) :
+    movePin false replacement pinned = false := by simp [movePin]
+
+theorem unshipped_pin_unchanged (named pinned : Bool) :
+    movePin named false pinned = false := by simp [movePin]
+
+theorem unpinned_selection_unchanged (named replacement : Bool) :
+    movePin named replacement false = false := by simp [movePin]
+
+end ToolPolicy.PluginPublication
