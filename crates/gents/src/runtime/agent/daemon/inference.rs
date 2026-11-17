@@ -121,28 +121,51 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
     Ok(())
 }
 
-pub(super) fn render_request_context_message(
-    _node: &defra_node::Node,
+pub(super) async fn render_request_context_message(
+    node: &std::sync::Arc<defra_node::Node>,
     tool_config: &gents_tools::surface::AgentToolSurfaceConfig,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
 ) -> Result<Option<Message>> {
+    // Whether this request runs in a verified workflow child. The answer comes
+    // from the session's creation receipt, so a user-authored string can never
+    // put the sentence in a prompt that should not have it.
+    let plugin_job_child = plugin_job_child(node, request).await;
     Ok(assemble_request_context_message(
         frozen_instruction_manifest,
         gents_session::workspace::request_workspace_cwd(request).as_deref(),
         tool_config.host_tools().read_root(),
+        plugin_job_child,
     ))
+}
+
+/// Whether `request` runs in a session a plugin job opened, from that session's
+/// verified creation receipt. A read that fails says `false`: one context
+/// sentence is not worth failing a turn over, and the absent sentence is the
+/// same as an ordinary session's.
+async fn plugin_job_child(node: &std::sync::Arc<defra_node::Node>, request: &AgentRequest) -> bool {
+    let scope = gents_protocol::session::SessionScope {
+        node_did: request.node_did.clone(),
+        session_id: request.session_id.clone(),
+        requester_did: request.requester_did.clone(),
+    };
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    gents_session::session::origin::verified_plugin_job_child(&access, &scope)
+        .await
+        .unwrap_or(false)
 }
 
 fn assemble_request_context_message(
     frozen_instruction_manifest: Option<&str>,
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
+    plugin_job_child: bool,
 ) -> Option<Message> {
-    gents_session::workspace::instruction_body_for_request(
+    gents_session::workspace::instruction_body_for_request_with_origin(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,
+        plugin_job_child,
     )
     .map(|body| Message::user(format!("<context>\n{body}\n</context>")))
 }
