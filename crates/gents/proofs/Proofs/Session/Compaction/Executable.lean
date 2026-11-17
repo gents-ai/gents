@@ -5,6 +5,10 @@ namespace Compaction
 
 open Transcript (MessageRow StrictlyIncreasingMessages)
 
+theorem stubFloor_cases :
+    stubEligible 10 11 = false ∧ stubEligible 10 10 = false ∧
+      stubEligible 11 10 = true := by decide
+
 def fixtureCallSymbol : Nat := PromptView.providerCallSymbol "1" none
 def fixtureSecondCallSymbol : Nat := PromptView.providerCallSymbol "2" none
 

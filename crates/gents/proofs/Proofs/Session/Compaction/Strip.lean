@@ -5,6 +5,18 @@ namespace Compaction
 
 open Transcript (MessageRow MessageKind ToolResultKey)
 
+/-- Compare the bytes of the actual candidate with the original content.
+Equal-size replacements are retained, not stubbed. -/
+def stubEligible (originalBytes candidateBytes : Nat) : Bool :=
+  candidateBytes < originalBytes
+
+@[simp] theorem stubEligible_equal (bytes : Nat) : stubEligible bytes bytes = false := by
+  simp [stubEligible]
+
+theorem stubEligible_no_expansion (originalBytes candidateBytes : Nat)
+    (h : stubEligible originalBytes candidateBytes = true) : candidateBytes < originalBytes := by
+  simpa [stubEligible] using h
+
 def stubKey (key : ToolResultKey) : ToolResultKey := { key with payloadHash := 0 }
 
 @[simp] theorem stubKey_idempotent (key : ToolResultKey) :
