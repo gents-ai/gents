@@ -23,6 +23,7 @@ pub struct ToolRuntimeContext {
     pub(super) agent_identity: Option<Arc<dyn NodeIdentity>>,
     pub(super) configuration: gents_inference::resolved::ResolvedConfiguration,
     pub(super) plugins: Arc<dyn PluginHost>,
+    pub(super) plugin_store_pin: Option<gents_pack::plugin::store::StoreReadPin>,
     pub(super) tasks: Arc<dyn TaskRunService>,
 }
 
@@ -67,6 +68,7 @@ impl ToolRuntimeContext {
             agent_identity: None,
             configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             plugins: Arc::new(NoPluginHost),
+            plugin_store_pin: None,
             tasks: Arc::new(NoTaskRunService),
         }
     }
@@ -89,6 +91,7 @@ impl ToolRuntimeContext {
             agent_identity: None,
             configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             plugins: Arc::new(NoPluginHost),
+            plugin_store_pin: None,
             tasks: Arc::new(NoTaskRunService),
         }
     }
@@ -124,6 +127,9 @@ impl ToolRuntimeContext {
     }
 
     pub fn with_plugins(mut self, plugins: Arc<dyn PluginHost>) -> Self {
+        self.plugin_store_pin = plugins
+            .home()
+            .map(gents_pack::plugin::store::StoreReadPin::capture);
         self.plugins = plugins;
         self
     }
@@ -135,6 +141,10 @@ impl ToolRuntimeContext {
 
     pub fn plugin_home(&self) -> Option<&std::path::Path> {
         self.plugins.home()
+    }
+
+    pub fn plugin_store_pin(&self) -> Option<&gents_pack::plugin::store::StoreReadPin> {
+        self.plugin_store_pin.as_ref()
     }
 
     pub fn node(&self) -> &Arc<EmbeddedNode> {

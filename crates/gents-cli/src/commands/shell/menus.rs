@@ -662,6 +662,8 @@ mod tests {
             profiles: Vec::new(),
             usage: None,
             read: None,
+            refusal: None,
+            refusal_partial: false,
         }
     }
 

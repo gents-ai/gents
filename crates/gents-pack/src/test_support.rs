@@ -122,6 +122,7 @@ pub fn installed_plugin(
         write_fields: Vec::new(),
     });
     let home = tempfile::tempdir().unwrap();
+    store::bootstrap_store(home.path()).unwrap();
     let hex = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
     store::store_bytes(home.path(), &hex, &bytes).unwrap();
     let record = InstalledPlugin {

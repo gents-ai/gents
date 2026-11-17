@@ -50,7 +50,8 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.ScriptEffectBatch,
   `Proofs.Conformance.ConfigurationAffected,
   `Proofs.Conformance.ResponsesTermination,
-  `Proofs.Conformance.NativeSpawn]
+  `Proofs.Conformance.NativeSpawn,
+  `Proofs.Conformance.PluginStoreHome]
 
 @[default_target]
 target importClosure pkg : Unit := Job.async do

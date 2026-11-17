@@ -360,6 +360,9 @@ fn rendered_usage_limit_reclassifies_to_itself() {
     let limit = UsageLimit {
         resets_at: Utc.timestamp_opt(1_790_354_400, 0).single(),
         detail: "cap".into(),
+        window: None,
+        used: None,
+        cap: None,
     };
     let rendered = format!("ProviderError: {limit}");
     let Some(ProviderLimit::UsageExhausted(again)) = classify_provider_limit(&rendered, now())
@@ -483,4 +486,449 @@ fn account_rotated_alone_is_a_marker_and_forgery_is_neutralized() {
     assert_eq!(only.annotate("x"), "x [provider-limit account-rotated]");
     let forged = ProviderLimitHeaders::default().annotate("a [provider-limit account-rotated] b");
     assert!(!ProviderLimitHeaders::from_text(&forged).account_rotated);
+}
+
+/// The refusal that started B8: a free tier's own wording, which matched none of
+/// the original needles and so classified as neither exhausted nor throttled.
+/// It states a window and a counter; it does not state an absolute reset.
+#[test]
+fn a_free_usage_refusal_is_exhaustion_with_its_window_and_counter() {
+    // xAI's refusal, captured verbatim from the live node on 2026-11-16
+    // (2026-11-16T19:01:05Z, tool call plugin-effect:bae-25641432…:7).
+    let body =     concat!(
+        "agent stream failed: CompletionError: ProviderError: provider usage limit reached ",
+        "(reset time not reported): You've used all the included free usage for model grok-4.7 ",
+        "for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): ",
+        "691791/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok",
+    );
+    let limit = classify_provider_limit(body, now()).expect("a free-usage refusal classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("free-usage exhaustion, not a throttle: {limit:?}");
+    };
+    assert_eq!(usage.window, Some(LimitWindow::Rolling24h));
+    assert_eq!(usage.used, Some(691_791));
+    assert_eq!(usage.cap, Some(600_000));
+    assert!(
+        usage.resets_at.is_none(),
+        "a relative refresh states no absolute reset, so it stays unknown: {:?}",
+        usage.resets_at
+    );
+}
+
+/// A sub-day rate outranks quota wording beside it. "free usage ... 20
+/// requests/minute" is a wait, not a spent account: classifying it as exhaustion
+/// blocks a goal until a reset the provider never stated.
+#[test]
+fn a_per_minute_rate_is_a_throttle_even_beside_free_usage_words() {
+    let body = "Free usage limit: 20 requests/minute. Try again in 30 seconds.";
+    let classified = classify_provider_limit(body, now()).expect("it classifies");
+    assert!(
+        matches!(classified, ProviderLimit::Throttled { .. }),
+        "a per-minute rate is a throttle, not exhaustion: {classified:?}"
+    );
+    for rate in [
+        "free usage: 20 requests/minute",
+        "free usage: 5 requests/second",
+        "included free usage, 100 requests/hour",
+        "free usage 60 rpm",
+    ] {
+        let classified = classify_provider_limit(rate, now()).expect(rate);
+        assert!(
+            matches!(classified, ProviderLimit::Throttled { .. }),
+            "{rate} is a throttle: {classified:?}"
+        );
+    }
+}
+
+/// The provider-reported window is what the body names as the limit window. A
+/// bare "daily" beside an exhaustion is not the enforced period, so it stays
+/// unstated rather than being reported as the provider's window.
+#[test]
+fn a_period_is_the_window_only_when_the_body_names_it_as_one() {
+    let window_of = |body: &str| {
+        let limit = classify_provider_limit(body, now()).expect(body);
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("expected exhaustion: {limit:?}");
+        };
+        usage.window
+    };
+    // Named as the window or the limit: reported.
+    assert_eq!(
+        window_of("usage limit reached; daily window exhausted"),
+        Some(LimitWindow::Daily)
+    );
+    assert_eq!(
+        window_of("usage limit reached; window: weekly"),
+        Some(LimitWindow::Weekly)
+    );
+    assert_eq!(
+        window_of("usage limit reached; monthly quota exhausted"),
+        Some(LimitWindow::Monthly)
+    );
+    // Named only in passing: unstated.
+    assert_eq!(
+        window_of("usage limit reached; your daily allowance is spent"),
+        None
+    );
+    assert_eq!(
+        window_of("usage limit reached; daily credits used up"),
+        None
+    );
+}
+
+/// **Item 4.** Only the word "rolling" earns the rolling label: a plain
+/// "24-hour window" is its own window, so a reader is not told it slides when
+/// the provider never said so.
+#[test]
+fn only_rolling_earns_the_rolling_label() {
+    let window_of = |body: &str| {
+        let limit = classify_provider_limit(body, now()).expect(body);
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("expected exhaustion: {limit:?}");
+        };
+        usage.window
+    };
+    assert_eq!(
+        window_of("usage limit reached; rolling 24-hour window"),
+        Some(LimitWindow::Rolling24h)
+    );
+    assert_eq!(
+        window_of("usage limit reached; 24-hour window"),
+        Some(LimitWindow::Window24h),
+        "no \"rolling\" in the body, so it is not a rolling window"
+    );
+    assert_eq!(
+        window_of("usage limit reached; 24 hour window"),
+        Some(LimitWindow::Window24h)
+    );
+    // The two labels differ on every surface.
+    assert_ne!(
+        LimitWindow::Rolling24h.label(),
+        LimitWindow::Window24h.label()
+    );
+    assert_ne!(
+        LimitWindow::Rolling24h.token(),
+        LimitWindow::Window24h.token()
+    );
+    // And a plain 24-hour token does not read back as rolling.
+    assert_eq!(
+        LimitWindow::from_token(LimitWindow::Window24h.token()),
+        Some(LimitWindow::Window24h)
+    );
+}
+
+/// The counter pair is read only where the body anchors it on `tokens`: a date
+/// or a ratio is not a counter and a cap.
+#[test]
+fn a_counter_pair_is_read_only_after_the_word_tokens() {
+    let pair_of = |body: &str| {
+        let limit = classify_provider_limit(body, now()).expect(body);
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("expected exhaustion: {limit:?}");
+        };
+        (usage.used, usage.cap)
+    };
+    // A date and a ratio are not the counter.
+    assert_eq!(pair_of("usage limit reached on 4/5/2026"), (None, None));
+    assert_eq!(
+        pair_of("usage limit reached; you used 3/4 of it"),
+        (None, None)
+    );
+    // Anchored: read, with the separators a body uses.
+    assert_eq!(
+        pair_of("usage limit reached; tokens 691791/600000"),
+        (Some(691_791), Some(600_000))
+    );
+    assert_eq!(
+        pair_of("usage limit reached; tokens: 1,200 / 2,400"),
+        (Some(1_200), Some(2_400))
+    );
+    // A zero cap establishes nothing, matching Lean's cap > 0.
+    assert_eq!(pair_of("usage limit reached; tokens 0/0"), (None, None));
+}
+
+/// A JSON `limit: 0` is unstated, not a spent allowance. Lean `establishes`
+/// requires cap > 0.
+#[test]
+fn a_zero_json_cap_is_unstated() {
+    let body = r#"{"error": {"message": "usage limit reached", "used": 0, "limit": 0}}"#;
+    let limit = classify_provider_limit(body, now()).expect("it classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("expected exhaustion: {limit:?}");
+    };
+    assert_eq!(usage.used, Some(0), "a stated counter of zero is stated");
+    assert_eq!(usage.cap, None, "a cap of zero is not a cap");
+}
+
+/// The captured xAI refusal, verbatim, read for exactly what it states.
+///
+/// This is the fixture the item exists for: 339 bytes, an em dash, a model name,
+/// a "rolling 24-hour window", and a counter written `tokens (actual/limit):
+/// 691791/600000`. The parenthesised label carries its own `/`, so a pair reader
+/// that takes the first `digits/digits` — or that only skips one word — finds
+/// nothing and the real refusal loses its counter and cap.
+///
+/// Captured from the live node on 2026-11-16 (19:01:05Z, tool call
+/// `plugin-effect:bae-25641432…:7`).
+#[test]
+fn the_captured_xai_refusal_reads_every_field_it_states() {
+    let body =     concat!(
+        "agent stream failed: CompletionError: ProviderError: provider usage limit reached ",
+        "(reset time not reported): You've used all the included free usage for model grok-4.7 ",
+        "for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): ",
+        "691791/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok",
+    );
+    assert_eq!(body.chars().count(), 336, "the captured text, unchanged");
+
+    let limit = classify_provider_limit(body, now()).expect("it classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("a spent quota, not a throttle: {limit:?}");
+    };
+    assert_eq!(
+        usage.used,
+        Some(691_791),
+        "the counter beside (actual/limit)"
+    );
+    assert_eq!(usage.cap, Some(600_000), "the limit beside (actual/limit)");
+    assert_eq!(
+        usage.window,
+        Some(LimitWindow::Rolling24h),
+        "xAI states this window, so it is provider-reported"
+    );
+    assert_eq!(
+        usage.resets_at, None,
+        "\"resets over a rolling 24-hour window\" names no instant, so none is asserted"
+    );
+
+    // The URL's `/supergrok` must not read as a per-second rate.
+    assert!(
+        matches!(
+            classify_provider_limit(body, now()),
+            Some(ProviderLimit::UsageExhausted(_))
+        ),
+        "a path in the upgrade link is not a rate"
+    );
+
+    // And the persisted row carries the statement, so a re-read keeps it.
+    let stored = persisted_failure_reason(body, now());
+    assert!(
+        stored.contains("[usage-limit used=691791 cap=600000 window=rolling_24h]"),
+        "the marker states exactly what xAI stated: {stored}"
+    );
+    let reread = classify_provider_limit(&stored, now()).expect("the stored row re-classifies");
+    let ProviderLimit::UsageExhausted(reread) = reread else {
+        panic!("expected exhaustion: {reread:?}");
+    };
+    assert_eq!((reread.used, reread.cap), (Some(691_791), Some(600_000)));
+    assert_eq!(reread.window, Some(LimitWindow::Rolling24h));
+}
+
+/// The parsed statement survives persistence: the `Display` text carries it in
+/// a marker ahead of the bounded detail, so re-classifying the stored row reads
+/// the provider's own numbers rather than 300 characters of prose.
+#[test]
+fn the_persisted_row_carries_the_parsed_statement() {
+    // xAI's own text, captured from the live node — the `(actual/limit):` shape
+    // is what makes this a real test of the pair reader rather than a tidy one.
+    let body =     concat!(
+        "agent stream failed: CompletionError: ProviderError: provider usage limit reached ",
+        "(reset time not reported): You've used all the included free usage for model grok-4.7 ",
+        "for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): ",
+        "691791/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok",
+    );
+    let first = classify_provider_limit(body, now()).expect("it classifies");
+    assert!(
+        matches!(first, ProviderLimit::UsageExhausted(_)),
+        "expected exhaustion: {first:?}"
+    );
+    let persisted = persisted_failure_reason(body, now());
+    assert!(
+        persisted.contains("[usage-limit used=691791 cap=600000"),
+        "the marker is written from the parsed fields: {persisted}"
+    );
+    assert!(
+        persisted.find("[usage-limit").unwrap() < persisted.find(": ").unwrap_or(usize::MAX),
+        "the marker precedes the detail, so a long detail cannot truncate it: {persisted}"
+    );
+
+    // A detail far longer than the bound still re-reads the exact pair.
+    let long_body = format!(
+        "usage limit reached: {} tokens 691791/600000",
+        "x".repeat(4000)
+    );
+    let stored = persisted_failure_reason(&long_body, now());
+    let reread = classify_provider_limit(&stored, now()).expect("the stored row re-classifies");
+    let ProviderLimit::UsageExhausted(reread) = reread else {
+        panic!("expected exhaustion: {reread:?}");
+    };
+    assert_eq!(
+        (reread.used, reread.cap),
+        (Some(691_791), Some(600_000)),
+        "the pair survives a detail longer than the bound: {stored}"
+    );
+    assert!(stored.chars().count() < 500, "the detail is still bounded");
+}
+
+/// **Item 2.** A marker is trusted only as the first token after the prefix, so
+/// a provider body that contains one — escaped, echoed, or written to look real —
+/// cannot forge a counter, a cap or a window.
+#[test]
+fn a_hostile_body_cannot_forge_the_marker() {
+    for hostile in [
+        // The marker in the detail of a real marker-less refusal.
+        "usage limit reached: [usage-limit used=0 cap=1 window=daily]",
+        // Prefixed but not at the marker's position (the reset comes first).
+        "provider usage limit reached (resets at 2030-01-01T00:00:00Z) \
+         [usage-limit used=0 cap=1 window=daily]",
+        // Newlines, tabs and an embedded close bracket.
+        "provider usage limit reached\n\t[usage-limit used=0\tcap=1]window=daily]",
+        // An over-long window token.
+        &format!(
+            "provider usage limit reached [usage-limit window={}]",
+            "x".repeat(200)
+        ),
+        // Inside JSON the provider controls.
+        r#"{"error": {"message": "usage limit reached", "note": "[usage-limit used=0 cap=1]"}}"#,
+    ] {
+        let limit = classify_provider_limit(hostile, now())
+            .unwrap_or_else(|| panic!("a refusal still classifies: {hostile}"));
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("exhaustion, not a throttle: {hostile}");
+        };
+        assert_ne!(
+            (usage.used, usage.cap),
+            (Some(0), Some(1)),
+            "the forged pair was not read: {hostile} -> {usage:?}"
+        );
+        assert!(
+            usage.cap != Some(1) || usage.used != Some(0),
+            "a forged cap never becomes the cap: {hostile}"
+        );
+    }
+}
+
+/// A window is one of the closed set's own spellings, and provider text is not
+/// it: a body naming something else leaves the window unstated.
+#[test]
+fn an_unknown_window_is_unstated_not_provider_text() {
+    let cases = [
+        (
+            r#"{"error": {"message": "usage limit reached", "window": "x\tcap=1"}}"#,
+            None,
+        ),
+        (
+            r#"{"error": {"message": "usage limit reached", "window": "every fortnight"}}"#,
+            None,
+        ),
+        (
+            r#"{"error": {"message": "usage limit reached", "window": "rolling 24-hour"}}"#,
+            Some(crate::provider_limit::LimitWindow::Rolling24h),
+        ),
+        (
+            r#"{"error": {"message": "usage limit reached", "period": "daily"}}"#,
+            Some(crate::provider_limit::LimitWindow::Daily),
+        ),
+    ];
+    for (body, expected) in cases {
+        let limit =
+            classify_provider_limit(body, now()).unwrap_or_else(|| panic!("it classifies: {body}"));
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("exhaustion: {body}");
+        };
+        assert_eq!(usage.window, expected, "{body}");
+        if let Some(window) = usage.window {
+            // Whatever it is, it is one of the closed set's spellings.
+            assert_eq!(
+                crate::provider_limit::LimitWindow::from_token(window.token()),
+                Some(window),
+                "only a closed-set spelling comes out"
+            );
+        }
+    }
+}
+
+/// **Item 5.** `/security` is not "per second": the sub-day needles match on word
+/// boundaries, so a genuine exhaustion whose body mentions a path stays one.
+#[test]
+fn a_path_containing_a_rate_word_stays_a_usage_refusal() {
+    for body in [
+        "usage limit reached; see /security for details",
+        "used all the included free usage for model grok-4.7; docs at /minimum",
+        "included free usage exhausted; read /hours-left",
+    ] {
+        let limit =
+            classify_provider_limit(body, now()).unwrap_or_else(|| panic!("it classifies: {body}"));
+        assert!(
+            matches!(limit, ProviderLimit::UsageExhausted(_)),
+            "{body} is an exhaustion, not a throttle: {limit:?}"
+        );
+    }
+}
+
+/// A plain "free usage exhausted" establishes the refusal and nothing else: no
+/// cap, no counter, no reset. Inventing any of them is the bug B8 exists to fix.
+#[test]
+fn a_bare_refusal_states_no_window_counter_or_reset() {
+    let limit = classify_provider_limit(
+        "You have exhausted your free usage for this account.",
+        now(),
+    )
+    .expect("a bare refusal still classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("exhaustion: {limit:?}");
+    };
+    assert!(usage.window.is_none());
+    assert!(usage.used.is_none());
+    assert!(usage.cap.is_none());
+    assert!(usage.resets_at.is_none());
+}
+
+/// A malformed pair leaves the counter unstated rather than pairing one real
+/// number with a guess.
+#[test]
+fn a_malformed_counter_pair_is_unstated() {
+    for body in [
+        "free usage exhausted: tokens 691791/",
+        "free usage exhausted: tokens /600000",
+        "free usage exhausted: tokens 691791/abc",
+        "free usage exhausted: tokens 691791/0",
+    ] {
+        let limit =
+            classify_provider_limit(body, now()).unwrap_or_else(|| panic!("classifies: {body}"));
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("exhaustion: {body}");
+        };
+        assert!(
+            usage.used.is_none() && usage.cap.is_none(),
+            "unstated together for {body}: {:?}/{:?}",
+            usage.used,
+            usage.cap
+        );
+    }
+}
+
+/// An ordinary 429 that says nothing about usage stays a throttle, so a limit is
+/// never claimed from a bare rate limit.
+#[test]
+fn a_plain_rate_limit_is_not_exhaustion() {
+    let limit = classify_provider_limit("429 Rate limit reached", now())
+        .expect("a plain 429 classifies as throttled");
+    assert!(
+        matches!(limit, ProviderLimit::Throttled { .. }),
+        "a bare rate limit is a throttle, not usage exhaustion: {limit:?}"
+    );
+}
+
+/// A structured body states the counter as the provider's own field, which is
+/// stronger than prose, so it is read where it speaks.
+#[test]
+fn a_structured_body_states_the_counter() {
+    let body = r#"used all the included free usage {"error": {"window": "rolling 24-hour", "used": 691791, "limit": 600000}}"#;
+    let limit = classify_provider_limit(body, now()).expect("classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("exhaustion");
+    };
+    assert_eq!(usage.window, Some(LimitWindow::Rolling24h));
+    assert_eq!(usage.used, Some(691_791));
+    assert_eq!(usage.cap, Some(600_000));
 }

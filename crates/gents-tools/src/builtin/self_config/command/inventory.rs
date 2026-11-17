@@ -82,12 +82,29 @@ impl ConfigCommandTool {
                     })
                     .and_then(|read| read.usage.clone())
             });
+            let read = kind.filter(|_| account.enabled).and_then(|_| {
+                reads.iter().find(|read| {
+                    read.backend_id.is_none()
+                        && read.provider == account.provider
+                        && read.account_ref == account.account_ref
+                })
+            });
+            // The parsed fields only: the provider's own words belong to the
+            // operator's shell and desktop, and can name account details this
+            // Agent does not own.
+            let refusal =
+                read.and_then(|read| read.refusal.as_ref().map(|refusal| refusal.for_model()));
+            // Present with and without a refusal: a refusal found in a
+            // truncated search and one absent are different findings.
+            let refusal_partial = read.is_some_and(|read| read.refusal_partial);
             items.push(json!({
                 "provider": account.provider,
                 "label": account.label,
                 "state": if account.enabled { "enabled" } else { "disabled" },
                 "profiles": profiles_on(&serving),
                 "usage": usage,
+                "refusal": refusal,
+                "refusal_partial": refusal_partial,
             }));
         }
         for backend in &backends {
@@ -105,18 +122,26 @@ impl ConfigCommandTool {
                         .and_then(|read| read.usage.clone())
                 })
                 .flatten();
+            let read = (state == "enabled")
+                .then(|| reads.iter().find(|read| read.matches_backend(backend)))
+                .flatten();
+            let refusal =
+                read.and_then(|read| read.refusal.as_ref().map(|refusal| refusal.for_model()));
+            let refusal_partial = read.is_some_and(|read| read.refusal_partial);
             items.push(json!({
                 "provider": backend.provider_kind.as_str(),
                 "label": backend.name,
                 "state": state,
                 "profiles": profiles_on(&[backend.backend_id.as_str()]),
                 "usage": usage,
+                "refusal": refusal,
+                "refusal_partial": refusal_partial,
             }));
         }
         ordered! {
             "resource": "accounts",
             "items": items,
-            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage endpoints are read when due; header-only limits use the latest runtime observation.",
+            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage endpoints are read when due; header-only limits use the latest runtime observation. A `refusal` is the provider's own out-of-quota statement read from this node's recorded calls: it is evidence, not a percentage, and every field the provider did not state is null. It is scoped to this node's calls through these backends, so it is partial, and no refusal means none was evidenced, not that the account is whole.",
         }
         .pretty()
     }

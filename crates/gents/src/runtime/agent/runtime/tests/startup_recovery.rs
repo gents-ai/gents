@@ -92,8 +92,17 @@ async fn wait_for_held_request_state(
     doc_id: &str,
     expected: &str,
 ) {
+    wait_for_held_request_state_with_budget(access, doc_id, expected, Duration::from_secs(5)).await;
+}
+
+async fn wait_for_held_request_state_with_budget(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+    expected: &str,
+    budget: Duration,
+) {
     let doc_id = escape_graphql_string(doc_id);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + budget;
     loop {
         let response = access.execute(&format!(
             r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 1) {{lifecycle_state}} }}"#
@@ -699,11 +708,21 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
     .await;
     let node = fixture.db.node.clone();
     let identity = fixture.db.node_identity.clone();
+    // Keep the real three-failure health transition, but do not make this
+    // regression wait two production probe intervals (roughly two minutes).
+    // Keep the initial idle/generation-one status observable before the third
+    // failed probe triggers reconciliation; production's 60s interval is too slow.
+    let probe_options = gents_inference::backends::health::BackendProberOptions {
+        probe_interval: Duration::from_secs(3),
+        probe_timeout: Duration::from_secs(2),
+        ..Default::default()
+    };
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
             backend_admission: Some(fixture.admission()),
+            backend_prober_options: probe_options.clone(),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -756,7 +775,20 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         "hello",
     )
     .await;
-    wait_for_held_request_state(&agent_access, &request_doc_id, "failed").await;
+    // This request is deferred while the enabled backend awaits its first probe.
+    // Release requires a health transition plus the production reconcile debounce;
+    // a five-second assertion deadline races that five-second debounce even alone.
+    let rejection_budget = super::super::control_watcher::CONTROL_RECONCILE_DEBOUNCE
+        + probe_options.probe_interval * probe_options.failure_threshold_k
+        + probe_options.probe_timeout * probe_options.failure_threshold_k
+        + Duration::from_secs(15);
+    wait_for_held_request_state_with_budget(
+        &agent_access,
+        &request_doc_id,
+        "failed",
+        rejection_budget,
+    )
+    .await;
 
     let request_query = format!(
         r#"{{

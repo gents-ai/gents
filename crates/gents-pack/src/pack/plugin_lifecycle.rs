@@ -538,6 +538,7 @@ pub mod tests {
     async fn install_issued_mid_reconcile_waits_then_publishes() {
         let (_source, _, archive) = fixture("1.0.0", false);
         let home = tempfile::tempdir().unwrap();
+        store::bootstrap_store(home.path()).unwrap();
         let reconcile = store::try_lock_store_shared(home.path()).unwrap();
         let bindings = BTreeMap::new();
         let mut installing = Box::pin(install(

@@ -301,7 +301,17 @@ impl Gents {
 
         Ok(Self {
             backend_admission,
-            usage_cache: Arc::default(),
+            // The evidence of a provider refusal lives in `InferenceCall`, which
+            // admits only the Agent that worked each call, so the cache carries
+            // this runtime's Agent signers to read it back.
+            usage_cache: Arc::new(
+                gents_inference::usage_observation::UsageCache::default().with_agent_signers(
+                    agents
+                        .iter()
+                        .filter_map(|agent| agent.agent.agent_identity.managed_agent_signer())
+                        .collect(),
+                ),
+            ),
             node,
             runtime_node,
             agents,
