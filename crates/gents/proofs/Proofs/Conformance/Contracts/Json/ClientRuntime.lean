@@ -949,7 +949,7 @@ def compactionSizesToModel (rows : List CompactionRowWire) :
   ((List.range rows.length).zip rows).filterMap fun (index, row) =>
     match row.kind, row.originalBytes, row.stubBytes with
     | "tool_result", some originalBytes, some stubBytes =>
-        some (⟨0, index, 37⟩, ⟨originalBytes, stubBytes⟩)
+        some (⟨0, index, 37⟩, ⟨originalBytes, stubBytes, false⟩)
     | _, _, _ => none
 
 def compactionCaseWire (c : Compaction.CompactionReducerCase) : List CompactionRowWire :=

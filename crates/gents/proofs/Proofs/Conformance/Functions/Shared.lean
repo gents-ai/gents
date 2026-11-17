@@ -42,3 +42,5 @@ def gateways : Conformance.Family String Bool where
   model := isGateway
 
 end ToolPresentation
+
+attribute [conformance_function] Compaction.receiptEligible

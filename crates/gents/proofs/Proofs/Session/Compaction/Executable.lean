@@ -17,15 +17,15 @@ tool and path, the call id and that byte count. The replay asserts the real
 measurements equal these inputs, so they are inputs, not expectations. -/
 
 /-- A large output: its stub is smaller. -/
-def largeOutput : StubSizes := ⟨4096, 126⟩
+def largeOutput : StubSizes := ⟨4096, 126, false⟩
 /-- A tiny output: its stub would be larger. -/
-def tinyOutput : StubSizes := ⟨2, 123⟩
+def tinyOutput : StubSizes := ⟨2, 123, false⟩
 /-- An output exactly the size of its stub. -/
-def stubSizedOutput : StubSizes := ⟨125, 125⟩
+def stubSizedOutput : StubSizes := ⟨125, 125, false⟩
 /-- An output one byte larger than its stub. -/
-def oneOverStubOutput : StubSizes := ⟨126, 125⟩
+def oneOverStubOutput : StubSizes := ⟨126, 125, false⟩
 /-- A large output whose call is unknown (an orphaned result). -/
-def largeOrphanOutput : StubSizes := ⟨4096, 99⟩
+def largeOrphanOutput : StubSizes := ⟨4096, 99, false⟩
 
 def resultKeys (msgs : List MessageRow) : List Transcript.ToolResultKey :=
   msgs.filterMap fun row => row.kind.toolResultKey?

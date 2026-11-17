@@ -34,6 +34,7 @@ key. Rust enforces it in
 structure StubSizes where
   originalBytes : Nat
   stubBytes : Nat
+  stubShaped : Bool := false
   deriving DecidableEq, Repr
 
 /-- The sizes measured for each tool result, by its identity. -/
@@ -42,7 +43,7 @@ abbrev ResultSizes := ToolResultKey → StubSizes
 /-- A sizes table given as rows; a result missing from the table measures
 `0` bytes and so is never stubbed. -/
 def sizesOf (table : List (ToolResultKey × StubSizes)) : ResultSizes := fun key =>
-  (table.lookup key).getD ⟨0, 0⟩
+  (table.lookup key).getD ⟨0, 0, false⟩
 
 def stubKey (key : ToolResultKey) : ToolResultKey := { key with payloadHash := 0 }
 
@@ -96,6 +97,13 @@ theorem stripKey_keeps_unless_smaller {sizes : ResultSizes} {key : ToolResultKey
   · rfl
   · exact absurd ((stubEligible_iff _ _).mp hs) h
 
+/-- Counting excludes stub-shaped input even when legacy projection rebuilds it.
+This changes accounting only; `stubs` remains the byte-floor policy owner. -/
+def receiptEligible (replaced stubShaped : Bool) : Bool := replaced && !stubShaped
+
+theorem receiptEligible_spoof (replaced : Bool) : receiptEligible replaced true = false := by
+  simp [receiptEligible]
+
 /-- Numbers emitted by the stripping reducer, not inferred from stub identities.
 Only candidates it actually replaces contribute their original/stub byte sizes. -/
 structure StubbingFigures where
@@ -113,7 +121,7 @@ def stripFigures (sizes : ResultSizes) : List MessageRow → StubbingFigures
     let tail := stripFigures sizes rest
     match row.kind with
     | .toolResult _ key =>
-      if stubs sizes key then
+      if receiptEligible (stubs sizes key) (sizes key).stubShaped then
         { count := tail.count + 1
           originalBytes := tail.originalBytes + (sizes key).originalBytes
           stubBytes := tail.stubBytes + (sizes key).stubBytes }
@@ -128,7 +136,7 @@ theorem stripFigures_floor (sizes : ResultSizes) (row : MessageRow) (rest : List
   cases hk : row.kind with
   | ordinary => simp [stripFigures, hk]
   | assistantToolCalls ids => simp [stripFigures, hk]
-  | toolResult call key => simp [stripFigures, hk, h call key hk]
+  | toolResult call key => simp [stripFigures, hk, h call key hk, receiptEligible]
 
 theorem stripFigures_no_expansion (sizes : ResultSizes) (rows : List MessageRow) :
     (stripFigures sizes rows).stubBytes ≤ (stripFigures sizes rows).originalBytes := by
@@ -139,7 +147,9 @@ theorem stripFigures_no_expansion (sizes : ResultSizes) (rows : List MessageRow)
     · exact ih
     · exact ih
     · split
-      · exact Nat.add_le_add ih (Nat.le_of_lt (stubEligible_no_expansion _ _ (by assumption)))
+      · rename_i h
+        have hs : stubs sizes _ = true := (Bool.and_eq_true.mp h).1
+        exact Nat.add_le_add ih (Nat.le_of_lt (stubEligible_no_expansion _ _ hs))
       · exact ih
 
 def stripKind (sizes : ResultSizes) : MessageKind → MessageKind
