@@ -71,12 +71,7 @@ pub fn install_service_stderr_sink() {
             .payload()
             .downcast_ref::<&str>()
             .map(|text| (*text).to_owned())
-            .or_else(|| {
-                panic_info
-                    .payload()
-                    .downcast_ref::<String>()
-                    .map(Clone::clone)
-            })
+            .or_else(|| panic_info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "panic".to_owned());
         service_stderr_line(&format!(
             "gents runtime: panic at {}: {text}",
