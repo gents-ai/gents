@@ -344,12 +344,12 @@ where
                 session_id: expected.session_id.clone(),
                 requester_did: Some(expected.requester_did.clone()),
             };
-            if !crate::session::origin::verified_agent_new_creation_for_opening(
+            if crate::session::origin::verified_agent_new_creation_for_opening(
                 &access,
                 &target,
                 &gents_protocol::session::SessionScope::from(source),
                 &receipt.request_doc_id,
-            ).await? {
+            ).await?.is_err() {
                 return Ok(None);
             }
             Ok(Some(Observation::Receipt(Box::new(durable), receipt)))

@@ -502,16 +502,6 @@ theorem job_message_cannot_create_authority (signedParent jobRow rootSlotAttempt
 theorem exact_job_spawn_creates_authority : verifiedJobCreation true true true true = true := by
   decide
 
-/-- A source-signed opening kind fixes the creation cause before its parent
-documents replicate. The physical target receipt is issued at creation; later
-visibility of the exact cause permits verification without rewriting it. -/
-def deferredCreationAllowed (signedKind targetReceipt exactOpening causeVisible : Bool) : Bool :=
-  signedKind && targetReceipt && exactOpening && causeVisible
-
-theorem missing_cause_defers_authority (signedKind targetReceipt exactOpening : Bool) :
-    deferredCreationAllowed signedKind targetReceipt exactOpening false = false := by
-  simp [deferredCreationAllowed]
-
 theorem altered_creation_cannot_grant (scopeMatches openingMatches causeMatches : Bool) :
     verifiedCreation false scopeMatches openingMatches causeMatches = false := by
   simp [verifiedCreation]
@@ -519,6 +509,156 @@ theorem altered_creation_cannot_grant (scopeMatches openingMatches causeMatches 
 theorem later_trigger_cannot_grant (signatureValid scopeMatches causeMatches : Bool) :
     verifiedCreation signatureValid scopeMatches false causeMatches = false := by
   simp [verifiedCreation]
+
+/-! ### The starter's cause call
+
+Once the opening request, the parent request and the cause call row are
+matched to the caller, `creationVerdict` decides from what reading the cause
+call observed. The reads run in order (the call and its accepted ancestry,
+its canonical result, a plugin effect's immutable acceptance receipt) and
+only as far as the verdict needs: an input not yet read is `notRead`, and a
+verdict that still needs it is `pending`. Rust calls this function with each
+real observation as it is read (`origin::creation_verdict`). -/
+
+/-- Loading the cause call and its accepted ancestry. -/
+inductive CauseLoad where
+  | notRead
+  | loaded
+  /-- The database could not answer a query of the walk. -/
+  | queryFailed
+  | missing
+  /-- The row was read but could not be decoded. -/
+  | unreadable
+  /-- The row's identity, ancestry or admission is invalid. -/
+  | invalid
+  | parentMissing
+  | parentUnreadable
+  deriving DecidableEq, Repr
+
+/-- Reading the cause call's canonical result. -/
+inductive ResultRead where
+  | notRead
+  | matches
+  | differs
+  | queryFailed
+  | unreadable
+  deriving DecidableEq, Repr
+
+/-- Reading a plugin effect's immutable acceptance receipt; `absent` when the
+call is not an effect or has no receipt. -/
+inductive EffectRead where
+  | notRead
+  | matches
+  | differs
+  | absent
+  | queryFailed
+  | unreadable
+  deriving DecidableEq, Repr
+
+/-- The verdict: how the caller is verified as the starter, the denial, a
+`retry` (a query failed, which is not a denial), or `pending`. -/
+inductive CreationOutcome where
+  | pending
+  | callResult
+  | effectAcceptance
+  | retry
+  | causeBindingMismatch
+  | causeCallMissing
+  | causeCallUnreadable
+  | causeCallInvalid
+  | parentMissing
+  | parentUnreadable
+  | causeReceiptUnreadable
+  | causeReceiptMismatch
+  deriving DecidableEq, Repr
+
+def CreationOutcome.allows : CreationOutcome → Bool
+  | .callResult | .effectAcceptance => true
+  | _ => false
+
+/-- The cause call's verdict. The call's own result wins over an effect's
+acceptance receipt, which is read only when the result does not match; the
+effect's terminal presentation is not an input, so it cannot change the
+verdict. -/
+def creationVerdict (binding : Bool) (load : CauseLoad) (result : ResultRead)
+    (effect : EffectRead) : CreationOutcome :=
+  if !binding then .causeBindingMismatch else
+  match load with
+  | .notRead => .pending
+  | .queryFailed => .retry
+  | .missing => .causeCallMissing
+  | .unreadable => .causeCallUnreadable
+  | .invalid => .causeCallInvalid
+  | .parentMissing => .parentMissing
+  | .parentUnreadable => .parentUnreadable
+  | .loaded =>
+    match result with
+    | .notRead => .pending
+    | .queryFailed => .retry
+    | .unreadable => .causeReceiptUnreadable
+    | .matches => .callResult
+    | .differs =>
+      match effect with
+      | .notRead => .pending
+      | .queryFailed => .retry
+      | .unreadable => .causeReceiptUnreadable
+      | .matches => .effectAcceptance
+      | .differs | .absent => .causeReceiptMismatch
+
+/-- Authority needs the exact cause binding and the call's accepted ancestry. -/
+theorem creationVerdict_allows_only_bound_loaded (b : Bool) (l : CauseLoad) (r : ResultRead)
+    (e : EffectRead) (h : (creationVerdict b l r e).allows = true) :
+    b = true ∧ l = .loaded := by
+  cases b <;> cases l <;> cases r <;> cases e <;> simp_all [creationVerdict, CreationOutcome.allows]
+
+/-- A missing or unreadable effect parent is denied by name, whatever was read
+after it. -/
+theorem missing_parent_denied (r : ResultRead) (e : EffectRead) :
+    creationVerdict true .parentMissing r e = .parentMissing := rfl
+
+theorem unreadable_parent_denied (r : ResultRead) (e : EffectRead) :
+    creationVerdict true .parentUnreadable r e = .parentUnreadable := rfl
+
+/-- A failed query is never a denial: the caller is told to retry. -/
+theorem query_failure_is_not_a_denial (r : ResultRead) (e : EffectRead) :
+    creationVerdict true .queryFailed r e = .retry ∧
+      creationVerdict true .loaded .queryFailed e = .retry ∧
+      creationVerdict true .loaded .differs .queryFailed = .retry :=
+  ⟨rfl, rfl, rfl⟩
+
+/-- The call's own result takes precedence over the effect receipt. -/
+theorem call_result_precedes_effect (e : EffectRead) :
+    creationVerdict true .loaded .matches e = .callResult := rfl
+
+/-- The effect's acceptance receipt verifies exactly when the bound, accepted
+call's result does not match and the receipt does. -/
+theorem effect_acceptance_iff (b : Bool) (l : CauseLoad) (r : ResultRead) (e : EffectRead) :
+    creationVerdict b l r e = .effectAcceptance ↔
+      b = true ∧ l = .loaded ∧ r = .differs ∧ e = .matches := by
+  cases b <;> cases l <;> cases r <;> cases e <;> simp [creationVerdict]
+
+/-- A verdict is `pending` only while a read it needs is still `notRead`. -/
+theorem pending_needs_a_read (b : Bool) (l : CauseLoad) (r : ResultRead) (e : EffectRead)
+    (h : creationVerdict b l r e = .pending) :
+    l = .notRead ∨ r = .notRead ∨ e = .notRead := by
+  cases b <;> cases l <;> cases r <;> cases e <;> simp_all [creationVerdict]
+
+/-- Stopping early is sound: a decided verdict does not change when an input
+that was not read is read. -/
+theorem decided_ignores_unread_load (b : Bool) (r : ResultRead) (e : EffectRead)
+    (l : CauseLoad) (h : creationVerdict b .notRead r e ≠ .pending) :
+    creationVerdict b l r e = creationVerdict b .notRead r e := by
+  cases b <;> simp_all [creationVerdict]
+
+theorem decided_ignores_unread_result (b : Bool) (l : CauseLoad) (e : EffectRead)
+    (r : ResultRead) (h : creationVerdict b l .notRead e ≠ .pending) :
+    creationVerdict b l r e = creationVerdict b l .notRead e := by
+  cases b <;> cases l <;> simp_all [creationVerdict]
+
+theorem decided_ignores_unread_effect (b : Bool) (l : CauseLoad) (r : ResultRead)
+    (e : EffectRead) (h : creationVerdict b l r .notRead ≠ .pending) :
+    creationVerdict b l r e = creationVerdict b l r .notRead := by
+  cases b <;> cases l <;> cases r <;> simp_all [creationVerdict]
 
 /-- Task-trigger authority requires verified opening-request provenance on the caller's node. -/
 def interruptAllowed (callerSession targetSession : String)
