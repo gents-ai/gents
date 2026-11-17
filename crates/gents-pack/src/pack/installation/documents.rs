@@ -2093,7 +2093,10 @@ pub async fn apply_hosted_document_graph(
     graph: &HostedDocumentGraph,
     policy: DriftPolicy,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
-) -> Result<Vec<InstallReport>> {
+) -> std::result::Result<Vec<InstallReport>, PackChangeError> {
+    // Typed, not erased: a hosted install hands documents that differ or were
+    // edited to the client by variant (`HostedRejection`), so the operator
+    // sees which documents before choosing --overwrite or --keep.
     super::super::pin_moves::apply(txn, owner, &graph.pin_moves, profile_policy).await?;
     if !graph.plugin_root {
         return apply_document_graph_in_txn(
@@ -2108,8 +2111,7 @@ pub async fn apply_hosted_document_graph(
             },
             graph.node_binding.as_ref(),
         )
-        .await
-        .map_err(PackChangeError::into_anyhow);
+        .await;
     }
     let (root, dependencies) = graph
         .identities
@@ -2123,10 +2125,9 @@ pub async fn apply_hosted_document_graph(
         .records
         .split_last()
         .context("hosted plugin graph missing")?;
-    anyhow::ensure!(
-        root_documents.is_empty(),
-        "plugin root cannot replace pack documents"
-    );
+    if !root_documents.is_empty() {
+        return Err(anyhow::anyhow!("plugin root cannot replace pack documents").into());
+    }
     let mut reports = apply_document_graph_in_txn(
         txn,
         owner,
@@ -2139,8 +2140,7 @@ pub async fn apply_hosted_document_graph(
         },
         graph.node_binding.as_ref(),
     )
-    .await
-    .map_err(PackChangeError::into_anyhow)?;
+    .await?;
     super::validate_plugin_replacements_in_txn(txn, owner, std::slice::from_ref(root)).await?;
     super::write_installed_plugin_identity(
         txn,

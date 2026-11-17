@@ -36,7 +36,7 @@ pub use documents::{
 };
 pub use hosted::{
     stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
-    HostedPackStageError,
+    HostedPackStageError, HostedRejection,
 };
 pub use removal::{
     ensure_plugins_unreferenced, plugin_pin_conflicts, visible_plugin_selections,

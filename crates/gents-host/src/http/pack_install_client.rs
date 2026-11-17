@@ -214,7 +214,8 @@ fn runtime_failure(error: &str, outcome: String, class: Option<&str>) -> PackIns
             outcome,
             class: "unclassified".to_owned(),
             reason: format!(
-                "the runtime did not classify this failure, so its {} bytes of detail are not                  shown, since they can quote install values",
+                "the runtime did not classify this failure, so its {} bytes of detail are not \
+                 shown, since they can quote install values",
                 error.len()
             ),
         },
@@ -749,7 +750,8 @@ pub async fn install_remote(
                     policy,
                     &gents_inference::resolved::ProviderProfilePolicy,
                 )
-                .await?;
+                .await
+                .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
                 Ok::<_, anyhow::Error>(())
             })
         })
@@ -1417,6 +1419,7 @@ mod tests {
             let shown = runtime_failure(&quoted, "unconfirmed".into(), class).to_string();
             assert!(!shown.contains(secret), "{shown}");
             assert!(shown.contains("unclassified"), "{shown}");
+            assert!(!shown.contains("  "), "no lost line continuation: {shown}");
             assert!(
                 shown.contains(&format!("{} bytes", quoted.len())),
                 "{shown}"

@@ -89,7 +89,7 @@ pub(crate) use installation::{
 };
 pub use installation::{
     stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
-    HostedPackStageError,
+    HostedPackStageError, HostedRejection,
 };
 pub use loader::{
     authored_document_schema, authored_pack_config_schema, decode_pack_config,

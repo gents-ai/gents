@@ -1238,6 +1238,149 @@ async fn a_hosted_preview_from_the_same_build_is_answered_over_the_session() {
     );
 }
 
+/// A documents pack whose one Tools document `differ-tools` reads
+/// `display_name` as written.
+fn tools_pack(
+    display_name: &str,
+) -> (
+    tempfile::TempDir,
+    gents_pack::pack::resolved_pack::ResolvedPack,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let write = |name: &str, value: serde_json::Value| {
+        std::fs::write(root.path().join(name), serde_json::to_vec(&value).unwrap()).unwrap()
+    };
+    std::fs::write(root.path().join("README.md"), "# fixture").unwrap();
+    write(
+        "manifest.json",
+        json!({
+            "manifest_version": 1, "name": "differ", "namespace": "fixture", "version": "1.0.0",
+            "description": "One Tools document", "authors": ["tests"], "tags": [],
+            "kind": "documents", "config": "pack_config.json",
+            "assets": ["README.md", "pack_config.json"], "dependencies": [],
+        }),
+    );
+    write(
+        "pack_config.json",
+        json!({
+            "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+            "tools": [{"tools_id": "differ-tools", "display_name": display_name}],
+        }),
+    );
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(root.path()).unwrap();
+    let pack = gents_pack::pack::resolved_pack::ResolvedPack::received(
+        gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
+        gents_pack::pack::PackSource::Local { file_name: None },
+    )
+    .unwrap();
+    (root, pack)
+}
+
+/// A hosted install over a Tools document that already exists with other
+/// content is refused before anything is written, and the operator is shown,
+/// through the socket, which document (collection and id) and the overwrite
+/// or keep choice, and no field value of either side. (A preview plans the
+/// pack without comparing it to the Node, so it is answered and writes
+/// nothing.)
+#[tokio::test]
+async fn a_hosted_install_over_differing_documents_names_them_and_no_values() {
+    let home = crate::test_support::ClientHome::new().await;
+    let owner = home.node_did().to_owned();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let server = hosted_install_server(&home, plugin_home.path(), "hosted-differ").await;
+    let existing = "Operator copy sk-live-existing-0123";
+    let shipped = "Pack copy sk-live-shipped-4567";
+    let tools = serde_json::from_value(json!({
+        "tools_id": "differ-tools", "node_did": owner, "display_name": existing,
+    }))
+    .unwrap();
+    gents_documents::write_tools_document(
+        &home.access,
+        &tools,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
+    let (_root, pack) = tools_pack(shipped);
+    let query = "{ PackInstallation { coordinate } }";
+    let before = home.access.execute(query).await.unwrap();
+    let mut args = preview_request(plugin_home.path());
+
+    // What the operator reads: after the handshake the runtime's refusal
+    // reaches the client through the replayed transaction, as text.
+    let check = |error: anyhow::Error, step: &str| {
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("the runtime refused the install (not_installed, documents_differ)"),
+            "{step}: {text}"
+        );
+        assert!(
+            text.contains("Tools/differ-tools"),
+            "{step}: names the document: {text}"
+        );
+        assert!(
+            text.contains("--overwrite or --keep"),
+            "{step}: the choice: {text}"
+        );
+        assert!(
+            !text.contains("sk-live"),
+            "{step}: no value of either side: {text}"
+        );
+        assert!(!text.contains("--home"), "{step}: {text}");
+    };
+
+    let preview = crate::http::pack_install_client::preview_remote(
+        &server.endpoint,
+        &owner,
+        &pack,
+        &[],
+        &args,
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .expect("a preview plans the pack without comparing it to the Node");
+    assert_eq!(
+        preview.0["documents"][0]["id"], "differ-tools",
+        "{}",
+        preview.0
+    );
+    assert_eq!(
+        home.access.execute(query).await.unwrap(),
+        before,
+        "a preview writes nothing"
+    );
+
+    args.preview = false;
+    let install = crate::http::pack_install_client::install_remote(
+        &server.endpoint,
+        &owner,
+        &pack,
+        &[],
+        &args,
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .expect_err("the install refuses the differing document");
+    check(install, "install");
+
+    assert_eq!(
+        home.access.execute(query).await.unwrap(),
+        before,
+        "nothing installed"
+    );
+    let kept = home
+        .access
+        .execute(r#"{ Tools(filter: {tools_id: {_eq: "differ-tools"}}) { display_name } }"#)
+        .await
+        .unwrap();
+    assert!(
+        kept.to_string().contains(existing),
+        "the existing document is untouched: {kept}"
+    );
+}
+
 #[tokio::test]
 async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
     use gents_store::identity::NodeIdentity as _;

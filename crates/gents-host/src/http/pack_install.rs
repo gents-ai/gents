@@ -250,11 +250,12 @@ pub async fn install_handler(
         return refused(StatusCode::CONFLICT, refusal);
     }
     // Detached so a dropped client cannot cancel an install mid-commit.
-    let result =
-        tokio::spawn(
-            async move { install_owned(state, PathBuf::from(home), received, access).await },
-        )
-        .await;
+    let result = tokio::spawn(async move {
+        install_owned(state, PathBuf::from(home), received, access)
+            .await
+            .map_err(gents_pack::pack::PackChangeError::into_anyhow)
+    })
+    .await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => (
@@ -379,7 +380,7 @@ async fn install_owned(
     home: PathBuf,
     received: Received,
     access: gents_store::config_client::ConfigAccess,
-) -> Result<serde_json::Value> {
+) -> std::result::Result<serde_json::Value, gents_pack::pack::PackChangeError> {
     let Received {
         root,
         dependencies,
@@ -411,8 +412,7 @@ async fn install_owned(
         dependencies,
         &gents_tools::surface::PackRoots,
     )
-    .await
-    .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
+    .await?;
     if !args.wire.is_empty() && !args.preview {
         result["wired"] = gents_pack::pack::plugin_wire::wire_pack_plugins(
             &access,

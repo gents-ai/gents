@@ -449,16 +449,15 @@ async fn run_inner(
         .await
         {
             Ok(prepared) => prepared,
-            // A plugin reference that does not resolve names identifiers only,
-            // so the client is shown it as written.
-            Err(gents_pack::pack::PackChangeError::PluginReference(unresolved)) => {
-                return Ok(Err(SessionFailure::shown(
-                    Class::PluginUnresolved,
-                    unresolved.to_string(),
-                    "not_installed",
-                )));
+            // A refusal that names identifiers only (a plugin that does not
+            // resolve, documents that differ or were edited) is shown as
+            // written; any other is classed by this step.
+            Err(error) => {
+                return match SessionFailure::change_refusal(&error) {
+                    Some(shown) => Ok(Err(shown)),
+                    None => Err(error.into_anyhow()),
+                }
             }
-            Err(error) => return Err(error.into_anyhow()),
         };
         prepared
             .prepare_pin_moves(
@@ -669,8 +668,8 @@ async fn run_inner(
         )
         .await
         .map_err(|error| match error {
-            gents_pack::pack::HostedPackStageError::Rejected(error) => {
-                SessionFailure::not_installed(Class::ApplyRejected)(error)
+            gents_pack::pack::HostedPackStageError::Rejected(rejection) => {
+                SessionFailure::rejection(rejection)
             }
             gents_pack::pack::HostedPackStageError::Unconfirmed(error) => {
                 SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(error)
@@ -715,5 +714,9 @@ async fn preview(
     }
     super::install_owned(state.clone(), home, received, access)
         .await
-        .map_err(SessionFailure::not_installed(Class::PreviewFailed))
+        .map_err(|error| {
+            SessionFailure::change_refusal(&error).unwrap_or_else(|| {
+                SessionFailure::not_installed(Class::PreviewFailed)(error.into_anyhow())
+            })
+        })
 }
