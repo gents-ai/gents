@@ -1405,6 +1405,7 @@ async fn control_watcher_stops_without_proposing_into_a_replaced_plugin_home() {
         .unwrap();
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
+    runtime_status.request_publication_recovery();
     let inputs = ControlWatcherInputs {
         node: node.clone(),
         backend_admission: agent.backend_admission.clone(),
@@ -1421,7 +1422,6 @@ async fn control_watcher_stops_without_proposing_into_a_replaced_plugin_home() {
     std::fs::rename(&home, root.path().join("retired")).unwrap();
     std::fs::create_dir(&home).unwrap();
     let watcher = tokio::spawn(run_test_control_watcher(inputs));
-    update_node_enabled(&fixture.user_access, agent.node_did(), true).await;
     tokio::time::timeout(PROPOSAL_TIMEOUT, watcher)
         .await
         .expect("retired-store watcher must stop")
