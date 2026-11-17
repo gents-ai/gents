@@ -1069,10 +1069,9 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
         .build()
         .await
         .unwrap();
-    let (bytes, _) = gents_pack::pack::archive::pack_dir(&crate::test_support::pack_fixture_dir(
-        "bind_plugin_fixture",
-    ))
-    .unwrap();
+    let (_pack_guard, pack_root) =
+        gents_pack::test_support::fixture_pack_copy("bind_plugin_fixture", &json!({"hosted":true}));
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(&pack_root).unwrap();
     let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let replacements = gents_pack::pack::pin_moves::replacement_digests([&archive]).unwrap();
     let old = format!("sha256:{}", "0".repeat(64));
