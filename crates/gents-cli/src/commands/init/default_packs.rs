@@ -96,25 +96,22 @@ pub(crate) enum InitEntryPoint {
 
 /// Refuse a fresh Engineer before bootstrap reservation if the build cannot
 /// provide its core packs. A bootstrap-only binary can still build packs.
-pub(crate) fn all_archives_present(archives: Archives<'_>) -> bool {
+pub(crate) fn missing_archives(archives: Archives<'_>) -> Vec<&'static str> {
     CorePack::ALL
-        .into_iter()
-        .all(|pack| release_archive(archives, pack).is_some())
-}
-
-pub(crate) fn require_archives(archives: Archives<'_>, entry: InitEntryPoint) -> Result<()> {
-    let missing: Vec<_> = CorePack::ALL
         .into_iter()
         .filter(|&pack| release_archive(archives, pack).is_none())
         .map(CorePack::coordinate)
-        .collect();
+        .collect()
+}
+
+pub(crate) fn require_archives(missing: &[&str], entry: InitEntryPoint) -> Result<()> {
     if !missing.is_empty() {
         return Err(MissingCorePackArchives {
             missing: missing.join(", "),
             opt_out: match entry {
                 InitEntryPoint::Cli => "; run `make core-packs && make build-cli` and retry, or pass `--no-default-packs` to opt out, leaving the Engineer without skills",
                 InitEntryPoint::Start => "; run `make core-packs && make build-cli` and retry",
-                InitEntryPoint::Desktop => "; this desktop dev build is incomplete; run `make core-packs && make desktop-native-dev`",
+                InitEntryPoint::Desktop => "; this desktop dev build is incomplete; run `make desktop-native-dev`",
             },
         }
         .into());
@@ -1171,7 +1168,7 @@ mod tests {
         );
         assert!(message.contains("--no-default-packs"), "{message}");
         assert!(message.contains("without skills"), "{message}");
-        let managed = require_archives(&[], InitEntryPoint::Start).unwrap_err();
+        let managed = require_archives(&missing_archives(&[]), InitEntryPoint::Start).unwrap_err();
         assert!(managed.downcast_ref::<MissingCorePackArchives>().is_some());
         let managed_message = managed.to_string();
         assert!(managed_message.contains("make core-packs && make build-cli"));
@@ -1200,21 +1197,16 @@ mod tests {
         )
         .await
         .unwrap();
-        let result =
-            crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &[])
-                .await;
-        if let Err(error) = result {
-            assert!(
-                error.downcast_ref::<MissingCorePackArchives>().is_none(),
-                "{error:#}"
-            );
-        }
+        crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &[])
+            .await
+            .unwrap();
     }
 
     #[test]
     fn partial_archive_set_reports_only_missing_packs() {
         let archives = [("gents/pack_builder", &b"fixture"[..])];
-        let error = require_archives(&archives, InitEntryPoint::Cli).unwrap_err();
+        let error =
+            require_archives(&missing_archives(&archives), InitEntryPoint::Cli).unwrap_err();
         let typed = error.downcast_ref::<MissingCorePackArchives>().unwrap();
         assert!(!typed.missing.contains("gents/pack_builder"));
         assert!(typed.missing.contains("gents/script"));

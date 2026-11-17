@@ -711,7 +711,7 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
         let error = gents_server::server_host::ensure_standard_home_with_core_packs(
             &gents_store::test_support::runtime_handle(),
             gents_server::server_host::ProvisionOptions {
-                home,
+                home: home.clone(),
                 desktop_root: resolved.root().to_path_buf(),
                 node_name: "Forge".to_owned(),
                 tool_ceiling: gents_service::args::ToolCeilingArg::Readwrite,
@@ -725,10 +725,10 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
         .unwrap_err();
         let message = format!("{error:#}");
         anyhow::ensure!(
-            message.contains("make core-packs && make desktop-native-dev")
-                && !message.contains("--no-default-packs"),
+            message.contains("make desktop-native-dev") && !message.contains("--no-default-packs"),
             "unexpected desktop error: {message}"
         );
+        provision_as_the_desktop(home, resolved.root().to_path_buf()).await?;
         return Ok(());
     }
     if step == "provision" {

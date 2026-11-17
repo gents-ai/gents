@@ -304,13 +304,14 @@ pub(crate) async fn init_home_for_entry(
     };
 
     let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
+    let missing_archives = default_packs::missing_archives(core_packs);
     if gents_pack::pack::core_packs::refuse_init(
         fresh_store,
         args.engineer,
         !args.no_default_packs,
-        default_packs::all_archives_present(core_packs),
+        missing_archives.is_empty(),
     ) {
-        default_packs::require_archives(core_packs, entry)?;
+        default_packs::require_archives(&missing_archives, entry)?;
     }
     if fresh_store {
         reserve_fresh_bootstrap(&home_dir).await?;
