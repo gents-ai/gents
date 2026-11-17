@@ -178,10 +178,37 @@ async fn submit_create(
     let identity_binding = gents_desktop_core::agent_identity::provision(&endpoint, owner).await?;
     let access = ConfigAccess::Graphql(endpoint);
     let mut receipt = create_agent(&access, owner, identity_binding, &input).await?;
-    if let Some(Value::String(command)) = receipt.pointer_mut("/host_root_access/user_command") {
-        *command = with_target(command, home, graphql);
-    }
+    target_host_root_receipt(&mut receipt, home, graphql)?;
     print_json(&receipt)
+}
+
+/// Rebuild from the owner's structured receipt: `user_command` may include
+/// unknown-home guidance, which is prose rather than a shell command to extend.
+fn target_host_root_receipt(
+    receipt: &mut Value,
+    home: Option<&std::path::Path>,
+    graphql: Option<&str>,
+) -> Result<()> {
+    let graphql = graphql.map(str::trim).filter(|value| !value.is_empty());
+    if (home.is_none() && graphql.is_none()) || receipt.get("host_root_access").is_none() {
+        return Ok(());
+    }
+    let agent = receipt
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .context("agent receipt with host_root_access is missing agent_did")?;
+    let command = match receipt
+        .pointer("/host_root_access/published_root")
+        .and_then(Value::as_str)
+    {
+        Some(root) => {
+            format!("gents config workspace-root grant-reader --path {root} --agent-did {agent}")
+        }
+        None => "gents config workspace-root list".to_owned(),
+    };
+    receipt["host_root_access"]["user_command"] =
+        Value::String(with_target(&command, home, graphql));
+    Ok(())
 }
 
 /// `command` addressed to the runtime this invocation selected.
@@ -477,6 +504,42 @@ pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn targeted_root_receipts_do_not_append_targets_to_unknown_home_prose() {
+        let original = serde_json::json!({
+            "agent_did": "did:key:helper",
+            "host_root_access": {
+                "published_root": "/workspace",
+                "user_command": "grant (add --home with this node's home)"
+            }
+        });
+        for (home, graphql, expected) in [
+            (Some(std::path::Path::new("/node/home")), None,
+             "gents config workspace-root grant-reader --path /workspace --agent-did did:key:helper --home /node/home"),
+            (None, Some("http://node/graphql"),
+             "gents config workspace-root grant-reader --path /workspace --agent-did did:key:helper --graphql http://node/graphql"),
+        ] {
+            let mut receipt = original.clone();
+            super::target_host_root_receipt(&mut receipt, home, graphql).unwrap();
+            assert_eq!(receipt["host_root_access"]["user_command"], expected);
+        }
+        let mut unknown = original.clone();
+        super::target_host_root_receipt(&mut unknown, None, None).unwrap();
+        assert_eq!(unknown, original, "retain guidance when no target is known");
+        let mut unpublished = original;
+        unpublished["host_root_access"]["published_root"] = serde_json::Value::Null;
+        super::target_host_root_receipt(
+            &mut unpublished,
+            Some(std::path::Path::new("/node/home")),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            unpublished["host_root_access"]["user_command"],
+            "gents config workspace-root list --home /node/home"
+        );
+    }
+
     use gents_store::graphql::escape_graphql_string;
     use gents_store::identity::NodeIdentity as _;
 
