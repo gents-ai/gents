@@ -68,6 +68,108 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
         .unwrap(),
         receipt
     );
+    let target_session = receipt["session_id"].as_str().unwrap();
+    let request_doc_id = receipt["request_doc_id"].as_str().unwrap();
+    let opening = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &fixture.access,
+        request_doc_id,
+    )
+    .await
+    .unwrap()
+    .expect("child opening request visible");
+    let parent = gents_protocol::session::SessionScope {
+        node_did: fixture.db.node_identity.did().to_owned(),
+        session_id: fixture.session_id.clone(),
+        requester_did: Some(fixture.user.did().to_owned()),
+    };
+    let target = gents_protocol::session::SessionScope::of_request(&opening);
+    assert_eq!(target.session_id, target_session);
+    let verified = gents_session::session::origin::verified_agent_new_creation(
+        &fixture.access,
+        &target,
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert!(
+        verified,
+        "effect receipt resolves, but signed starter verification failed: receipt={receipt}"
+    );
+    let listed = control(
+        &fixture,
+        "list-before-message",
+        "agent_session_list",
+        json!({}),
+    )
+    .await;
+    let entry = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["session_id"] == target_session)
+        .expect("child in session list");
+    assert_eq!(entry["can_interrupt"], true, "list denied starter: {entry}");
+    let message = control(
+        &fixture,
+        "queue-worker",
+        "agent_message",
+        json!({"session_id": target_session, "message": "continue", "delivery": "queue"}),
+    )
+    .await;
+    assert_eq!(message["ok"], true, "queued message failed: {message}");
+    assert_eq!(
+        message["delivery"], "request",
+        "expected a new message-delivered request: {message}"
+    );
+    assert_ne!(message["request_id"], receipt["request_id"]);
+    assert!(
+        gents_session::session::origin::verified_agent_new_creation(
+            &fixture.access,
+            &target,
+            &parent
+        )
+        .await
+        .unwrap(),
+        "starter verification changed after message delivery"
+    );
+    let listed = control(
+        &fixture,
+        "list-after-message",
+        "agent_session_list",
+        json!({}),
+    )
+    .await;
+    let entry = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["session_id"] == target_session)
+        .expect("child in session list after message");
+    assert_eq!(
+        entry["can_interrupt"], true,
+        "list denied starter after message: {entry}"
+    );
+    let stop = control(
+        &fixture,
+        "stop-worker",
+        "agent_stop",
+        json!({"session_id":target_session}),
+    )
+    .await;
+    assert_eq!(stop["ok"], true, "stop failed: {stop}");
+    let unrelated = gents_protocol::session::SessionScope {
+        session_id: "different-session".into(),
+        ..parent
+    };
+    assert!(
+        !gents_session::session::origin::verified_agent_new_creation(
+            &fixture.access,
+            &target,
+            &unrelated
+        )
+        .await
+        .unwrap()
+    );
     fixture.db.node.shutdown().await.unwrap();
 }
 
