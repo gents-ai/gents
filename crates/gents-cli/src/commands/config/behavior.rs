@@ -188,10 +188,23 @@ async fn submit_create(
                 .and_then(Value::as_str)
                 .map(str::to_owned)
             {
-                let home = home
-                    .map(|h| format!("'{}'", h.to_string_lossy().replace('\'', "'\\''")))
-                    .unwrap_or_else(|| "<HOME>".to_owned());
-                entry["grant_command"] = Value::String(command.replace("<HOME>", &home));
+                let target = home
+                    .map(|h| format!(" --home '{}'", h.to_string_lossy().replace('\'', "'\\''")))
+                    .unwrap_or_default();
+                let target = match graphql {
+                    Some(endpoint) => {
+                        format!("{target} --graphql '{}'", endpoint.replace('\'', "'\\''"))
+                    }
+                    None => target,
+                };
+                entry["grant_command"] = Value::String(command.replacen(
+                    "gents config tools set",
+                    &format!("gents config tools set{target}"),
+                    1,
+                ));
+                if !target.is_empty() {
+                    entry.as_object_mut().unwrap().remove("target_note");
+                }
             }
         }
     }

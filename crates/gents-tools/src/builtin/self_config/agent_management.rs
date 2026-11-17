@@ -925,8 +925,6 @@ async fn agent_apply_in_txn(
                 )?)?),
                 None => None,
             };
-            // Preserve the source before any clone-specific removal or override.
-            let source_tools = tools.clone();
             let dropped_self_config = if clone_omitted_self_config(
                 operation == "clone",
                 tools
@@ -1009,44 +1007,6 @@ async fn agent_apply_in_txn(
                 if let Some(dropped) = dropped_self_config {
                     omitted.push(("config", json!({"self_config": dropped})));
                 }
-                if operation == "clone" {
-                    if let Some(source) = source_tools.as_ref() {
-                        if let Some(lsp) = source.integrations.as_ref().and_then(|i| i.lsp.as_ref())
-                        {
-                            if tools
-                                .integrations
-                                .as_ref()
-                                .and_then(|i| i.lsp.as_ref())
-                                .is_none()
-                            {
-                                omitted.push(("lsp", json!({"integrations": {"lsp": lsp}})));
-                            }
-                        }
-                        if let Some(bash) = source.host.as_ref().and_then(|h| h.bash.as_ref()) {
-                            let old = bash.network_mode;
-                            let new = tools
-                                .host
-                                .as_ref()
-                                .and_then(|h| h.bash.as_ref())
-                                .and_then(|b| b.network_mode);
-                            if args.network_mode.is_some() && old != new && old.is_some() {
-                                omitted.push((
-                                    "bash network",
-                                    json!({"host": {"bash": {"network_mode": old}}}),
-                                ));
-                            }
-                        }
-                        if args.root.is_present() {
-                            let old = source.host.as_ref().and_then(|h| h.root.as_ref());
-                            let new = tools.host.as_ref().and_then(|h| h.root.as_ref());
-                            if old != new {
-                                if let Some(root) = old {
-                                    omitted.push(("host root", json!({"host": {"root": root}})));
-                                }
-                            }
-                        }
-                    }
-                }
                 let mut warnings = Vec::new();
                 for (name, mut patch) in omitted {
                     patch["tools_id"] = json!(tools.tools_id);
@@ -1054,19 +1014,22 @@ async fn agent_apply_in_txn(
                     let payload = serde_json::to_string(&patch)?;
                     let quoted = format!("'{}'", payload.replace('\'', "'\\''"));
                     let home_arg = home
-                        .map(|h| format!("'{}'", h.to_string_lossy().replace('\'', "'\\''")))
-                        .unwrap_or_else(|| "<HOME>".to_owned());
+                        .map(|h| {
+                            format!(" --home '{}'", h.to_string_lossy().replace('\'', "'\\''"))
+                        })
+                        .unwrap_or_default();
                     not_copied.push(AgentOmittedCapability {
                         capability: name.to_owned(),
-                        grant_command: format!("( f=$(mktemp) && printf '%s' {quoted} > \"$f\" && gents config tools set --home {home_arg} --file \"$f\"; status=$?; rm -f \"$f\"; exit $status )"),
+                        target_note: home.is_none().then(|| "No home is available here; select the intended node with --home or --graphql before running this command.".to_owned()),
+                        grant_command: format!("( f=$(mktemp) && printf '%s' {quoted} > \"$f\" && gents config tools set{home_arg} --no-keychain-prompts --file \"$f\"; status=$?; rm -f \"$f\"; exit $status )"),
                     });
                     if context
                         .system_prompt
                         .as_deref()
-                        .is_some_and(|prompt| prompt.to_lowercase().contains(name))
+                        .is_some_and(|prompt| prompt_mentions_tool(prompt, name))
                     {
                         warnings.push(format!(
-                            "The cloned prompt mentions {name}, but the clone lacks that grant."
+                            "The cloned prompt mentions {name}, but the clone lacks that grant. To grant it, run not_copied[0].grant_command against the intended node."
                         ));
                     }
                 }
@@ -1325,5 +1288,33 @@ mod clone_omission_conformance {
         gents_lean_vocab::families::self_config_clone_omitted_self_config::replay(|i| {
             super::clone_omitted_self_config(i.is_clone, i.source_has_self_config)
         });
+    }
+}
+
+fn prompt_mentions_tool(prompt: &str, name: &str) -> bool {
+    prompt
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|word| word.eq_ignore_ascii_case(name))
+}
+
+#[cfg(test)]
+mod clone_prompt_tests {
+    #[test]
+    fn tool_mentions_are_whole_words() {
+        for prompt in [
+            "Use config to inspect Tools.",
+            "Use `config`.",
+            "CONFIG is unavailable.",
+        ] {
+            assert!(super::prompt_mentions_tool(prompt, "config"));
+        }
+        for prompt in [
+            "Configure yourself.",
+            "Check the configuration.",
+            "self_config",
+            "configurator",
+        ] {
+            assert!(!super::prompt_mentions_tool(prompt, "config"));
+        }
     }
 }

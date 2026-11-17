@@ -129,6 +129,8 @@ pub struct AgentReceipt<A> {
 pub struct AgentOmittedCapability {
     pub capability: String,
     pub grant_command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_note: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

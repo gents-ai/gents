@@ -122,12 +122,13 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 }
 
 pub(super) fn render_request_context_message(
-    _node: &defra_node::Node,
+    agent_config: &gents_inference::resolved::ResolvedAgent,
     tool_config: &gents_tools::surface::AgentToolSurfaceConfig,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
 ) -> Result<Option<Message>> {
     Ok(assemble_request_context_message(
+        &agent_config.model_name,
         frozen_instruction_manifest,
         gents_session::workspace::request_workspace_cwd(request).as_deref(),
         tool_config.host_tools().read_root(),
@@ -135,16 +136,28 @@ pub(super) fn render_request_context_message(
 }
 
 fn assemble_request_context_message(
+    model: &str,
     frozen_instruction_manifest: Option<&str>,
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
 ) -> Option<Message> {
-    gents_session::workspace::instruction_body_for_request(
+    let mut body = gents_session::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,
     )
-    .map(|body| Message::user(format!("<context>\n{body}\n</context>")))
+    .unwrap_or_default();
+    let model = model.trim();
+    if !model.is_empty()
+        && !model.eq_ignore_ascii_case("default")
+        && !model.eq_ignore_ascii_case("unknown")
+    {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&format!("Your profile's model: {model}."));
+    }
+    (!body.is_empty()).then(|| Message::user(format!("<context>\n{body}\n</context>")))
 }
 
 async fn await_with_request_deadline<F, T>(
@@ -1793,4 +1806,22 @@ pub(super) mod tests {
     include!("pre_inference_interrupt_tests.rs");
     include!("execution_lease_regression_tests.rs");
     include!("fold_checkpoint_reclaim_tests.rs");
+}
+
+#[cfg(test)]
+mod profile_model_tests {
+    #[test]
+    fn profile_model_line_omits_placeholders() {
+        for model in ["", " ", "default", "unknown", " DEFAULT "] {
+            assert!(super::assemble_request_context_message(model, None, None, None).is_none());
+        }
+        for model in ["model-a", "model-b"] {
+            assert_eq!(
+                super::assemble_request_context_message(model, None, None, None),
+                Some(super::Message::user(format!(
+                    "<context>\nYour profile's model: {model}.\n</context>"
+                )))
+            );
+        }
+    }
 }

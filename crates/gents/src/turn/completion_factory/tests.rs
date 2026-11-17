@@ -1098,23 +1098,3 @@ fn generated_reasoning_capabilities_override_untrusted_provider_parameters() {
         authoritative_reasoning_capabilities(params, kind, advertised.as_deref()).map(|params| gents_lean_vocab::compact_model_json(&params))
     });
 }
-
-#[test]
-fn profile_model_line_tracks_admitted_model_and_omits_unknown() {
-    let mut agent = agent_with_retry(CompletionRetryProfileFields::default());
-    for (model, expected) in [
-        ("model-a", Some("model-a")),
-        ("model-b", Some("model-b")),
-        ("", None),
-    ] {
-        agent.model_name = model.to_owned();
-        let config =
-            loop_config_for_request(&agent, "base".into(), &request(), None, 0, 0).unwrap();
-        let preamble = config.preamble.unwrap();
-        if let Some(expected) = expected {
-            assert!(preamble.contains(&format!("Your profile's model: {expected}.")));
-        } else {
-            assert!(!preamble.contains("Your profile's model:"));
-        }
-    }
-}

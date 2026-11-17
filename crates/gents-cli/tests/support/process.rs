@@ -214,6 +214,7 @@ fn spawn_server_with_ready_json_inner(
         let stdout = stdout_log.reopen().context("opening gents stdout log")?;
         let stderr = stderr_log.reopen().context("opening gents stderr log")?;
         let mut command = Command::new(cli_bin());
+        command.arg("--no-keychain-prompts");
         command
             .env("HOME", home_dir)
             .env("RUST_LOG", "error")
@@ -309,6 +310,7 @@ pub fn spawn_server_with_env(
     let stdout = stdout_log.reopen().context("opening gents stdout log")?;
     let stderr = stderr_log.reopen().context("opening gents stderr log")?;
     let mut command = Command::new(cli_bin());
+    command.arg("--no-keychain-prompts");
     command
         .env("HOME", home_dir)
         .env("RUST_LOG", "error")
@@ -421,6 +423,7 @@ const CLI_LOG: &str = "error,gents_server::commands::init=info";
 
 fn cli_command(home_dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Command {
     let mut command = Command::new(cli_bin());
+    command.arg("--no-keychain-prompts");
     command
         .env("HOME", home_dir)
         .env("RUST_LOG", CLI_LOG)
