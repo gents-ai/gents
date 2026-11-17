@@ -2053,16 +2053,9 @@ fn ambient_request_context_only_shrinks() {
 /// shrinks.
 #[rustfmt::skip]
 const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-cli/src/commands/fleet.rs", 1, "sent through gents_host::http_client, which takes a built request; give it a builder"),
-    ("crates/gents-cli/src/commands/p2p/connect.rs", 1, "sent through gents_host::http_client, which takes a built request; give it a builder"),
-    ("crates/gents-cli/src/commands/p2p/mod.rs", 1, "sent through gents_host::http_client, which takes a built request; give it a builder"),
-    ("crates/gents-cli/src/commands/p2p/replicators.rs", 3, "sent through gents_host::http_client, which takes a built request; give it a builder"),
-    ("crates/gents-desktop-core/src/pack_watch.rs", 1, "a long poll raced against cancellation; send it through send_resolving inside the race"),
-    ("crates/gents-desktop-core/src/remote_admin/http_impl.rs", 1, "a signed remote admin request built in steps; build it in a send_resolving closure"),
-    ("crates/gents-host/src/p2p_status.rs", 1, "sent through gents_host::http_client, which takes a built request; give it a builder"),
-    ("crates/gents-host/src/readiness.rs", 1, "an operator request built and sent outside send_resolving; move its send into it"),
-    ("crates/gents-service/src/runtime_control.rs", 1, "an operator request built and sent outside send_resolving; move its send into it"),
-    ("crates/gents-service/src/service_update/execute.rs", 2, "an operator request built and sent outside send_resolving; move its send into it"),
+    ("crates/gents-host/src/readiness.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
+    ("crates/gents-service/src/runtime_control.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
+    ("crates/gents-service/src/service_update/execute.rs", 2, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
     ("crates/gents-store/src/config_client/graphql.rs", 2, "a transaction's commit and discard: its transaction recovers as a unit (resendUnit) and a refused commit is told"),
     ("crates/gents-store/src/config_client/mod.rs", 1, "authorize_in_transaction, the one authorizer of requests inside a transaction"),
 ];
