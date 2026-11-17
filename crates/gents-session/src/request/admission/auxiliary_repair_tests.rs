@@ -56,6 +56,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
             gents_store::identity::resolve_agent_identity(&root, &foreign_binding).unwrap();
         for actor in [agent.did(), foreign.did()] {
             for permission in [
+                NodePermission::CollectionGet,
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,

@@ -57,6 +57,7 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
         }
     }
     for permission in [
+        acp::nac::NodePermission::CollectionGet,
         acp::nac::NodePermission::DocumentUpdate,
         acp::nac::NodePermission::DacRelationAdd,
         acp::nac::NodePermission::DacRelationDelete,

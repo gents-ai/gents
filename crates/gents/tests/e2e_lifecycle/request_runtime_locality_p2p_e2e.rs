@@ -51,7 +51,11 @@ impl DeliveryFixture {
             owner.node.clone(),
             owner.node_identity.did().parse().unwrap(),
         );
-        for permission in [NodePermission::DocumentRead, NodePermission::DocumentUpdate] {
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+        ] {
             admin
                 .grant_node_permission(&outsider.did().parse().unwrap(), permission)
                 .await

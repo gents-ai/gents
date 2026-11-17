@@ -418,6 +418,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         binding.agent_did.as_str(),
     ] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,

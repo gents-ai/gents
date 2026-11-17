@@ -30,6 +30,7 @@ impl PrivateSessionFixture {
             .unwrap();
         for did in [selected.did(), other.did()] {
             for permission in [
+                NodePermission::CollectionGet,
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,

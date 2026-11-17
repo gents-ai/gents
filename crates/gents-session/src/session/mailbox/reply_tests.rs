@@ -43,6 +43,7 @@ async fn persisted_request(
     let context = defra_core::RequestContext::default()
         .with_identity(Some(tests::root_identity().did().to_owned()));
     for permission in [
+        acp::nac::NodePermission::CollectionGet,
         acp::nac::NodePermission::DocumentRead,
         acp::nac::NodePermission::DocumentUpdate,
     ] {

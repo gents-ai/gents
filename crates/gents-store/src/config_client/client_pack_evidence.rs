@@ -587,6 +587,7 @@ mod tests {
         }
         let other_did = identity::Did::new(other.did())?;
         for permission in [
+            acp::nac::NodePermission::CollectionGet,
             acp::nac::NodePermission::DocumentRead,
             acp::nac::NodePermission::DocumentUpdate,
             acp::nac::NodePermission::DacRelationAdd,

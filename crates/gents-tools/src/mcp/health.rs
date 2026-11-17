@@ -1360,6 +1360,7 @@ mod tests {
             ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
         for actor in [&user, &agent, &sibling, &outsider] {
             for permission in [
+                NodePermission::CollectionGet,
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,

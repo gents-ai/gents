@@ -258,6 +258,7 @@ pub async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &st
         identity::Did::new(local).unwrap(),
     );
     for permission in [
+        gents_store::config_client::NodePermission::CollectionGet,
         gents_store::config_client::NodePermission::DocumentRead,
         gents_store::config_client::NodePermission::DocumentUpdate,
         gents_store::config_client::NodePermission::DacRelationAdd,
@@ -346,6 +347,7 @@ pub(crate) async fn grant_test_node_administrator(node: &Arc<defra_node::Node>, 
         identity::Did::new(local).unwrap(),
     );
     for permission in [
+        gents_store::config_client::NodePermission::CollectionGet,
         gents_store::config_client::NodePermission::DocumentRead,
         gents_store::config_client::NodePermission::DocumentUpdate,
     ] {

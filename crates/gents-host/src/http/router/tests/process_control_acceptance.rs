@@ -39,6 +39,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let admin = ConfigAccess::local_as(node.clone(), did.parse().unwrap());
     for actor in [foreign.did(), agent_did.as_str()] {
         for permission in [
+            gents_store::config_client::NodePermission::CollectionGet,
             gents_store::config_client::NodePermission::DocumentRead,
             gents_store::config_client::NodePermission::DocumentUpdate,
             gents_store::config_client::NodePermission::DacRelationAdd,

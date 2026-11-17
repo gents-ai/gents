@@ -74,6 +74,7 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
     let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     for actor in [&user, &agent, &sibling, &outsider] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,

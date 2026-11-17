@@ -1178,6 +1178,7 @@ mod relationship_publication_tests {
         let creator_did = identity::Did::new(creator.did()).unwrap();
         let collaborator_did = identity::Did::new(collaborator.did()).unwrap();
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,

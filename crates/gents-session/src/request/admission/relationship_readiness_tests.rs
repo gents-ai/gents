@@ -101,6 +101,7 @@ async fn exercise_readiness(same_agent: bool) {
         .await
         .unwrap();
     for permission in [
+        NodePermission::CollectionGet,
         NodePermission::DocumentRead,
         NodePermission::DocumentUpdate,
         NodePermission::DacRelationAdd,

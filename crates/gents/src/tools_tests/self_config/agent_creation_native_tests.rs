@@ -1917,6 +1917,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     // projected baseline as well as any direct grant, so revoking the direct
     // edges leaves creation admitted (`GrantSets.agentEffective`).
     for permission in [
+        NodePermission::CollectionGet,
         NodePermission::DacRelationAdd,
         NodePermission::DocumentUpdate,
     ] {
