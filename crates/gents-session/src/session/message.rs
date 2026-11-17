@@ -25,6 +25,8 @@ pub use commit::{
 pub use discovery::{agent_session_list, AgentSessionListArgs};
 pub use goals::{NoSessionMessageGoals, RequestGoalAssignment, SessionGoal, SessionMessageGoals};
 pub use inspection::{agent_session_read, AgentSessionReadArgs};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use interrupt::interrupt_refusal_with;
 pub use interrupt::{
     agent_interrupt_allowed, interrupt_refusal, interrupt_session, interrupt_session_with_access,
 };

@@ -91,10 +91,23 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     )
     .await
     .unwrap();
-    assert!(
+    assert_eq!(
         verified,
+        Ok(gents_session::session::origin::VerifiedCreation::CallResult),
         "effect receipt resolves, but signed starter verification failed: receipt={receipt}"
     );
+    // The same valid receipt, with the effect's parent (the script call)
+    // withheld by the loader: missing, then unreadable. Each is denied by name.
+    let script_doc = gents_toolcalls::test_support::background_hook::tool_row(
+        &fixture.access,
+        &fixture.session_id,
+        "script",
+    )
+    .await["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_withheld_parent_is_denied(&fixture, &target, &parent, &script_doc).await;
     let mut lifecycle = fixture
         .access
         .transact_readonly("test.effect.load", |txn| {
@@ -132,7 +145,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     )
     .await;
     assert_eq!(cancelled["lifecycle_state"], "cancelled");
-    assert!(
+    assert_eq!(
         gents_session::session::origin::verified_agent_new_creation(
             &fixture.access,
             &target,
@@ -140,8 +153,11 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
         )
         .await
         .unwrap(),
+        Ok(gents_session::session::origin::VerifiedCreation::EffectAcceptance),
         "starter authorization lost after effect cancellation"
     );
+    // A terminal effect is denied the same way when its parent is withheld.
+    assert_withheld_parent_is_denied(&fixture, &target, &parent, &script_doc).await;
     let listed = control(
         &fixture,
         "list-before-message",
@@ -176,7 +192,8 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
             &parent
         )
         .await
-        .unwrap(),
+        .unwrap()
+        .is_ok(),
         "starter verification changed after message delivery"
     );
     let listed = control(
@@ -317,14 +334,15 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
         session_id: "different-session".into(),
         ..parent.clone()
     };
-    assert!(
-        !gents_session::session::origin::verified_agent_new_creation(
+    assert_eq!(
+        gents_session::session::origin::verified_agent_new_creation(
             &fixture.access,
             &target,
             &unrelated
         )
         .await
-        .unwrap()
+        .unwrap(),
+        Err(gents_session::session::origin::CreationDenial::CallerSessionNotFound)
     );
     fixture.db.node.shutdown().await.unwrap();
 }
@@ -483,4 +501,102 @@ async fn a_background_request_on_a_script_child_is_refused() {
     assert_eq!(row["await_mode"], "foreground");
     assert_eq!(row["lifecycle_state"], "running");
     fixture.db.node.shutdown().await.unwrap();
+}
+
+/// A loader that withholds one tool call (the effect's parent) and loads every
+/// other through the production loader, the parent walk included.
+struct WithholdParent {
+    parent_doc: String,
+    unreadable: bool,
+    withheld: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl gents_session::tool_call::query::result::ToolCallLoader for WithholdParent {
+    async fn load(
+        &self,
+        source: gents_session::tool_call::query::result::ReadSource<'_, '_>,
+        tool_call_doc_id: &str,
+        scope: gents_session::tool_call::query::result::ToolCallScope<'_>,
+        ancestry: &mut gents_session::tool_call::query::result::ToolCallAncestry,
+    ) -> Result<
+        gents_session::tool_call::query::result::AcceptedToolCall,
+        gents_session::tool_call::query::result::ToolCallLoadError,
+    > {
+        use gents_session::tool_call::query::result::ToolCallLoadError;
+        if tool_call_doc_id == self.parent_doc {
+            self.withheld
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return Err(if self.unreadable {
+                ToolCallLoadError::Unreadable(anyhow::anyhow!("parent row could not be read"))
+            } else {
+                ToolCallLoadError::Missing(tool_call_doc_id.to_owned())
+            });
+        }
+        gents_session::tool_call::query::result::load_accepted_tool_call_with(
+            self,
+            source,
+            tool_call_doc_id,
+            scope,
+            ancestry,
+        )
+        .await
+    }
+}
+
+/// With a valid creation receipt, a missing or unreadable effect parent
+/// denies the starter by name, and the interrupt is refused with that reason,
+/// so the session list reports `can_interrupt=false` (it is
+/// `interrupt_refusal(..).is_none()`).
+async fn assert_withheld_parent_is_denied(
+    fixture: &gents_toolcalls::test_support::background_hook::BudgetHookFixture,
+    target: &gents_protocol::session::SessionScope,
+    parent: &gents_protocol::session::SessionScope,
+    parent_doc: &str,
+) {
+    use gents_session::session::origin::CreationDenial;
+    for (unreadable, denial) in [
+        (false, CreationDenial::ParentMissing),
+        (true, CreationDenial::ParentUnreadable),
+    ] {
+        let loader = WithholdParent {
+            parent_doc: parent_doc.to_owned(),
+            unreadable,
+            withheld: Default::default(),
+        };
+        let verdict = gents_session::session::origin::verified_agent_new_creation_with(
+            &loader,
+            &fixture.access,
+            target,
+            parent,
+        )
+        .await
+        .unwrap();
+        assert_eq!(verdict, Err(denial));
+        let refusal = gents_session::session::message::interrupt_refusal_with(
+            &loader,
+            &fixture.db.node,
+            fixture.agent.did(),
+            parent,
+            target,
+        )
+        .await
+        .unwrap()
+        .expect("interrupt refused without the effect's parent");
+        assert!(refusal.contains(denial.reason()), "{refusal}");
+        assert!(
+            loader.withheld.load(std::sync::atomic::Ordering::SeqCst) > 0,
+            "the parent was never asked for"
+        );
+    }
+    // The production loader still verifies the same receipt.
+    assert!(gents_session::session::message::interrupt_refusal(
+        &fixture.db.node,
+        fixture.agent.did(),
+        parent,
+        target,
+    )
+    .await
+    .unwrap()
+    .is_none());
 }

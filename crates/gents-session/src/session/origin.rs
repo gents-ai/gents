@@ -1002,12 +1002,167 @@ fn creation_receipt_signer<'a>(
     }
 }
 
+/// How a session's creation by its caller was verified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifiedCreation {
+    /// The cause call's canonical result is the receipt: a direct
+    /// `agent_new` call, or a plugin effect while its in-flight result is.
+    CallResult,
+    /// A plugin effect's immutable acceptance receipt is it, whatever its
+    /// later terminal presentation (for example after cancellation).
+    EffectAcceptance,
+    /// A plugin job spawn bound to the caller.
+    PluginJob,
+}
+
+/// Why a caller is not verified as the session that created a target, one
+/// variant per check of `verified_agent_new_creation`. Each is a fixed,
+/// value-free reason; infrastructure failures stay the outer `Err`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreationDenial {
+    /// The caller scope does not name exactly one session.
+    CallerSessionNotFound,
+    /// The target scope does not name exactly one session.
+    TargetSessionNotFound,
+    /// The target has no signed creation receipt of an agent_new or plugin
+    /// job (or not for the expected opening request).
+    NoVerifiedCreationReceipt,
+    /// The receipt's opening request is not exactly one readable row.
+    OpeningRequestNotFound,
+    /// The opening request row does not decode.
+    OpeningRequestUnreadable,
+    /// The opening request's scope, agent, requester, admission signer or
+    /// signature does not match the target and caller.
+    OpeningRequestMismatch,
+    /// The plugin job spawn is not bound to this caller.
+    PluginJobBindingMismatch,
+    /// The opening request names no parent request and tool call.
+    OpeningWithoutCause,
+    /// The parent request is not exactly one readable row.
+    ParentRequestNotFound,
+    /// The parent request row does not decode.
+    ParentRequestUnreadable,
+    /// The parent request's scope, request id or signature does not match.
+    ParentRequestMismatch,
+    /// The cause tool call is not exactly one readable row.
+    CauseCallNotFound,
+    /// The cause tool call is not this caller's agent_new call of the parent
+    /// request.
+    CauseCallMismatch,
+    /// The receipt's cause binding is not the cause tool call.
+    CauseBindingMismatch,
+    /// The cause tool call is missing from the caller's scope.
+    CauseCallMissing,
+    /// The cause tool call could not be read.
+    CauseCallUnreadable,
+    /// The cause tool call's identity, ancestry or admission is invalid.
+    CauseCallInvalid,
+    /// The cause is a plugin effect whose parent call is missing.
+    ParentMissing,
+    /// The cause is a plugin effect (or spawned call) whose parent call could
+    /// not be read as an accepted call.
+    ParentUnreadable,
+    /// The cause call's result or effect receipt could not be read.
+    CauseReceiptUnreadable,
+    /// Neither the cause call's result nor its effect receipt is the creation
+    /// receipt of this session.
+    CauseReceiptMismatch,
+}
+
+impl CreationDenial {
+    /// The fixed reason, for refusals.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::CallerSessionNotFound => "the caller's session was not found",
+            Self::TargetSessionNotFound => "the target session was not found",
+            Self::NoVerifiedCreationReceipt => {
+                "the target has no verified agent_new creation receipt"
+            }
+            Self::OpeningRequestNotFound => "the target's opening request was not found",
+            Self::OpeningRequestUnreadable => "the target's opening request could not be read",
+            Self::OpeningRequestMismatch => {
+                "the target's opening request was not admitted by the caller's agent"
+            }
+            Self::PluginJobBindingMismatch => "the plugin job is not bound to the caller",
+            Self::OpeningWithoutCause => "the target's opening request names no starting call",
+            Self::ParentRequestNotFound => "the starting request was not found",
+            Self::ParentRequestUnreadable => "the starting request could not be read",
+            Self::ParentRequestMismatch => "the starting request is not the caller's",
+            Self::CauseCallNotFound => "the starting call was not found",
+            Self::CauseCallMismatch => "the starting call is not the caller's agent_new call",
+            Self::CauseBindingMismatch => "the creation receipt names another starting call",
+            Self::CauseCallMissing => "the starting call is missing from the caller's session",
+            Self::CauseCallUnreadable => "the starting call could not be read",
+            Self::CauseCallInvalid => "the starting call's admission could not be verified",
+            Self::ParentMissing => "the starting call's parent call is missing",
+            Self::ParentUnreadable => "the starting call's parent call could not be read",
+            Self::CauseReceiptUnreadable => "the starting call's receipt could not be read",
+            Self::CauseReceiptMismatch => {
+                "the starting call's receipt is not this session's creation"
+            }
+        }
+    }
+
+    /// The denial a failed load of the cause call is, by its typed failure.
+    fn of_load(error: &crate::tool_call::query::result::ToolCallLoadError) -> Self {
+        use crate::tool_call::query::result::ToolCallLoadError;
+        match error {
+            ToolCallLoadError::Missing(_) => Self::CauseCallMissing,
+            ToolCallLoadError::Unreadable(_) => Self::CauseCallUnreadable,
+            ToolCallLoadError::Invalid(_) => Self::CauseCallInvalid,
+            ToolCallLoadError::Parent { error, .. } => match **error {
+                ToolCallLoadError::Missing(_) => Self::ParentMissing,
+                _ => Self::ParentUnreadable,
+            },
+        }
+    }
+
+    fn of_read(error: &crate::tool_call::query::result::ToolCallReadError) -> Self {
+        match error {
+            crate::tool_call::query::result::ToolCallReadError::Load(error) => Self::of_load(error),
+            crate::tool_call::query::result::ToolCallReadError::Read(_) => {
+                Self::CauseReceiptUnreadable
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for CreationDenial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())
+    }
+}
+
+/// Whether `caller` created `target`: how it was verified, or the check that
+/// refused it. The outer `Err` is an infrastructure failure, never a denial.
+pub type CreationVerdict = std::result::Result<VerifiedCreation, CreationDenial>;
+
 pub async fn verified_agent_new_creation(
     access: &ConfigAccess,
     target: &SessionScope,
     caller: &SessionScope,
-) -> Result<bool> {
-    verified_agent_new_creation_matching(access, target, caller, None).await
+) -> Result<CreationVerdict> {
+    verified_agent_new_creation_matching(
+        &crate::tool_call::query::result::ProductionToolCallLoader,
+        access,
+        target,
+        caller,
+        None,
+    )
+    .await
+}
+
+/// `verified_agent_new_creation` with the cause call, and its ancestry, loaded
+/// through `loader`. For tests that withhold a row; production passes
+/// `ProductionToolCallLoader` through `verified_agent_new_creation`.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn verified_agent_new_creation_with(
+    loader: &dyn crate::tool_call::query::result::ToolCallLoader,
+    access: &ConfigAccess,
+    target: &SessionScope,
+    caller: &SessionScope,
+) -> Result<CreationVerdict> {
+    verified_agent_new_creation_matching(loader, access, target, caller, None).await
 }
 
 pub(crate) async fn verified_agent_new_creation_for_opening(
@@ -1015,17 +1170,26 @@ pub(crate) async fn verified_agent_new_creation_for_opening(
     target: &SessionScope,
     caller: &SessionScope,
     expected_opening: &str,
-) -> Result<bool> {
-    verified_agent_new_creation_matching(access, target, caller, Some(expected_opening)).await
+) -> Result<CreationVerdict> {
+    verified_agent_new_creation_matching(
+        &crate::tool_call::query::result::ProductionToolCallLoader,
+        access,
+        target,
+        caller,
+        Some(expected_opening),
+    )
+    .await
 }
 
 async fn verified_agent_new_creation_matching(
+    loader: &dyn crate::tool_call::query::result::ToolCallLoader,
     access: &ConfigAccess,
     target: &SessionScope,
     caller: &SessionScope,
     expected_opening: Option<&str>,
-) -> Result<bool> {
+) -> Result<CreationVerdict> {
     use gents_protocol::session::SessionCreationCause;
+    use CreationDenial as Denied;
     let callers = session_rows(
         access,
         &session_scope_filter(
@@ -1036,7 +1200,7 @@ async fn verified_agent_new_creation_matching(
     )
     .await?;
     let [caller_session] = callers.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::CallerSessionNotFound));
     };
     let caller_agent = caller_session.session.agent_did.as_str();
     let own = session_rows(
@@ -1049,12 +1213,12 @@ async fn verified_agent_new_creation_matching(
     )
     .await?;
     let [owner] = own.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::TargetSessionNotFound));
     };
     let session = &owner.session;
     let receipt = verified_agent_creation_receipt(session, &owner.doc_id, expected_opening);
     let Some(receipt) = receipt else {
-        return Ok(false);
+        return Ok(Err(Denied::NoVerifiedCreationReceipt));
     };
     let opening = collection(
         access,
@@ -1067,10 +1231,10 @@ async fn verified_agent_new_creation_matching(
     )
     .await?;
     let [row] = opening.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::OpeningRequestNotFound));
     };
     let Ok(request) = serde_json::from_value::<AgentRequestRow>(row.clone()) else {
-        return Ok(false);
+        return Ok(Err(Denied::OpeningRequestUnreadable));
     };
     if request.node_did.as_deref() != Some(target.node_did.as_str())
         || request.session_id.as_deref() != Some(target.session_id.as_str())
@@ -1081,7 +1245,7 @@ async fn verified_agent_new_creation_matching(
         || gents_store::identity::request_receipt::verify_request_receipt_signature(&request)
             .is_err()
     {
-        return Ok(false);
+        return Ok(Err(Denied::OpeningRequestMismatch));
     }
     if receipt.cause == SessionCreationCause::PluginJob {
         let source_bound = request
@@ -1100,19 +1264,24 @@ async fn verified_agent_new_creation_matching(
         } else {
             None
         };
-        return Ok(plugin_job_creation_binding(access, &request)
+        let bound = plugin_job_creation_binding(access, &request)
             .await?
             .is_some_and(|(legacy_binding, scope)| {
                 scope == *caller
                     && binding.as_deref().unwrap_or(&legacy_binding) == receipt.cause_binding
-            }));
+            });
+        return Ok(if bound {
+            Ok(VerifiedCreation::PluginJob)
+        } else {
+            Err(Denied::PluginJobBindingMismatch)
+        });
     }
     let (Some(parent_doc), Some(call_doc), Some(call_id)) = (
         request.caused_by_parent_request_doc_id.as_deref(),
         request.caused_by_parent_tool_call_doc_id.as_deref(),
         request.caused_by_parent_tool_call_id.as_deref(),
     ) else {
-        return Ok(false);
+        return Ok(Err(Denied::OpeningWithoutCause));
     };
     let parent = collection(
         access,
@@ -1125,10 +1294,10 @@ async fn verified_agent_new_creation_matching(
     )
     .await?;
     let [row] = parent.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::ParentRequestNotFound));
     };
     let Ok(parent) = serde_json::from_value::<AgentRequestRow>(row.clone()) else {
-        return Ok(false);
+        return Ok(Err(Denied::ParentRequestUnreadable));
     };
     if parent.node_did.as_deref() != Some(caller.node_did.as_str())
         || parent.session_id.as_deref() != Some(caller.session_id.as_str())
@@ -1137,14 +1306,14 @@ async fn verified_agent_new_creation_matching(
         || gents_store::identity::request_receipt::verify_request_receipt_signature(&parent)
             .is_err()
     {
-        return Ok(false);
+        return Ok(Err(Denied::ParentRequestMismatch));
     }
     let calls = collection(access, &format!(
         "{{AgentToolCall(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{request_doc_id node_did session_id requester_did tool_call_id tool_name}}}}",
         escape_graphql_string(call_doc),
     ), "AgentToolCall").await?;
     let [call] = calls.as_slice() else {
-        return Ok(false);
+        return Ok(Err(Denied::CauseCallNotFound));
     };
     if call["request_doc_id"].as_str() != Some(parent_doc)
         || call["node_did"].as_str() != Some(caller.node_did.as_str())
@@ -1153,12 +1322,13 @@ async fn verified_agent_new_creation_matching(
         || call["tool_call_id"].as_str() != Some(call_id)
         || call["tool_name"].as_str() != Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME)
     {
-        return Ok(false);
+        return Ok(Err(Denied::CauseCallMismatch));
     }
     if receipt.cause_binding != call_doc {
-        return Ok(false);
+        return Ok(Err(Denied::CauseBindingMismatch));
     }
-    let Ok(read) = crate::tool_call::query::result::load_tool_call_read(
+    let read = match crate::tool_call::query::result::load_tool_call_read_by(
+        loader,
         access,
         call_doc,
         &caller.node_did,
@@ -1166,43 +1336,55 @@ async fn verified_agent_new_creation_matching(
         caller.requester_did.as_deref(),
     )
     .await
-    else {
-        return Ok(false);
+    {
+        Ok(read) => read,
+        Err(error) => return Ok(Err(Denied::of_read(&error))),
     };
-    let direct_match =
-        agent_receipt_matches(&read, &request, &receipt.opening_request_doc_id, call_id);
-    let effect_match = if direct_match {
-        false
+    if agent_receipt_matches(&read, &request, &receipt.opening_request_doc_id, call_id) {
+        return Ok(creation_verdict(true, Ok(false)));
+    }
+    let effect = match crate::tool_call::query::result::load_effect_creation_receipt_by(
+        loader,
+        access,
+        call_doc,
+        &caller.node_did,
+        &caller.session_id,
+        caller.requester_did.as_deref(),
+    )
+    .await
+    {
+        Ok(Some(text)) => Ok(effect_creation_evidence(
+            true,
+            true,
+            agent_receipt_text_matches(&text, &request, &receipt.opening_request_doc_id, call_id),
+            true,
+        )),
+        Ok(None) => Ok(false),
+        Err(error) => Err(Denied::of_read(&error)),
+    };
+    Ok(creation_verdict(false, effect))
+}
+
+/// The verdict of the cause receipt: a direct result match, or the effect
+/// receipt's evidence (or the denial its read failed with).
+fn creation_verdict(
+    direct_match: bool,
+    effect: std::result::Result<bool, CreationDenial>,
+) -> CreationVerdict {
+    let effect_match = match effect {
+        Ok(matched) => matched,
+        Err(denial) if !direct_match => return Err(denial),
+        Err(_) => false,
+    };
+    if deferred_creation_allowed(true, true, true, direct_match || effect_match) {
+        Ok(if direct_match {
+            VerifiedCreation::CallResult
+        } else {
+            VerifiedCreation::EffectAcceptance
+        })
     } else {
-        match crate::tool_call::query::result::load_effect_creation_receipt(
-            access,
-            call_doc,
-            &caller.node_did,
-            &caller.session_id,
-            caller.requester_did.as_deref(),
-        )
-        .await
-        {
-            Ok(Some(text)) => effect_creation_evidence(
-                true,
-                true,
-                agent_receipt_text_matches(
-                    &text,
-                    &request,
-                    &receipt.opening_request_doc_id,
-                    call_id,
-                ),
-                true,
-            ),
-            _ => false,
-        }
-    };
-    Ok(deferred_creation_allowed(
-        true,
-        true,
-        true,
-        direct_match || effect_match,
-    ))
+        Err(CreationDenial::CauseReceiptMismatch)
+    }
 }
 
 // Terminal presentation is not creation authority; only authenticated effect

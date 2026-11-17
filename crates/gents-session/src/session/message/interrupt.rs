@@ -17,6 +17,8 @@ pub fn agent_interrupt_allowed(
         && (target_origin_cause == Some(caller_session) || (same_node && task_triggered))
 }
 
+const INTERRUPT_REFUSAL: &str = "only the session that started this session or a same-node agent for a Task-triggered session may interrupt it";
+
 pub async fn interrupt_refusal(
     node: &Arc<EmbeddedNode>,
     caller_agent_did: &str,
@@ -24,17 +26,58 @@ pub async fn interrupt_refusal(
     target: &SessionScope,
 ) -> Result<Option<String>> {
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(caller_agent_did)?);
-    let started =
+    let verdict =
         crate::session::origin::verified_agent_new_creation(&access, target, caller).await?;
-    let cause = started.then_some(caller.session_id.clone());
+    refusal_of(&access, caller, target, verdict).await
+}
+
+/// `interrupt_refusal` with the starter's cause call loaded through `loader`.
+/// For tests that withhold a row; production uses `interrupt_refusal`.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn interrupt_refusal_with(
+    loader: &dyn crate::tool_call::query::result::ToolCallLoader,
+    node: &Arc<EmbeddedNode>,
+    caller_agent_did: &str,
+    caller: &SessionScope,
+    target: &SessionScope,
+) -> Result<Option<String>> {
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(caller_agent_did)?);
+    let verdict =
+        crate::session::origin::verified_agent_new_creation_with(loader, &access, target, caller)
+            .await?;
+    refusal_of(&access, caller, target, verdict).await
+}
+
+/// The refusal for a creation verdict: none when the caller started the
+/// target or may interrupt a same-node Task-triggered session; otherwise the
+/// fixed refusal, with the verifier's reason when it refused the caller as
+/// the starter.
+async fn refusal_of(
+    access: &ConfigAccess,
+    caller: &SessionScope,
+    target: &SessionScope,
+    verdict: crate::session::origin::CreationVerdict,
+) -> Result<Option<String>> {
+    let cause = verdict.is_ok().then_some(caller.session_id.clone());
     let same_node = caller.node_did == target.node_did;
     let task_triggered = if same_node && cause.is_none() {
-        crate::session::origin::task_triggered_opening(&access, target).await?
+        crate::session::origin::task_triggered_opening(access, target).await?
     } else {
         false
     };
-    Ok((!agent_interrupt_allowed(&caller.session_id, &target.session_id, cause.as_deref(), same_node, task_triggered))
-        .then(|| "only the session that started this session or a same-node agent for a Task-triggered session may interrupt it".to_owned()))
+    if agent_interrupt_allowed(
+        &caller.session_id,
+        &target.session_id,
+        cause.as_deref(),
+        same_node,
+        task_triggered,
+    ) {
+        return Ok(None);
+    }
+    Ok(Some(match verdict {
+        Ok(_) => INTERRUPT_REFUSAL.to_owned(),
+        Err(denial) => format!("{INTERRUPT_REFUSAL} ({denial})"),
+    }))
 }
 
 pub async fn interrupt_session(
