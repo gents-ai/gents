@@ -522,6 +522,10 @@ async fn serve_foreground(
     // A home whose identity can never own the node is refused from its
     // configuration alone, before any store is reserved or opened.
     gents_store::local::home::ensure_home_identity_can_serve(&home_dir)?;
+    let init_config = read_init_config(&home_dir)?;
+    if let Some(config) = init_config.as_ref() {
+        gents_store::local::document_acp::ensure_home_opens(config)?;
+    }
     let data_dir = args
         .data_dir
         .clone()
@@ -593,10 +597,6 @@ async fn serve_foreground(
     let advertised_graphql_url = args.advertise_graphql_url.clone();
     if let Some(url) = &advertised_graphql_url {
         gents_p2p::p2p_reconcile::endpoint::validate_advertised_graphql_url(url)?;
-    }
-    let init_config = read_init_config(&home_dir)?;
-    if let Some(config) = init_config.as_ref() {
-        gents_store::local::document_acp::ensure_home_opens(config)?;
     }
     if let (Some(explicit), Some(config)) = (args.node_name.as_deref(), init_config.as_ref()) {
         if explicit != config.node_name {
