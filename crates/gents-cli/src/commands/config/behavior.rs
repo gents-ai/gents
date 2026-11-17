@@ -761,7 +761,7 @@ mod tests {
     "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     "published_root": "<ROOT>",
     "state": "waiting_for_user",
-    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CREATED>"
+    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CREATED> (add --home with this node's home when it runs against a node other than your default one)"
   },
   "make_default": false,
   "operation": "create"
@@ -784,7 +784,7 @@ mod tests {
     "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     "published_root": "<ROOT>",
     "state": "waiting_for_user",
-    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CLONED>"
+    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CLONED> (add --home with this node's home when it runs against a node other than your default one)"
   },
   "make_default": false,
   "operation": "clone"

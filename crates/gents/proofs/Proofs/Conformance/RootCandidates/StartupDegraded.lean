@@ -4,4 +4,4 @@ import Proofs.Conformance.Functions.Pack
 
 attribute [conformance_function] Runtime.StartupDegraded.allowsStartup
   Runtime.StartupDegraded.degradesNode Runtime.StartupDegraded.initAgentReason
-  Runtime.StartupDegraded.enabledAgentReason
+  Runtime.StartupDegraded.enabledAgentReason Runtime.StartupDegraded.toolSurfaceReason

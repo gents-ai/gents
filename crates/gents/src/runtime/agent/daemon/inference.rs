@@ -1591,6 +1591,7 @@ pub(super) mod tests {
             agent_did: agent_config.agent_did.clone(),
             selected_root: Some(selected.clone()),
             ceiling_root: Some(selected.clone()),
+            node_home: None,
         }));
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 

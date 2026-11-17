@@ -385,6 +385,7 @@ pub async fn configure_agent(
         ceiling,
         args.action == "preview",
         AgentCaller::default(),
+        None,
     )
     .await?;
     receipt_text(&receipt)
@@ -412,7 +413,16 @@ pub async fn apply_agent(
     args: &ConfigureAgentParams,
     ceiling: &crate::surface::SelfConfigProcessCeiling,
 ) -> Result<AgentReceipt<Agent>, AgentOperationError> {
-    Ok(agent_apply_access(access, owner, args, ceiling, false, AgentCaller::default()).await?)
+    Ok(agent_apply_access(
+        access,
+        owner,
+        args,
+        ceiling,
+        false,
+        AgentCaller::default(),
+        None,
+    )
+    .await?)
 }
 
 /// The operations layer's preview (Lean `agentOutcome .preview`): a refusal is
@@ -424,7 +434,17 @@ pub async fn preview_agent(
     args: &ConfigureAgentParams,
     ceiling: &crate::surface::SelfConfigProcessCeiling,
 ) -> Result<AgentOutcome<AgentReceipt<Agent>>, AgentOperationError> {
-    match agent_apply_access(access, owner, args, ceiling, true, AgentCaller::default()).await {
+    match agent_apply_access(
+        access,
+        owner,
+        args,
+        ceiling,
+        true,
+        AgentCaller::default(),
+        None,
+    )
+    .await
+    {
         Ok(receipt) => Ok(AgentOutcome::Admitted(receipt)),
         Err(error) => {
             let error = AgentOperationError::from(error);
@@ -439,6 +459,8 @@ pub async fn preview_agent(
 pub struct ObservedAdmission {
     facts: AdmissionFacts,
     actor_did: String,
+    /// The node home the runtime runs under, when its caller knows one.
+    node_home: Option<std::path::PathBuf>,
 }
 
 /// Observes what `access` holds over `targets` before its transaction opens:
@@ -452,7 +474,17 @@ pub async fn observe_admission(
     Ok(ObservedAdmission {
         facts: admission_facts(access, owner, targets).await?,
         actor_did: access.actor_did().unwrap_or_default(),
+        node_home: None,
     })
+}
+
+impl ObservedAdmission {
+    /// Attach the node home the runtime runs under, so a reader-grant step
+    /// names the `--home` the grant must run against.
+    pub fn with_node_home(mut self, home: Option<std::path::PathBuf>) -> Self {
+        self.node_home = home;
+        self
+    }
 }
 
 /// The operations layer's commit inside the caller's transaction, for a
@@ -479,6 +511,7 @@ pub async fn apply_agent_in_txn(
             facts: &admission.facts,
             actor_did: &admission.actor_did,
             caller: AgentCaller::default(),
+            home: admission.node_home.as_deref(),
         },
     )
     .await?)
@@ -499,6 +532,7 @@ async fn agent_apply(
         ceiling,
         preview,
         AgentCaller::default(),
+        None,
     )
     .await?;
     receipt_text(&receipt)
@@ -533,6 +567,7 @@ pub(super) async fn model_agent_outcome(
         core.process_ceiling(),
         true,
         caller,
+        core.node_home(),
     )
     .await
     {
@@ -621,6 +656,7 @@ pub(super) async fn model_agent_apply(
             node_binding: core.node_binding(),
             lockout: Some(core),
         },
+        core.node_home(),
     )
     .await
 }
@@ -632,6 +668,7 @@ async fn agent_apply_access(
     ceiling: &crate::surface::SelfConfigProcessCeiling,
     preview: bool,
     caller: AgentCaller<'_>,
+    home: Option<&std::path::Path>,
 ) -> Result<AgentReceipt<Agent>, AgentApplyError> {
     let facts = admission_facts(access, owner, &admission_targets(args)).await?;
     let actor_did = access.actor_did().unwrap_or_default();
@@ -643,6 +680,7 @@ async fn agent_apply_access(
         facts: &facts,
         actor_did: &actor_did,
         caller,
+        home,
     };
     let request = &request;
     if preview {
@@ -668,6 +706,8 @@ struct AgentApplyRequest<'a> {
     facts: &'a AdmissionFacts,
     actor_did: &'a str,
     caller: AgentCaller<'a>,
+    /// The node home the runtime runs under, for a reader-grant step's `--home`.
+    home: Option<&'a std::path::Path>,
 }
 
 /// Lean `SelfConfig.materializedAgent`: admits the request through
@@ -683,6 +723,7 @@ async fn agent_apply_in_txn(
         facts,
         actor_did,
         caller,
+        home,
         ..
     } = *request;
     let refs = gents_documents::ConfigReferences::load_in_txn(txn, owner).await?;
@@ -968,6 +1009,7 @@ async fn agent_apply_in_txn(
                     root_access = Some(crate::surface::reader_grant_step(
                         &id,
                         published.as_deref(),
+                        home,
                         true,
                     ));
                 }
