@@ -487,6 +487,27 @@ class NativeNextest(unittest.TestCase):
         self.assertEqual(gate.binary_id("gents", ("--lib",)), "gents")
 
 
+    def test_the_core_packs_directory_exists_so_its_build_script_stays_fresh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unset = {key: value for key, value in os.environ.items()
+                     if key not in ("GENTS_CORE_PACKS_DIR", "GITHUB_ACTIONS", "CARGO_TARGET_DIR")}
+            with mock.patch.object(gate, "ROOT", root), \
+                    mock.patch.dict(os.environ, {**unset, "GENTS_CORE_PACKS_DIR": "/elsewhere"}, clear=True):
+                gate.keep_core_packs_fresh()
+                self.assertFalse((root / "target/core-packs").exists())
+            with mock.patch.object(gate, "ROOT", root), mock.patch.dict(os.environ, unset, clear=True):
+                gate.keep_core_packs_fresh()
+                gate.keep_core_packs_fresh()
+                self.assertNotIn("GENTS_CORE_PACKS_DIR", os.environ)
+            self.assertTrue((root / "target/core-packs").is_dir())
+            target = root / "kept-target"
+            ci = {**unset, "GITHUB_ACTIONS": "true", "CARGO_TARGET_DIR": str(target)}
+            with mock.patch.object(gate, "ROOT", root), mock.patch.dict(os.environ, ci, clear=True):
+                gate.keep_core_packs_fresh()
+                self.assertEqual(os.environ["GENTS_CORE_PACKS_DIR"], str(target / "core-packs-none"))
+            self.assertTrue((target / "core-packs-none").is_dir())
+
     def test_a_crate_or_macos_target_that_ran_no_test_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
