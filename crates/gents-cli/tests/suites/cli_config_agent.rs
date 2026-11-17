@@ -158,6 +158,37 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         binary_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    // Parse every generated command through the real CLI without applying it.
+    for omission in omissions {
+        let command = omission["grant_command"].as_str().unwrap();
+        let parse_only = command.replace(
+            "gents config tools set --home",
+            "gents config tools set --help --home",
+        );
+        assert_ne!(parse_only, command);
+        let parsed = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&parse_only)
+            .current_dir(&home_dir)
+            .env("PATH", &path)
+            .env("HOME", &home_dir)
+            .output()?;
+        assert!(
+            parsed.status.success(),
+            "command did not parse: {command}: {}",
+            String::from_utf8_lossy(&parsed.stderr)
+        );
+    }
+    // The nested root grant must restore the original source root, not the override.
+    let root_command = omissions
+        .iter()
+        .find(|entry| entry["capability"] == "host root")
+        .unwrap()["grant_command"]
+        .as_str()
+        .unwrap();
+    assert!(root_command.contains(&tool_root));
+    assert!(!root_command.contains(override_root.to_str().unwrap()));
+
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(grant_command)
