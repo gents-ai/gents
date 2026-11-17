@@ -154,7 +154,7 @@ async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
         .join(",");
     let observed = reconnected.execute(&format!(r#"{{
         AgentRequest(filter: {{_docID: {{_in: [{ids}]}}}}) {{_docID request_id lifecycle_state superseded_by_request_doc_id}}
-        AgentMessage(filter: {{request_doc_id: {{_in: [{ids}]}}, role: {{_eq: "user"}}}}, order: {{sequence: ASC}}) {{request_doc_id sequence}}
+        AgentMessage(filter: {{request_doc_id: {{_in: [{ids}]}}, role: {{_eq: "user"}}}}, order: {{sequence: ASC}}) {{request_doc_id sequence message_key}}
     }}"#)).await.unwrap();
     let rows = observed["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), documents.len());
@@ -184,6 +184,16 @@ async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
     let authored = observed["data"]["AgentMessage"].as_array().unwrap();
     let claims = authored
         .iter()
+        .filter(|message| {
+            message["message_key"].as_str()
+                == Some(
+                    gents_protocol::output::rows::authored_message_key(
+                        message["request_doc_id"].as_str().unwrap(),
+                        "prompt",
+                    )
+                    .as_str(),
+                )
+        })
         .map(|message| {
             let doc = message["request_doc_id"].as_str().unwrap();
             let head = documents
