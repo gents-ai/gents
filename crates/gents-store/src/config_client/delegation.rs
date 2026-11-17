@@ -56,6 +56,7 @@ fn mint_for(
     let audience = acp::DelegationAudience {
         worker: audience.worker.clone(),
         deployment: audience.deployment,
+        genesis_id: None,
     };
     vera::vera_rs::caller_delegation(&signer, &audience, lifetime)
         .now_or_never()
