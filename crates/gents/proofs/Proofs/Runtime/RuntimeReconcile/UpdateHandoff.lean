@@ -44,6 +44,20 @@ theorem other_custody_unchanged (verified readable : Bool) :
     preflight verified false readable = (if verified then some .staged else none) := by
   simp [preflight]
 
+/-- Registration is downstream of the candidate observation: without its
+admitted phase there is no initial receipt and no registration transition. -/
+def registerAfterPreflight (verified keychain readable : Bool) : Option Phase :=
+  (preflight verified keychain readable).bind fun phase => step phase (.register true)
+
+theorem rejected_preflight_cannot_register (verified keychain readable : Bool)
+    (h : preflight verified keychain readable = none) :
+    registerAfterPreflight verified keychain readable = none := by
+  simp [registerAfterPreflight, h]
+
+theorem unreadable_keychain_cannot_register (verified : Bool) :
+    registerAfterPreflight verified true false = none := by
+  simp [registerAfterPreflight, preflight]
+
 /-- A different executable may migrate before readiness; it is never rolled
 back after a startup attempt or publication of its service definition: a
 reboot/external start can open that definition after helper death. Reconfiguration of the identical digest may be

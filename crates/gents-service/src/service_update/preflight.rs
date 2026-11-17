@@ -1,5 +1,5 @@
 use super::*;
-use crate::native_service::{CommandRunner, ProcessCommandRunner};
+use crate::native_service::CommandRunner;
 use gents_store::local::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyError};
 
 #[derive(Debug, thiserror::Error)]
@@ -8,19 +8,61 @@ pub(super) enum PreflightError {
     Observation(#[source] gents_protocol::error_chain::PassedThrough),
     #[error("candidate preflight returned invalid metadata; runtime and service unchanged")]
     Metadata(#[from] serde_json::Error),
-    #[error("candidate cannot read this home's store key without a Keychain prompt: {}; this build may not be trusted by the Keychain item (or the login Keychain is locked). Runtime and service unchanged. Unlock the login Keychain and grant the candidate access in Keychain Access, or re-sign it with the installed build's signing identity; then run `{command}` to check access without prompting. Cause: {source}", home.display())]
+    #[error("candidate {} cannot read this home's store key without interaction ({}). Keychain service `{service}`, account `{account}`. Runtime and service unchanged. A person at the Mac must approve this build's access to that item (and unlock the login Keychain if needed), or install a build signed with the same stable identity as the running one. Then run `{command}` to CHECK access without prompting, and retry your original update command. Cause: {source}", candidate.display(), home.display())]
     StoreKey {
+        candidate: PathBuf,
         home: PathBuf,
+        service: &'static str,
+        account: String,
         command: String,
         #[source]
-        source: Box<StoreKeyError>,
+        source: Box<StoreKeyCause>,
     },
-    #[error("candidate preflight refused; runtime and service unchanged. After resolving trust/access, run `{command}` using the original candidate (the temporary probe copy is removed). Diagnostic: {detail}")]
-    CandidateRefused { command: String, detail: String },
+    #[error("candidate preflight failed; runtime and service unchanged. Diagnostic: {detail}")]
+    CandidateRefused { detail: String },
     #[error("candidate did not prove noninteractive Keychain store-key access for {}; runtime and service unchanged. Use a candidate that supports the store-key preflight, then retry your original update command", home.display())]
     MissingStoreKeyProof { home: PathBuf },
     #[error("candidate platform, schema check or handoff protocol mismatch; runtime and service unchanged")]
     Incompatible,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum StoreKeyCause {
+    #[error(transparent)]
+    Local(#[from] StoreKeyError),
+    #[error("{detail}")]
+    Candidate { detail: String },
+}
+
+/// Versioned child evidence: never scrape stderr for a Keychain-looking phrase.
+#[derive(Debug, Serialize, Deserialize)]
+struct FailureEnvelope {
+    store_key_failure_v1: String,
+}
+
+pub(super) fn failure_metadata(error: &anyhow::Error) -> Option<serde_json::Value> {
+    match error.downcast_ref::<PreflightError>()? {
+        PreflightError::StoreKey { source, .. } => Some(serde_json::json!(FailureEnvelope {
+            store_key_failure_v1: gents_protocol::failure_text::bounded_text(&source.to_string()),
+        })),
+        _ => None,
+    }
+}
+
+fn store_key_error(
+    home: &Path,
+    candidate: &Path,
+    account: String,
+    source: StoreKeyCause,
+) -> PreflightError {
+    PreflightError::StoreKey {
+        candidate: candidate.to_owned(),
+        home: home.to_owned(),
+        service: "com.source-inc.gents.store-key",
+        account,
+        command: check_command(candidate, home),
+        source: Box::new(source),
+    }
 }
 
 /// Quote paths as single POSIX shell arguments, including embedded apostrophes.
@@ -65,22 +107,24 @@ fn check_store_key_with(
         &gents_store::local::home::default_data_dir(home),
     )
     .map(drop)
-    .map_err(|source| PreflightError::StoreKey {
-        home: home.to_path_buf(),
-        command: check_command(&executable, home),
-        source: Box::new(source),
+    .map_err(|source| {
+        let StoreKeyCustody::MacosKeychain { keychain_label } = &record.custody else {
+            unreachable!()
+        };
+        store_key_error(home, &executable, keychain_label.clone(), source.into())
     })?;
     Ok(true)
 }
 
 pub(super) fn probe(
+    runner: &impl CommandRunner,
     candidate: &Path,
     home: &Path,
     keychain: bool,
     original_candidate: &Path,
-) -> std::result::Result<(), PreflightError> {
+) -> std::result::Result<Phase, PreflightError> {
     super::files::validate_native_executable(candidate).map_err(observation)?;
-    let output = ProcessCommandRunner
+    let output = runner
         .run(
             candidate.as_os_str(),
             &[
@@ -92,14 +136,31 @@ pub(super) fn probe(
         )
         .map_err(observation)?;
     if !output.success {
+        if keychain {
+            if let Ok(failure) = serde_json::from_str::<FailureEnvelope>(&output.stdout) {
+                let config = read_init_config(home).map_err(observation)?;
+                if let Some(StoreEncryption {
+                    custody: StoreKeyCustody::MacosKeychain { keychain_label },
+                    ..
+                }) = config.and_then(|config| config.store_encryption)
+                {
+                    return Err(store_key_error(
+                        home,
+                        original_candidate,
+                        keychain_label,
+                        StoreKeyCause::Candidate {
+                            detail: failure.store_key_failure_v1,
+                        },
+                    ));
+                }
+            }
+        }
         return Err(PreflightError::CandidateRefused {
-            command: check_command(original_candidate, home),
             detail: gents_protocol::failure_text::bounded_text(&output.stderr),
         });
     }
     let metadata = serde_json::from_str(&output.stdout)?;
-    admit(&metadata, home, keychain)?;
-    Ok(())
+    admit(&metadata, home, keychain)
 }
 
 fn admit(

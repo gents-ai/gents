@@ -56,14 +56,22 @@ structure PreflightCase where
   keyReadableWithoutInteraction : Bool
   deriving ToJson
 
+structure PreflightVerdict where
+  admitted : Option Phase
+  registered : Option Phase
+  deriving ToJson
+
 @[conformance_family]
-def preflight : Conformance.Family PreflightCase (Option Phase) where
+def preflight : Conformance.Family PreflightCase PreflightVerdict where
   inputs := [false, true].flatMap fun verified =>
     [false, true].flatMap fun keychain =>
       [false, true].map fun readable => {
         verified := verified, keychainCustody := keychain,
         keyReadableWithoutInteraction := readable }
-  model := fun c => _root_.RuntimeReconcile.UpdateHandoff.preflight
-    c.verified c.keychainCustody c.keyReadableWithoutInteraction
+  model := fun c => {
+    admitted := _root_.RuntimeReconcile.UpdateHandoff.preflight
+      c.verified c.keychainCustody c.keyReadableWithoutInteraction,
+    registered := registerAfterPreflight
+      c.verified c.keychainCustody c.keyReadableWithoutInteraction }
 
 end Conformance.UpdateHandoff

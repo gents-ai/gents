@@ -67,17 +67,6 @@ mod conformance {
     use super::*;
 
     #[test]
-    fn update_preflight_matches_lean() {
-        gents_lean_vocab::families::update_handoff_preflight::replay::<Phase>(|i| {
-            preflight(
-                i.verified,
-                i.keychain_custody,
-                i.key_readable_without_interaction,
-            )
-        });
-    }
-
-    #[test]
     fn update_handoff_transitions_match_lean() {
         gents_lean_vocab::families::update_handoff_transitions::replay::<String, Phase>(|i| {
             let action = match i.action.as_str() {

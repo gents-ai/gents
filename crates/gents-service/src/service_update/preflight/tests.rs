@@ -86,7 +86,7 @@ fn candidate_keychain_refusal_precedes_staging_without_touching_runtime() {
         drain_timeout_secs: 300,
     };
     let mut reads = 0;
-    let result = super::super::stage::prepare_with_preflight(
+    let result = super::super::stage::prepare_with_probe(
         home.clone(),
         id,
         args,
@@ -122,10 +122,10 @@ fn candidate_keychain_refusal_precedes_staging_without_touching_runtime() {
     ));
     let text = format!("{error:#}");
     for fragment in [
-        "Keychain prompt",
-        "not be trusted",
+        "without interaction",
+        "approve this build",
         "Runtime and service unchanged",
-        "Keychain Access",
+        "account `injected-reader-no-keychain-item`",
         "service update-check --home",
         "-25293",
     ] {
@@ -218,4 +218,233 @@ fn remedy_command_quotes_executable_and_actual_home() {
         ),
         "'/candidate dir/gents' runtime service update-check --home '/home/John'\"'\"'s node'"
     );
+}
+
+fn write_fixture(home: &Path) {
+    crate::home_state::write_init_config(
+        home,
+        &crate::state::StoredInitConfig {
+            home: home.to_string_lossy().into_owned(),
+            node_name: "preflight-fixture".into(),
+            node_did: "fixture-node".into(),
+            key_path: None,
+            identity_backend: Some("file".into()),
+            keychain_label: None,
+            secure_enclave_label: None,
+            tool_package: None,
+            tool_ceiling: crate::args::ToolCeilingArg::Readwrite,
+            tool_root: Some(home.to_string_lossy().into_owned()),
+            store_encryption: Some(keychain_record()),
+        },
+    )
+    .unwrap();
+}
+
+struct ChildRunner {
+    home: PathBuf,
+    output: crate::native_service::CommandOutput,
+    calls: std::sync::atomic::AtomicUsize,
+}
+impl CommandRunner for ChildRunner {
+    fn run(
+        &self,
+        program: &std::ffi::OsStr,
+        args: &[std::ffi::OsString],
+    ) -> Result<crate::native_service::CommandOutput> {
+        assert!(Path::new(program).is_file());
+        assert_eq!(
+            args,
+            [
+                "service".into(),
+                "update-check".into(),
+                "--home".into(),
+                self.home.as_os_str().to_owned()
+            ]
+        );
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(crate::native_service::CommandOutput {
+            success: self.output.success,
+            stdout: self.output.stdout.clone(),
+            stderr: self.output.stderr.clone(),
+        })
+    }
+}
+
+fn prepared_probe(
+    home: &Path,
+    output: crate::native_service::CommandOutput,
+    keychain: bool,
+) -> Result<(tempfile::TempDir, Phase)> {
+    let root = home.join("probe-copies");
+    std::fs::create_dir_all(&root).unwrap();
+    let candidate = std::env::current_exe().unwrap();
+    let runner = ChildRunner {
+        home: home.into(),
+        output,
+        calls: Default::default(),
+    };
+    let result = super::super::stage::prepare_with_preflight(
+        &root,
+        &candidate,
+        &super::super::files::digest(&candidate).unwrap(),
+        home,
+        keychain,
+        &mut |copy, home, keychain, original| {
+            probe(&runner, copy, home, keychain, original).map_err(Into::into)
+        },
+    );
+    assert_eq!(runner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    if result.is_err() {
+        assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+    }
+    assert!(!home
+        .join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME)
+        .exists());
+    result
+}
+
+#[test]
+fn real_probe_refuses_nonzero_and_missing_attestation_and_admits_attestation() {
+    let home = tempfile::tempdir().unwrap();
+    write_fixture(home.path());
+    let mut metadata = super::super::metadata(true);
+    let error = prepared_probe(
+        home.path(),
+        crate::native_service::CommandOutput {
+            success: false,
+            stdout: metadata.to_string(),
+            stderr: "schema migration failed on Linux".into(),
+        },
+        true,
+    )
+    .unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("schema migration failed on Linux"));
+    assert!(!text.contains("Keychain"));
+    assert!(!text.contains("approve"));
+    let error = prepared_probe(
+        home.path(),
+        crate::native_service::CommandOutput {
+            success: true,
+            stdout: metadata.to_string(),
+            stderr: String::new(),
+        },
+        true,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<PreflightError>(),
+        Some(PreflightError::MissingStoreKeyProof { .. })
+    ));
+    metadata["keychain_store_key_checked"] = serde_json::json!(true);
+    let (_, phase) = prepared_probe(
+        home.path(),
+        crate::native_service::CommandOutput {
+            success: true,
+            stdout: metadata.to_string(),
+            stderr: String::new(),
+        },
+        true,
+    )
+    .unwrap();
+    assert_eq!(phase, Phase::Staged);
+    assert_eq!(phase.step(Action::Register(true)), Some(Phase::Registered));
+}
+
+#[test]
+fn real_probe_preserves_structural_store_key_cause_and_original_path() {
+    let home = tempfile::tempdir().unwrap();
+    write_fixture(home.path());
+    let child_error: anyhow::Error = store_key_error(
+        home.path(),
+        Path::new("/deleted/stage/gents"),
+        "untrusted-child-label".into(),
+        StoreKeyCause::Candidate {
+            detail: "authorization denied (-25293)".into(),
+        },
+    )
+    .into();
+    let error = prepared_probe(
+        home.path(),
+        crate::native_service::CommandOutput {
+            success: false,
+            stdout: failure_metadata(&child_error).unwrap().to_string(),
+            stderr: child_error.to_string(),
+        },
+        true,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<PreflightError>(),
+        Some(PreflightError::StoreKey { .. })
+    ));
+    let text = format!("{error:#}");
+    assert!(text.contains(&std::env::current_exe().unwrap().display().to_string()));
+    assert!(text.contains("account `injected-reader-no-keychain-item`"));
+    assert!(text.contains("com.source-inc.gents.store-key"));
+    assert!(text.contains("-25293"));
+    assert!(text.contains("Runtime and service unchanged"));
+    assert!(!text.contains("/deleted/stage"));
+    assert!(!text.contains("untrusted-child-label"));
+    assert!(!text.contains("re-sign"));
+}
+
+#[test]
+fn candidate_metadata_cannot_skip_the_store_key_reader() {
+    if !in_child(concat!(
+        module_path!(),
+        "::candidate_metadata_cannot_skip_the_store_key_reader"
+    )) {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    write_fixture(home.path());
+    let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = called.clone();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let error = runtime
+        .block_on(super::super::check_metadata_with_reader(
+            Some(home.path().into()),
+            move |home, record| {
+                observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                check_store_key_with(home, record, |_, _, data| {
+                    assert_no_keychain_interaction();
+                    Err(StoreKeyUnavailable {
+                        data_path: data.into(),
+                        code: -25293,
+                    }
+                    .into())
+                })
+            },
+        ))
+        .unwrap_err();
+    assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(failure_metadata(&error).is_some());
+    // If check_metadata replaces the reader with literal true, it instead hits
+    // the absent runtime endpoint: both assertions above fail (no identity read).
+}
+
+#[test]
+fn real_probe_and_receipt_admission_order_match_lean() {
+    gents_lean_vocab::families::update_handoff_preflight::replay::<Phase>(|i| {
+        let home = tempfile::tempdir().unwrap();
+        let mut metadata = super::super::metadata(i.verified);
+        metadata["keychain_store_key_checked"] =
+            serde_json::json!(i.key_readable_without_interaction);
+        let observed = prepared_probe(
+            home.path(),
+            crate::native_service::CommandOutput {
+                success: true,
+                stdout: metadata.to_string(),
+                stderr: String::new(),
+            },
+            i.keychain_custody,
+        )
+        .ok();
+        let admitted = observed.as_ref().map(|(_, phase)| *phase);
+        gents_lean_vocab::families::update_handoff_preflight::PreflightVerdict {
+            admitted,
+            registered: admitted.and_then(|phase| phase.step(Action::Register(true))),
+        }
+    });
 }

@@ -312,10 +312,30 @@ pub fn executable_digest(path: &Path) -> Result<String> {
 }
 
 pub async fn check(home: Option<PathBuf>) -> Result<()> {
-    emit(&check_metadata(home).await?).await
+    match check_metadata(home).await {
+        Ok(metadata) => emit(&metadata).await,
+        Err(error) => {
+            if let Some(failure) = preflight::failure_metadata(&error) {
+                emit(&failure).await?;
+            }
+            Err(error)
+        }
+    }
 }
 
 async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
+    check_metadata_with_reader(home, preflight::check_store_key).await
+}
+
+async fn check_metadata_with_reader(
+    home: Option<PathBuf>,
+    reader: impl FnOnce(
+            &Path,
+            Option<&gents_store::local::store_key::StoreEncryption>,
+        ) -> std::result::Result<bool, preflight::PreflightError>
+        + Send
+        + 'static,
+) -> Result<serde_json::Value> {
     let Some(home) = home else {
         return Ok(metadata(false));
     };
@@ -326,8 +346,7 @@ async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
                 &gents_store::local::home::default_data_dir(&home),
             )?;
             let config = read_init_config(&home)?.context("home must be initialized")?;
-            let store_key_checked =
-                preflight::check_store_key(&home, config.store_encryption.as_ref())?;
+            let store_key_checked = reader(&home, config.store_encryption.as_ref())?;
             let state = read_runtime_state(&home)?.context("runtime endpoint missing")?;
             let settings = NetworkSettings::read(&home)?;
             let identity = crate::home_state::load_initialized_home_identity(&home, &config)?;

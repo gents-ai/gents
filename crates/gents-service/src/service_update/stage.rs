@@ -3,6 +3,7 @@ use super::files::{
     write_json,
 };
 use super::*;
+use crate::native_service::ProcessCommandRunner;
 use std::fs::{self, File};
 
 pub(super) fn prepare(
@@ -11,23 +12,24 @@ pub(super) fn prepare(
     args: ServiceUpdateArgs,
     helper: Option<PathBuf>,
 ) -> Result<(Plan, Receipt, File)> {
-    prepare_with_preflight(
+    prepare_with_probe(
         home,
         id,
         args,
         helper,
         |candidate, home, keychain, original| {
-            preflight::probe(candidate, home, keychain, original).map_err(Into::into)
+            preflight::probe(&ProcessCommandRunner, candidate, home, keychain, original)
+                .map_err(Into::into)
         },
     )
 }
 
-pub(super) fn prepare_with_preflight(
+pub(super) fn prepare_with_probe(
     home: PathBuf,
     id: uuid::Uuid,
     args: ServiceUpdateArgs,
     helper: Option<PathBuf>,
-    mut probe: impl FnMut(&Path, &Path, bool, &Path) -> Result<()>,
+    mut probe: impl FnMut(&Path, &Path, bool, &Path) -> Result<Phase>,
 ) -> Result<(Plan, Receipt, File)> {
     let root = home.join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME);
     private_dir(&root)?;
@@ -77,9 +79,9 @@ pub(super) fn prepare_with_preflight(
             supplied.eq_ignore_ascii_case(&expected),
             "candidate SHA-256 mismatch; runtime unchanged"
         );
-        let temp = verified_candidate(&root, candidate, &expected)?;
-        probe(&temp.path().join("gents"), &home, keychain, candidate)?;
-        Some((expected, temp))
+        let (temp, phase) =
+            prepare_with_preflight(&root, candidate, &expected, &home, keychain, &mut probe)?;
+        Some((expected, temp, phase))
     } else {
         None
     };
@@ -96,13 +98,19 @@ pub(super) fn prepare_with_preflight(
         .as_deref()
         .map(crate::native_service::read_environment_file)
         .transpose()?;
-    let (expected, temp) = match supplied_candidate {
+    let (expected, temp, admitted_phase) = match supplied_candidate {
         Some(candidate) => candidate,
         None => {
             let expected = digest(&old_executable)?;
-            let temp = verified_candidate(&root, &old_executable, &expected)?;
-            probe(&temp.path().join("gents"), &home, keychain, &old_executable)?;
-            (expected, temp)
+            let (temp, phase) = prepare_with_preflight(
+                &root,
+                &old_executable,
+                &expected,
+                &home,
+                keychain,
+                &mut probe,
+            )?;
+            (expected, temp, phase)
         }
     };
     super::files::check_backup_capacity(&home, &root)?;
@@ -181,7 +189,7 @@ pub(super) fn prepare_with_preflight(
         node_did: plan.node_did.clone(),
         session_id: plan.session_id.clone(),
         request_id: plan.request_id.clone(),
-        phase: Phase::Staged,
+        phase: admitted_phase,
         message: "Verified candidate staged; runtime unchanged".into(),
         updated_at: chrono::Utc::now().to_rfc3339(),
         directory: directory.clone(),
@@ -191,6 +199,21 @@ pub(super) fn prepare_with_preflight(
     fs::rename(temp.keep(), &directory)?;
     File::open(&root)?.sync_all()?;
     Ok((plan, receipt, submission_lock))
+}
+
+/// The shared admission boundary for both supplied and installed candidates.
+/// Only the observed phase returned here can initialize the durable receipt.
+pub(super) fn prepare_with_preflight(
+    root: &Path,
+    candidate: &Path,
+    expected: &str,
+    home: &Path,
+    keychain: bool,
+    probe: &mut impl FnMut(&Path, &Path, bool, &Path) -> Result<Phase>,
+) -> Result<(tempfile::TempDir, Phase)> {
+    let temp = verified_candidate(root, candidate, expected)?;
+    let phase = probe(&temp.path().join("gents"), home, keychain, candidate)?;
+    Ok((temp, phase))
 }
 
 /// Candidate execution uses only a private digest-verified copy, never the
