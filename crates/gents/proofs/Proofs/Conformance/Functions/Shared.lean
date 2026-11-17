@@ -43,4 +43,3 @@ def gateways : Conformance.Family String Bool where
 
 end ToolPresentation
 
-attribute [conformance_function] Compaction.receiptEligible

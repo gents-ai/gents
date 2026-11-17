@@ -148,7 +148,8 @@ theorem stripFigures_no_expansion (sizes : ResultSizes) (rows : List MessageRow)
     · exact ih
     · split
       · rename_i h
-        have hs : stubs sizes _ = true := (Bool.and_eq_true.mp h).1
+        have hs : stubs sizes _ = true := by
+          cases he : stubs sizes _ <;> simp_all [receiptEligible]
         exact Nat.add_le_add ih (Nat.le_of_lt (stubEligible_no_expansion _ _ hs))
       · exact ih
 

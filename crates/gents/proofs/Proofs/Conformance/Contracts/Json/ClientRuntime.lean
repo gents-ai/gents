@@ -1129,3 +1129,5 @@ def agentFoldedBinding : Family QueuedSteering.FoldedBindingCase Bool where
       ⟨1, 2, some c.headRequester, c.headAgent⟩ c.namedHead c.actualHead
 
 end Conformance.Contracts
+
+attribute [conformance_function] Compaction.receiptEligible
