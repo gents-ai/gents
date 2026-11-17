@@ -1120,16 +1120,16 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
 
     // Actual stub-only runtime -> persisted InferenceCall -> context_budget tool.
     // No synthetic figure or reduction entry is seeded by this assertion.
-    let budget_tool = gents_tools::native::context_budget::build_context_budget_tool(
+    let budget_tool = gents_tools::native::build_context_budget_tool(
         fixture.node.clone(),
         fixture.node_did.clone(),
     );
-    let budget_json = gents_tools::runtime_context::scope_tool_request_identity(
+    let budget_json = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
         None,
         Some(fixture.node_did.clone()),
         Some(fixture.agent_did.clone()),
         Some("req-capture-compaction".into()),
-        gents_tools::runtime_context::scope_request_tool_execution_with_session(
+        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
             None,
             Default::default(),
             None,
