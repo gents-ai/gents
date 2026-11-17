@@ -520,6 +520,19 @@ theorem later_trigger_cannot_grant (signatureValid scopeMatches causeMatches : B
     verifiedCreation signatureValid scopeMatches false causeMatches = false := by
   simp [verifiedCreation]
 
+/-- Terminal presentation may replace an effect result, but cannot invalidate
+an independently authenticated immutable receipt and accepted ancestry. -/
+def effectCreationEvidence (acceptedAncestry signedReceipt exactBinding : Bool)
+    (_terminal : Bool) : Bool :=
+  acceptedAncestry && signedReceipt && exactBinding
+
+theorem effect_terminal_does_not_change_evidence (a r b : Bool) :
+    effectCreationEvidence a r b true = effectCreationEvidence a r b false := rfl
+
+theorem effect_without_ancestry_refused (r b terminal : Bool) :
+    effectCreationEvidence false r b terminal = false := by
+  simp [effectCreationEvidence]
+
 /-- Task-trigger authority requires verified opening-request provenance on the caller's node. -/
 def interruptAllowed (callerSession targetSession : String)
     (targetOriginCause : Option String) (sameNode taskTriggered : Bool) : Bool :=

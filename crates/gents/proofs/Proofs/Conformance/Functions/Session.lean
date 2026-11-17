@@ -43,7 +43,7 @@ end ManagedExec
 
 namespace DurableLineage
 
-attribute [conformance_function] deferredCreationAllowed
+attribute [conformance_function] deferredCreationAllowed effectCreationEvidence
 
 end DurableLineage
 
