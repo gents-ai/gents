@@ -365,9 +365,6 @@ def with_event(event, run):
 
 
 class VeraTests(unittest.TestCase):
-    """The tests behind a crate's `vera` feature run beside its own build, on the
-    per-package path and the archive path alike, outside pull requests."""
-
     def test_each_named_crate_has_the_feature_and_the_tests_its_filter_names(self):
         metadata = gate.workspace_metadata()
         for package, test_filter in gate.VERA_TESTS.items():
