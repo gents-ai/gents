@@ -3,12 +3,12 @@ import Proofs.Tools.ToolPolicy.PluginPublication
 
 namespace RuntimeReconcile.SurfacePublication
 
-/-- An exhausted publication wait is not evidence that an agent's desired
-configuration is invalid. Refuse that proposal, preserving the active
-configuration and its dispatchers; a non-transient failure still demotes. -/
+/-- Classify a transient publication failure. This classification alone is
+NOT permission to retain authority: deferAuthority additionally requires the
+epoch budget. At exhaustion the latest proposal must be published. -/
 def keepPrevious (busy : Bool) : Bool := busy
 
-theorem busy_never_demotes : keepPrevious true = true := by decide
+theorem busy_is_transient : keepPrevious true = true := by decide
 
 theorem permanent_failure_does_not_keep_stale_authority :
     keepPrevious false = false := by decide
@@ -19,5 +19,17 @@ because a lock release itself emits no database event. -/
 def retryProposal (busy withinSettleWindow : Bool) : Bool := busy || withinSettleWindow
 
 theorem busy_retries_after_settle_window : retryProposal true false = true := by decide
+
+end RuntimeReconcile.SurfacePublication
+
+namespace RuntimeReconcile.SurfacePublication
+
+/-- Busy deferral consumes one total epoch budget. Exhaustion publishes the
+latest authority even if plugin agents must be demoted; retries then continue
+without restoring a revoked grant. Neither events nor retry resets the epoch. -/
+def deferAuthority (busy budgetRemaining : Bool) : Bool := busy && budgetRemaining
+
+theorem expired_never_defers (busy : Bool) : deferAuthority busy false = false := by
+  simp [deferAuthority]
 
 end RuntimeReconcile.SurfacePublication

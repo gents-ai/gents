@@ -71,4 +71,12 @@ theorem unshipped_pin_unchanged (named pinned : Bool) :
 theorem unpinned_selection_unchanged (named replacement : Bool) :
     movePin named replacement false = false := by simp [movePin]
 
+/-- A constructed slot can execute only a digest in its current explicit
+pin set. Refreshing a stale slot cannot widen that set to installed bytes. -/
+def digestAuthorized (pinnedDigests : List Nat) (runningDigest : Nat) : Bool :=
+  pinnedDigests.contains runningDigest
+
+theorem revoked_digest_never_runs (digest : Nat) : digestAuthorized [] digest = false := by
+  simp [digestAuthorized]
+
 end ToolPolicy.PluginPublication

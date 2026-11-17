@@ -1,5 +1,5 @@
 ---- MODULE PluginSurfacePublication ----
-\* lean: ToolPolicy.PluginPublication.retry, RuntimeReconcile.SurfacePublication.keepPrevious
+\* lean: ToolPolicy.PluginPublication.retry, RuntimeReconcile.SurfacePublication.deferAuthority
 \* crates: gents-tools, gents
 \* The installer holds the cross-process exclusive store lock; construction
 \* observes one shared-lock attempt. A failed proposal does not replace the
@@ -30,12 +30,15 @@ Release ==
 
 Construct ==
   /\ constructing
-  /\ IF WaitForPublication /\ retry(locked, remaining > 0)
+  /\ IF HavePrevious /\ ~KeepPrevious /\ deferAuthority(locked, remaining > 0)
+        THEN /\ constructing' = FALSE /\ ready' = FALSE /\ busyDemotion' = TRUE
+             /\ UNCHANGED <<remaining, prematureFailure>>
+        ELSE IF WaitForPublication /\ retry(locked, remaining > 0)
         THEN /\ remaining' = remaining - 1
              /\ UNCHANGED <<constructing, ready, prematureFailure, busyDemotion>>
         ELSE /\ constructing' = FALSE
-             /\ ready' = (IF locked /\ KeepPrevious /\ keepPrevious(locked) THEN ready ELSE ~locked)
-             /\ busyDemotion' = (locked /\ HavePrevious /\ ~KeepPrevious)
+             /\ ready' = (IF locked /\ KeepPrevious /\ deferAuthority(locked, remaining > 0) THEN ready ELSE ~locked)
+             /\ busyDemotion' = (locked /\ HavePrevious /\ remaining > 0 /\ ~KeepPrevious)
              /\ prematureFailure' = (locked /\ remaining > 0 /\ ~HavePrevious)
              /\ UNCHANGED remaining
   /\ UNCHANGED <<locked, request>>
