@@ -233,6 +233,8 @@ debug = 0
 split-debuginfo = "off"
 incremental = false
 
+# Native Windows editor tests and the gate's portable test archive
+# (scripts/ci/gate.py ARCHIVE_PROFILE): workspace code unoptimized.
 [profile.ci-native]
 inherits = "test"
 opt-level = 0
