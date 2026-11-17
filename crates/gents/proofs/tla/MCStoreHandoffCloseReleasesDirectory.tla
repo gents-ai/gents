@@ -1,0 +1,4 @@
+---- MODULE MCStoreHandoffCloseReleasesDirectory ----
+EXTENDS StoreHandoff
+
+====

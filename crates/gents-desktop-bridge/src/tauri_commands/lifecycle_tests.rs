@@ -163,6 +163,7 @@ async fn cancelled_exclusion_waiter_observations() -> Vec<(bool, bool)> {
     );
     let home = paths.root().to_path_buf();
     let data = paths.node_data_dir().to_path_buf();
+    let released = core.store_release().expect("a claimed client");
     let lifecycle_guard = Arc::clone(&state.client_lifecycle).lock_owned().await;
     let started = Arc::new(tokio::sync::Notify::new());
     let allow_shutdown = Arc::new(tokio::sync::Notify::new());
@@ -220,6 +221,11 @@ async fn cancelled_exclusion_waiter_observations() -> Vec<(bool, bool)> {
     .await
     .expect("exclusion guard releases after its shutdown owner returns");
     drop(lifecycle_guard);
+    // The owner dropped the client as it returned; its node's engine lets go
+    // of the data directory and the store is released from its own thread.
+    tokio::time::timeout(std::time::Duration::from_secs(10), released.released())
+        .await
+        .expect("the store is released once the exclusion's owner let go of the client");
     let lifecycle_guard_held = Arc::clone(&state.client_lifecycle)
         .try_lock_owned()
         .is_err();
