@@ -22,6 +22,7 @@
 //! attributed retroactively.
 
 use chrono::{DateTime, Duration, Utc};
+use rapidhash::{HashSetExt, RapidHashSet};
 
 pub use crate::usage_observation::WindowBasis as WindowProvenance;
 use crate::usage_observation::{UsageRefusalView, WindowBasis};
@@ -306,7 +307,7 @@ where
     F: Fn(usize) -> Fut,
     Fut: std::future::Future<Output = Option<Vec<serde_json::Value>>>,
 {
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen: RapidHashSet<String> = RapidHashSet::new();
     let mut evidence = Evidence {
         // A read that ends early without a short page is partial by default.
         partial: true,
@@ -433,7 +434,7 @@ pub async fn refusal_for_backend_across_agents(
     // union also keeps the refusal to the model it was stated for, rather than
     // "the newest refusal any Agent can see" applied to the whole account.
     let mut union: Vec<CallEvidence> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen: RapidHashSet<String> = RapidHashSet::new();
     let mut partial = false;
     for signer in signers {
         let Some(evidence) = evidence_as_agent(node, signer, backend, now).await else {
