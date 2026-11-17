@@ -833,6 +833,22 @@ pub fn test_runtime_handle() -> tokio::runtime::Handle {
     tokio::runtime::Handle::current()
 }
 
+/// The build a test runtime reports. Registered once per process (the first
+/// registration wins, as in the binary), so a test that serves installs and a
+/// client that passes this value agree; a test of a mismatch changes a field.
+pub fn test_runtime_build() -> gents_protocol::build_info::BuildInfo {
+    crate::http::pack_install::set_runtime_build(
+        gents_protocol::build_info::BuildInfo::from_parts(
+            "0.0.0-test".to_owned(),
+            Some("7e57b0117e57".to_owned()),
+            Some(false),
+            Vec::new(),
+        ),
+        Vec::new,
+    );
+    crate::http::pack_install::runtime_build()
+}
+
 pub fn pack_fixture_dir(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs")

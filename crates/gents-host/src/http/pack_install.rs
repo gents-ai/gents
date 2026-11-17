@@ -18,9 +18,9 @@ use super::router::RuntimeHttpState;
 use gents_pack::pack::install_flow::DocumentsInstallRequest;
 use gents_pack::pack::resolved_pack::ResolvedPack;
 
+pub mod failure;
 pub mod session;
 
-const PATH: &str = "/packs/install";
 /// The root and its dependencies share one pack's compressed bound, so a
 /// remote install never buffers more archive bytes than one maximal pack.
 pub const MAX_ARCHIVE_BYTES: usize = gents_pack::pack::archive::MAX_PACK_BYTES;
@@ -126,64 +126,6 @@ fn encode_request(
         .collect::<Result<Vec<_>>>()?;
     ensure_archive_bound(root.0.len() + dependencies.iter().map(|a| a.0.len()).sum::<usize>())?;
     Ok(serde_json::to_vec(&fields(root, dependencies))?)
-}
-
-/// Install over the runtime's own install session, returning the runtime's
-/// outcome **and** what the handshake accepted on a weaker guarantee.
-///
-/// The warnings are returned rather than printed here, so every caller sees
-/// them: the CLI prints them, and the desktop and library callers can show or
-/// log them without the install having decided for them.
-pub async fn install_remote(
-    endpoint: &gents_store::config_client::GraphqlEndpoint,
-    owner: &str,
-    pack: &ResolvedPack,
-    dependencies: &[ResolvedPack],
-    args: &DocumentsInstallRequest,
-    explicit: bool,
-    client_build: gents_protocol::build_info::BuildInfo,
-) -> Result<serde_json::Value> {
-    let mut url = reqwest::Url::parse(endpoint.url())?;
-    anyhow::ensure!(
-        matches!(url.scheme(), "http" | "https")
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none(),
-        "remote pack install requires an HTTP URL without credentials"
-    );
-    let prefix = url
-        .path()
-        .strip_suffix("/api/v0/graphql")
-        .context("remote pack install requires a Gents runtime GraphQL endpoint")?;
-    url.set_path(&format!("{prefix}{PATH}"));
-    let body =
-        encode_install_request(pack, dependencies, args, owner, explicit, client_build).await?;
-    let client = tokio::task::spawn_blocking(|| {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-    })
-    .await??;
-    let response = endpoint
-        .authorize(client.post(url))?
-        .json(&body)
-        .send()
-        .await
-        .context(
-            "remote pack install outcome is unconfirmed; inspect the runtime before retrying",
-        )?;
-    let status = response.status();
-    let body = response.bytes().await.context(
-        "remote pack install response was unreadable; inspect the runtime before retrying",
-    )?;
-    anyhow::ensure!(
-        status.is_success(),
-        "remote pack install returned HTTP {status}: {}",
-        String::from_utf8_lossy(&body)
-    );
-    serde_json::from_slice(&body)
-        .context("remote pack install response was unreadable; inspect the runtime before retrying")
 }
 
 pub async fn encode_install_request(
@@ -302,6 +244,10 @@ pub async fn install_handler(
             StatusCode::BAD_REQUEST,
             "plugin packs require the reviewed install session",
         );
+    }
+    // Before anything is planned: a plan prepared by two builds is not one plan.
+    if let Some(refusal) = refuse_client_build(&received.request.client_build) {
+        return refused(StatusCode::CONFLICT, refusal);
     }
     // Detached so a dropped client cannot cancel an install mid-commit.
     let result =
@@ -486,17 +432,61 @@ async fn install_owned(
 #[path = "pack_install_tests.rs"]
 mod tests;
 
-/// The build of the process serving installs. The binary sets it once, at
-/// startup, because the core pack archives are compiled into the binary and not
-/// into this crate; a test that does not set it gets the crate's own version
-/// with no packs, which is a real (if minimal) answer rather than a guess.
-static RUNTIME_BUILD: std::sync::OnceLock<gents_protocol::build_info::BuildInfo> =
-    std::sync::OnceLock::new();
+/// The build of the process serving installs, as the binary registered it.
+///
+/// The binary registers its version facts at startup, before any command runs,
+/// and the function that digests its core-pack archives. The digests are
+/// computed only when an install handshake first asks for the build, so a
+/// command that never serves an install hashes no archive.
+pub struct RuntimeBuildSource {
+    facts: gents_protocol::build_info::BuildInfo,
+    core_packs: fn() -> Vec<gents_protocol::build_info::CorePackBuild>,
+    resolved: std::sync::OnceLock<gents_protocol::build_info::BuildInfo>,
+}
 
-/// Record this process's build, so an install handshake can state it. Called
-/// once by the runtime binary; a later call keeps the first.
-pub fn set_runtime_build(build: gents_protocol::build_info::BuildInfo) {
-    let _ = RUNTIME_BUILD.set(build);
+impl RuntimeBuildSource {
+    /// The version facts now, the core-pack digests on first use.
+    pub fn new(
+        facts: gents_protocol::build_info::BuildInfo,
+        core_packs: fn() -> Vec<gents_protocol::build_info::CorePackBuild>,
+    ) -> Self {
+        Self {
+            facts,
+            core_packs,
+            resolved: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The whole build, digesting the core packs the first time it is asked.
+    pub fn build(&self) -> &gents_protocol::build_info::BuildInfo {
+        self.resolved.get_or_init(|| {
+            let mut build = self.facts.clone();
+            build.core_packs = (self.core_packs)();
+            build
+        })
+    }
+
+    /// Whether the core-pack digests have been computed yet.
+    pub fn digests_computed(&self) -> bool {
+        self.resolved.get().is_some()
+    }
+}
+
+static RUNTIME_BUILD: std::sync::OnceLock<RuntimeBuildSource> = std::sync::OnceLock::new();
+
+/// Record this process's build: its version facts, and how to digest its core
+/// packs when an install first needs them. Called once by the binary before
+/// any command runs; a later call keeps the first.
+pub fn set_runtime_build(
+    facts: gents_protocol::build_info::BuildInfo,
+    core_packs: fn() -> Vec<gents_protocol::build_info::CorePackBuild>,
+) {
+    let _ = RUNTIME_BUILD.set(RuntimeBuildSource::new(facts, core_packs));
+}
+
+/// The registered source, if the binary registered one.
+pub fn runtime_build_source() -> Option<&'static RuntimeBuildSource> {
+    RUNTIME_BUILD.get()
 }
 
 /// This process's build as the handshake reports it. A process that recorded
@@ -505,6 +495,18 @@ pub fn set_runtime_build(build: gents_protocol::build_info::BuildInfo) {
 pub fn runtime_build() -> gents_protocol::build_info::BuildInfo {
     RUNTIME_BUILD
         .get()
-        .cloned()
+        .map(|source| source.build().clone())
         .unwrap_or(gents_protocol::build_info::BuildInfo::UNVERIFIABLE)
+}
+
+/// The runtime's half of the build check: the client's build against this
+/// process's, refused before anything is prepared or written. The refusal's
+/// text holds build facts only.
+pub(crate) fn refuse_client_build(
+    client_build: &gents_protocol::build_info::BuildInfo,
+) -> Option<crate::http::pack_install_client::PackInstallHandshakeError> {
+    crate::http::pack_install_client::PackInstallHandshakeError::build_mismatch(
+        client_build,
+        &runtime_build(),
+    )
 }

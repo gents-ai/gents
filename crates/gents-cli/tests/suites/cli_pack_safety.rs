@@ -422,3 +422,136 @@ async fn hosted_pack_install_preview_names_variables_without_their_values() -> R
     )?;
     assert_preview_hides_the_secret(&preview, secret)
 }
+
+/// A documents pack whose agent runs under the installer's root, with a schema
+/// so the install goes through the runtime's own install session.
+fn rooted_schema_pack(root: &Path) -> Result<()> {
+    std::fs::create_dir_all(root.join("schemas"))?;
+    std::fs::write(root.join("README.md"), "# fixture")?;
+    std::fs::write(
+        root.join("schemas/rooted_note.graphql"),
+        "type RootedNote {\n  title: String\n}\n",
+    )?;
+    std::fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": "rooted", "namespace": "fixture", "version": "1.0.0",
+            "description": "An agent with host tools and a schema", "authors": ["tests"],
+            "tags": [], "kind": "documents", "config": "pack_config.json",
+            "assets": ["README.md", "pack_config.json", "schemas/rooted_note.graphql"],
+            "schemas": ["schemas/rooted_note.graphql"], "dependencies": [],
+            "inference_slots": [{"name": "worker", "description": "The worker.",
+                "agents": ["rooted-worker"]}],
+        }))?,
+    )?;
+    std::fs::write(
+        root.join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": {},
+            "agents": [{"agent_slot": "rooted-worker", "context_id": "rooted-context",
+                "display_name": "rooted worker", "description": "Does one task.",
+                "inference_profile_id": "gents:inference-slot:worker"}],
+            "contexts": [{"context_id": "rooted-context", "system_prompt": "Work.",
+                "tools_id": "rooted-tools"}],
+            "tools": [{"tools_id": "rooted-tools", "display_name": "Read-only files",
+                "host": {"files": {"mode": "ReadOnly"}}}],
+        }))?,
+    )?;
+    Ok(())
+}
+
+/// An install through the runtime's session returns the runtime's outcome to
+/// the CLI unchanged: one receipt, with the pack's digest (what `promote`
+/// reads) and the tool root grant made from the planned root agents the
+/// runtime's outcome carried. Before, the CLI printed the outcome itself and
+/// went on with `null`, so the planned agents were lost and nothing was
+/// granted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_runtime_session_install_returns_the_runtimes_outcome_to_the_cli() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home)?;
+    let endpoint = MockModelEndpoint::start("pack-outcome")?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--engineer",
+            "--no-default-packs",
+            "--node-name",
+            "pack-outcome",
+            "--model-name",
+            "pack-outcome",
+            "--inference-url",
+            endpoint.endpoint(),
+        ],
+    )?;
+    let owner = node_did_from_init(&init)?;
+    let tool_root = init["tool_root"]
+        .as_str()
+        .context("an Engineer init reports its tool root")?
+        .to_owned();
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server_with_env(&home, port, &[], &[])?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+    let root = temp.path().join("rooted");
+    rooted_schema_pack(&root)?;
+    let root_arg = root.to_str().context("pack path")?;
+
+    // Previewed through the same session first: it writes nothing.
+    let preview = run_cli_json(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            root_arg,
+            "--graphql",
+            &graphql,
+            "--preview",
+        ],
+    )?;
+    assert_eq!(preview["coordinate"], "fixture/rooted", "{preview}");
+    let installed = "{ PackInstallation { coordinate digest } }";
+    assert_eq!(
+        graphql_query(&graphql, installed).await?["data"]["PackInstallation"],
+        json!([]),
+        "a preview installs nothing"
+    );
+
+    // `run_cli_json` parses stdout as one JSON document: a receipt printed
+    // twice fails here.
+    let receipt = run_cli_json(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            root_arg,
+            "--graphql",
+            &graphql,
+            "--grant-authority",
+        ],
+    )?;
+    assert_eq!(receipt["pack"], "rooted", "{receipt}");
+    let digest = receipt["digest"]
+        .as_str()
+        .with_context(|| format!("the receipt carries the digest promote reads: {receipt}"))?;
+    let rows = graphql_query(&graphql, installed).await?;
+    assert_eq!(
+        rows["data"]["PackInstallation"][0]["digest"], digest,
+        "{rows}"
+    );
+    assert!(
+        receipt.get("installer_root_agents").is_none(),
+        "the planned rows are taken off the outcome to make the grant: {receipt}"
+    );
+    let roots = receipt["host_tool_roots"]
+        .as_array()
+        .with_context(|| format!("the planned root agent was granted: {receipt}"))?;
+    assert_eq!(roots.len(), 1, "{receipt}");
+    assert_eq!(roots[0]["root"], tool_root, "{receipt}");
+    assert!(roots[0]["reader_on"].is_string(), "{receipt}");
+    Ok(())
+}

@@ -73,9 +73,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             crate::current_build(),
         )
         .await?;
-        for warning in &warnings {
-            eprintln!("warning: {}", warning.describe());
-        }
+        crate::commands::pack::print_install_warnings(&warnings);
         return crate::print_json(&result);
     }
     let notify_scope = notification_scope.clone();

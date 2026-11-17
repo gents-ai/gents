@@ -1070,7 +1070,7 @@ async fn a_repeated_install_grants_the_dependency_agents_a_failed_grant_missed()
         .lock()
         .unwrap()
         .retain(|failing| failing != "fixture/retryworker");
-    let (receipt, failed_step) = outcome.unwrap();
+    let (receipt, failed_step, _) = outcome.unwrap();
     assert!(failed_step.is_some(), "{receipt}");
     assert!(
         receipt["host_tool_roots"][0]["failed"].is_string(),
@@ -1601,7 +1601,7 @@ async fn a_failed_reader_grant_keeps_the_install_receipt() {
         .lock()
         .unwrap()
         .retain(|failing| failing != "fixture/grantfail");
-    let (receipt, failed_step) = outcome.unwrap();
+    let (receipt, failed_step, _) = outcome.unwrap();
     assert!(failed_step.is_some(), "{receipt}");
     assert_eq!(receipt["pack"], "grantfail", "{receipt}");
     let step = &receipt["host_tool_roots"][0];
