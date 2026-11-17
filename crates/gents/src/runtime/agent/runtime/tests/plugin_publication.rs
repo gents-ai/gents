@@ -108,29 +108,36 @@ async fn request_submitted_while_another_process_holds_the_plugin_store_complete
 
     let (waiting_tx, mut waiting_rx) = mpsc::unbounded_channel();
     let subscriber = Registry::default().with(PublicationWaitCapture(waiting_tx));
+    let (published, mut snapshots) = mpsc::unbounded_channel();
+    let capture = Arc::new(PublicationReadinessCapture {
+        node: node.clone(),
+        snapshots: Default::default(),
+        published,
+    });
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let run = tokio::spawn(agent.run(shutdown_rx).with_subscriber(subscriber));
-    let ready_query = format!(
-        r#"{{NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{snapshot_json}}}}"#,
-        escape_graphql_string(&node_did)
+    let run = tokio::spawn(
+        super::super::startup::run_agent_with_readiness_writer(
+            agent,
+            shutdown_rx,
+            capture,
+            Duration::from_millis(1),
+        )
+        .with_subscriber(subscriber),
     );
-    rows_when(
-        &fixture.agent_access,
-        "NodeReadiness",
-        &ready_query,
-        |data| {
-            data["NodeReadiness"][0]["snapshot_json"]
-                .as_str()
-                .and_then(|json| serde_json::from_str::<NodeReadinessSnapshot>(json).ok())
-                .is_some_and(|snapshot| {
-                    snapshot.process_state == NodeReadinessProcessState::Ready
-                        && snapshot.agents.iter().any(|a| {
-                            a.agent_did == agent_did && a.state == AgentReadinessState::Ready
-                        })
+    tokio::time::timeout(STALL_CEILING, async {
+        loop {
+            let snapshot = snapshots.recv().await.expect("readiness writer stopped");
+            if snapshot.process_state == NodeReadinessProcessState::Ready
+                && snapshot.agents.iter().any(|entry| {
+                    entry.agent_did == agent_did && entry.state == AgentReadinessState::Ready
                 })
-        },
-    )
-    .await;
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("node never reached READY before publication");
     let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
         .args([
             LOCK_CHILD_TEST,
@@ -299,6 +306,9 @@ async fn bounded_publication_case(change: PublicationChange) {
     .unwrap();
     let home = tempfile::tempdir().unwrap();
     let agent = configured_publication_agent(&fixture, home.path()).await;
+    if matches!(change, PublicationChange::DisableAgent) {
+        choose_spare_default(&fixture, agent.default_agent_did()).await;
+    }
     let context = agent.document_runtime_context().cloned().unwrap();
     let node_did = fixture.runtime.did().to_owned();
     let agent_did = agent.default_agent_did().to_owned();
@@ -730,6 +740,7 @@ async fn named_pin_update_never_publishes_an_unavailable_agent() {
         .unwrap()
         .unwrap()
         .unwrap();
+    choose_spare_default(&fixture, &agent_did).await;
     merge_fixture_document(
         &fixture.user_access,
         "test.stale_pin.revoked_agent",
@@ -784,4 +795,45 @@ async fn startup_shutdown_cancels_publication_wait_without_releasing_the_writer(
         "test still owns writer exclusion"
     );
     drop(guard);
+}
+
+/// Revocation is valid only after a different enabled default is selected.
+/// Exercise the signed configuration owner rather than bypass its invariant.
+async fn choose_spare_default(fixture: &PluginRuntimeFixture, previous: &str) {
+    let actor = fixture.user_access.actor_did().unwrap().parse().unwrap();
+    let binding = gents_store::identity::provision_agent_identity_authorized(
+        &fixture.node,
+        fixture.runtime.as_ref(),
+        &actor,
+    )
+    .await
+    .unwrap();
+    let owner = fixture.runtime.did();
+    let documents = vec![
+        (gents_store::collection::Collection::Agent, serde_json::json!({
+            "node_did":owner, "agent_did":binding.agent_did, "creation_nonce":binding.creation_nonce,
+            "inference_profile_id":format!("{previous}:inference"),
+        })),
+        (gents_store::collection::Collection::DefaultAgentSelection, serde_json::json!({
+            "node_did":owner, "default_agent_did":binding.agent_did,
+        })),
+    ].into_iter().map(|(collection, value)| gents_documents::DesiredStateApplyDocument {
+        collection, add:value.clone(), update:value,
+    }).collect();
+    let plan = gents_documents::DesiredStateApplyPlan::new(documents).unwrap();
+    fixture
+        .user_access
+        .transact_write("test.publication.spare_default", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
 }
