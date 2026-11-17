@@ -135,15 +135,15 @@ private def narrow : Job :=
 private def skill : List String := ["create-workflow"]
 
 /-- All mode pairs and sufficient/insufficient target sets, including a repeated
-wire. Refusals leave the state available for a subsequent compatible wire. -/
+wire. Existing authority is retained and differences are advisory. -/
 private def policyWiringScripts : List WiringScript :=
   [.off, .check, .run].flatMap fun existingMode =>
     [.off, .check, .run].flatMap fun incomingMode =>
-      [[], ["a"], ["a", "b"], ["b", "a"]].map fun incomingTargets =>
-        let existing := block ["a", "b"] existingMode ["a"]
-        let incoming := block ["a", "b"] incomingMode incomingTargets
+      [[], ["a"], ["a", "c"], ["b", "a"]].map fun incomingTargets =>
+        let existing := block ["a", "b", "c"] existingMode ["b", "a"]
+        let incoming := block ["a", "b", "c"] incomingMode incomingTargets
         let step := wireStep runner (reviewed := some incoming) (skills := skill)
-        ⟨s!"preserve or refuse {repr existingMode}/{repr incomingMode}/{repr incomingTargets}",
+        ⟨s!"keep and warn {repr existingMode}/{repr incomingMode}/{repr incomingTargets}",
           wiredWith (some existing) ["a", "b"],
           [step, step, wireStep runner (reviewed := some existing)]⟩
 

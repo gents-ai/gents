@@ -12,7 +12,7 @@ A plugin entry may carry a job block: the ceiling within which the plugin runs
 job steps. A block comes from the block the installer reviewed, or from the
 defaults over the packs whose targets are wired in. An existing block is never
 widened by a later wiring: bounds only fall, while existing dynamic mode and dynamic targets are preserved.
-An existing policy insufficient for the incoming block refuses the entire wiring. Targets and trusted packs
+Any difference in requested authority is advisory; operator policy always wins. Targets and trusted packs
 are the additions a wiring is for.
 
 Nothing records which wiring added a target or a skill, so unwiring decides
@@ -99,6 +99,9 @@ inductive Warning
   /-- The Agent may start Agents directly, so the new targets widen that too. -/
   | agentNewWidened
   | notWired
+  | dynamicModeKept
+  | dynamicTargetsKept
+  | dynamicRunRepinned
   deriving DecidableEq, Repr
 
 structure Outcome where
@@ -113,12 +116,13 @@ structure Outcome where
 def addMissing (list items : List String) : List String :=
   items.foldl (fun list item => if item ∈ list then list else list ++ [item]) list
 
-/-- A pack cannot alter operator dynamic authority. Wiring requires the existing
-mode to cover the incoming mode, and every incoming dynamic target to be already
-authorized. Even inactive target lists are preserved rather than intersected. -/
-def policySufficient (existing incoming : Job) : Bool :=
-  decide (incoming.policy.dynamic.rank ≤ existing.policy.dynamic.rank)
-    && incoming.policy.dynamicTargets.all (· ∈ existing.policy.dynamicTargets)
+/-- Advisories never grant authority or block re-pinning. Targets are irrelevant
+when the incoming mode is off. -/
+def policyWarnings (existing incoming : Job) : List Warning :=
+  (if existing.policy.dynamic != incoming.policy.dynamic then [.dynamicModeKept] else [])
+  ++ (if incoming.policy.dynamic != .off &&
+      !incoming.policy.dynamicTargets.all (· ∈ existing.policy.dynamicTargets)
+    then [.dynamicTargetsKept] else [])
 
 def merge (existing incoming : Job) : Job :=
   { agentTargets := addMissing existing.agentTargets incoming.agentTargets
@@ -176,13 +180,20 @@ def wiredJob (surface : Surface) (plugin : Plugin) (reviewed : Option Job)
   match incomingJob plugin reviewed sources with
   | none => some (priorJob surface plugin, surface.targets)
   | some incoming =>
-    if (priorJob surface plugin).any (fun existing => !policySufficient existing incoming) then none
-    else
     let base := match priorJob surface plugin with
       | some existing => merge existing incoming
       | none => incoming
     let wired := sources.foldl wireSource (base, surface.targets)
     if wired.1.valid then some (some wired.1, addMissing wired.2 wired.1.agentTargets) else none
+
+def keptPolicyWarnings (surface : Surface) (plugin : Plugin) (reviewed : Option Job)
+    (sources : List Source) : List Warning :=
+  let policy := match priorJob surface plugin, incomingJob plugin reviewed sources with
+    | some existing, some incoming => policyWarnings existing incoming
+    | _, _ => []
+  policy ++ (if surface.plugins.any (fun entry => entry.plugin == plugin.coordinate &&
+    entry.digest != plugin.digest && entry.job.any (·.policy.dynamic == .run))
+    then [.dynamicRunRepinned] else [])
 
 def wire (surface : Surface) (plugin : Plugin) (reviewed : Option Job) (skills : List String)
     (sources : List Source) : Option Outcome :=
@@ -199,6 +210,7 @@ def wire (surface : Surface) (plugin : Plugin) (reviewed : Option Job) (skills :
         ++ (if wired.1.any (·.policy.dynamic = .check) then [.dynamicCheck] else [])
         ++ (if surface.enabled = some true ∧ ¬ (wired.2.filter (· ∉ surface.targets)).isEmpty
           then [.agentNewWidened] else [])
+        ++ keptPolicyWarnings surface plugin reviewed sources
       nextCall := plugin.runsJobs && wired.1.isNone }
 
 def setJob (coordinate : String) (job : Option Job) : List Entry → List Entry
@@ -350,33 +362,17 @@ theorem merge_never_widens (existing incoming : Job) :
 theorem merge_keeps_off (existing incoming : Job) (h : existing.policy.dynamic = .off) :
     (merge existing incoming).policy.dynamic = .off := h
 
-/-- An incompatible existing policy refuses before any wiring can be published. -/
-theorem wire_refuses_insufficient_policy (surface : Surface) (plugin : Plugin)
-    (reviewed : Option Job) (skills : List String) (sources : List Source)
-    (existing incoming : Job)
-    (hprior : priorJob surface plugin = some existing)
-    (hincoming : incomingJob plugin reviewed sources = some incoming)
-    (hpolicy : policySufficient existing incoming = false) :
-    wire surface plugin reviewed skills sources = none := by
-  simp [wire, wiredJob, hprior, hincoming, hpolicy]
+/-- The resulting dynamic authority never exceeds the operator's existing policy,
+regardless of what a pack asks for. Exact list equality preserves order as well. -/
+theorem kept_policy_never_exceeds_operator (existing incoming : Job) :
+    (merge existing incoming).policy.dynamic.rank ≤ existing.policy.dynamic.rank
+    ∧ (merge existing incoming).policy.dynamicTargets = existing.policy.dynamicTargets := by
+  exact ⟨Nat.le_refl _, rfl⟩
 
-/-- A narrower mode is never raised by merging or silently accepted. -/
-theorem policySufficient_refuses_narrower (existing incoming : Job)
-    (h : existing.policy.dynamic.rank < incoming.policy.dynamic.rank) :
-    policySufficient existing incoming = false := by
-  simp [policySufficient, Nat.not_le.mpr h]
-
-/-- Missing even one requested dynamic target refuses the policy. -/
-theorem policySufficient_refuses_missing_target (existing incoming : Job) (target : String)
-    (hin : target ∈ incoming.policy.dynamicTargets)
-    (hout : target ∉ existing.policy.dynamicTargets) :
-    policySufficient existing incoming = false := by
-  have h : incoming.policy.dynamicTargets.all (· ∈ existing.policy.dynamicTargets) = false := by
-    apply Bool.eq_false_iff.mpr
-    intro hall
-    have := List.all_eq_true.mp hall target hin
-    simp [hout] at this
-  simp [policySufficient, h]
+theorem incoming_off_never_warns_targets (existing incoming : Job)
+    (h : incoming.policy.dynamic = .off) :
+    Warning.dynamicTargetsKept ∉ policyWarnings existing incoming := by
+  simp [policyWarnings, h]
 
 /-- Consent never enables dynamic scripts on a block that is `off`. -/
 theorem consent_keeps_off (coordinate : String) (outcome : Outcome) (job : Job)
