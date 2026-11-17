@@ -37,6 +37,9 @@ pub(crate) struct AccountRow {
     /// operator's list, so the words it used are shown here and never in the
     /// Agent-facing read (`UsageRefusalView::for_model`).
     pub(crate) refusal: Option<UsageRefusalView>,
+    /// Whether the evidence search for `refusal` reached its page bound. Present
+    /// when `refusal` is none: "no refusal in a truncated search" is not "none".
+    pub(crate) refusal_partial: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -283,6 +286,7 @@ pub(crate) async fn account_rows(
             usage,
             read: None,
             refusal: None,
+            refusal_partial: false,
         });
     }
     if provider.is_some() {
@@ -314,6 +318,7 @@ pub(crate) async fn account_rows(
             usage,
             read: None,
             refusal: None,
+            refusal_partial: false,
         });
     }
     Ok(rows)
@@ -392,6 +397,7 @@ pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, node_did
             row.read = Some(read.outcome.clone());
             row.usage = read.usage.clone();
             row.refusal = read.refusal.clone();
+            row.refusal_partial = read.refusal_partial;
         }
     }
 }
@@ -459,7 +465,16 @@ pub(crate) fn short_duration(secs: i64) -> String {
 /// percentage appears, because a refusal establishes no cap and no counter.
 fn refusal_lines(row: &AccountRow) -> Vec<String> {
     let Some(refusal) = &row.refusal else {
-        return Vec::new();
+        // No refusal, but the search may still have been truncated: that is a
+        // different finding from "none", and it is the only line to show.
+        return match row.refusal_partial {
+            true => vec![
+                "  no refusal found; partial: the evidence read reached its bound, \
+                 so an older refusal may lie beyond it"
+                    .to_owned(),
+            ],
+            false => Vec::new(),
+        };
     };
     let mut stated: Vec<String> = Vec::new();
     match (refusal.used, refusal.cap) {

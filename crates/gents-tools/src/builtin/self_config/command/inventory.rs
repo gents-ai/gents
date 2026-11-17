@@ -82,19 +82,21 @@ impl ConfigCommandTool {
                     })
                     .and_then(|read| read.usage.clone())
             });
-            let refusal = kind.filter(|_| account.enabled).and_then(|_| {
-                reads
-                    .iter()
-                    .find(|read| {
-                        read.backend_id.is_none()
-                            && read.provider == account.provider
-                            && read.account_ref == account.account_ref
-                    })
-                    // The parsed fields only: the provider's own words belong
-                    // to the operator's shell and desktop, and can name account
-                    // details this Agent does not own.
-                    .and_then(|read| read.refusal.as_ref().map(|refusal| refusal.for_model()))
+            let read = kind.filter(|_| account.enabled).and_then(|_| {
+                reads.iter().find(|read| {
+                    read.backend_id.is_none()
+                        && read.provider == account.provider
+                        && read.account_ref == account.account_ref
+                })
             });
+            // The parsed fields only: the provider's own words belong to the
+            // operator's shell and desktop, and can name account details this
+            // Agent does not own.
+            let refusal =
+                read.and_then(|read| read.refusal.as_ref().map(|refusal| refusal.for_model()));
+            // Present with and without a refusal: a refusal found in a
+            // truncated search and one absent are different findings.
+            let refusal_partial = read.is_some_and(|read| read.refusal_partial);
             items.push(json!({
                 "provider": account.provider,
                 "label": account.label,
@@ -102,6 +104,7 @@ impl ConfigCommandTool {
                 "profiles": profiles_on(&serving),
                 "usage": usage,
                 "refusal": refusal,
+                "refusal_partial": refusal_partial,
             }));
         }
         for backend in &backends {
@@ -119,14 +122,12 @@ impl ConfigCommandTool {
                         .and_then(|read| read.usage.clone())
                 })
                 .flatten();
-            let refusal = (state == "enabled")
-                .then(|| {
-                    reads
-                        .iter()
-                        .find(|read| read.matches_backend(backend))
-                        .and_then(|read| read.refusal.as_ref().map(|refusal| refusal.for_model()))
-                })
+            let read = (state == "enabled")
+                .then(|| reads.iter().find(|read| read.matches_backend(backend)))
                 .flatten();
+            let refusal =
+                read.and_then(|read| read.refusal.as_ref().map(|refusal| refusal.for_model()));
+            let refusal_partial = read.is_some_and(|read| read.refusal_partial);
             items.push(json!({
                 "provider": backend.provider_kind.as_str(),
                 "label": backend.name,
@@ -134,6 +135,7 @@ impl ConfigCommandTool {
                 "profiles": profiles_on(&[backend.backend_id.as_str()]),
                 "usage": usage,
                 "refusal": refusal,
+                "refusal_partial": refusal_partial,
             }));
         }
         ordered! {

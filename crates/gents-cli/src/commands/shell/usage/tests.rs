@@ -39,6 +39,7 @@ fn account(
             read_error: None,
         }),
         refusal: None,
+        refusal_partial: false,
     }
 }
 

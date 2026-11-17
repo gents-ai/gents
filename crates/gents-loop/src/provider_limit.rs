@@ -213,8 +213,13 @@ pub fn persisted_failure_reason(text: &str, now: DateTime<Utc>) -> String {
 /// time, from the body; the enum is what is carried everywhere after that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LimitWindow {
-    /// xAI's own words: "rolling 24-hour window".
+    /// xAI's own words: "rolling 24-hour window". Only the word "rolling" earns
+    /// this label: it states something a plain 24-hour period does not, namely
+    /// that the window slides rather than resetting on a boundary.
     Rolling24h,
+    /// "24-hour window"/"24 hour window" without "rolling". Its own label, so a
+    /// reader is not told the window rolls when the provider never said so.
+    Window24h,
     Daily,
     Weekly,
     Monthly,
@@ -226,6 +231,7 @@ impl LimitWindow {
     pub fn label(self) -> &'static str {
         match self {
             LimitWindow::Rolling24h => "rolling 24-hour",
+            LimitWindow::Window24h => "24-hour",
             LimitWindow::Daily => "daily",
             LimitWindow::Weekly => "weekly",
             LimitWindow::Monthly => "monthly",
@@ -236,6 +242,7 @@ impl LimitWindow {
     pub fn token(self) -> &'static str {
         match self {
             LimitWindow::Rolling24h => "rolling_24h",
+            LimitWindow::Window24h => "24h",
             LimitWindow::Daily => "daily",
             LimitWindow::Weekly => "weekly",
             LimitWindow::Monthly => "monthly",
@@ -247,6 +254,7 @@ impl LimitWindow {
     pub fn from_token(token: &str) -> Option<Self> {
         match token {
             "rolling_24h" => Some(LimitWindow::Rolling24h),
+            "24h" => Some(LimitWindow::Window24h),
             "daily" => Some(LimitWindow::Daily),
             "weekly" => Some(LimitWindow::Weekly),
             "monthly" => Some(LimitWindow::Monthly),
@@ -534,7 +542,9 @@ fn named_window(lower: &str) -> Option<LimitWindow> {
     }
     for needle in ["24-hour window", "24 hour window"] {
         if lower.contains(needle) {
-            return Some(LimitWindow::Rolling24h);
+            // No "rolling" in the body, so it is a 24-hour window and not a
+            // rolling one: only the provider saying "rolling" earns that label.
+            return Some(LimitWindow::Window24h);
         }
     }
     for (period, window) in [
@@ -564,9 +574,10 @@ fn json_window(text: &str) -> Option<LimitWindow> {
         .collect::<Vec<_>>()
         .join("-");
     match collapsed.as_str() {
-        "rolling-24-hour" | "rolling-24h" | "rolling-24-hours" | "24-hour" | "24h" => {
-            Some(LimitWindow::Rolling24h)
-        }
+        // Only an explicit "rolling" is a rolling window; a bare 24-hour period
+        // is its own label.
+        "rolling-24-hour" | "rolling-24h" | "rolling-24-hours" => Some(LimitWindow::Rolling24h),
+        "24-hour" | "24h" | "24-hours" => Some(LimitWindow::Window24h),
         "daily" | "day" => Some(LimitWindow::Daily),
         "weekly" | "week" => Some(LimitWindow::Weekly),
         "monthly" | "month" => Some(LimitWindow::Monthly),

@@ -219,7 +219,7 @@ impl UsageCache {
         node: &std::sync::Arc<defra_node::Node>,
         backend: &InferenceBackend,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Option<UsageRefusalView> {
+    ) -> Option<(Option<UsageRefusalView>, bool)> {
         crate::usage_refusal::refusal_for_backend_across_agents(
             node,
             &self.agent_signers,
@@ -664,6 +664,13 @@ pub struct AccountUsageRead {
     /// stated counter has no window to show at 100%.
     #[serde(default)]
     pub refusal: Option<UsageRefusalView>,
+    /// Whether the evidence search for `refusal` reached its page bound.
+    ///
+    /// Separate from `refusal.partial`, and present when `refusal` is `None`:
+    /// "no refusal in a truncated search" is not the same finding as "none",
+    /// and only this field can tell them apart.
+    #[serde(default)]
+    pub refusal_partial: bool,
 }
 
 /// A standing provider refusal, as the provider stated it.
@@ -842,6 +849,7 @@ pub async fn read_node_usage(
                         outcome: UsageRead::Disabled,
                         usage: None,
                         refusal: None,
+                        refusal_partial: false,
                     };
                     (entry, true)
                 }
@@ -888,11 +896,15 @@ pub async fn read_node_usage(
             // calls. Diagnostics only: it never changes the outcome or a route.
             // The evidence is read as each Agent this runtime holds, because
             // `InferenceCall` admits only the Agent that worked the call.
-            let refusal = cache.refusal_for_backend(&node, &backend, now).await;
+            let (refusal, refusal_partial) = cache
+                .refusal_for_backend(&node, &backend, now)
+                .await
+                .unwrap_or((None, false));
             AccountUsageRead {
                 outcome,
                 usage: Some(usage_view(stored.as_ref(), backend.provider_kind, now)),
                 refusal,
+                refusal_partial,
                 ..entry
             }
         }
@@ -909,6 +921,7 @@ fn account_entry(account: &crate::auth::credential::AccountSummary) -> AccountUs
         outcome: UsageRead::Disabled,
         usage: None,
         refusal: None,
+        refusal_partial: false,
     }
 }
 
@@ -993,6 +1006,9 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
                     // bounded excerpt for the operator's CLI and desktop, and
                     // can name account details that are not this Agent's.
                     "refusal": read.refusal.as_ref().map(UsageRefusalView::for_model),
+                    // Stated even when no refusal stands: a refusal found in a
+                    // truncated search and a refusal absent differ.
+                    "refusal_partial": read.refusal_partial,
                     "read": read.outcome,
                 })
             })

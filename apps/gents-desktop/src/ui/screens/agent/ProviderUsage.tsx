@@ -289,11 +289,23 @@ export function refusalDetail(refusal: UsageRefusalView) {
 }
 
 /** What this node has itself counted in its own look-back, labelled so it can
-    never be read as the provider's counter. */
+    never be read as the provider's counter — and stating *what* it counted: the
+    refused model when the refusal names one, the whole backend when it does not. */
 export function nodeEstimate(refusal: UsageRefusalView): string | null {
-  return refusal.consumedByNode == null
-    ? null
-    : `${refusal.consumedByNode.toLocaleString()} counted on this node, last ${refusal.evidenceWindowHours}h`;
+  if (refusal.consumedByNode == null) return null;
+  const scope = refusal.consumedScope.startsWith("model:")
+    ? refusal.consumedScope.slice("model:".length)
+    : "this backend";
+  return `${refusal.consumedByNode.toLocaleString()} counted on this node for ${scope}, last ${refusal.evidenceWindowHours}h (locally estimated)`;
+}
+
+/** Said when the evidence read reached its bound, so "no refusal" from a
+    truncated search is not read as "none". Independent of whether a refusal
+    stands: the truncation is a property of the search, not the finding. */
+export function partialNote(partial: boolean): string | null {
+  return partial
+    ? "partial: the evidence read reached its bound, so an older refusal may lie beyond it"
+    : null;
 }
 
 /** How a refusal reads in one line: what the provider stated — the model it is
@@ -352,6 +364,9 @@ export function RefusalBanner({ refusal }: { refusal: UsageRefusalView }) {
       )}
       {nodeEstimate(refusal) && (
         <p className="text-muted-foreground">{nodeEstimate(refusal)}</p>
+      )}
+      {partialNote(refusal.partial) && (
+        <p className="text-muted-foreground">{partialNote(refusal.partial)}</p>
       )}
     </div>
   );
@@ -525,6 +540,13 @@ export function AllProviderLimits({
                 {/* a refusal goes above the meters: an exhausted account can
                     have no window to fill, so the percentages may say nothing */}
                 {view.refusal && <RefusalBanner refusal={view.refusal} />}
+                {/* Shown when no refusal stands too: a truncated search is a
+                    property of the search, not of the finding. */}
+                {!view.refusal && partialNote(view.refusalPartial) && (
+                  <p className="text-muted-foreground">
+                    {partialNote(view.refusalPartial)}
+                  </p>
+                )}
                 <UsageRows view={view} />
               </>
             )}

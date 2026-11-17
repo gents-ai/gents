@@ -206,6 +206,75 @@ it("never shows a window the provider did not state as its own", () => {
   unknown.unmount();
 });
 
+it("labels what the local count covers, and says when the search was truncated", () => {
+  /* The review's items 1 and 2: the screen must say which scope the local count
+     is over, and must show a truncated search even when no refusal stands —
+     "no refusal" from a truncated read is not the same finding as "none". */
+  const base = (over: Record<string, unknown>) => [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: ["grok"],
+      windows: [],
+      plan: null,
+      note: null,
+      readAt: null,
+      readError: null,
+      read: "read",
+      ...over,
+    },
+  ];
+
+  /* A refusal naming a model: the count says it is about that model. */
+  const withRefusal = render(
+    <AllProviderLimits
+      views={base({
+        refusal: {
+          at: new Date().toISOString(),
+          model: "grok-4.7",
+          window: null,
+          used: null,
+          cap: null,
+          resetsAt: null,
+          consumedByNode: 1200,
+          consumedBasis: "locally_estimated",
+          consumedScope: "model:grok-4.7",
+          partial: true,
+          detail: "usage limit reached",
+          windowProvenance: "unknown",
+          evidenceWindowHours: 24,
+        },
+        refusalPartial: true,
+      })}
+      onRefresh={async () => {}}
+    />,
+  );
+  expect(screen.getByText(/1,200 counted on this node for grok-4\.7/)).toBeTruthy();
+  expect(screen.getByText(/locally estimated/)).toBeTruthy();
+  expect(screen.getByText(/reached its bound/)).toBeTruthy();
+  withRefusal.unmount();
+
+  /* No refusal, but the search was truncated: the truncation is still shown. */
+  const noRefusal = render(
+    <AllProviderLimits
+      views={base({ refusal: null, refusalPartial: true })}
+      onRefresh={async () => {}}
+    />,
+  );
+  expect(screen.getByText(/partial: the evidence read reached its bound/)).toBeTruthy();
+  noRefusal.unmount();
+
+  /* No refusal and a complete search: nothing is said. */
+  const clean = render(
+    <AllProviderLimits
+      views={base({ refusal: null, refusalPartial: false })}
+      onRefresh={async () => {}}
+    />,
+  );
+  expect(screen.queryByText(/reached its bound/)).toBeNull();
+  clean.unmount();
+});
+
 it("keeps the counter and cap even when the provider stated a reset", () => {
   /* The review's nit: a reset time used to replace the statement, so a refusal
      that said both "691791 of 600000" and "resets Thursday" showed only the

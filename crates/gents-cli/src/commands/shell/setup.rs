@@ -593,6 +593,7 @@ mod tests {
             usage: None,
             read: None,
             refusal: None,
+            refusal_partial: false,
         }
     }
 

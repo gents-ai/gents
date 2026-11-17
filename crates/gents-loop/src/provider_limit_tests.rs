@@ -576,6 +576,47 @@ fn a_period_is_the_window_only_when_the_body_names_it_as_one() {
     );
 }
 
+/// **Item 4.** Only the word "rolling" earns the rolling label: a plain
+/// "24-hour window" is its own window, so a reader is not told it slides when
+/// the provider never said so.
+#[test]
+fn only_rolling_earns_the_rolling_label() {
+    let window_of = |body: &str| {
+        let limit = classify_provider_limit(body, now()).expect(body);
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("expected exhaustion: {limit:?}");
+        };
+        usage.window
+    };
+    assert_eq!(
+        window_of("usage limit reached; rolling 24-hour window"),
+        Some(LimitWindow::Rolling24h)
+    );
+    assert_eq!(
+        window_of("usage limit reached; 24-hour window"),
+        Some(LimitWindow::Window24h),
+        "no \"rolling\" in the body, so it is not a rolling window"
+    );
+    assert_eq!(
+        window_of("usage limit reached; 24 hour window"),
+        Some(LimitWindow::Window24h)
+    );
+    // The two labels differ on every surface.
+    assert_ne!(
+        LimitWindow::Rolling24h.label(),
+        LimitWindow::Window24h.label()
+    );
+    assert_ne!(
+        LimitWindow::Rolling24h.token(),
+        LimitWindow::Window24h.token()
+    );
+    // And a plain 24-hour token does not read back as rolling.
+    assert_eq!(
+        LimitWindow::from_token(LimitWindow::Window24h.token()),
+        Some(LimitWindow::Window24h)
+    );
+}
+
 /// The counter pair is read only where the body anchors it on `tokens`: a date
 /// or a ratio is not a counter and a cap.
 #[test]

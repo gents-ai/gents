@@ -7,4 +7,10 @@ export type AccountUsageView = { label: string, provider: string, backendIds: Ar
  * The provider's own refusal, when one stands. Beside the windows rather
  * than among them: a refusal states a fact, not a percentage.
  */
-refusal: UsageRefusalView | null, };
+refusal: UsageRefusalView | null,
+/**
+ * Whether the evidence search for `refusal` reached its page bound. Present
+ * when `refusal` is null too: "no refusal in a truncated search" is not the
+ * same finding as "none", and the screen says which it has.
+ */
+refusalPartial: boolean, };

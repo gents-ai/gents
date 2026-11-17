@@ -25,6 +25,10 @@ pub struct AccountUsageView {
     /// The provider's own refusal, when one stands. Beside the windows rather
     /// than among them: a refusal states a fact, not a percentage.
     pub refusal: Option<UsageRefusalView>,
+    /// Whether the evidence search for `refusal` reached its page bound. Present
+    /// when `refusal` is null too: "no refusal in a truncated search" is not the
+    /// same finding as "none", and the screen says which it has.
+    pub refusal_partial: bool,
 }
 
 /// A standing provider refusal, as the provider stated it. Every field past
@@ -141,6 +145,7 @@ pub(crate) async fn account_usage_views(
         .map(|read| {
             let usage = read.usage.as_ref();
             AccountUsageView {
+                refusal_partial: read.refusal_partial,
                 label: read.label.clone(),
                 provider: read.provider.clone(),
                 backend_ids: backends

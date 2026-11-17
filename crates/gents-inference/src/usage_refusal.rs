@@ -269,20 +269,51 @@ async fn read_evidence(
     access: &gents_store::config_client::ConfigAccess,
     backend_id: &str,
     since: &DateTime<Utc>,
-) -> Option<(Vec<CallEvidence>, bool, u64, bool)> {
+) -> Option<Evidence> {
     let since_text = gents_store::graphql::escape_graphql_string(&since.to_rfc3339());
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut calls = Vec::new();
-    let mut consumed: u64 = 0;
-    let mut saw_usage = false;
-    let mut partial = true;
-    for page in 0..EVIDENCE_MAX_PAGES {
+    let fetch = |page: usize| {
         let query = format!(
             r#"{{ InferenceCall(filter: {{backend_id: {{_eq: "{backend_id}"}}, queued_at: {{_gt: "{since_text}"}}}}, order: {{queued_at: DESC}}, limit: {EVIDENCE_PAGE}, offset: {}) {{ call_id call_state model_name failure_reason queued_at provider_total_tokens }} }}"#,
             page * EVIDENCE_PAGE
         );
-        let response = access.execute(&query).await.ok()?;
-        let rows = response["data"]["InferenceCall"].as_array()?;
+        let access = access.clone();
+        async move {
+            let response = access.execute(&query).await.ok()?;
+            Some(response["data"]["InferenceCall"].as_array()?.clone())
+        }
+    };
+    page_evidence(fetch).await
+}
+
+/// What a read of one backend's evidence found.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Evidence {
+    pub calls: Vec<CallEvidence>,
+    pub saw_usage: bool,
+    pub consumed: u64,
+    /// The read reached its page bound before the window ended, so an older row
+    /// was not seen. Carried even when no refusal stands, so "no refusal in a
+    /// truncated search" is distinguishable from "none".
+    pub partial: bool,
+}
+
+/// Page a fetcher to the end of the window, or to the stated bound.
+///
+/// Separated from the query so the bound is testable without a node: `fetch(page)`
+/// returns that page's rows, or `None` if the query failed.
+async fn page_evidence<F, Fut>(fetch: F) -> Option<Evidence>
+where
+    F: Fn(usize) -> Fut,
+    Fut: std::future::Future<Output = Option<Vec<serde_json::Value>>>,
+{
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut evidence = Evidence {
+        // A read that ends early without a short page is partial by default.
+        partial: true,
+        ..Evidence::default()
+    };
+    for page in 0..EVIDENCE_MAX_PAGES {
+        let rows = fetch(page).await?;
         let short = rows.len() < EVIDENCE_PAGE;
         for row in rows {
             // Dedupe by the call's own id: one call is one call's tokens.
@@ -300,10 +331,10 @@ async fn read_evidence(
             };
             let provider_total_tokens = row["provider_total_tokens"].as_u64();
             if let Some(total) = provider_total_tokens {
-                consumed = consumed.saturating_add(total);
-                saw_usage = true;
+                evidence.consumed = evidence.consumed.saturating_add(total);
+                evidence.saw_usage = true;
             }
-            calls.push(CallEvidence {
+            evidence.calls.push(CallEvidence {
                 call_id: row["call_id"].as_str().map(str::to_owned),
                 at: queued_at,
                 call_state: row["call_state"].as_str().unwrap_or_default().to_owned(),
@@ -313,22 +344,11 @@ async fn read_evidence(
             });
         }
         if short {
-            partial = false;
+            evidence.partial = false;
             break;
         }
     }
-    if partial {
-        // Said rather than silent: the caller sees evidence that reached its
-        // bound, so an old refusal beyond the horizon cannot be mistaken for
-        // "none exists".
-        tracing::debug!(
-            backend_id,
-            pages = EVIDENCE_MAX_PAGES,
-            rows = calls.len(),
-            "refusal evidence reached its page bound; the view is partial"
-        );
-    }
-    Some((calls, saw_usage, consumed, partial))
+    Some(evidence)
 }
 
 /// The standing refusal for one backend, read from the durable evidence of the
@@ -343,19 +363,21 @@ pub async fn refusal_for_backend(
     access: &gents_store::config_client::ConfigAccess,
     backend: &gents_documents::inference_backend::InferenceBackend,
     now: DateTime<Utc>,
-) -> Option<UsageRefusalView> {
+) -> Option<(Option<UsageRefusalView>, bool)> {
     let since = evidence_since(now);
     let backend_id = gents_store::graphql::escape_graphql_string(&backend.backend_id);
     // `InferenceCall` carries no `created_at`: it is the call's own lifecycle
     // that times it. `queued_at` is written once at admission and never revised,
     // so it is the column a window can be taken over; `started_at`/`ended_at`
     // are stamped later and a queued call has neither.
-    let (calls, _saw_usage, _consumed, partial) =
-        read_evidence(access, &backend_id, &since).await?;
+    let evidence = read_evidence(access, &backend_id, &since).await?;
     // The classifier's detail is already bounded (`DETAIL_MAX_CHARS`), so the
     // view takes it as it is rather than truncating a second time: the agent
     // JSON, the account inventory and the desktop show the same excerpt.
-    standing_refusal_with(&calls, now, usize::MAX, partial)
+    let view = standing_refusal_with(&evidence.calls, now, usize::MAX, evidence.partial);
+    // `partial` is returned even when no view is: "no refusal in a truncated
+    // search" is not the same finding as "none".
+    Some((view, evidence.partial))
 }
 
 /// Evidence read as one Agent: the calls this backend made that this Agent's
@@ -365,9 +387,10 @@ pub async fn refusal_for_backend_as_agent(
     signer: &gents_store::identity::ManagedAgentSigner,
     backend: &gents_documents::inference_backend::InferenceBackend,
     now: DateTime<Utc>,
-) -> Option<UsageRefusalView> {
-    let (calls, partial) = evidence_as_agent(node, signer, backend, now).await?;
-    standing_refusal_with(&calls, now, usize::MAX, partial)
+) -> Option<(Option<UsageRefusalView>, bool)> {
+    let evidence = evidence_as_agent(node, signer, backend, now).await?;
+    let view = standing_refusal_with(&evidence.calls, now, usize::MAX, evidence.partial);
+    Some((view, evidence.partial))
 }
 
 /// The raw evidence this Agent's `children` grant admits for one backend.
@@ -376,7 +399,7 @@ async fn evidence_as_agent(
     signer: &gents_store::identity::ManagedAgentSigner,
     backend: &gents_documents::inference_backend::InferenceBackend,
     now: DateTime<Utc>,
-) -> Option<(Vec<CallEvidence>, bool)> {
+) -> Option<Evidence> {
     let actor = identity::Did::new(signer.did()).ok()?;
     let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
         node.clone(),
@@ -386,9 +409,7 @@ async fn evidence_as_agent(
     .ok()?;
     let since = evidence_since(now);
     let backend_id = gents_store::graphql::escape_graphql_string(&backend.backend_id);
-    read_evidence(&access, &backend_id, &since)
-        .await
-        .map(|(calls, _, _, partial)| (calls, partial))
+    read_evidence(&access, &backend_id, &since).await
 }
 
 /// The standing refusal for one backend, across every Agent this runtime can
@@ -404,7 +425,7 @@ pub async fn refusal_for_backend_across_agents(
     signers: &[gents_store::identity::ManagedAgentSigner],
     backend: &gents_documents::inference_backend::InferenceBackend,
     now: DateTime<Utc>,
-) -> Option<UsageRefusalView> {
+) -> Option<(Option<UsageRefusalView>, bool)> {
     // Read each Agent's evidence, then decide once over the union.
     //
     // The union is deduped by call id: a call visible to two Agents is one call,
@@ -415,12 +436,11 @@ pub async fn refusal_for_backend_across_agents(
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut partial = false;
     for signer in signers {
-        let Some((view, agent_partial)) = evidence_as_agent(node, signer, backend, now).await
-        else {
+        let Some(evidence) = evidence_as_agent(node, signer, backend, now).await else {
             continue;
         };
-        partial |= agent_partial;
-        for call in view {
+        partial |= evidence.partial;
+        for call in evidence.calls {
             let key = match &call.call_id {
                 Some(id) => id.clone(),
                 // Without a call id there is nothing that says two rows are the
@@ -435,7 +455,8 @@ pub async fn refusal_for_backend_across_agents(
     }
     // Partial if any Agent's read was: a page bound reached by one means the
     // union has a horizon, and saying so beats implying there is none.
-    standing_refusal_with(&union, now, usize::MAX, partial)
+    let view = standing_refusal_with(&union, now, usize::MAX, partial);
+    Some((view, partial))
 }
 
 /// The refusal text an operator sees: bounded, never the whole body.
@@ -615,6 +636,84 @@ mod tests {
         assert_eq!(view.consumed_by_node, Some(120));
         assert_eq!(view.consumed_basis, WindowBasis::LocallyEstimated);
         assert_eq!(view.for_model()["consumed_basis"], "locally_estimated");
+    }
+
+    /// **Item 3.** The paging bound is testable because the loop takes a
+    /// fetcher: `EVIDENCE_MAX_PAGES` full pages leave the read partial, and a
+    /// short page clears it.
+    #[tokio::test]
+    async fn a_full_page_bound_reports_partial_and_a_short_page_does_not() {
+        // Ids are unique per page: a repeated id is one call, and dedupe would
+        // (correctly) collapse the repeats instead of counting them.
+        let page_rows = |page: usize| {
+            (0..super::EVIDENCE_PAGE)
+                .map(move |n| {
+                    serde_json::json!({
+                        "call_id": format!("call-{page}-{n}"),
+                        "queued_at": "2026-11-17T09:00:00Z",
+                        "call_state": "completed",
+                        "model_name": GROK,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        // Every page is full: the loop stops at the bound and says so.
+        let full = super::page_evidence(|page| async move { Some(page_rows(page)) })
+            .await
+            .expect("the read succeeds");
+        assert!(
+            full.partial,
+            "the bound was reached, so an older row was unseen"
+        );
+        assert_eq!(
+            full.calls.len(),
+            super::EVIDENCE_PAGE * super::EVIDENCE_MAX_PAGES,
+            "the bound is the ceiling, not a longer read"
+        );
+
+        // One short page ends the window before the bound.
+        let short = super::page_evidence(|page| async move {
+            Some(if page == 0 {
+                page_rows(0).into_iter().take(3).collect()
+            } else {
+                Vec::new()
+            })
+        })
+        .await
+        .expect("the read succeeds");
+        assert!(!short.partial, "a short page means the window ended");
+        assert_eq!(short.calls.len(), 3);
+    }
+
+    /// **Item 1.** `partial` survives when no refusal is found: the finding from
+    /// a truncated search is not the finding from a complete one.
+    #[tokio::test]
+    async fn a_truncated_search_without_a_refusal_still_reports_partial() {
+        // A full page of plain completions: no refusal, and the bound reached.
+        let full = super::page_evidence(|page| async move {
+            Some(
+                (0..super::EVIDENCE_PAGE)
+                    .map(|n| {
+                        serde_json::json!({
+                            "call_id": format!("call-{page}-{n}"),
+                            "queued_at": "2026-11-17T09:00:00Z",
+                            "call_state": "completed",
+                            "model_name": GROK,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .await
+        .expect("the read succeeds");
+        assert!(full.partial);
+        let view =
+            standing_refusal_with(&full.calls, at("2026-11-17T10:00:00Z"), 300, full.partial);
+        assert!(view.is_none(), "no refusal among the rows read");
+        assert!(
+            full.partial,
+            "yet the search was truncated, which the caller must be able to say"
+        );
     }
 
     /// A completion after the refusal clears it.
