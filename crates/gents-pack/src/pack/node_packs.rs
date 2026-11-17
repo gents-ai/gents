@@ -691,10 +691,6 @@ impl NodePacks<'_> {
         .await
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "plugin install inputs plus explicit reviewed pin edits"
-    )]
     pub async fn install_plugins_with_pins(
         &self,
         pin_moves: Vec<super::pin_moves::PluginPinMove>,
