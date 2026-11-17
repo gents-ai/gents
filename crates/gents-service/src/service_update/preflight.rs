@@ -1,6 +1,9 @@
 use super::*;
 use crate::native_service::CommandRunner;
-use gents_store::local::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyError};
+use gents_store::local::store_key::{
+    StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyError, StoreKeyUnavailable,
+    MACOS_KEYCHAIN_SERVICE,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum PreflightError {
@@ -18,7 +21,9 @@ pub(super) enum PreflightError {
         #[source]
         source: Box<StoreKeyCause>,
     },
-    #[error("candidate preflight failed; runtime and service unchanged. Diagnostic: {detail}")]
+    #[error(transparent)]
+    StoreKeyRead(#[from] Box<StoreKeyError>),
+    #[error("candidate preflight failed; runtime and service unchanged. Fix the cause, then retry your update command. Diagnostic: {detail}")]
     CandidateRefused { detail: String },
     #[error("candidate did not prove noninteractive Keychain store-key access for {}; runtime and service unchanged. Use a candidate that supports the store-key preflight, then retry your original update command", home.display())]
     MissingStoreKeyProof { home: PathBuf },
@@ -29,7 +34,7 @@ pub(super) enum PreflightError {
 #[derive(Debug, thiserror::Error)]
 pub(super) enum StoreKeyCause {
     #[error(transparent)]
-    Local(#[from] StoreKeyError),
+    Local(#[from] StoreKeyUnavailable),
     #[error("{detail}")]
     Candidate { detail: String },
 }
@@ -58,7 +63,7 @@ fn store_key_error(
     PreflightError::StoreKey {
         candidate: candidate.to_owned(),
         home: home.to_owned(),
-        service: "com.source-inc.gents.store-key",
+        service: MACOS_KEYCHAIN_SERVICE,
         account,
         command: check_command(candidate, home),
         source: Box::new(source),
@@ -95,7 +100,13 @@ fn check_store_key_with(
     encryption: Option<&StoreEncryption>,
     read: impl FnOnce(&StoreEncryption, &Path, &Path) -> std::result::Result<StoreKey, StoreKeyError>,
 ) -> std::result::Result<bool, PreflightError> {
-    let Some(record) = encryption.filter(|record| keychain_custody(Some(record))) else {
+    let Some(
+        record @ StoreEncryption {
+            custody: StoreKeyCustody::MacosKeychain { keychain_label },
+            ..
+        },
+    ) = encryption
+    else {
         return Ok(false);
     };
     let _no_prompts =
@@ -107,11 +118,14 @@ fn check_store_key_with(
         &gents_store::local::home::default_data_dir(home),
     )
     .map(drop)
-    .map_err(|source| {
-        let StoreKeyCustody::MacosKeychain { keychain_label } = &record.custody else {
-            unreachable!()
-        };
-        store_key_error(home, &executable, keychain_label.clone(), source.into())
+    .map_err(|source| match source {
+        StoreKeyError::Unavailable(unavailable) => store_key_error(
+            home,
+            &executable,
+            keychain_label.clone(),
+            unavailable.into(),
+        ),
+        other => PreflightError::StoreKeyRead(Box::new(other)),
     })?;
     Ok(true)
 }

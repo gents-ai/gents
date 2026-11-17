@@ -322,6 +322,7 @@ fn real_probe_refuses_nonzero_and_missing_attestation_and_admits_attestation() {
     assert!(text.contains("schema migration failed on Linux"));
     assert!(!text.contains("Keychain"));
     assert!(!text.contains("approve"));
+    assert!(text.contains("Fix the cause, then retry your update command"));
     let error = prepared_probe(
         home.path(),
         crate::native_service::CommandOutput {
@@ -381,7 +382,11 @@ fn real_probe_preserves_structural_store_key_cause_and_original_path() {
     let text = format!("{error:#}");
     assert!(text.contains(&std::env::current_exe().unwrap().display().to_string()));
     assert!(text.contains("account `injected-reader-no-keychain-item`"));
-    assert!(text.contains("com.source-inc.gents.store-key"));
+    assert!(text.contains(MACOS_KEYCHAIN_SERVICE));
+    assert_eq!(
+        MACOS_KEYCHAIN_SERVICE,
+        "com.source-inc.gents.test.store-key"
+    );
     assert!(text.contains("-25293"));
     assert!(text.contains("Runtime and service unchanged"));
     assert!(!text.contains("/deleted/stage"));
@@ -447,4 +452,181 @@ fn real_probe_and_receipt_admission_order_match_lean() {
             registered: admitted.and_then(|phase| phase.step(Action::Register(true))),
         }
     });
+}
+
+#[test]
+fn check_stdout_emits_denied_reader_envelope_and_preserves_failure() {
+    if !in_child(concat!(
+        module_path!(),
+        "::check_stdout_emits_denied_reader_envelope_and_preserves_failure"
+    )) {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    write_fixture(home.path());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut stdout = Vec::new();
+    let error = runtime
+        .block_on(super::super::check_to(
+            Some(home.path().into()),
+            |home, record| {
+                check_store_key_with(home, record, |_, _, data| {
+                    assert_no_keychain_interaction();
+                    Err(StoreKeyUnavailable {
+                        data_path: data.into(),
+                        code: -25293,
+                    }
+                    .into())
+                })
+            },
+            &mut stdout,
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<PreflightError>(),
+        Some(PreflightError::StoreKey { .. })
+    ));
+    // Observe the actual production check output writer, not just failure_metadata.
+    assert_eq!(stdout.last(), Some(&b'\n'));
+    let envelope: FailureEnvelope = serde_json::from_slice(&stdout).unwrap();
+    assert!(envelope.store_key_failure_v1.contains("-25293"));
+    assert!(!envelope.store_key_failure_v1.contains("update-check"));
+    let parent = prepared_probe(
+        home.path(),
+        crate::native_service::CommandOutput {
+            success: false,
+            stdout: String::from_utf8(stdout).unwrap(),
+            stderr: error.to_string(),
+        },
+        true,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        parent.downcast_ref::<PreflightError>(),
+        Some(PreflightError::StoreKey { .. })
+    ));
+}
+
+#[test]
+fn non_access_key_errors_keep_their_text_without_envelope_or_approval_advice() {
+    if !in_child(concat!(
+        module_path!(),
+        "::non_access_key_errors_keep_their_text_without_envelope_or_approval_advice"
+    )) {
+        return;
+    }
+    use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
+    let home = tempfile::tempdir().unwrap();
+    write_fixture(home.path());
+    let data = gents_store::local::home::default_data_dir(home.path());
+    // The custody owner translates Keychain -25300 into MissingStoreKey.
+    let missing = StoreKeyError::Incompatible(IncompatibleStore {
+        kind: IncompatibleStoreKind::MissingStoreKey,
+        data_path: data.clone(),
+    });
+    // Version rejection precedes Keychain access, even for a Keychain record.
+    let mut foreign = keychain_record();
+    foreign.version = STORE_ENCRYPTION_VERSION + 1;
+    let foreign = foreign
+        .load(
+            &gents_store::local::store_key::home_key_file(home.path()),
+            &data,
+        )
+        .unwrap_err();
+    let wrong_length = StoreKey::from_host(&[0; 31]).unwrap_err();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    for source in [missing, foreign, wrong_length] {
+        let expected = source.to_string();
+        let mut stdout = Vec::new();
+        let error = runtime
+            .block_on(super::super::check_to(
+                Some(home.path().into()),
+                move |home, record| {
+                    check_store_key_with(home, record, |_, _, _| {
+                        assert_no_keychain_interaction();
+                        Err(source)
+                    })
+                },
+                &mut stdout,
+            ))
+            .unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert!(matches!(
+            error.downcast_ref::<PreflightError>(),
+            Some(PreflightError::StoreKeyRead(_))
+        ));
+        assert!(stdout.is_empty());
+        assert!(failure_metadata(&error).is_none());
+        assert!(!error.to_string().contains("approve"));
+        let parent = prepared_probe(
+            home.path(),
+            crate::native_service::CommandOutput {
+                success: false,
+                stdout: String::new(),
+                stderr: expected.clone(),
+            },
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            parent.downcast_ref::<PreflightError>(),
+            Some(PreflightError::CandidateRefused { .. })
+        ));
+        assert!(parent.to_string().contains(&expected));
+        assert!(!parent.to_string().contains("approve"));
+    }
+}
+
+#[test]
+fn repair_live_update_propagates_missing_and_foreign_key_errors() {
+    if !in_child(concat!(
+        module_path!(),
+        "::repair_live_update_propagates_missing_and_foreign_key_errors"
+    )) {
+        return;
+    }
+    use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
+    let home = tempfile::tempdir().unwrap();
+    write_fixture(home.path());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let missing = StoreKeyError::Incompatible(IncompatibleStore {
+        kind: IncompatibleStoreKind::MissingStoreKey,
+        data_path: gents_store::local::home::default_data_dir(home.path()),
+    });
+    let expected = missing.to_string();
+    let error = runtime
+        .block_on(super::super::repair_preflight_with_reader(
+            home.path(),
+            move |home, record| {
+                check_store_key_with(home, record, |_, _, _| {
+                    assert_no_keychain_interaction();
+                    Err(missing)
+                })
+            },
+        ))
+        .expect_err("repair must stop, not silently skip a missing key");
+    assert!(matches!(
+        error.downcast_ref::<PreflightError>(),
+        Some(PreflightError::StoreKeyRead(_))
+    ));
+    assert_eq!(error.to_string(), expected);
+
+    // Exercise the production repair preflight with the real loader: a foreign version
+    // fails before accessing any custody backend, so no Keychain read occurs.
+    let mut config = crate::home_state::read_init_config(home.path())
+        .unwrap()
+        .unwrap();
+    config.store_encryption.as_mut().unwrap().version = STORE_ENCRYPTION_VERSION + 1;
+    crate::home_state::write_init_config(home.path(), &config).unwrap();
+    let error = runtime
+        .block_on(super::super::repair_preflight_with_reader(
+            home.path(),
+            check_store_key,
+        ))
+        .expect_err("repair must stop, not silently skip a foreign key format");
+    assert!(
+        matches!(error.downcast_ref::<PreflightError>(), Some(PreflightError::StoreKeyRead(source))
+        if matches!(source.as_ref(), StoreKeyError::Incompatible(store) if store.kind == IncompatibleStoreKind::ForeignVersion))
+    );
+    assert!(!error.to_string().contains("approve"));
 }
