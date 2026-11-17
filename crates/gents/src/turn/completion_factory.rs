@@ -159,6 +159,16 @@ fn authoritative_reasoning_capabilities(
     Some(params)
 }
 
+fn preamble_with_profile_model(mut preamble: String, model: &str) -> String {
+    let model = model.trim();
+    if !model.is_empty() {
+        preamble.push_str("\nYour profile's model: ");
+        preamble.push_str(model);
+        preamble.push('.');
+    }
+    preamble
+}
+
 pub(crate) fn loop_config_for_request(
     agent_config: &ResolvedAgent,
     preamble: String,
@@ -169,7 +179,7 @@ pub(crate) fn loop_config_for_request(
 ) -> anyhow::Result<LoopConfig> {
     let mut config = loop_config(
         agent_config,
-        preamble,
+        preamble_with_profile_model(preamble, &agent_config.model_name),
         tool_count,
         CaptureScopeKind::Inference,
     );

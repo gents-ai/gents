@@ -1098,3 +1098,19 @@ fn generated_reasoning_capabilities_override_untrusted_provider_parameters() {
         authoritative_reasoning_capabilities(params, kind, advertised.as_deref()).map(|params| gents_lean_vocab::compact_model_json(&params))
     });
 }
+
+#[test]
+fn profile_model_line_tracks_admitted_model_and_omits_unknown() {
+    assert_eq!(
+        super::preamble_with_profile_model("base".into(), "model-a"),
+        "base\nYour profile's model: model-a."
+    );
+    assert_eq!(
+        super::preamble_with_profile_model("base".into(), "model-b"),
+        "base\nYour profile's model: model-b."
+    );
+    assert_eq!(
+        super::preamble_with_profile_model("base".into(), "  "),
+        "base"
+    );
+}
