@@ -437,6 +437,18 @@ See `../README.md` for how this fits the broader formal-verification model.
   reaps before its exec (`write_executable_script`), and its RED
   `ChildWriterUnwaited` drops the reap. `Darwin` (no such execve check) and
   `Alone` (no sibling) explain why the old order passed on macOS and alone.
+- `TestPortReservation` — two gents-cli integration tests on one host, each
+  in its own nextest process, reserving a port with `allocate_port`,
+  starting a server on it and waiting with `wait_for_port`, which accepts any
+  listener. `NoCrossTalk`: the server answering on a test's port is its own.
+  RED: `PerRunner` locks reservations under TMPDIR, which differs per CI
+  runner, so two jobs on one machine reserve the same port and one test talks
+  to the other's server (the subscription EOFs and foreign-node errors on
+  the shared Linux runners); `EphemeralOverlap` lets an outbound connection
+  take the reserved port, which fails the server's bind. Green locks in one
+  host-wide directory below every ephemeral range; `PerRunnerSpread` shows
+  why separate directories rarely collided while one process per binary
+  spread its cursor.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking

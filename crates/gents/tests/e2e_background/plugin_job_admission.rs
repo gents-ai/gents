@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::time::Duration;
 
 use gents::DocumentRuntimeOptions;
 use gents_inference::llm::message::{Message, Text, ToolResultContent, UserContent};
@@ -17,6 +16,7 @@ use super::plugin_job_support::{
 use crate::support::accepted_turn::{
     boot_managed_accepted_turn_with_backend_capacity, AcceptedTurnSpec,
 };
+use crate::support::live_inference::STALL_CEILING;
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse, StreamScript};
 use crate::support::{test_db, TestDb};
 
@@ -173,7 +173,6 @@ async fn settle(h: &JobHarness, tool_call_id: &str, refusal: &str) -> Settled {
         session_id: h.session_id.clone(),
         tool_call_id: tool_call_id.into(),
     };
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let mut changes = gents_store::subscription_source::subscribe_collections(
         h.db.node.as_ref(),
         ["AgentToolCall", "AgentRequest", "AgentMessage"],
@@ -209,9 +208,11 @@ async fn settle(h: &JobHarness, tool_call_id: &str, refusal: &str) -> Settled {
             }
             Err(error) => panic!("job {tool_call_id} is unreadable: {error:?}"),
         }
-        tokio::time::timeout_at(deadline, changes.recv())
+        tokio::time::timeout(STALL_CEILING, changes.recv())
             .await
-            .unwrap_or_else(|_| panic!("{tool_call_id} did not settle; last read: {view:?}"))
+            .unwrap_or_else(|_| {
+                panic!("{tool_call_id} made no progress for {STALL_CEILING:?}; last read: {view:?}")
+            })
             .expect("job document subscription closed");
     }
 }

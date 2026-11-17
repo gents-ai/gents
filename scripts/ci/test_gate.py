@@ -731,6 +731,26 @@ class HostGroups(unittest.TestCase):
                 self.assertFalse(any(group in other["labels"] for other in ROLES.values()), group)
 
 
+class SystemPreflight(unittest.TestCase):
+    def test_a_linux_host_missing_a_library_names_its_package(self):
+        saved = list(gate.results)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertFalse(gate.system_preflight("linux", lambda name: name != "alsa"))
+            self.assertIn("libasound2-dev", output.getvalue())
+            self.assertNotIn("libgtk-3-dev", output.getvalue())
+            self.assertTrue(gate.system_preflight("linux", lambda name: True))
+            self.assertTrue(gate.system_preflight("darwin", lambda name: False))
+        finally:
+            gate.results[:] = saved
+
+    def test_the_build_and_the_test_jobs_check_first(self):
+        source = Path(gate.__file__).read_text()
+        for function in ("run_test", "run_build"):
+            body = source.split(f"def {function}(", 1)[1].split("\ndef ", 1)[0]
+            self.assertIn("system_preflight()", body, function)
+
+
 class MacosOnlyTests(unittest.TestCase):
     def test_cfg_predicates_evaluate_per_platform(self):
         cases = {

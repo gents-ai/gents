@@ -117,6 +117,27 @@ JOURNEY = {"gents-cli", "gents-client-host", "gents-media-host"}
 # Portable crates whose tests need the Afterburner compilers (Go, Javy, Binaryen).
 AFTERBURNER = {"gents-cli"}
 
+# The system libraries a Linux build of the portable crates links, by the
+# pkg-config module that finds each (module -> Ubuntu package): Tauri's GTK and
+# WebKitGTK (gents-client-host, fixture-domain-plugin), ALSA (gents-media-host)
+# and the rest of the portable hosts' provisioning list (amygdala
+# infra/services/github-runners/provision-ghrunner-root.sh). `system_preflight`
+# names any that is missing before a build, instead of a -sys crate's build
+# script failing deep inside it.
+LINUX_SYSTEM_LIBRARIES = {
+    "gtk+-3.0": "libgtk-3-dev",
+    "webkit2gtk-4.1": "libwebkit2gtk-4.1-dev",
+    "javascriptcoregtk-4.1": "libjavascriptcoregtk-4.1-dev",
+    "libsoup-3.0": "libsoup-3.0-dev",
+    "librsvg-2.0": "librsvg2-dev",
+    "ayatana-appindicator3-0.1": "libayatana-appindicator3-dev",
+    "alsa": "libasound2-dev",
+    "libudev": "libudev-dev",
+    "libxml-2.0": "libxml2-dev",
+    "zlib": "zlib1g-dev",
+    "ncurses": "libncurses-dev",
+}
+
 PACKAGE_FEATURES = {
     "gents-claude": "gents-claude/transport",
     "gents-protocol": "gents-protocol/typescript",
@@ -960,6 +981,30 @@ def feature_flags(package):
     return []
 
 
+def system_preflight(platform=None, exists=None):
+    """False, with the missing packages named, when this Linux host lacks a
+    system library the portable crates link."""
+    if (platform or sys.platform) != "linux":
+        return True
+    started = time.time()
+
+    def found(name):
+        try:
+            return subprocess.run(["pkg-config", "--exists", name]).returncode == 0
+        except FileNotFoundError:
+            return False
+
+    missing = [package for name, package in LINUX_SYSTEM_LIBRARIES.items() if not (exists or found)(name)]
+    if not missing:
+        return True
+    problem = (f"this runner lacks the system packages {' '.join(missing)}, which the portable crates link "
+               "on Linux; install them on every host of the runner's role "
+               "(amygdala infra/services/github-runners/provision-ghrunner-root.sh)")
+    print(f"::error::{problem}", flush=True)
+    results.append(("system library preflight", problem, "", time.time() - started))
+    return False
+
+
 def run_test(selection, name):
     entry = next((entry for entry in selection["matrix"] if entry["job"] == f"test:{name}"), None)
     group = next((group for group in GROUPS if entry and group.name == entry["group"]), None)
@@ -968,6 +1013,8 @@ def run_test(selection, name):
     packages = entry["packages"].split()
     if group.name == NATIVE:
         run_native(entry, packages)
+        return
+    if not system_preflight():
         return
     options = group_options(group)
     # One crate per build: a crate that compiles only through the features
@@ -1355,6 +1402,8 @@ class LeanContract:
 
 def build_and_run(entry, name, lean):
     packages = entry["packages"].split()
+    if not system_preflight():
+        return
     source = ROOT
     if os.environ.get("GITHUB_ACTIONS") and os.environ.get("RUNNER_TEMP"):
         source = Path(os.environ["RUNNER_TEMP"]) / ARCHIVE_SOURCE
