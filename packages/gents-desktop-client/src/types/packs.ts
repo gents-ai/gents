@@ -48,12 +48,27 @@ export type WireReport = {
   next_call: string | null;
 };
 
-export type PackWireResult = {
-  plugin: string;
+export type PackWireResult =
+  | PackWireSkipped
+  | {
+      skipped?: false;
+      plugin: string;
+      agent: string;
+      preview: boolean;
+      authority: string | null;
+      report: WireReport;
+    };
+
+/** A per-slot/agent/plugin preview entry. No report exists until runtime
+ * identity provisioning binds every authored slot. Install, then wire. */
+export type PackWireSkipped = {
+  skipped: true;
+  preview: true;
+  slot: string;
   agent: string;
-  preview: boolean;
-  authority: string | null;
-  report: WireReport;
+  plugin: string | null;
+  reason: string;
+  next: string;
 };
 
 export type PackWireSources = {

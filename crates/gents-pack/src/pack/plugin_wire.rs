@@ -241,6 +241,18 @@ pub async fn wire_pack_plugins(
     .await
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("pack operator action requires the hosted caller identity selected by the transaction")]
+pub struct HostedCallerMismatch;
+
+fn require_hosted_caller(access: &ConfigAccess) -> Result<()> {
+    let caller = access.client_held_signer_did();
+    if caller.is_none() || access.actor_did().as_deref() != caller {
+        return Err(HostedCallerMismatch.into());
+    }
+    Ok(())
+}
+
 /// Separate explicit operator transition. Wire/init never call this owner.
 pub async fn enable_pack_dynamic(
     access: &gents_store::config_client::ConfigAccess,
@@ -262,6 +274,9 @@ pub async fn enable_pack_dynamic(
             )
             .await;
         }
+    }
+    if matches!(access, ConfigAccess::Graphql(_)) {
+        require_hosted_caller(access)?;
     }
     let config = crate::pack::load_pack_recorded_config(
         access,
@@ -324,9 +339,7 @@ pub async fn enable_pack_dynamic(
             .await
             .map_err(|failure| {
                 if failure.unconfirmed {
-                    failure
-                        .error
-                        .context("enable commit was not confirmed; inspect policy before retrying")
+                    failure.error.context("enable commit was not confirmed")
                 } else {
                     failure.error
                 }
@@ -412,16 +425,32 @@ pub async fn wire_pack_batch(
         })
         .await?;
         if !pending.is_empty() {
-            return Ok(pending
-                .into_iter()
-                .map(|slot| {
-                    json!({
-                        "slot": slot, "preview": true, "skipped": true,
-                        "reason": "needs runtime identity provisioning",
-                        "next": "Install this pack, then wire it to the selected agent(s)."
-                    })
-                })
-                .collect());
+            let plugins: Vec<_> = pack
+                .manifest()
+                .metadata
+                .plugins
+                .iter()
+                .map(|p| Some(format!("{}/{}", pack.manifest().metadata.namespace, p.name)))
+                .collect();
+            let plugins = if plugins.is_empty() {
+                vec![None]
+            } else {
+                plugins
+            };
+            let mut skipped = Vec::new();
+            for slot in pending {
+                for agent in agents {
+                    for plugin in &plugins {
+                        skipped.push(json!({
+                            "slot": slot, "agent": agent, "plugin": plugin,
+                            "preview": true, "skipped": true,
+                            "reason": "needs runtime identity provisioning",
+                            "next": "Install this pack, then wire it to the selected agent(s)."
+                        }));
+                    }
+                }
+            }
+            return Ok(skipped);
         }
     }
     if let ConfigAccess::Graphql(endpoint) = access {
@@ -587,11 +616,7 @@ pub async fn wire_pack_batch(
             failure.error.context("batch wiring commit was not confirmed; inspect all targets before retrying")
         } else { failure.error })?
     } else {
-        let caller = access.client_held_signer_did();
-        anyhow::ensure!(
-            caller.is_some() && access.actor_did().as_deref() == caller,
-            "pack wire requires the caller identity selected by the hosted transaction"
-        );
+        require_hosted_caller(access)?;
         // Hosted installs carry the caller's delegated signing endpoint, not
         // a local held User key. Keep the entire batch in that one caller-
         // authorized transaction, just as the single-plugin wire does.

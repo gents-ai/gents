@@ -86,6 +86,35 @@ describe("enabling a pack's plugin for an agent", () => {
     expect(warning).toHaveTextContent("No policy change is required to wire.");
   });
 
+  it("renders a skipped slot with a next step and disables Enable", async () => {
+    const wirePack = vi.fn(async () => ({
+      skipped: true,
+      preview: true,
+      slot: "fresh-worker",
+      agent: "test-agent",
+      plugin: "demo/hello_plugin",
+      reason: "needs runtime identity provisioning",
+      next: "Install this pack, then wire it to the selected agent(s).",
+    }));
+    renderIn(
+      testApp({ api: { wirePack } }),
+      <WirePackDialog
+        plugin="demo/hello_plugin"
+        agents={deployment.agents}
+        targetsFrom={[]}
+        onClose={() => {}}
+      />,
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Skipped fresh-worker: needs runtime identity provisioning",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Install this pack, then wire",
+    );
+    expect(screen.getByRole("button", { name: "Enable" })).toBeDisabled();
+    expect(wirePack).toHaveBeenCalledTimes(1);
+  });
+
   it("allows a new dialog to try after an earlier refusal", async () => {
     const refusing = vi.fn(async ({ preview }: { preview: boolean }) => {
       if (preview)

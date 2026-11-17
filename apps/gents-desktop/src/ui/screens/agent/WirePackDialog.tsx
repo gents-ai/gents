@@ -99,7 +99,8 @@ export function WirePackDialog({
     }
   }
 
-  const job = preview?.report.job;
+  const report = preview && !preview.skipped ? preview.report : null;
+  const job = report?.job;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose(false)}>
       <DialogContent className="sm:max-w-lg">
@@ -130,7 +131,15 @@ export function WirePackDialog({
               </SelectContent>
             </Select>
           </Field>
-          {preview && (
+          {preview?.skipped && (
+            <div role="status" className="text-sm">
+              <p>
+                Skipped {preview.slot}: {preview.reason}
+              </p>
+              <p>{preview.next}</p>
+            </div>
+          )}
+          {preview && !preview.skipped && (
             <ul className="grid gap-1 text-sm">
               {job ? (
                 <>
@@ -150,10 +159,14 @@ export function WirePackDialog({
               )}
               {preview.authority && <li>Authority: {preview.authority}</li>}
               {preview.report.policy_warnings?.map((warning) => (
-                <li key={`${warning.plugin}:${warning.code}`} data-testid="wire-policy-warning">
-                  {warning.code}: requested {warning.requested?.dynamic ?? "none"}
-                  {" "}[{warning.requested?.dynamic_targets.join(", ") ?? ""}]; kept {warning.kept.dynamic}
-                  {" "}[{warning.kept.dynamic_targets.join(", ")}]. {warning.remedy}
+                <li
+                  key={`${warning.plugin}:${warning.code}`}
+                  data-testid="wire-policy-warning"
+                >
+                  {warning.code}: requested {warning.requested?.dynamic ?? "none"} [
+                  {warning.requested?.dynamic_targets.join(", ") ?? ""}]; kept{" "}
+                  {warning.kept.dynamic} [{warning.kept.dynamic_targets.join(", ")}].{" "}
+                  {warning.remedy}
                 </li>
               ))}
               {preview.report.warnings.map((warning) => (
@@ -178,7 +191,7 @@ export function WirePackDialog({
           </Button>
           <Button
             variant="brand"
-            disabled={busy || !preview || refused}
+            disabled={busy || !preview || preview.skipped === true || refused}
             onClick={() => void confirm()}
           >
             Enable

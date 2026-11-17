@@ -321,12 +321,12 @@ async fn engineer_of(
 /// enable whose grant failed names the command that makes the grant, and
 /// enabling the pack again makes it.
 async fn observed_wiring(
-    home: &Path,
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     record: &gents_pack::pack::HomePackInstall,
     context: &gents_documents::AgentContext,
     tools: &gents_documents::Tools,
+    dynamic_plugins: &[String],
 ) -> Result<Wiring> {
     let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(&record.coordinate);
     let selected: Vec<_> = tools
@@ -357,17 +357,10 @@ async fn observed_wiring(
         .await?
         .iter()
         .all(|(_, enabled)| *enabled);
-    let mut dynamic_plugins = Vec::new();
-    for shipped in &record.plugins {
-        let plugin = gents_pack::plugin::store::read_record(home, namespace, &shipped.name)?;
-        if plugin.declaration.job.0 {
-            dynamic_plugins.push(format!("{namespace}/{}", shipped.name));
-        }
-    }
     Ok(Wiring {
         wired,
         tool_calls: !selections.is_empty() && selections.iter().all(|plugin| plugin.tool_calls),
-        consent_dynamic: dynamic_workflows_enabled(tools, &dynamic_plugins),
+        consent_dynamic: dynamic_workflows_enabled(tools, dynamic_plugins),
         root_readers: false,
         agents_active,
     })
@@ -397,69 +390,87 @@ type Installed = (gents_pack::pack::HomePackInstall, Result<Wiring, String>);
 /// not the Engineer.
 async fn engineer_packs(home: &Path) -> Result<Option<Vec<(CorePack, Option<Installed>)>>> {
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
-    let read = async {
-        let Some(engineer) = engineer_of(&access, &owner).await? else {
-            return Ok(None);
-        };
-        let (context, tools) = access
-            .transact_readonly("cli.core_packs.status", |txn| {
-                let (owner, engineer) = (&owner, &engineer);
-                Box::pin(async move {
-                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await
-                })
-            })
-            .await?;
-        let context = context.context("the Engineer has no Context document")?;
-        let tools = tools.context("the Engineer has no Tools document")?;
-        let mut packs = Vec::new();
-        for pack in CorePack::ALL {
-            let installed = match gents_pack::pack::read_home_install(home, pack.coordinate())? {
-                Some(record) => {
-                    let wiring = observed_wiring(home, &access, &owner, &record, &context, &tools)
-                        .await
-                        .map_err(|error| format!("{error:#}"));
-                    Some((record, wiring))
-                }
-                None => None,
-            };
-            packs.push((pack, installed));
-        }
-        Ok::<_, anyhow::Error>(Some(packs))
-    }
-    .await;
+    let read = engineer_packs_in_access(home, &access, &owner).await;
     release(access).await;
     read
+}
+
+async fn engineer_packs_in_access(
+    home: &Path,
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+) -> Result<Option<Vec<(CorePack, Option<Installed>)>>> {
+    let Some(engineer) = engineer_of(access, owner).await? else {
+        return Ok(None);
+    };
+    let (context, tools) = access
+        .transact_readonly("cli.core_packs.status", |txn| {
+            let (owner, engineer) = (owner, &engineer);
+            Box::pin(async move {
+                gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await
+            })
+        })
+        .await?;
+    let context = context.context("the Engineer has no Context document")?;
+    let tools = tools.context("the Engineer has no Tools document")?;
+    let mut packs = Vec::new();
+    for pack in CorePack::ALL {
+        let installed = match gents_pack::pack::read_home_install(home, pack.coordinate())? {
+            Some(record) => {
+                // Only plugin-record reads produce a per-pack Unknown.
+                // Database, scope and transport failures remain errors.
+                let namespace = record
+                    .coordinate
+                    .split_once('/')
+                    .context("invalid pack coordinate")?
+                    .0;
+                let plugins: Result<Vec<_>> = record
+                    .plugins
+                    .iter()
+                    .map(|shipped| {
+                        let plugin =
+                            gents_pack::plugin::store::read_record(home, namespace, &shipped.name)?;
+                        Ok(plugin
+                            .declaration
+                            .job
+                            .0
+                            .then(|| format!("{namespace}/{}", shipped.name)))
+                    })
+                    .collect();
+                let wiring = match plugins {
+                    Ok(plugins) => {
+                        let plugins: Vec<_> = plugins.into_iter().flatten().collect();
+                        Ok(
+                            observed_wiring(access, owner, &record, &context, &tools, &plugins)
+                                .await?,
+                        )
+                    }
+                    Err(error) => Err(format!("{error:#}")),
+                };
+                Some((record, wiring))
+            }
+            None => None,
+        };
+        packs.push((pack, installed));
+    }
+    Ok::<_, anyhow::Error>(Some(packs))
 }
 
 /// Each core pack as `home` has it, with `archives` the release's. A home
 /// whose default agent is not the Engineer has none.
 pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<PackStatus>> {
-    let packs = match engineer_packs(home).await {
-        Ok(Some(packs)) => packs,
-        Ok(None) => return Ok(Vec::new()),
-        Err(error) => {
-            // Opening the local store validates plugin protection metadata.
-            // If that fails, no pack's runtime state is observable. Preserve
-            // the diagnostic as Unknown rather than fail the entire status.
-            let reason = format!("cannot observe core-pack status: {error:#}");
-            return Ok(CorePack::ALL
-                .into_iter()
-                .map(|pack| {
-                    let (purpose, without) = describe(pack);
-                    PackStatus {
-                        pack: pack.coordinate(),
-                        purpose,
-                        without,
-                        state: PackState::Unknown,
-                        version: None,
-                        reason: Some(reason.clone()),
-                        enable_with: None,
-                    }
-                })
-                .collect());
-        }
+    let Some(packs) = engineer_packs(home).await? else {
+        return Ok(Vec::new());
     };
-    Ok(packs
+    Ok(render_status(home, archives, packs))
+}
+
+fn render_status(
+    home: &Path,
+    archives: Archives<'_>,
+    packs: Vec<(CorePack, Option<Installed>)>,
+) -> Vec<PackStatus> {
+    packs
         .into_iter()
         .map(|(pack, installed)| {
             let (state, version, reason) = match installed {
@@ -498,7 +509,7 @@ pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<Pa
                     .then(|| enable_command(home, pack)),
             }
         })
-        .collect())
+        .collect()
 }
 
 /// Enables each of `packs` for `home`'s Engineer: the user's explicit
@@ -1855,20 +1866,54 @@ mod tests {
         );
         let record = home.path().join("plugins/installed/gents/workflow.json");
         assert!(record.exists(), "{}", record.display());
+        // Keep the store open, as a serving runtime does. Corruption found
+        // during plugin observation is per-pack Unknown; failure to open a
+        // protected store in the first place is still an operational error.
+        let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
+            .await
+            .unwrap();
         std::fs::write(record, "invalid plugin record").unwrap();
-        let listed = status(home.path(), &archives).await.unwrap();
+        let packs = engineer_packs_in_access(home.path(), &access, &owner)
+            .await
+            .unwrap()
+            .unwrap();
+        let listed = render_status(home.path(), &archives, packs);
+        release(access).await;
         let workflow = listed
             .iter()
             .find(|p| p.pack == CorePack::DynamicWorkflows.coordinate())
             .unwrap();
         assert_eq!(workflow.state, PackState::Unknown);
         assert!(!workflow.reason.as_deref().unwrap().is_empty());
-        assert!(listed.iter().all(|p| p.state == PackState::Unknown));
+        assert!(listed
+            .iter()
+            .filter(|p| p.pack != CorePack::DynamicWorkflows.coordinate())
+            .all(|p| p.state != PackState::Unknown));
         assert!(workflow
             .reason
             .as_deref()
             .unwrap()
             .contains("workflow.json"));
+    }
+
+    #[tokio::test]
+    async fn status_refuses_unresolvable_node() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(status(home.path(), &[]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn status_refuses_unreachable_runtime_with_claimed_store() {
+        let owned = fixture_archives().await;
+        let archives = borrowed(&owned);
+        let home = tempfile::tempdir().unwrap();
+        crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &archives)
+            .await
+            .unwrap();
+        // An unavailable runtime still owns the store; status may not report
+        // success/Unknown or open it behind the runtime's back.
+        let _claim = gents_store::local::home::lock_home_store(home.path()).unwrap();
+        assert!(status(home.path(), &archives).await.is_err());
     }
 
     /// A home set up before any inference provider exists, as the desktop

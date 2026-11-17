@@ -274,6 +274,32 @@ async fn hosted_fresh_install_preview_plans_wiring_without_publication() {
     })).unwrap()).unwrap();
     let (bytes, _) = gents_pack::pack::archive::pack_dir(&path).unwrap();
     let archive = PackArchive::from_bytes(&bytes).unwrap();
+    // A caller without a held signer must be rejected before config reads or
+    // writes, not retried as an ordinary GraphQL mutation.
+    let source = gents_pack::pack::resolved_pack::ResolvedPack::received(
+        PackArchive::from_bytes(&bytes).unwrap(),
+        gents_pack::pack::PackSource::Local { file_name: None },
+    )
+    .unwrap();
+    let unsigned = gents_store::config_client::ConfigAccess::graphql_as(
+        "http://127.0.0.1:1/graphql",
+        "did:key:zUnheldCaller",
+    );
+    let error = gents_pack::pack::plugin_wire::enable_pack_dynamic(
+        &unsigned,
+        &owner,
+        &binding.agent_did,
+        &source,
+        std::path::Path::new("."),
+        gents_service::home_state::load_held_user_identity,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.is::<gents_pack::pack::plugin_wire::HostedCallerMismatch>(),
+        "{error:#}"
+    );
+
     let mut request: serde_json::Value =
         serde_json::from_slice(&body(&archive, &[], &owner)).unwrap();
     request["preview"] = true.into();
