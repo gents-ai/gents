@@ -180,6 +180,7 @@ where
                 .map(str::to_owned);
         let request_context_message = super::super::inference::render_request_context_message(
             &self.node,
+            &self.agent_config.model_name,
             &self.tool_config,
             request,
             frozen_instruction_manifest.as_deref(),

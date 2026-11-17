@@ -117,8 +117,22 @@ pub struct AgentReceipt<A> {
     /// Agent's host tools wait on a WorkspaceRoot reader grant.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_root_access: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_copied: Vec<AgentOmittedCapability>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overridden_on_request: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_warning: Option<String>,
     pub agent: A,
     pub make_default: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AgentOmittedCapability {
+    pub capability: String,
+    pub grant_command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_note: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -533,6 +547,9 @@ mod tests {
             operation: AgentOperationKind::Clone,
             agent_did: "did:key:new".to_owned(),
             host_root_access: None,
+            not_copied: vec![],
+            overridden_on_request: vec![],
+            prompt_warning: None,
             agent: serde_json::json!({"agent_did": "did:key:new"}),
             make_default: false,
         };

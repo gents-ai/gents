@@ -100,6 +100,8 @@ where
             request_context_message,
             wake_notifications,
         )?;
+        provider_history
+            .retain(|row| !gents_loop::loop_stream::is_request_context_message(&row.message));
         let mut new_messages = gents_loop::loop_stream::assemble_new_messages(
             if resume_from_history {
                 None

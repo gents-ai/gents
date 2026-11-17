@@ -129,10 +129,14 @@ fn request_for(session_id: &str, node_did: &str, agent_did: &str) -> AgentReques
 
 /// The message the real renderer produces for `request`, or `None` when it
 /// renders no context at all.
-async fn rendered_context(node: &Arc<defra_node::Node>, request: &AgentRequest) -> Option<String> {
+async fn rendered_context(
+    node: &Arc<defra_node::Node>,
+    request: &AgentRequest,
+    model: &str,
+) -> Option<String> {
     let tool_config = gents_tools::surface::AgentToolSurfaceConfig::meta_only();
     let message =
-        super::inference::render_request_context_message(node, &tool_config, request, None)
+        super::inference::render_request_context_message(node, model, &tool_config, request, None)
             .await
             .expect("the context renders");
     message.map(|message| format!("{message:?}"))
@@ -166,13 +170,20 @@ async fn a_verified_workflow_childs_rendered_context_carries_the_sentence() {
     );
 
     let request = request_for(&session_id, &node_did, &agent_did);
-    let context = rendered_context(&node, &request)
+    let context = rendered_context(&node, &request, "")
         .await
         .expect("a request carries a context message");
     assert!(
         context.contains(gents_session::workspace::WORKFLOW_RESULT_RETURN_INSTRUCTION),
         "the rendered context carries the sentence: {context}"
     );
+    let context_with_model = rendered_context(&node, &request, "model-a")
+        .await
+        .expect("a child with a real model has context");
+    assert!(
+        context_with_model.contains(gents_session::workspace::WORKFLOW_RESULT_RETURN_INSTRUCTION)
+    );
+    assert!(context_with_model.contains("Your profile's model: model-a."));
 }
 
 /// An `agent_new` child is verified and is not a workflow child, so its rendered
@@ -202,7 +213,7 @@ async fn an_agent_new_childs_rendered_context_omits_the_sentence() {
     );
 
     let request = request_for(&session_id, &node_did, &agent_did);
-    if let Some(context) = rendered_context(&node, &request).await {
+    if let Some(context) = rendered_context(&node, &request, "").await {
         assert!(
             !context.contains(gents_session::workspace::WORKFLOW_RESULT_RETURN_INSTRUCTION),
             "an ordinary session's context omits the sentence: {context}"

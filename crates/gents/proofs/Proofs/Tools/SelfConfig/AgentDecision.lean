@@ -42,6 +42,14 @@ def AgentCatalog.present (c : AgentCatalog) (id : String) : Bool :=
 def AgentCatalog.enabled (c : AgentCatalog) (id : String) : Bool :=
   c.agents.any (fun a => a.id == id && a.enabled)
 
+/-- Cloning drops the source self-configuration group; fresh creation does not. -/
+def cloneOmittedSelfConfig (isClone sourceHasSelfConfig : Bool) : Bool :=
+  isClone && sourceHasSelfConfig
+
+theorem clone_omission_exact (sourceHasSelfConfig : Bool) :
+    cloneOmittedSelfConfig true sourceHasSelfConfig = sourceHasSelfConfig := by
+  cases sourceHasSelfConfig <;> rfl
+
 /-! ## Inputs -/
 
 structure AgentCreateInput where
