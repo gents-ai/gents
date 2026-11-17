@@ -1481,16 +1481,14 @@ def kept_target():
 
 
 def keep_core_packs_fresh():
-    """Give gents-core-packs' build script an empty core packs directory to watch.
+    """Give gents-core-packs' build script a core packs directory that outlives the checkout.
 
-    Cargo reruns a build script whose `rerun-if-changed` path is missing, so
-    without one every Cargo invocation of a job rebuilt gents-core-packs and each
-    crate above it (gents-cli, gents-client-host): four times in one
-    test:macos-only job (dispatch 44116567619). Empty, it embeds the same no
-    archives a missing directory does. A CI runner keeps it beside its Cargo
-    target, which outlives the checkout's `git clean`, so the first build of a
-    job reuses those crates too; elsewhere it is the default target/core-packs,
-    where `make core-packs` writes real ones.
+    The build script creates and watches its directory (default
+    target/core-packs). The checkout's `git clean` deletes that directory
+    before every job, and a directory created during a build reruns the script
+    once more, which recompiles gents-cli and gents-client-host above it. A CI
+    runner therefore keeps an empty directory beside its Cargo target. Empty,
+    it embeds the same no archives a missing directory does.
     """
     if os.environ.get("GENTS_CORE_PACKS_DIR"):
         return
