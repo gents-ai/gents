@@ -310,6 +310,7 @@ type ShutdownOutcome = std::result::Result<(), String>;
 
 pub struct ClientCore {
     store_access: Mutex<Option<ConfigAccess>>,
+    store_release: Option<gents_store::local::home::StoreRelease>,
     paths: DesktopPaths,
     options: ClientCoreOptions,
     node_identity: PrincipalIdentity,
@@ -366,6 +367,15 @@ impl ClientCore {
 
     pub fn p2p(&self) -> &Arc<dyn P2POps> {
         &self.p2p
+    }
+
+    /// Resolves once this client's store is free for another opener: after
+    /// [`Self::shutdown`] and once every handle of its node, this client's
+    /// own included, has been dropped (Lean `StoreHandoff.mayRelease`). A stop
+    /// is acknowledged only after it (`tla/StoreHandoff.tla`
+    /// `AckFollowsRelease`), so the acknowledger drops its handles first.
+    pub fn store_release(&self) -> Option<gents_store::local::home::StoreRelease> {
+        self.store_release.clone()
     }
 
     /// Stops the observer so only a test's direct reads publish into the
@@ -636,20 +646,23 @@ impl ClientCore {
         }
     }
 
-    /// Reports done only once the store lock is free: a stop, retire or quit
-    /// built on this is acknowledged after the release (`tla/StoreHandoff.tla`
-    /// `AckFollowsRelease`). The claim lives in the node's write gate until
-    /// its last owner, possibly a native operation still settling, drops it.
-    /// The release is declared first, so a process that opens the store
-    /// meanwhile waits for it instead of being refused.
+    /// Reports done once the node has shut down and its store claim has been
+    /// handed to its release, whoever else still holds an access on the node
+    /// (`tla/StoreHandoff.tla` `ReleaseByShutdownOwner`). The store lock goes
+    /// once the node's storage engine lets go of the data directory, which
+    /// regolith does only when the node's last handle drops; a stop, retire
+    /// or quit is acknowledged after [`Self::store_release`] resolves, never on
+    /// this return. The release is declared first, so a process that opens
+    /// the store meanwhile waits for it instead of being refused.
     async fn shutdown_inner(&self) -> Result<()> {
         tracing::info!("client core shutdown: begin");
-        let release = self
-            .store_access
-            .lock()
-            .await
-            .as_ref()
-            .and_then(ConfigAccess::begin_store_release);
+        drop(
+            self.store_access
+                .lock()
+                .await
+                .as_ref()
+                .and_then(ConfigAccess::begin_store_release),
+        );
         self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
             tracing::info!("client core shutdown: stopping p2p supervisor");
@@ -672,9 +685,8 @@ impl ClientCore {
             pause.node_shutdown_returned.notify_one();
             pause.allow_access_release.notified().await;
         }
-        self.store_access.lock().await.take();
-        if let Some(release) = release {
-            release.released().await;
+        if let Some(access) = self.store_access.lock().await.take() {
+            access.release_store();
         }
         node_shutdown.context("shutting down embedded node")?;
         tracing::info!("client core shutdown: complete");

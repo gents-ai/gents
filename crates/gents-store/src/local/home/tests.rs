@@ -1249,3 +1249,49 @@ fn generated_store_handoff_decisions_match_the_lock_owner() {
         decision.to_owned()
     });
 }
+
+/// Lean `StoreHandoff.mayRelease`, replayed against real lock files: a store
+/// lock dropped while a storage engine holds the data directory's own lock
+/// stays held, declared releasing, until that engine lets go, and only then
+/// is the store free and its release notice resolved.
+#[tokio::test]
+async fn generated_store_handoff_release_waits_for_the_engine_directory() {
+    let mut observed = Vec::new();
+    for directory_held in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let engine = directory_held.then(|| {
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(data.join("LOCK"))
+                .unwrap();
+            crate::local::file_lock::FileLock::exclusive(file).unwrap()
+        });
+        let held = lock_store(temp.path(), &data).unwrap();
+        let released = held.release_notice();
+        drop(held);
+        let attempt = try_store(temp.path(), &data).unwrap();
+        observed.push((directory_held, matches!(attempt, StoreAttempt::Acquired(_))));
+        if engine.is_some() {
+            assert!(
+                matches!(attempt, StoreAttempt::Wait(_)),
+                "a store held for its engine is declared releasing: {attempt:?}"
+            );
+        }
+        drop(attempt);
+        drop(engine);
+        released.released().await;
+        drop(lock_store(temp.path(), &data).expect("a released store is free"));
+    }
+    gents_lean_vocab::families::store_handoff_release::replay(|i| {
+        observed
+            .iter()
+            .find(|(held, _)| *held == i.directory_held)
+            .map(|(_, free)| *free)
+            .expect("every modeled directory state was observed")
+    });
+}

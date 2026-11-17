@@ -1,0 +1,4 @@
+---- MODULE MCStoreHandoffSuccessorCurrent ----
+EXTENDS StoreHandoff
+
+====
