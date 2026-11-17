@@ -49,6 +49,16 @@ pub(crate) fn include_existing_by_version(
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {
     for (name, root, target, id, patch, fields) in [
+        // Presentation only (Lean Shared.ToolPolicy.Presentation): an absent/null
+        // list advertises the entire existing grant; no capabilities or defaults change.
+        (
+            "Tools",
+            "bafyreiay45qi2chkcus5wfycrsumq5vr6igrydc3ebsqqr2qrkb3qfgo6a",
+            "bafyreictaobcfheh7hrsaek6p2i2hgnyeiy6ogtfetxc5c4ozhmqqcv4cy",
+            "tools-add-hidden-tool-names",
+            r#"[{"op":"add","path":"/Tools/Fields/-","value":{"Name":"hidden_tool_names","Kind":"[String!]"}}]"#,
+            &["hidden_tool_names"][..],
+        ),
         (
             "Task",
             "bafyreieh67b32auhf33bkdltep2gh6gmrb5wgs2sd7vxexmqxno45jnmdm",

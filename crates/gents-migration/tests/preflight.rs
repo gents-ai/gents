@@ -181,12 +181,99 @@ async fn startup_refuses_unbound_transport_collections_before_mutation() {
     }
 }
 
+/// Pin the append result as well as the fresh SDL root: DefraDB field IDs must not move.
 #[tokio::test]
-async fn hidden_tool_names_schema_change_never_silently_migrates_an_existing_home() {
+async fn hidden_tool_names_append_preserves_existing_field_ids() {
     let node = fresh_node().await;
     let previous = schemas::TOOLS.replace("    hidden_tool_names: [String!]\n", "");
     assert_ne!(previous, schemas::TOOLS);
     node.add_collection(&previous).await.unwrap();
+    let before = node.get_collection("Tools").unwrap().unwrap();
+    let after = common::patch_collection(
+        &node,
+        "Tools",
+        r#"[{"op":"add","path":"/Tools/Fields/-","value":{"Name":"hidden_tool_names","Kind":"[String!]"}}]"#,
+    ).await;
+    assert_eq!(
+        before.version_id,
+        "bafyreiay45qi2chkcus5wfycrsumq5vr6igrydc3ebsqqr2qrkb3qfgo6a"
+    );
+    assert_eq!(
+        after.version_id,
+        "bafyreictaobcfheh7hrsaek6p2i2hgnyeiy6ogtfetxc5c4ozhmqqcv4cy"
+    );
+    for field in &before.fields {
+        assert_eq!(
+            after
+                .fields
+                .iter()
+                .find(|next| next.name == field.name)
+                .unwrap()
+                .id,
+            field.id
+        );
+    }
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn hidden_tool_names_upgrades_existing_tools_without_changing_grants() {
+    let node = fresh_node().await;
+    let previous = schemas::TOOLS.replace("    hidden_tool_names: [String!]\n", "");
+    assert_ne!(previous, schemas::TOOLS);
+    node.add_collection(&previous).await.unwrap();
+    let created = node
+        .execute(
+            r#"mutation { create_Tools(input: {
+        tools_id: "retained" node_did: "did:key:existing" display_name: "Retained grants"
+        host: "{\"files\":{\"mode\":\"read\"}}"
+        built_ins: "{\"schema\":true}" tags: ["retained"]
+    }) { _docID } }"#,
+        )
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let selection = "{ Tools { _docID tools_id node_did display_name host built_ins tags } }";
+    let retained = node.execute(selection).await;
+    assert!(!retained.has_errors(), "{:?}", retained.errors);
+    assert_eq!(
+        retained.data.as_ref().unwrap()["Tools"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let before = node.get_all_collection_versions().await.unwrap();
+    check_migration_compatibility(&before).unwrap();
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(node.get_all_collection_versions().await.unwrap()).unwrap()
+    );
+    let report = ensure_migrations(node.as_ref()).await.unwrap();
+    assert_eq!(report.steps_applied, 1);
+    let after = node.execute(selection).await;
+    assert!(!after.has_errors(), "{:?}", after.errors);
+    assert_eq!(after.data, retained.data);
+    let hidden = node.execute("{ Tools { hidden_tool_names } }").await;
+    assert!(!hidden.has_errors(), "{:?}", hidden.errors);
+    assert!(hidden.data.unwrap()["Tools"][0]["hidden_tool_names"].is_null());
+    check_migration_compatibility(&node.get_all_collection_versions().await.unwrap()).unwrap();
+    assert_eq!(
+        ensure_migrations(node.as_ref())
+            .await
+            .unwrap()
+            .steps_applied,
+        0
+    );
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn hidden_tool_names_unknown_older_tools_lineage_is_still_refused() {
+    let node = fresh_node().await;
+    let unknown = schemas::TOOLS
+        .replace("    hidden_tool_names: [String!]\n", "")
+        .replace("    self_config: JSON\n", "");
+    node.add_collection(&unknown).await.unwrap();
     let before = node.get_all_collection_versions().await.unwrap();
     assert!(
         matches!(check_migration_compatibility(&before), Err(Error::UnknownLineage { collection, .. }) if collection == "Tools")
@@ -198,5 +285,5 @@ async fn hidden_tool_names_schema_change_never_silently_migrates_an_existing_hom
         serde_json::to_value(&before).unwrap(),
         serde_json::to_value(node.get_all_collection_versions().await.unwrap()).unwrap()
     );
-    node.shutdown().await.expect("shut down test node");
+    node.shutdown().await.unwrap();
 }
