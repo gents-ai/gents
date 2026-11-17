@@ -297,6 +297,39 @@ mod tests {
             .iter()
             .any(|row| row["agent_did"] == binding.agent_did
                 && row["display_name"] == "Agent-signed update"));
+        let batch_provider = "metadata-batch";
+        let mut expected_docs = Vec::new();
+        for index in 0..=query::owners::MAX_OWNER_OBSERVATIONS {
+            let mut row = credential.clone();
+            row.credential_id = format!("metadata-batch-{index}");
+            row.provider = batch_provider.into();
+            row.account_ref = Some(format!("batch-{index}"));
+            row.access_token = format!("batch-secret-{index}");
+            row.refresh_token = format!("batch-refresh-{index}");
+            expected_docs.push(
+                crate::auth::credential::upsert_oauth_credential_on(&user_access, &row).await?,
+            );
+        }
+        let batch_query = super::super::runtime_account_query(runtime.did(), batch_provider);
+        let batch = agent
+            .transact_readonly("test.default_account.metadata_batch", |txn| {
+                let query = &batch_query;
+                Box::pin(async move {
+                    txn.execute_runtime_account_metadata_query(runtime.did(), query)
+                        .await
+                })
+            })
+            .await?;
+        let mut actual_docs = batch.data.unwrap()["OAuthCredential"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["_docID"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        actual_docs.sort();
+        expected_docs.sort();
+        assert_eq!(actual_docs, expected_docs);
+
         let foreign = agent
             .transact_readonly("test.default_account.foreign", |txn| {
                 Box::pin(async move {
@@ -328,13 +361,16 @@ mod tests {
         user_access
             .delete_actor_relationship("OAuthCredential", &doc, "runtime_writer", &runtime_did)
             .await?;
-        let visible = admin
-            .execute("{ OAuthCredential { _docID access_token } }")
-            .await?;
-        assert!(visible["data"]["OAuthCredential"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        let visible = gents_store::identity::observe_document_permissions(
+            &db.node,
+            runtime.did(),
+            &runtime_did,
+            Some(("OAuthCredential", &doc)),
+            &["read".to_owned()],
+        )
+        .await?
+        .unwrap();
+        assert_eq!(visible.held, [false]);
         let empty = agent
             .transact_readonly("test.default_account.hidden", |txn| {
                 Box::pin(async move {

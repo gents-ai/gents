@@ -17,7 +17,7 @@ pub enum RuntimeHopCapError {
 
 pub(super) fn runtime_hop_cap_query(node_did: &str) -> String {
     format!(
-        r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ max_request_hop }} }}"#,
+        r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ _docID max_request_hop }} }}"#,
         escape_graphql_string(node_did)
     )
 }

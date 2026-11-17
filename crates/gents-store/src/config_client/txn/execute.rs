@@ -1174,57 +1174,6 @@ impl ConfigApplyTxn<'_> {
         .await
     }
 
-    /// Read only account-selection metadata as this transaction's bound
-    /// runtime. Native document ACP still filters and authorizes the read.
-    /// The credential owner supplies `query`; store holds no OAuthCredential
-    /// selection of its own.
-    pub async fn execute_runtime_account_metadata_query(
-        &self,
-        node_did: &str,
-        query: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        self.execute_runtime_metadata_query(node_did, query).await
-    }
-
-    /// Read only the runtime Node's hop cap as this transaction's bound
-    /// runtime. Native document ACP still filters the Node row.
-    pub(super) async fn execute_runtime_hop_cap_query(
-        &self,
-        node_did: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        self.execute_runtime_metadata_query(
-            node_did,
-            &super::runtime_hop_cap::runtime_hop_cap_query(node_did),
-        )
-        .await
-    }
-
-    async fn execute_runtime_metadata_query(
-        &self,
-        node_did: &str,
-        query: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        let TxnBackend::Embedded {
-            node,
-            agent_signer: Some(agent_signer),
-            ..
-        } = &self.backend
-        else {
-            return Err(ConfigClientError::EmbeddedAccessRequired);
-        };
-        if node.node_identity_did() != Some(node_did)
-            || agent_signer.node_did() != node_did
-            || self.actor_did() != Some(agent_signer.did())
-        {
-            return Err(ConfigClientError::TransactionActorMismatch);
-        }
-        let runtime =
-            identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
-        graphql::ensure_query_document(query)?;
-        self.execute_local_response_with_actor(query, None, Some(runtime), None)
-            .await
-    }
-
     pub(super) async fn execute_local_response_with_actor(
         &self,
         document: &str,

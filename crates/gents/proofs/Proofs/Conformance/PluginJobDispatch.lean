@@ -195,7 +195,8 @@ theorem duplicate_handle_is_suffixed_and_the_scratch_path_is_unchanged :
 /-- A later step of the adopted job `own`, whose one child in slot `s` is
 live, answering `spawn` (one spawn of `worker` in slot `later`) or nothing.
 The runtime reads its Node's hop cap: `capReadable` with `cap`, or a Node it
-cannot read. The Agent's own view of the Node plays no part. -/
+has no native document read grant for. Native administrator query bypass does
+not supply that grant. The Agent's own view of the Node plays no part. -/
 structure LaterStep where
   capReadable : Bool
   cap : Option Nat

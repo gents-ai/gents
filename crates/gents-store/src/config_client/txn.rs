@@ -12,6 +12,7 @@ mod owner_staged;
 mod pack_interpreter;
 mod rollback;
 mod runtime_hop_cap;
+mod runtime_metadata;
 mod telemetry;
 mod transact;
 mod transact_entry;

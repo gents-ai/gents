@@ -1825,7 +1825,12 @@ theorem agent_cannot_resolve_runtime_secret (access : BackendCredentialAccess)
 native ACP in the Agent write's transaction. Its input is the runtime-visible
 credential set: a filtered empty set is absence, not evidence about hidden
 documents. The Agent receives no credential document or token. The configured
-runtime identity, same-Node binding, snapshot, and native read are premises. -/
+runtime identity, same-Node binding, snapshot, and native read are premises.
+
+The metadata service narrows the runtime's native authority to its document
+read grants. Native NAC administration and query DAC bypass do not stand in
+for those grants; the native document-read observation runs on the same
+transaction snapshot as the metadata query. -/
 structure RuntimeDefaultAccountRead where
   runtimeActor : Bool
   sameNode : Bool
