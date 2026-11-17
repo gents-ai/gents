@@ -586,7 +586,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
             .await
             .expect_err("anonymous HTTP writes must be refused");
         assert!(
-            refused.to_string().contains("not authorized"),
+            refused.is_permission_denied(),
             "{phase}: unexpected refusal: {refused:#}"
         );
         gents_store::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
