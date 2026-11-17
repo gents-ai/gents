@@ -61,6 +61,7 @@ struct Admitted {
     internal_id: String,
     args: String,
     skipped: Option<String>,
+    rejected: Option<ToolOutcome>,
 }
 
 pub(super) async fn run_batch<H>(
@@ -77,46 +78,67 @@ where
     let mut admitted = Vec::new();
     for (call, internal_id) in calls {
         let args = super::value_to_json_string(&call.function.arguments);
-        let action = match hook.as_ref() {
-            Some(hook) => match handoff.as_ref() {
-                Some(handoff) => {
-                    let (work, reply) = super::admission_work(
-                        Arc::clone(hook),
-                        call.function.name.clone(),
-                        call.call_id.clone(),
-                        internal_id.clone(),
-                        args.clone(),
-                    );
-                    if handoff.send(work).is_err() {
-                        ToolCallHookAction::Terminate {
-                            reason: "tool admission handoff closed".into(),
-                        }
-                    } else {
-                        reply
-                            .await
-                            .unwrap_or_else(|_| ToolCallHookAction::Terminate {
+        let rejected = tool_dispatch::admit_tool(tools.as_slice(), &call.function.name, &args);
+        let rejection_action = match (hook.as_ref(), rejected.as_ref()) {
+            (Some(hook), Some(outcome)) => Some(
+                hook.on_tool_admission_rejected(
+                    &call.function.name,
+                    call.call_id.clone(),
+                    &internal_id,
+                    &args,
+                    outcome,
+                )
+                .await,
+            ),
+            _ => None,
+        };
+        let action = if rejected.is_some() {
+            match rejection_action {
+                Some(HookAction::Terminate { reason }) => ToolCallHookAction::Terminate { reason },
+                _ => ToolCallHookAction::Continue,
+            }
+        } else {
+            match hook.as_ref() {
+                Some(hook) => match handoff.as_ref() {
+                    Some(handoff) => {
+                        let (work, reply) = super::admission_work(
+                            Arc::clone(hook),
+                            call.function.name.clone(),
+                            call.call_id.clone(),
+                            internal_id.clone(),
+                            args.clone(),
+                        );
+                        if handoff.send(work).is_err() {
+                            ToolCallHookAction::Terminate {
                                 reason: "tool admission handoff closed".into(),
-                            })
+                            }
+                        } else {
+                            reply
+                                .await
+                                .unwrap_or_else(|_| ToolCallHookAction::Terminate {
+                                    reason: "tool admission handoff closed".into(),
+                                })
+                        }
                     }
-                }
-                None => {
-                    hook.on_tool_call(
-                        &call.function.name,
-                        call.call_id.clone(),
-                        &internal_id,
-                        &args,
-                    )
-                    .await
-                }
-            },
-            None => ToolCallHookAction::Continue,
+                    None => {
+                        hook.on_tool_call(
+                            &call.function.name,
+                            call.call_id.clone(),
+                            &internal_id,
+                            &args,
+                        )
+                        .await
+                    }
+                },
+                None => ToolCallHookAction::Continue,
+            }
         };
         match action {
             ToolCallHookAction::Terminate { reason } => {
                 if let Some(hook) = hook.as_ref() {
                     for prior in &admitted {
                         let prior: &Admitted = prior;
-                        if prior.skipped.is_none() {
+                        if prior.skipped.is_none() && prior.rejected.is_none() {
                             let _ = hook
                                 .on_tool_result(
                                     &prior.call.function.name,
@@ -136,12 +158,14 @@ where
                 internal_id,
                 args,
                 skipped: Some(reason),
+                rejected,
             }),
             ToolCallHookAction::Continue => admitted.push(Admitted {
                 call,
                 internal_id,
                 args,
                 skipped: None,
+                rejected,
             }),
         }
     }
@@ -151,7 +175,7 @@ where
         .collect();
     let accepted: Vec<_> = admitted
         .iter()
-        .filter(|item| item.skipped.is_none())
+        .filter(|item| item.skipped.is_none() && item.rejected.is_none())
         .map(|item| item.internal_id.clone())
         .collect();
     let batch_token = tokio_util::sync::CancellationToken::new();
@@ -168,7 +192,18 @@ where
                 internal_id,
                 args,
                 skipped,
+                rejected,
             } = item;
+            if let Some(outcome) = rejected {
+                return BatchResult {
+                    call,
+                    internal_id,
+                    args,
+                    outcome: Some(outcome),
+                    skipped: None,
+                    termination: None,
+                };
+            }
             if skipped.is_some() {
                 return BatchResult {
                     call,
@@ -259,7 +294,7 @@ where
     }
     let settled: Vec<_> = results
         .iter()
-        .filter(|result| result.outcome.is_some())
+        .filter(|result| result.outcome.is_some() && accepted.contains(&result.internal_id))
         .map(|result| result.internal_id.clone())
         .collect();
     if !fully_settled(&accepted, &settled) {

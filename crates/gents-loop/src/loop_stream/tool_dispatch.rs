@@ -124,6 +124,23 @@ pub(super) fn admit_tool(
     name: &str,
     args: &str,
 ) -> Option<ToolOutcome> {
+    admit_tool_from(
+        tools,
+        name,
+        args,
+        crate::tool_policy::presentation::InvocationOrigin::Provider,
+    )
+}
+
+fn admit_tool_from(
+    tools: &[Box<dyn ToolDyn>],
+    name: &str,
+    args: &str,
+    origin: crate::tool_policy::presentation::InvocationOrigin,
+) -> Option<ToolOutcome> {
+    if let Err(refusal) = crate::tool_policy::presentation::admit(tools, name, origin) {
+        return Some(ToolOutcome::from_dispatch(name, Err(refusal.into())));
+    }
     let tool = tools.iter().find(|tool| tool.name() == name)?;
     tool.admit(args)
         .err()
@@ -131,16 +148,12 @@ pub(super) fn admit_tool(
 }
 
 fn admit_tool_effect(tools: &[Box<dyn ToolDyn>], name: &str, args: &str) -> Option<ToolOutcome> {
-    if !tools.iter().any(|tool| tool.name() == name) {
-        return Some(ToolOutcome::from_dispatch(
-            name,
-            Err(crate::tool::ToolError::ReportedFailure {
-                class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
-                text: format!("tool '{name}' is not in this request's granted tool surface"),
-            }),
-        ));
-    }
-    admit_tool(tools, name, args)
+    admit_tool_from(
+        tools,
+        name,
+        args,
+        crate::tool_policy::presentation::InvocationOrigin::Composition,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -777,6 +790,75 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[tokio::test]
+    async fn hidden_tool_admission_precedes_hooks_and_preserves_composition() {
+        use crate::tool_effects::ToolEffectDispatcher;
+        use crate::tool_policy::presentation::{
+            admit, AdmissionRefusal, InvocationOrigin, PresentedTool,
+        };
+        let hook = Arc::new(EffectHook {
+            invoked: AtomicBool::new(false),
+            rejected: AtomicBool::new(false),
+            block_before: false,
+            cleanup_fails: false,
+            cleaned: AtomicBool::new(false),
+            parent_settled: AtomicBool::new(false),
+            terminate_before: false,
+        });
+        let tools = Arc::new(vec![PresentedTool::wrap(
+            Box::new(ParseOnlyTool),
+            true,
+            false,
+        )]);
+        let args = r#"{"text":"valid"}"#;
+        assert!(matches!(
+            admit(&tools, "parse", InvocationOrigin::Provider),
+            Err(AdmissionRefusal::Hidden { .. })
+        ));
+        assert!(admit_tool(&tools, "parse", args)
+            .unwrap()
+            .model_facing_text()
+            .contains("script"));
+        assert!(!hook.invoked.load(Ordering::SeqCst));
+        let call = gents_protocol::message::ToolCall::new(
+            "hidden".into(),
+            gents_protocol::message::ToolFunction::new(
+                "parse".into(),
+                serde_json::from_str(args).unwrap(),
+            ),
+        );
+        let (results, termination) = super::super::parallel::run_batch(
+            vec![(crate::rig_compat::to_rig_tool_call(&call), "hidden".into())],
+            tools.clone(),
+            Some(hook.clone()),
+            None,
+            false,
+            None,
+        )
+        .await;
+        assert!(termination.is_none(), "{termination:?}");
+        assert_eq!(results.len(), 1);
+        assert!(results[0]
+            .outcome
+            .as_ref()
+            .unwrap()
+            .model_facing_text()
+            .contains("script"));
+        assert!(!hook.invoked.load(Ordering::SeqCst));
+        assert!(hook.rejected.load(Ordering::SeqCst));
+        let dispatcher = tool_effect_dispatcher(tools, hook.clone(), "parent".into());
+        assert_eq!(dispatcher.definitions().await[0].name, "parse");
+        let outcome = dispatcher.call(1, "parse", args).await.unwrap();
+        assert_eq!(outcome.model_facing_text(), "specialized side effect");
+        assert!(hook.invoked.load(Ordering::SeqCst));
+        assert!(dispatcher
+            .call(2, "ungranted", "{}")
+            .await
+            .unwrap()
+            .model_facing_text()
+            .contains("not in this request"));
     }
 
     struct ReadyAfterWallDeadline {

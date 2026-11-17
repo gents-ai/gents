@@ -1143,3 +1143,111 @@ async fn every_provider_assembly_rechecks_configuration_before_reading_input() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+async fn hidden_tool_provider_projection_preserves_default_bytes_and_reduces_accounting() {
+    use crate::provider_input::ProviderInputCounter;
+    use crate::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+    use crate::tool_policy::presentation::{AdmissionRefusal, InvocationOrigin, PresentedTool};
+    struct Tool;
+    impl ToolDyn for Tool {
+        fn name(&self) -> String {
+            "query".into()
+        }
+        fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: "query".into(),
+                    description: "Reads rows. ".repeat(512),
+                    parameters: serde_json::json!({"type":"object"}),
+                }
+            })
+        }
+        fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+            Box::pin(async { Ok("rows".into()) })
+        }
+    }
+    let plain: Vec<Box<dyn ToolDyn>> = vec![Box::new(Tool)];
+    let visible: Vec<Box<dyn ToolDyn>> = vec![PresentedTool::wrap(Box::new(Tool), false, false)];
+    let hidden: Vec<Box<dyn ToolDyn>> = vec![PresentedTool::wrap(Box::new(Tool), true, false)];
+    let config = replay_assembly_config();
+    let original = super::build_request(
+        &AssemblyOnlyModel,
+        Message::user("input"),
+        &[],
+        &[],
+        &plain,
+        &config,
+    )
+    .await
+    .unwrap();
+    let default = super::build_request(
+        &AssemblyOnlyModel,
+        Message::user("input"),
+        &[],
+        &[],
+        &visible,
+        &config,
+    )
+    .await
+    .unwrap();
+    let projected = super::build_request(
+        &AssemblyOnlyModel,
+        Message::user("input"),
+        &[],
+        &[],
+        &hidden,
+        &config,
+    )
+    .await
+    .unwrap();
+    for (provider, wire) in [
+        (
+            crate::backend_provider::BackendProviderKind::OpenAiCompatible,
+            crate::openai_wire::OpenAiWireApi::ChatCompletions,
+        ),
+        (
+            crate::backend_provider::BackendProviderKind::OpenAiCompatible,
+            crate::openai_wire::OpenAiWireApi::Responses,
+        ),
+        (
+            crate::backend_provider::BackendProviderKind::AnthropicApiKey,
+            crate::openai_wire::OpenAiWireApi::ChatCompletions,
+        ),
+    ] {
+        let counter = ProviderInputCounter::new(provider, wire, "projection-fixture");
+        assert_eq!(
+            serde_json::to_vec(&counter.project_body(&original).unwrap()).unwrap(),
+            serde_json::to_vec(&counter.project_body(&default).unwrap()).unwrap()
+        );
+        assert!(
+            counter
+                .project_request(&projected)
+                .unwrap()
+                .estimated_input_tokens
+                < counter
+                    .project_request(&original)
+                    .unwrap()
+                    .estimated_input_tokens
+        );
+    }
+    assert_eq!(original.tools.len(), 1);
+    assert!(projected.tools.is_empty());
+    assert_eq!(hidden[0].definition(String::new()).await.name, "query");
+    assert!(matches!(
+        crate::tool_policy::presentation::admit(&hidden, "query", InvocationOrigin::Provider),
+        Err(AdmissionRefusal::Hidden { .. })
+    ));
+    assert!(crate::tool_policy::presentation::admit(
+        &hidden,
+        "query",
+        InvocationOrigin::Composition
+    )
+    .is_ok());
+    assert_eq!(
+        super::dispatch_tool(&hidden, "query", "{}".into(), None, None)
+            .await
+            .model_facing_text(),
+        "rows"
+    );
+}

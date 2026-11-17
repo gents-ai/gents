@@ -19,6 +19,8 @@ pub struct ToolDefinition {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
+    #[error(transparent)]
+    Admission(#[from] crate::tool_policy::presentation::AdmissionRefusal),
     #[error("tool call error: {0}")]
     ToolCallError(#[from] Box<dyn std::error::Error + Send + Sync>),
     #[error("tool json error: {0}")]
@@ -141,6 +143,9 @@ pub struct ToolDispatchResult {
 }
 
 pub trait ToolDyn: Send + Sync {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String;
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition>;
     fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>>;
