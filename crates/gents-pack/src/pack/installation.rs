@@ -1173,6 +1173,11 @@ pub enum PackChangeError {
     Grant(#[from] GrantError),
     #[error(transparent)]
     Slots(#[from] super::SlotBindingError),
+    /// A Tools document names a plugin this node does not hold, or pins one to
+    /// another digest. Its own variant so a hosted install can show it as
+    /// written: it names identifiers only.
+    #[error(transparent)]
+    PluginReference(#[from] PluginReferenceUnresolved),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -1215,7 +1220,8 @@ impl gents_store::config_client::TransactionFailure for PackChangeError {
             Self::Edited { .. }
             | Self::Differing { .. }
             | Self::Grant(GrantError::Ungranted { .. })
-            | Self::Slots(super::SlotBindingError::Unbound { .. }) => None,
+            | Self::Slots(super::SlotBindingError::Unbound { .. })
+            | Self::PluginReference(_) => None,
             Self::Other(error)
             | Self::Grant(GrantError::Other(error))
             | Self::Slots(super::SlotBindingError::Other(error)) => {

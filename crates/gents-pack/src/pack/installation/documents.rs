@@ -1459,7 +1459,9 @@ async fn prepare_document_pack_install_inner(
             }
         }
     }
-    ensure_plugin_references_resolve_with_inventory(
+    // The unresolved reference keeps its type through `PackChangeError`, so a
+    // hosted install hands it to the client as written.
+    plugin_references_resolve(
         &std::iter::once((manifest, &config))
             .chain(
                 prepared_dependencies
@@ -1470,7 +1472,8 @@ async fn prepare_document_pack_install_inner(
         plugin_home,
         &shipped_digests,
         hosted.map(|facts| &facts.plugin_digests),
-    )?;
+    )?
+    .map_err(PackChangeError::PluginReference)?;
     Ok(PreparedDocumentPackInstall {
         pin_moves: Vec::new(),
         installation_doc_id,
@@ -1536,6 +1539,17 @@ fn ensure_plugin_references_resolve_with_inventory(
     shipped_digests: &BTreeMap<String, String>,
     inventory: Option<&BTreeMap<String, String>>,
 ) -> Result<()> {
+    plugin_references_resolve(packs, plugin_home, shipped_digests, inventory)?.map_err(Into::into)
+}
+
+/// The plugin reference check, with an unresolved reference as its own typed
+/// result beside any other failure, so a caller can hand it on by type.
+fn plugin_references_resolve(
+    packs: &[(&super::super::PackManifest, &PackConfig)],
+    plugin_home: Option<&Path>,
+    shipped_digests: &BTreeMap<String, String>,
+    inventory: Option<&BTreeMap<String, String>>,
+) -> Result<std::result::Result<(), PluginReferenceUnresolved>> {
     let root = format!("{}/{}", packs[0].0.metadata.namespace, packs[0].0.name);
     let shipped = packs
         .iter()
@@ -1589,25 +1603,23 @@ fn ensure_plugin_references_resolve_with_inventory(
                     Ok(record) => {
                         if let Some(pin) = &reference.digest {
                             if pin != &record.digest {
-                                return Err(PluginReferenceUnresolved::PinMismatch {
+                                return Ok(Err(PluginReferenceUnresolved::PinMismatch {
                                     pack: manifest.name.clone(),
                                     tools: tools.tools_id.clone(),
                                     plugin: reference.plugin.clone(),
                                     pin: pin.clone(),
                                     installed: record.digest.clone(),
-                                }
-                                .into());
+                                }));
                             }
                         }
                     }
                     Err(error) if crate::plugin::store::is_not_found(&error) => {
-                        return Err(PluginReferenceUnresolved::NotInstalled {
+                        return Ok(Err(PluginReferenceUnresolved::NotInstalled {
                             pack: manifest.name.clone(),
                             tools: tools.tools_id.clone(),
                             plugin: reference.plugin.clone(),
                             root: root.clone(),
-                        }
-                        .into())
+                        }))
                     }
                     Err(error) => {
                         return Err(error).with_context(|| {
@@ -1625,7 +1637,7 @@ fn ensure_plugin_references_resolve_with_inventory(
             );
         }
     }
-    Ok(())
+    Ok(Ok(()))
 }
 
 #[expect(

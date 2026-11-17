@@ -385,8 +385,10 @@ async fn run_inner(
     // prepared by two builds is not one plan, so neither an install nor a
     // preview proceeds, and nothing is written.
     if let Some(refusal) = super::refuse_client_build(&request.client_build) {
-        return Err(SessionFailure::not_installed(Class::BuildMismatch)(
-            refusal.into(),
+        return Err(SessionFailure::shown(
+            Class::BuildMismatch,
+            refusal.to_string(),
+            "not_installed",
         ));
     }
     if request.preview {
@@ -417,6 +419,7 @@ async fn run_inner(
     }
     .await
     .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
+    let preparation_failed = SessionFailure::not_installed(Class::PreparationFailed);
     let prepare = async {
         let requested =
             gents_pack::operations::pack::parse_inference_slots(&received.request.inference_slots)?;
@@ -425,7 +428,7 @@ async fn run_inner(
             &received.request.bind_agents,
         )?;
         let overrides = gents_pack::operations::pack::dependency_overrides(&supplied);
-        let mut prepared = gents_pack::pack::prepare_document_pack_archive(
+        let mut prepared = match gents_pack::pack::prepare_document_pack_archive(
             &access,
             &state.node_did,
             received.root.archive(),
@@ -447,9 +450,19 @@ async fn run_inner(
             &overrides,
         )
         .await
-        // Kept typed: a plugin reference that does not resolve is classed by
-        // its type (`failure::PackSessionFailureClass::of`).
-        .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
+        {
+            Ok(prepared) => prepared,
+            // A plugin reference that does not resolve names identifiers only,
+            // so the client is shown it as written.
+            Err(gents_pack::pack::PackChangeError::PluginReference(unresolved)) => {
+                return Ok(Err(SessionFailure::shown(
+                    Class::PluginUnresolved,
+                    unresolved.to_string(),
+                    "not_installed",
+                )));
+            }
+            Err(error) => return Err(error.into_anyhow()),
+        };
         prepared
             .prepare_pin_moves(
                 &access,
@@ -483,12 +496,10 @@ async fn run_inner(
             received.request.explicit,
         )
         .await?;
-        Ok::<_, anyhow::Error>((received, prepared, stage, planned))
+        Ok::<_, anyhow::Error>(Ok((received, prepared, stage, planned)))
     }
     .await;
-    let (received, prepared, stage, planned) = prepare.map_err(|error| {
-        SessionFailure::not_installed(Class::of(Class::PreparationFailed, &error))(error)
-    })?;
+    let (received, prepared, stage, planned) = prepare.map_err(preparation_failed)??;
     let installed_plugins = stage.installed_plugins().to_vec();
     let materialized = if received.request.explicit {
         let cache_home = home.clone();
@@ -660,13 +671,12 @@ async fn run_inner(
             &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
-        .map_err(|error| {
-            let rejected = matches!(error, gents_pack::pack::HostedPackStageError::Rejected(_));
-            let error = anyhow::Error::new(error);
-            if rejected {
-                SessionFailure::not_installed(Class::of(Class::ApplyRejected, &error))(error)
-            } else {
-                SessionFailure::unconfirmed(Class::of(Class::ApplyUnconfirmed, &error))(error)
+        .map_err(|error| match error {
+            gents_pack::pack::HostedPackStageError::Rejected(error) => {
+                SessionFailure::not_installed(Class::ApplyRejected)(error)
+            }
+            gents_pack::pack::HostedPackStageError::Unconfirmed(error) => {
+                SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(error)
             }
         })?;
     let report = gents_pack::pack::assemble_document_graph_report(&prepared, reports)

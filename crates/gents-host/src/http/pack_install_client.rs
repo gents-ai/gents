@@ -159,13 +159,13 @@ async fn first_reply(
         // Only the decode error means "unreadable handshake". A closed or lost
         // connection is its own case and must not be reported as a build
         // problem.
-        Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {
+        Err(error @ ReceiveFailure::Unreadable { .. }) => {
             Err(PackInstallHandshakeError::UnreadableHandshake {
                 client: client_build.summary(),
                 detail_bytes: format!("{error:#}").len(),
             })
         }
-        Err(error) => Err(PackInstallHandshakeError::ConnectionLost {
+        Err(error @ ReceiveFailure::Lost(_)) => Err(PackInstallHandshakeError::ConnectionLost {
             detail_bytes: format!("{error:#}").len(),
         }),
     }
@@ -461,28 +461,48 @@ async fn receive(socket: &mut InstallSocket) -> Result<ServerMessage> {
     Ok(receive_sized(socket).await?.0)
 }
 
+/// Why no message arrived: one that could not be read, or a connection that
+/// went away. Typed, so the handshake tells them apart by variant.
+#[derive(Debug, thiserror::Error)]
+enum ReceiveFailure {
+    #[error("invalid remote pack install message ({bytes} bytes)")]
+    Unreadable {
+        bytes: usize,
+        #[source]
+        error: serde_json::Error,
+    },
+    #[error(transparent)]
+    Lost(anyhow::Error),
+}
+
 /// A message and its size in bytes.
-async fn receive_sized(socket: &mut InstallSocket) -> Result<(ServerMessage, usize)> {
+async fn receive_sized(
+    socket: &mut InstallSocket,
+) -> std::result::Result<(ServerMessage, usize), ReceiveFailure> {
     loop {
         match socket.next().await {
             Some(Ok(Message::Text(text))) => {
                 let bytes = text.len();
-                let message = tokio::task::spawn_blocking(move || serde_json::from_str(&text))
+                let decoded = tokio::task::spawn_blocking(move || serde_json::from_str(&text))
                     .await
-                    .context("decoding remote pack install message")?
-                    .context("invalid remote pack install message")?;
-                return Ok((message, bytes));
+                    .context("decoding remote pack install message")
+                    .map_err(ReceiveFailure::Lost)?;
+                return decoded
+                    .map(|message| (message, bytes))
+                    .map_err(|error| ReceiveFailure::Unreadable { bytes, error });
             }
             Some(Ok(Message::Ping(_)))
             | Some(Ok(Message::Pong(_)))
             | Some(Ok(Message::Frame(_))) => {}
             Some(Ok(_)) | None => {
-                bail!("remote pack install connection closed; inspect the runtime before retrying")
+                return Err(ReceiveFailure::Lost(anyhow::anyhow!(
+                    "remote pack install connection closed; inspect the runtime before retrying"
+                )))
             }
             Some(Err(error)) => {
-                return Err(error).context(
+                return Err(ReceiveFailure::Lost(anyhow::Error::new(error).context(
                     "remote pack install connection lost; inspect the runtime before retrying",
-                )
+                )))
             }
         }
     }
