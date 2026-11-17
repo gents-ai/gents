@@ -277,8 +277,10 @@ on that check yet. Decision (gents#3831): a write for a User that carries no
 delegation is refused, never made under another authority; an identity token
 is no delegation.
 Admission comes before the command's nonce or receipt is consumed and before
-anything is written, so a refused command leaves no trace and is answered by
-signing a new one. -/
+anything is written, so a refused command leaves no write and is answered by
+signing a new one. Decision (gents#3831): the runtime answers a refused stored
+command with a rejected receipt naming the refusal
+(`Identity.SessionInputEdit.answer`), so its client learns why. -/
 def admit (provider : Provider) (author : Author) (carrier : Carrier) (write : Write)
     (carried : Carried) (scope : Scope) (verdict : Verdict) : Admission :=
   match provider, author with
@@ -294,8 +296,7 @@ def Admission.runs : Admission → Bool
   | .forwarded => true
   | _ => false
 
-/-- Whether an admission uses up the command: its nonce, or the receipt that
-answers it. -/
+/-- Whether an admission uses up the command's nonce. -/
 def Admission.consumesCommand (admission : Admission) : Bool := admission.runs
 
 def admitCommand (digest : Digest) (provider : Provider) (author : Author) (node : Audience)
