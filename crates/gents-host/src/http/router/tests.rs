@@ -60,6 +60,7 @@ fn state() -> RuntimeHttpState {
         activation_observation,
         replicated_schema: Default::default(),
         serve_lifecycle: Default::default(),
+        document_acp: Default::default(),
     }
 }
 
@@ -417,6 +418,7 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
             crate::http::enrollment::empty_decision_service_handle(),
             activation_runtime,
             activation_observation,
+            Default::default(),
             Default::default(),
             Default::default(),
         )

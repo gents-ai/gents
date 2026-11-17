@@ -150,6 +150,17 @@ pub(super) fn consensus_key(node: &defra_node::Node) -> Option<String> {
         .map(|deployment| deployment.consensus_key.clone())
 }
 
+pub(super) fn delegation_audience(
+    node: &defra_node::Node,
+) -> Option<gents_protocol::delegation_audience::DelegationAudience> {
+    use acp::RemotePolicies as _;
+    let audience = node.vera_acp()?.light_client_status().ok()?.delegation?;
+    Some(gents_protocol::delegation_audience::DelegationAudience {
+        worker: audience.worker,
+        deployment: audience.deployment,
+    })
+}
+
 pub(super) fn configure(
     builder: defra_node::NodeBuilder,
     node_dir: &Path,

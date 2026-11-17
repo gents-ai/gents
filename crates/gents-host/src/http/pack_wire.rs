@@ -25,6 +25,15 @@ pub async fn wire_handler(
         )
             .into_response();
     }
+    if let Err(refused) =
+        gents_store::local::document_acp::runtime_signs_with_held_user_key(state.document_acp)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": refused.to_string()})),
+        )
+            .into_response();
+    }
     let Some(runtime) = state.activation_runtime.get() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,

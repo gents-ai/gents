@@ -11,6 +11,8 @@ pub enum ConfigClientError {
     ReadVariablesUnsupported,
     #[error(transparent)]
     PackApproval(#[from] super::PackApprovalError),
+    #[error(transparent)]
+    Delegation(#[from] super::DelegationError),
     #[error("verified pack effect failed")]
     PackEvidence(#[source] Box<super::PackEvidenceError>),
     #[error("client Agent publication journal could not be recorded")]

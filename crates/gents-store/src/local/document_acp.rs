@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +74,11 @@ pub enum DocumentAcpError {
     )]
     NotYetUsable,
     #[error(
+        "this home decides document access through Vera, where the runtime never signs with a \
+         User key; wire the plugin from the client that holds the key"
+    )]
+    HeldUserKey,
+    #[error(
         "this home's embedded Vera deployment was created under a different {what} than this \
          Gents build and node identity give it; open the home with the Gents version that \
          created it"
@@ -117,12 +123,49 @@ impl DocumentAcpError {
             | Self::Unavailable
             | Self::NodeKeyCannotSign { .. }
             | Self::NotYetUsable
+            | Self::HeldUserKey
             | Self::Inspect { .. } => None,
         }
     }
 }
 
 type Result<T> = std::result::Result<T, DocumentAcpError>;
+
+/// What a runtime's public status reports of its delegation audience
+/// (`Identity.UserDelegation.statusReports`).
+pub fn status_reports(
+    provider: DocumentAcp,
+    audience: Option<DelegationAudience>,
+) -> ReportedDelegationAudience {
+    match (provider, audience) {
+        (DocumentAcp::Local, _) => ReportedDelegationAudience::Absent,
+        (DocumentAcp::Vera, Some(audience)) => ReportedDelegationAudience::Named(audience),
+        (DocumentAcp::Vera, None) => ReportedDelegationAudience::Unavailable,
+    }
+}
+
+/// Whether the runtime may sign a pack's effects with a User key kept in its
+/// home (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`).
+pub fn runtime_signs_with_held_user_key(provider: DocumentAcp) -> Result<()> {
+    match provider {
+        DocumentAcp::Local => Ok(()),
+        DocumentAcp::Vera => Err(DocumentAcpError::HeldUserKey),
+    }
+}
+
+/// The worker and deployment `node`'s Vera access control acts under a
+/// delegation for; none for a node that decides access in its own store.
+pub fn node_delegation_audience(node: &defra_node::Node) -> Option<DelegationAudience> {
+    #[cfg(feature = "vera")]
+    {
+        embedded_vera::delegation_audience(node)
+    }
+    #[cfg(not(feature = "vera"))]
+    {
+        let _ = node;
+        None
+    }
+}
 
 pub(crate) fn refused(error: &defra_node::Error) -> Option<DocumentAcpError> {
     #[cfg(feature = "vera")]

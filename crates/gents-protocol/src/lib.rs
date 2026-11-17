@@ -7,6 +7,7 @@ pub mod client_installation;
 pub mod client_media;
 pub mod client_protocol;
 pub mod database_error;
+pub mod delegation_audience;
 pub mod document_query;
 pub mod enrollment;
 pub mod error_chain;
