@@ -252,6 +252,7 @@ async fn resolve_startup(
             return Err(error);
         }
     };
+    let publication = gents_tools::surface::publication_guard(tool_runtime.plugin_home()).await?;
     let mut resolved_snapshot = match resolve_startup_snapshot(agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -264,6 +265,7 @@ async fn resolve_startup(
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
+    drop(publication);
     log_recovery(
         &agent.node,
         agent.node_did(),

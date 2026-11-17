@@ -1,0 +1,3 @@
+---- MODULE MCPluginSurfaceRecovery ----
+EXTENDS PluginSurfaceRecovery
+====

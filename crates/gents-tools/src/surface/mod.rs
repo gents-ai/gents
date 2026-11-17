@@ -35,7 +35,9 @@ pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
 };
-pub use publication::PLUGIN_PUBLICATION_WAIT_EVENT_TARGET;
+pub use publication::{
+    publication_guard, publication_guard_until, PLUGIN_PUBLICATION_WAIT_EVENT_TARGET,
+};
 
 pub(crate) fn configured_node_operation_sources(
     tools: &gents_documents::Tools,

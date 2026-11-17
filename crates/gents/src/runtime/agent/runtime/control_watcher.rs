@@ -22,6 +22,7 @@ const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 
 
 #[derive(Clone, Copy)]
 pub(super) struct ControlWatcherTiming {
+    pub(super) publication_wait: Duration,
     pub(super) debounce: Duration,
     pub(super) local_debounce: Duration,
     pub(super) settle_retry: Duration,
@@ -30,6 +31,7 @@ pub(super) struct ControlWatcherTiming {
 }
 
 const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
+    publication_wait: Duration::from_secs(60),
     debounce: CONTROL_RECONCILE_DEBOUNCE,
     local_debounce: CONTROL_RECONCILE_LOCAL_DEBOUNCE,
     settle_retry: CONTROL_RECONCILE_SETTLE_RETRY,
@@ -177,7 +179,14 @@ pub(super) async fn run_control_watcher_with_timing(
                 }
                 let mut proposed_update = false;
                 let mut resolve_failed = false;
+                let mut publication_busy = false;
                 match async {
+                    let _publication = gents_tools::surface::publication_guard_until(tool_runtime.plugin_home(), tokio::time::Instant::now() + timing.publication_wait).await?;
+                    // The cached view may predate a pin move committed while
+                    // publication was fenced. Resolve fresh under that fence.
+                    if tool_runtime.plugin_home().is_some() {
+                        document_view = document_view::load_document_runtime_view_as(&node, &node_did, resolve_context.identity.did()).await?;
+                    }
                     let mut snapshot = document_view::resolve_document_runtime_snapshot_from_view(
                         &node,
                         &resolve_context,
@@ -206,6 +215,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     }
                     Err(error) => {
                         resolve_failed = true;
+                        publication_busy = super::startup::snapshot::preserve_generation_for_surface_error(&error);
                         tracing::error!(
                             node_did = %node_did,
                             error = %error,
@@ -215,8 +225,8 @@ pub(super) async fn run_control_watcher_with_timing(
                     }
                 }
                 if resolve_failed {
-                    if settle_deadline
-                        .is_some_and(|deadline| tokio::time::Instant::now() < deadline)
+                    if retry_proposal(publication_busy, settle_deadline
+                        .is_some_and(|deadline| tokio::time::Instant::now() < deadline))
                     {
                         dirty = true;
                         sleep
@@ -395,4 +405,16 @@ pub(super) async fn run_control_watcher_with_timing(
             }
         }
     }
+}
+
+fn retry_proposal(publication_busy: bool, within_settle_window: bool) -> bool {
+    publication_busy || within_settle_window
+}
+
+#[cfg(test)]
+#[test]
+fn publication_retry_outlives_the_settle_window() {
+    gents_lean_vocab::families::runtime_reconcile_surface_publication_retry_proposal::replay(|i| {
+        retry_proposal(i.busy, i.within_settle_window)
+    });
 }

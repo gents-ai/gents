@@ -193,3 +193,334 @@ async fn request_submitted_while_another_process_holds_the_plugin_store_complete
         .unwrap()
         .unwrap();
 }
+
+async fn configured_publication_agent(
+    fixture: &PluginRuntimeFixture,
+    home: &std::path::Path,
+) -> crate::Gents {
+    super::plugin_readmission::install_fixture_plugin(home);
+    let record = gents_pack::plugin::store::read_record(home, "fixture", "list_files").unwrap();
+    let agent_did = fixture.node_binding.default_agent_did.as_ref().unwrap();
+    let tools: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id":format!("{agent_did}:tools"), "node_did":fixture.runtime.did(),
+        "integrations":{"plugins":[{"plugin":"fixture/list_files", "digest":record.digest}]}
+    }))
+    .unwrap();
+    gents_documents::write_tools_document(
+        &fixture.user_access,
+        &tools,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
+    crate::Gents::from_default_agent_documents(
+        fixture.node.clone(),
+        fixture.runtime.clone(),
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(home.to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn publication_retry_recovers_after_the_settle_window_without_another_event() {
+    crate::test_support::root::enable_scoped_event_capture();
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let fixture = plugin_runtime_fixture(
+        "publication-rollback",
+        "backend-publication-rollback",
+        endpoint.endpoint(),
+    )
+    .await
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let agent = configured_publication_agent(&fixture, home.path()).await;
+    let context = agent.document_runtime_context().cloned().unwrap();
+    let node_did = fixture.runtime.did().to_owned();
+    let agent_did = agent.default_agent_did().to_owned();
+    let runtime_status = RuntimeStatusHandle::new(fixture.node.clone(), &node_did);
+    runtime_status.initialize_startup(&agent_did).await.unwrap();
+    let tool_runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
+        fixture.node.clone(),
+        gents_tools::mcp::pool::McpPool::default(),
+        gents_tools::mcp::health::ServiceHealthMap::default(),
+        "localhost",
+        None,
+        &node_did,
+        Some(context.identity.clone()),
+    )
+    .with_plugins(context.plugins.clone());
+    let guard = gents_pack::plugin::store::try_lock_store(home.path()).unwrap();
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let subscriber = Registry::default().with(PublicationWaitCapture(observed_tx));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
+    let (health_tx, health_rx) = mpsc::channel(1);
+    let watcher = tokio::spawn(
+        run_control_watcher_with_timing(
+            ControlWatcherInputs {
+                node: fixture.node.clone(),
+                backend_admission: fixture.admission(),
+                subscription: subscribe_control_changes(&fixture.node).unwrap(),
+                node_did: node_did.clone(),
+                resolve_context: context,
+                tool_runtime,
+                proposals_tx: proposal_tx,
+                runtime_status,
+                health_events_rx: health_rx,
+                shutdown: shutdown_rx,
+            },
+            ControlWatcherTiming {
+                publication_wait: Duration::from_millis(20),
+                debounce: Duration::from_millis(1),
+                local_debounce: Duration::from_millis(1),
+                settle_retry: Duration::from_millis(1),
+                settle_window: Duration::from_millis(1),
+                idle_sleep: Duration::from_secs(3600),
+            },
+        )
+        .with_subscriber(subscriber),
+    );
+    health_tx.send(()).await.unwrap();
+    // Each construction logs once, so two events prove the first bounded
+    // wait expired and the watcher retried beyond its generic settle window.
+    for _ in 0..2 {
+        tokio::time::timeout(STALL_CEILING, observed_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        proposal_rx.try_recv().is_err(),
+        "busy must never publish a demotion"
+    );
+    drop(guard); // Rollback/release emits no new document or health event.
+    let proposal = tokio::time::timeout(STALL_CEILING, proposal_rx.recv())
+        .await
+        .expect("publication retry was stranded after settle expiry")
+        .unwrap();
+    assert!(proposal.agents.contains_key(&agent_did));
+    assert!(!proposal.unavailable_agents.contains_key(&agent_did));
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(STALL_CEILING, watcher)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+struct PublicationReadinessCapture {
+    node: Arc<defra_node::Node>,
+    snapshots: std::sync::Mutex<Vec<NodeReadinessSnapshot>>,
+    published: mpsc::UnboundedSender<NodeReadinessSnapshot>,
+}
+
+#[async_trait::async_trait]
+impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for PublicationReadinessCapture {
+    async fn upsert(
+        &self,
+        node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
+        updated_at: &str,
+    ) -> anyhow::Result<()> {
+        crate::runtime::node_readiness_publisher::upsert_node_readiness(
+            &self.node, node_did, snapshot, updated_at,
+        )
+        .await?;
+        self.snapshots.lock().unwrap().push(snapshot.clone());
+        let _ = self.published.send(snapshot.clone());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn named_pin_update_never_publishes_an_unavailable_agent() {
+    crate::test_support::root::enable_scoped_event_capture();
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let fixture = plugin_runtime_fixture(
+        "publication-pin-update",
+        "backend-publication-pin",
+        endpoint.endpoint(),
+    )
+    .await
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let agent = configured_publication_agent(&fixture, home.path()).await;
+    let node_did = fixture.runtime.did().to_owned();
+    let agent_did = agent.default_agent_did().to_owned();
+    let tools_id = format!("{agent_did}:tools");
+    let old_plugin =
+        gents_pack::plugin::store::read_record(home.path(), "fixture", "list_files").unwrap();
+    let omitted: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id":"not-named-by-update", "node_did":node_did,
+        "integrations":{"plugins":[{"plugin":"fixture/list_files","digest":old_plugin.digest}]}
+    }))
+    .unwrap();
+    gents_documents::write_tools_document(
+        &fixture.user_access,
+        &omitted,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
+    let (published, mut snapshots) = mpsc::unbounded_channel();
+    let capture = Arc::new(PublicationReadinessCapture {
+        node: fixture.node.clone(),
+        snapshots: Default::default(),
+        published,
+    });
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (wait_tx, mut wait_rx) = mpsc::unbounded_channel();
+    let subscriber = Registry::default().with(PublicationWaitCapture(wait_tx));
+    let run = tokio::spawn(
+        super::super::startup::run_agent_with_readiness_writer(
+            agent,
+            shutdown_rx,
+            capture.clone(),
+            Duration::from_millis(1),
+        )
+        .with_subscriber(subscriber),
+    );
+    let first_generation = tokio::time::timeout(STALL_CEILING, async {
+        loop {
+            let snapshot = snapshots.recv().await.unwrap();
+            if snapshot
+                .agents
+                .iter()
+                .any(|a| a.agent_did == agent_did && a.state == AgentReadinessState::Ready)
+            {
+                break snapshot.active_generation;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let (_directory, pack_root) = gents_pack::test_support::fixture_pack_copy(
+        "bind_plugin_fixture",
+        &serde_json::json!({"version":2}),
+    );
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(&pack_root).unwrap();
+    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let replacements = gents_pack::pack::pin_moves::replacement_digests([&archive]).unwrap();
+    let edits = gents_pack::pack::pin_moves::prepare(
+        &fixture.user_access,
+        &node_did,
+        std::slice::from_ref(&tools_id),
+        &replacements,
+    )
+    .await
+    .unwrap();
+    let access = fixture.user_access.clone();
+    let owner = node_did.clone();
+    let publication_home = home.path().to_owned();
+    // The same callback config pack update uses: Tools effects and the pack
+    // record are signed in one transaction while the plugin stage is fenced.
+    let install_home = home.path().to_owned();
+    let install_owner = node_did.clone();
+    let (staged_tx, staged_rx) = tokio::sync::oneshot::channel();
+    let (continue_tx, continue_rx) = tokio::sync::oneshot::channel();
+    let install = tokio::spawn(async move {
+        gents_pack::pack::plugin_lifecycle::install(
+            &install_home,
+            &archive,
+            false,
+            Some(&install_owner),
+            &Default::default(),
+            gents_pack::pack::InstalledVia::Operator,
+            gents_pack::pack::PackSource::Local { file_name: None },
+            move |identity, changes| async move {
+                let _ = staged_tx.send(());
+                continue_rx.await.expect("test released the signed install");
+                gents_pack::pack::record_staged_plugin_store_change_with_pins(
+                    &access,
+                    &owner,
+                    &publication_home,
+                    &identity.coordinate,
+                    Some(&identity),
+                    &changes,
+                    &edits,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            },
+        )
+        .await
+        .unwrap();
+    });
+    tokio::time::timeout(STALL_CEILING, staged_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    // Wake the control reader while the install has staged new bytes but
+    // has not committed its pin. This is the old-pin/new-record race.
+    merge_fixture_document(
+        &fixture.user_access,
+        "test.pin_update.wake",
+        gents_store::collection::Collection::AgentContext,
+        &node_did,
+        &format!("{agent_did}:context"),
+        serde_json::json!({"system_prompt":"prompt edited during plugin publication"}),
+    )
+    .await;
+    tokio::time::timeout(STALL_CEILING, wait_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    continue_tx.send(()).unwrap();
+    tokio::time::timeout(STALL_CEILING, install)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(STALL_CEILING, async {
+        loop {
+            let snapshot = snapshots.recv().await.unwrap();
+            if snapshot.active_generation > first_generation
+                && snapshot
+                    .agents
+                    .iter()
+                    .any(|a| a.agent_did == agent_did && a.state == AgentReadinessState::Ready)
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("updated pin was not admitted");
+    let all = capture.snapshots.lock().unwrap().clone();
+    assert!(
+        !all.iter()
+            .any(|snapshot| snapshot.agents.iter().any(|entry| {
+                entry.agent_did == agent_did && entry.state == AgentReadinessState::Unavailable
+            })),
+        "agent became unavailable during atomic pin update: {all:?}"
+    );
+    let query = format!(
+        r#"{{ Tools(filter: {{tools_id: {{_eq: "{}"}}}}) {{integrations}} }}"#,
+        escape_graphql_string(&tools_id)
+    );
+    let tools = fixture.user_access.execute(&query).await.unwrap();
+    assert_eq!(
+        tools["data"]["Tools"][0]["integrations"]["plugins"][0]["digest"],
+        replacements["fixture/list_files"]
+    );
+    let untouched = fixture
+        .user_access
+        .execute(r#"{Tools(filter: {tools_id: {_eq: "not-named-by-update"}}) {integrations}}"#)
+        .await
+        .unwrap();
+    assert_eq!(
+        untouched["data"]["Tools"][0]["integrations"],
+        serde_json::to_value(omitted.integrations).unwrap()
+    );
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(STALL_CEILING, run)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
