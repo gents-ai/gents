@@ -1454,7 +1454,7 @@ async fn prepare_document_pack_install_inner(
         dependencies: prepared_dependencies,
         sources: BTreeMap::new(),
         root_snapshot: root.snapshot,
-        variables: recorded_variables(&root.variables),
+        variables: root.variables,
         installer_root_tools: root.installer_root_tools,
     })
 }
@@ -1854,7 +1854,7 @@ pub(super) fn document_graph_stages(
             explicit: false,
             source: prepared.sources.get(&dependency.coordinate).cloned(),
             snapshot: dependency.snapshot.clone(),
-            variables: Some(recorded_variables(&dependency.variables)),
+            variables: Some(dependency.variables.clone()),
             reconfigure: dependency.reconfigure,
             reuse_plugins: dependency.snapshot.is_some(),
             installer_root_tools: dependency.installer_root_tools.clone(),
@@ -1924,28 +1924,6 @@ impl DocumentPackStage {
             installer_root_tools: self.installer_root_tools.clone(),
         }
     }
-}
-
-/// The variables an installation record states: only the ones the install
-/// resolved.
-///
-/// A plan captures every variable the config *references*, recording `None` for
-/// one that stayed unset. A record cannot keep those: a client rebuilding the
-/// same plan from the runtime's rendered configuration sees the reference
-/// already resolved and has nothing left to capture, so the two plans disagree
-/// on exactly the unset keys -- `null` against absent -- which is how
-/// `pack install` came to be refused with "runtime pack graph differs from the
-/// client's installation plan". Stating only resolved variables is the spelling
-/// both sides reach, and what the record means: an unset variable has no
-/// recorded value.
-pub(crate) fn recorded_variables(
-    variables: &BTreeMap<String, Option<String>>,
-) -> BTreeMap<String, Option<String>> {
-    variables
-        .iter()
-        .filter(|(_, value)| value.is_some())
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect()
 }
 
 /// What a stage's installation record keeps: its source, the installed
@@ -2480,49 +2458,5 @@ mod conformance {
         gents_lean_vocab::families::plugin_job_document_ux_allowed::replay(|i| {
             document_ux_install_allowed(i.has_ux, i.has_local_home)
         });
-    }
-}
-
-#[cfg(test)]
-mod recorded_variables_tests {
-    use super::recorded_variables;
-    use std::collections::BTreeMap;
-
-    /// The record states the variables the install resolved, and not the ones
-    /// its config referenced but left unset. The second kind is what made the
-    /// client's plan and the runtime's disagree: the runtime recorded `null`,
-    /// a client rebuilding from the rendered config recorded nothing.
-    #[test]
-    fn a_record_keeps_resolved_variables_and_drops_unset_ones() {
-        let mut variables = BTreeMap::new();
-        variables.insert(
-            "GENTS_PACK_NODE_DID".to_owned(),
-            Some("did:key:node".to_owned()),
-        );
-        variables.insert("APP_NAME".to_owned(), Some("scout".to_owned()));
-        // Referenced by the config, never supplied.
-        variables.insert("GENTS_PACK_BIND_AGENT_WEB_RESEARCHER".to_owned(), None);
-        variables.insert("UNSET_TOKEN".to_owned(), None);
-
-        let recorded = recorded_variables(&variables);
-        assert_eq!(
-            recorded.keys().cloned().collect::<Vec<_>>(),
-            vec!["APP_NAME".to_owned(), "GENTS_PACK_NODE_DID".to_owned()],
-            "only resolved variables are recorded"
-        );
-        assert!(recorded["APP_NAME"].is_some());
-        assert!(
-            !recorded.contains_key("GENTS_PACK_BIND_AGENT_WEB_RESEARCHER"),
-            "an unset key is absent, not null"
-        );
-        // All-unset config records nothing, which is what a client with a
-        // fully rendered configuration also produces.
-        let mut all_unset = BTreeMap::new();
-        all_unset.insert("GENTS_PACK_BIND_AGENT_WEB_RESEARCHER".to_owned(), None);
-        assert!(recorded_variables(&all_unset).is_empty());
-        // And a resolved-only map passes through unchanged.
-        let mut resolved = BTreeMap::new();
-        resolved.insert("APP_NAME".to_owned(), Some("scout".to_owned()));
-        assert_eq!(recorded_variables(&resolved), resolved);
     }
 }
