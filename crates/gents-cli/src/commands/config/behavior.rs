@@ -182,32 +182,20 @@ async fn submit_create(
     print_json(&receipt)
 }
 
-/// Rebuild from the owner's structured receipt: `user_command` may include
-/// unknown-home guidance, which is prose rather than a shell command to extend.
+/// Address the owner's runnable command without copying its command format.
 fn target_host_root_receipt(
     receipt: &mut Value,
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
 ) -> Result<()> {
     let graphql = graphql.map(str::trim).filter(|value| !value.is_empty());
-    if (home.is_none() && graphql.is_none()) || receipt.get("host_root_access").is_none() {
+    if home.is_none() && graphql.is_none() {
         return Ok(());
     }
-    let agent = receipt
-        .get("agent_did")
-        .and_then(Value::as_str)
-        .context("agent receipt with host_root_access is missing agent_did")?;
-    let command = match receipt
-        .pointer("/host_root_access/published_root")
-        .and_then(Value::as_str)
-    {
-        Some(root) => {
-            format!("gents config workspace-root grant-reader --path {root} --agent-did {agent}")
-        }
-        None => "gents config workspace-root list".to_owned(),
-    };
-    receipt["host_root_access"]["user_command"] =
-        Value::String(with_target(&command, home, graphql));
+    if let Some(Value::String(command)) = receipt.pointer_mut("/host_root_access/user_command") {
+        *command = with_target(command, home, graphql);
+        receipt["host_root_access"]["target_guidance"] = Value::Null;
+    }
     Ok(())
 }
 
@@ -510,7 +498,8 @@ mod tests {
             "agent_did": "did:key:helper",
             "host_root_access": {
                 "published_root": "/workspace",
-                "user_command": "grant (add --home with this node's home)"
+                "user_command": "gents config workspace-root grant-reader --path /workspace --agent-did did:key:helper",
+                "target_guidance": "Select this node with --home."
             }
         });
         for (home, graphql, expected) in [
@@ -522,12 +511,15 @@ mod tests {
             let mut receipt = original.clone();
             super::target_host_root_receipt(&mut receipt, home, graphql).unwrap();
             assert_eq!(receipt["host_root_access"]["user_command"], expected);
+            assert!(receipt["host_root_access"]["target_guidance"].is_null());
         }
         let mut unknown = original.clone();
         super::target_host_root_receipt(&mut unknown, None, None).unwrap();
         assert_eq!(unknown, original, "retain guidance when no target is known");
         let mut unpublished = original;
         unpublished["host_root_access"]["published_root"] = serde_json::Value::Null;
+        unpublished["host_root_access"]["user_command"] =
+            serde_json::json!("gents config workspace-root list");
         super::target_host_root_receipt(
             &mut unpublished,
             Some(std::path::Path::new("/node/home")),
@@ -821,10 +813,11 @@ mod tests {
   "committed": true,
   "host_root_access": {
     "answer": "Saved, but <CREATED> cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot <ROOT>. Until then the runtime cannot load its tools and reports the agent unavailable.",
-    "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
+    "how_to_proceed": "Keep these Tools and give the User user_command and target_guidance to run it from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     "published_root": "<ROOT>",
     "state": "waiting_for_user",
-    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CREATED> (add --home with this node's home when it runs against a node other than your default one)"
+    "target_guidance": "Add --home with this node's home when running against a node other than your default one.",
+    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CREATED>"
   },
   "make_default": false,
   "operation": "create"
@@ -844,10 +837,11 @@ mod tests {
   "committed": true,
   "host_root_access": {
     "answer": "Saved, but <CLONED> cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot <ROOT>. Until then the runtime cannot load its tools and reports the agent unavailable.",
-    "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
+    "how_to_proceed": "Keep these Tools and give the User user_command and target_guidance to run it from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     "published_root": "<ROOT>",
     "state": "waiting_for_user",
-    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CLONED> (add --home with this node's home when it runs against a node other than your default one)"
+    "target_guidance": "Add --home with this node's home when running against a node other than your default one.",
+    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CLONED>"
   },
   "make_default": false,
   "operation": "clone"

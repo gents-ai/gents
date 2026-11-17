@@ -43,10 +43,6 @@ impl ToolEffectDispatcher for Files {
 #[tokio::test]
 #[ignore = "set GENTS_SCRIPT_WASM to the script pack's compiled WASM"]
 async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
     let wasm =
         std::fs::read(std::env::var_os("GENTS_SCRIPT_WASM").expect("GENTS_SCRIPT_WASM")).unwrap();
     let bytes = gents_pack::plugin::test_fixtures::build_plugin_afb_bytes(&wasm);
@@ -67,22 +63,33 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
     );
     let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
     let files = Arc::new(files);
-    let result = tool_effects::scope(Some(files.clone()), executor.call_data_bound_for(
-        &record,
-        json!({"script": r#"
+    let input = json!({"script": r#"
             const names = Object.keys(tools);
             const files = await Promise.all([tools.read_file({path: 'a.txt'}), tools.read_file({path: 'b.txt'})]);
             return {names, types: files.map(f => typeof f), contents: files.map(f => f.content), ok: files.every(f => f.ok)};
-        "#}),
-        super::super::executor::ToolInvocation { tool_root: None, tool_calls: true, context: &gents_loop::tool::ToolCallEnvelope::ambient() }, None,
-    )).await.unwrap();
+        "#});
+    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+    let result = tool_effects::scope(
+        Some(files.clone()),
+        executor.call_data_bound_for(
+            &record,
+            input,
+            super::super::executor::ToolInvocation {
+                tool_root: None,
+                tool_calls: true,
+                context: &envelope,
+            },
+            None,
+        ),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         result.outcome.verdict,
         PluginVerdict::Success,
         "{}",
         result.outcome.diagnostics
     );
-    tracing::info!(home = %home.path().display(), output = %result.outcome.output, "scratch script end-to-end result");
     assert_eq!(
         result.outcome.output,
         json!({"names": ["read_file"], "types": ["object", "object"], "contents": ["L1: alpha", "L1: beta"], "ok": true})
