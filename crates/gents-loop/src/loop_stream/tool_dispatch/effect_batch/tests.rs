@@ -1,5 +1,6 @@
 use super::*;
 use crate::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError, ToolFootprint};
+use crate::tool_call_lifecycle::runtime::scope_request_tool_execution;
 use crate::tool_effects::ToolEffectDispatcher;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -188,7 +189,7 @@ async fn four_one_second_reads_share_one_second_and_keep_ordinals_and_positions(
     assert_eq!(start.elapsed(), Duration::from_secs(1));
     let results: Vec<_> = results
         .into_iter()
-        .map(|r| r.unwrap().model_facing_text())
+        .map(|r| r.unwrap().model_facing_text().to_owned())
         .collect();
     assert_eq!(results, ["1", "2", "3", "4"]);
     let events = events.lock().unwrap();
@@ -218,7 +219,7 @@ async fn writers_are_barriers_and_completion_does_not_reorder_results() {
     assert_eq!(
         results
             .into_iter()
-            .map(|r| r.unwrap().model_facing_text())
+            .map(|r| r.unwrap().model_facing_text().to_owned())
             .collect::<Vec<_>>(),
         ["1", "2", "3", "4"]
     );

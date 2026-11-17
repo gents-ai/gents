@@ -1,6 +1,5 @@
 use super::*;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError, ToolFootprint};
-use gents_loop::SessionHook;
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
@@ -101,16 +100,26 @@ async fn scratch_persisted_script_batch_timing() {
             parent.clone(),
         );
         let start = Instant::now();
-        let result = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution(
-            Some(deadline),
-            Default::default(),
-            gents_loop::tool_effects::scope(
-                Some(effects),
-                executor.call_data_bound_for(&record, json!({"script":script}), None, true, None),
-            ),
-        )
-        .await
-        .unwrap();
+        let result =
+            gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+                Some(deadline),
+                Default::default(),
+                None,
+                None,
+                Some(session.clone()),
+                gents_loop::tool_effects::scope(
+                    Some(effects),
+                    executor.call_data_bound_for(
+                        &record,
+                        json!({"script":script}),
+                        None,
+                        true,
+                        None,
+                    ),
+                ),
+            )
+            .await
+            .unwrap();
         tracing::info!(sample = label, total_us = start.elapsed().as_micros() as u64, home = %home.path().display(), "scratch script total; reserve/before/body/result phases logged by production dispatcher");
         assert_eq!(
             result.outcome.verdict,

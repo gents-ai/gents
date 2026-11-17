@@ -183,6 +183,9 @@ async fn perform_tools(
     requests: Vec<(String, Map<String, Value>)>,
     tools: &mut Option<tool_calls::Session>,
 ) -> Result<Vec<Value>, String> {
+    if requests.is_empty() {
+        return Ok(Vec::new());
+    }
     match tools {
         Some(tools) => tools.call_batch(requests).await,
         None => Ok(requests

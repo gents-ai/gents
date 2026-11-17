@@ -1,3 +1,5 @@
+pub const MAX_PARALLEL_READ_TOOLS: usize = 4;
+
 /// Reserve invalid-call budget before dispatch and stop at any duplicate,
 /// because repetition decisions depend on preceding results.
 pub fn read_prefix<'a>(
@@ -39,7 +41,7 @@ pub fn effect_width(
                 is_read(tools, &call.name, &call.arguments),
             )
         }),
-        4,
+        MAX_PARALLEL_READ_TOOLS,
     )
     .max(1)
 }

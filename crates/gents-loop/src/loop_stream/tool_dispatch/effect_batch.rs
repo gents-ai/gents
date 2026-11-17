@@ -150,6 +150,9 @@ impl<H: SessionHook + 'static> EffectDispatcher<H> {
 
     pub(super) async fn effect_batch(&self, calls: Vec<ToolEffectCall>) -> Vec<EffectResult> {
         use ToolEffectError::{Fatal, Unavailable};
+        if calls.is_empty() {
+            return Vec::new();
+        }
         self.composed
             .store(true, std::sync::atomic::Ordering::Release);
         let Some(scope) = current_tool_runtime_context() else {
@@ -191,17 +194,17 @@ impl<H: SessionHook + 'static> EffectDispatcher<H> {
                             Fatal(reason) | Unavailable(reason) => reason,
                         };
                         for item in admitted {
-                            if item.ready.is_none() {
+                            if let Some(ready) = item.ready {
+                                results.push(ready);
+                            } else {
                                 let cleanup = self
                                     .finish_effect(&item.internal_id, Err(Fatal(reason.clone())))
                                     .await;
                                 results.push(cleanup);
-                            } else {
-                                results.push(item.ready.expect("ready admission"));
                             }
                         }
                         let fatal = matches!(error, Fatal(_)) || width > 1;
-                        results.push(error);
+                        results.push(Err(error));
                         if fatal {
                             break;
                         }
