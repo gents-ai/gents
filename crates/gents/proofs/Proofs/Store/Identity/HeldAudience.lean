@@ -1,4 +1,5 @@
 import Proofs.Store.Identity.UserDelegation
+import Proofs.Store.TransactionReplay
 
 /-! What a client keeps of the delegation audience its home's public status
 reports, and how it recovers when a request is refused for its credential
@@ -205,6 +206,60 @@ theorem a_client_learns_its_audience_from_the_refusal (user : String) (node : Au
       ∧ resend false .delegationRequired .learned = true
       ∧ presentedOverHttp node now fresh = some user :=
   ⟨rfl, rfl, rfl, a_client_mints_for_its_held_audience user node now fresh minted⟩
+
+/-- Where in a transaction a request was refused for its credential. -/
+inductive UnitStage where
+  /-- Its begin or a request inside it: the commit was not sent. -/
+  | beforeCommit
+  /-- Its commit. -/
+  | commit
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3831): a transaction is a unit, so one of its requests
+refused for its credential is not sent again alone; the transaction it belonged
+to is gone with the runtime that refused it. The owner reads the status, and
+when that would send a lone request again (`resend`) it runs the whole
+transaction again once, as a rerun (`TransactionReplay.rerunHonoured`): a
+single-attempt or observing transaction is not run again, and one that already
+sent a client-signed write runs again only where conflict rebuilds are
+authorized. A refusal at commit is told: the client cannot tell whether a
+commit answered with a refusal landed, and running a landed unit again could
+apply it twice. External premise: DefraDB commits an HTTP transaction only on
+its commit request, so a transaction whose commit was not sent did not land,
+whether or not its discard was answered; the HTTP transport holds no native
+operation that could poison it. -/
+def resendUnit (resent : Bool) (refusal : Refusal) (record : Change) (stage : UnitStage)
+    (mode : TransactionReplay.Mode) (dispatched : Bool) : Bool :=
+  resend resent refusal record && stage == .beforeCommit
+    && TransactionReplay.rerunHonoured mode true false dispatched
+
+theorem a_refused_commit_is_never_run_again (resent : Bool) (refusal : Refusal)
+    (record : Change) (mode : TransactionReplay.Mode) (dispatched : Bool) :
+    resendUnit resent refusal record .commit mode dispatched = false := by
+  simp [resendUnit]
+
+theorem a_unit_is_run_again_at_most_once (refusal : Refusal) (record : Change)
+    (stage : UnitStage) (mode : TransactionReplay.Mode) (dispatched : Bool) :
+    resendUnit true refusal record stage mode dispatched = false := by
+  simp [resendUnit, resend]
+
+theorem a_unit_is_run_again_only_when_a_lone_request_would_be (resent : Bool)
+    (refusal : Refusal) (record : Change) (stage : UnitStage) (mode : TransactionReplay.Mode)
+    (dispatched : Bool) (h : resendUnit resent refusal record stage mode dispatched = true) :
+    resend resent refusal record = true := by
+  simp_all [resendUnit]
+
+theorem a_unit_that_sent_a_signed_write_runs_again_only_as_a_rebuild (resent : Bool)
+    (refusal : Refusal) (record : Change) (stage : UnitStage) (mode : TransactionReplay.Mode)
+    (h : resendUnit resent refusal record stage mode true = true) :
+    mode = .signedConflictRebuild := by
+  cases mode <;> simp_all [resendUnit, TransactionReplay.rerunHonoured]
+
+theorem a_unit_on_the_node_store_is_never_run_again (resent : Bool) (refusal : Refusal)
+    (held : Held) (sameAudience : Bool) (stage : UnitStage) (mode : TransactionReplay.Mode)
+    (dispatched : Bool) :
+    resendUnit resent refusal (change held .absent sameAudience) stage mode dispatched = false := by
+  simp [resendUnit, a_home_on_the_node_store_never_resends]
 
 /-- What a client tells the person of a request that stayed refused. -/
 inductive Told where
