@@ -343,7 +343,7 @@ mod tests {
         };
         // The classifier reads the marker the same text was rendered with, so a
         // reset has to arrive in the text; this one carries none, so it stands.
-        assert!(standing_refusal(&[expired.clone()], past, None, 300).is_some());
+        assert!(standing_refusal(std::slice::from_ref(&expired), past, None, 300).is_some());
     }
 
     /// The detail an operator sees is bounded, never the whole body.

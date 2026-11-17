@@ -843,7 +843,7 @@ async fn node_read_outcomes_hold_no_secrets() {
     let reads = node_read(
         &cache,
         &node,
-        &did,
+        did,
         UsageTrigger::Open,
         None,
         &grok_endpoints(&url),
@@ -921,16 +921,27 @@ async fn refusal_fixture() -> (
 /// Leaves one failed call in the node's own durable record, the way the daemon
 /// leaves it: the classifier's rendered text in `failure_reason`, and the tokens
 /// it reported. The refusal has to be readable from that record alone.
+struct SeedCall<'a> {
+    call_id: &'a str,
+    queued_at: &'a str,
+    call_state: &'a str,
+    failure_reason: Option<&'a str>,
+    provider_total_tokens: Option<u64>,
+}
+
 async fn seed_refused_call(
     access: &ConfigAccess,
     node_did: &str,
     backend_id: &str,
-    call_id: &str,
-    queued_at: &str,
-    call_state: &str,
-    failure_reason: Option<&str>,
-    provider_total_tokens: Option<u64>,
+    call: SeedCall<'_>,
 ) -> String {
+    let SeedCall {
+        call_id,
+        queued_at,
+        call_state,
+        failure_reason,
+        provider_total_tokens,
+    } = call;
     let escape = gents_store::graphql::escape_graphql_string;
     let failure = failure_reason
         .map(|text| format!(r#", failure_reason: "{}""#, escape(text)))
@@ -1039,11 +1050,13 @@ async fn a_refused_account_is_exhausted_from_evidence_and_says_so_everywhere() {
         &agent_access,
         &did,
         "backend-usage-a",
-        "usage-refusal-call",
-        &(now - Duration::minutes(30)).to_rfc3339(),
-        "failed",
-        Some(GROK_REFUSAL),
-        Some(1200),
+        SeedCall {
+            call_id: "usage-refusal-call",
+            queued_at: &(now - Duration::minutes(30)).to_rfc3339(),
+            call_state: "failed",
+            failure_reason: Some(GROK_REFUSAL),
+            provider_total_tokens: Some(1200),
+        },
     )
     .await;
     seed_session_chain(&agent_access, &did, "usage-refusal-session", &call_doc).await;
@@ -1124,11 +1137,13 @@ async fn a_restart_with_an_empty_cache_still_shows_the_refusal() {
         &agent_access,
         &did,
         "backend-usage-a",
-        "usage-refusal-call",
-        &(now - Duration::minutes(30)).to_rfc3339(),
-        "failed",
-        Some(GROK_REFUSAL),
-        None,
+        SeedCall {
+            call_id: "usage-refusal-call",
+            queued_at: &(now - Duration::minutes(30)).to_rfc3339(),
+            call_state: "failed",
+            failure_reason: Some(GROK_REFUSAL),
+            provider_total_tokens: None,
+        },
     )
     .await;
 
@@ -1172,22 +1187,26 @@ async fn a_later_completed_call_clears_the_refusal_at_the_read_path() {
         &agent_access,
         &did,
         "backend-usage-a",
-        "usage-refusal-call",
-        &(now - Duration::minutes(40)).to_rfc3339(),
-        "failed",
-        Some(GROK_REFUSAL),
-        None,
+        SeedCall {
+            call_id: "usage-refusal-call",
+            queued_at: &(now - Duration::minutes(40)).to_rfc3339(),
+            call_state: "failed",
+            failure_reason: Some(GROK_REFUSAL),
+            provider_total_tokens: None,
+        },
     )
     .await;
     seed_refused_call(
         &agent_access,
         &did,
         "backend-usage-a",
-        "usage-clearing-call",
-        &(now - Duration::minutes(10)).to_rfc3339(),
-        "completed",
-        None,
-        None,
+        SeedCall {
+            call_id: "usage-clearing-call",
+            queued_at: &(now - Duration::minutes(10)).to_rfc3339(),
+            call_state: "completed",
+            failure_reason: None,
+            provider_total_tokens: None,
+        },
     )
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
@@ -1227,11 +1246,13 @@ async fn evidence_older_than_the_window_is_not_a_standing_refusal() {
         &agent_access,
         &did,
         "backend-usage-a",
-        "usage-stale-call",
-        &(now - Duration::hours(30)).to_rfc3339(),
-        "failed",
-        Some("you have used all the included free usage"),
-        None,
+        SeedCall {
+            call_id: "usage-stale-call",
+            queued_at: &(now - Duration::hours(30)).to_rfc3339(),
+            call_state: "failed",
+            failure_reason: Some("you have used all the included free usage"),
+            provider_total_tokens: None,
+        },
     )
     .await;
     let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
