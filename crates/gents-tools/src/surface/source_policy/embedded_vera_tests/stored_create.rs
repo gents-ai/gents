@@ -24,7 +24,7 @@ const AGENT_DOC: &str = "bae-stored-create-agent";
 
 /// The User as its client holds it: a key in a signing capability that
 /// DefraDB never holds.
-struct ClientUser(ClientSigningCapability, identity::RawIdentity);
+pub(super) struct ClientUser(pub(super) ClientSigningCapability, identity::RawIdentity);
 
 async fn client_user(root: &std::path::Path, name: &str) -> anyhow::Result<ClientUser> {
     let capability = client_key(root, name).await?;
@@ -207,16 +207,16 @@ async fn working_agent_reads(
         .await?)
 }
 
-struct Fixture {
-    _directory: tempfile::TempDir,
-    home: Home,
-    node: Arc<defra_node::Node>,
-    user: ClientUser,
-    stranger: ClientUser,
-    agent: Arc<dyn NodeIdentity>,
+pub(super) struct Fixture {
+    pub(super) _directory: tempfile::TempDir,
+    pub(super) home: Home,
+    pub(super) node: Arc<defra_node::Node>,
+    pub(super) user: ClientUser,
+    pub(super) stranger: ClientUser,
+    pub(super) agent: Arc<dyn NodeIdentity>,
 }
 
-async fn fixture(name: &str) -> anyhow::Result<Fixture> {
+pub(super) async fn fixture(name: &str) -> anyhow::Result<Fixture> {
     let directory = tempfile::tempdir()?;
     let home = home(directory.path(), name).await?;
     FreshBackendStore::observe(&home.data, &home.lock)
