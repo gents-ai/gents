@@ -74,12 +74,17 @@ where
 }
 
 /// Start settling in the background what the endpoint's own User owes,
-/// when the endpoint mints Vera delegations; a failure is told in product
-/// words. Nothing is started for any other endpoint.
-pub fn spawn_settlement(
+/// when the endpoint mints Vera delegations; `tell` hands a failure, in
+/// product words, to whoever tells the person. Nothing is started for any
+/// other endpoint.
+pub fn spawn_settlement<T>(
     endpoint: GraphqlEndpoint,
     node_did: String,
-) -> Option<tokio::task::JoinHandle<()>> {
+    tell: T,
+) -> Option<tokio::task::JoinHandle<()>>
+where
+    T: FnOnce(OwedSettlementFailed) + Send + 'static,
+{
     endpoint.mints_delegations().then(|| {
         tokio::spawn(async move {
             let pass = EndpointPass {
@@ -87,7 +92,7 @@ pub fn spawn_settlement(
                 node_did: &node_did,
             };
             if let Err(failed) = settle_owed_while_online(&pass).await {
-                tracing::warn!("{failed}");
+                tell(failed);
             }
         })
     })

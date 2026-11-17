@@ -5,6 +5,8 @@ mod file_inventory;
 mod file_review;
 mod goal;
 mod held_audience;
+pub(super) mod owed_settlement;
+pub use owed_settlement::UnkeptChange;
 mod inference_observation;
 mod p2p_ops;
 mod route_manager;
@@ -294,6 +296,8 @@ pub struct ClientSyncStateSnapshot {
     // directory read after receiving a sync update.
     pub directory: Vec<PeerRecord>,
     pub peers: Vec<ClientPeerStatus>,
+    /// The latest change each home did not keep, told quietly.
+    pub unkept_changes: Vec<owed_settlement::UnkeptChange>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

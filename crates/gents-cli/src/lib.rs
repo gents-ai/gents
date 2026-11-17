@@ -624,6 +624,7 @@ async fn resolve_config_access_inner(
             gents_store::config_client::owed::spawn_settlement(
                 endpoint.clone(),
                 runtime_state.node_did,
+                |failed| tracing::warn!("{failed}"),
             );
             return Ok((
                 ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),

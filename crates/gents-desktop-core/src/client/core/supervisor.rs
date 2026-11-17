@@ -57,6 +57,7 @@ pub(super) fn spawn_p2p_supervisor_task(
     route_manager: Arc<ClientRouteManager>,
     install_replicators_on_bootstrap: bool,
 ) -> JoinHandle<()> {
+    let owed = super::owed_settlement::OwedSettlements::default();
     tokio::spawn(async move {
         let mut renewal_tasks = tokio::task::JoinSet::new();
         renewal_tasks.spawn(gents_p2p::p2p_reconcile::run_client_member_renewals(
@@ -126,6 +127,7 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &enrollment_authority,
             )
             .await;
+            owed.settle_saved(&sync_state, &remote_admin_actor);
 
             let previous = sync_state.snapshot().transport;
             let next_health = probe_p2p_health(&p2p, &previous).await;

@@ -66,6 +66,7 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
           operatorConfigAuthoritativeNodeDids: configured ? [deployment.nodeDid] : [],
           deployments: [deployment],
           endedAccess: [],
+          unkeptChanges: [],
         }
       : null,
   };

@@ -66,6 +66,7 @@ impl ClientSyncStateOwner {
             enrollment_activation_errors: BTreeMap::new(),
             directory: records,
             peers,
+            unkept_changes: Vec::new(),
         });
         Self {
             tx,
@@ -335,6 +336,17 @@ impl ClientSyncStateOwner {
             Some(updated) => (change, updated),
             None => (HeldAudienceChange::Unchanged, expected.clone()),
         })
+    }
+
+    /// Tell, once, that the home `node_did` did not keep a change; a later
+    /// one replaces it.
+    pub(super) fn report_unkept_change(&self, unkept: super::owed_settlement::UnkeptChange) {
+        self.tx.send_modify(|state| {
+            state
+                .unkept_changes
+                .retain(|told| told.node_did != unkept.node_did);
+            state.unkept_changes.push(unkept);
+        });
     }
 
     pub(super) async fn set_pairing_ready(
