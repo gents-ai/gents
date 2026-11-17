@@ -90,7 +90,10 @@ impl ConfigCommandTool {
                             && read.provider == account.provider
                             && read.account_ref == account.account_ref
                     })
-                    .and_then(|read| read.refusal.clone())
+                    // The parsed fields only: the provider's own words belong
+                    // to the operator's shell and desktop, and can name account
+                    // details this Agent does not own.
+                    .and_then(|read| read.refusal.as_ref().map(|refusal| refusal.for_model()))
             });
             items.push(json!({
                 "provider": account.provider,
@@ -121,7 +124,7 @@ impl ConfigCommandTool {
                     reads
                         .iter()
                         .find(|read| read.matches_backend(backend))
-                        .and_then(|read| read.refusal.clone())
+                        .and_then(|read| read.refusal.as_ref().map(|refusal| refusal.for_model()))
                 })
                 .flatten();
             items.push(json!({

@@ -150,6 +150,54 @@ it("shows a provider refusal above the meters, with only the fields it stated", 
   ).toBeTruthy();
 });
 
+it("never shows a window the provider did not state as its own", () => {
+  /* xAI's text names "rolling 24-hour" -> reported. A provider that names
+     none leaves the window null, and the node's own count says it is the
+     node's, labelled "locally estimated". */
+  const refusal = (provenance: string) => ({
+    at: new Date().toISOString(),
+    window: provenance === "provider_reported" ? "rolling 24-hour" : null,
+    used: 691_791,
+    cap: 600_000,
+    resetsAt: null,
+    consumedByNode: 1200,
+    detail: "usage limit reached",
+    windowProvenance: provenance,
+    evidenceWindowHours: 24,
+  });
+  const view = (provenance: string) => [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: ["grok"],
+      windows: [],
+      plan: null,
+      note: null,
+      readAt: null,
+      readError: null,
+      read: "read",
+      refusal: refusal(provenance),
+    },
+  ];
+
+  const stated = render(
+    <AllProviderLimits views={view("provider_reported")} onRefresh={async () => {}} />,
+  );
+  expect(screen.getByText(/rolling 24-hour window/)).toBeTruthy();
+  /* the node's own count is always labelled as the node's */
+  expect(screen.getByText(/1,200 counted on this node/)).toBeTruthy();
+  stated.unmount();
+
+  const unknown = render(
+    <AllProviderLimits views={view("unknown")} onRefresh={async () => {}} />,
+  );
+  /* no window at all, so none is presented as the provider's */
+  expect(screen.queryByText(/rolling 24-hour/)).toBeNull();
+  expect(screen.queryByText(/, locally estimated/)).toBeNull();
+  expect(screen.getByText(/1,200 counted on this node/)).toBeTruthy();
+  unknown.unmount();
+});
+
 it("says the reset when the provider stated one, and that none was stated otherwise", () => {
   const refusal = (resetsAt: string | null) => ({
     at: new Date().toISOString(),
@@ -159,7 +207,7 @@ it("says the reset when the provider stated one, and that none was stated otherw
     resetsAt,
     consumedByNode: null,
     detail: "free usage exhausted",
-    windowProvenance: "analytical",
+    windowProvenance: "unknown",
     evidenceWindowHours: 24,
   });
   const view = (resetsAt: string | null) => [

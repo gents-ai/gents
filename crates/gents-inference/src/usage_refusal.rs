@@ -22,9 +22,9 @@
 //! attributed retroactively.
 
 use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Serialize};
 
-use crate::usage_observation::UsageRefusalView;
+pub use crate::usage_observation::WindowBasis as WindowProvenance;
+use crate::usage_observation::{UsageRefusalView, WindowBasis};
 
 /// How far back the evidence window reaches. An analytical choice, not a
 /// provider fact: a refusal whose reset is unknown is looked for in this window
@@ -90,12 +90,21 @@ pub fn standing_refusal(
 
     Some(UsageRefusalView {
         at: observed_at.to_rfc3339(),
+        // The provider's own words, or nothing: this node never puts a window
+        // it chose into the field the provider's statement belongs in.
+        window_basis: match usage.window {
+            Some(_) => WindowBasis::ProviderReported,
+            None => WindowBasis::Unknown,
+        },
         window: usage.window,
         used: usage.used,
         cap: usage.cap,
         resets_at: usage.resets_at.map(|at| at.to_rfc3339()),
         consumed_by_node,
         detail: bounded_detail(&usage.detail, detail_limit),
+        // The look-back this node bounded its own evidence to, stated as
+        // this node's choice rather than as the provider's window.
+        evidence_window_hours: REFUSAL_EVIDENCE_WINDOW_HOURS,
     })
 }
 
@@ -223,24 +232,10 @@ pub fn evidence_since(now: DateTime<Utc>) -> DateTime<Utc> {
     now - Duration::hours(REFUSAL_EVIDENCE_WINDOW_HOURS)
 }
 
-/// Whether the evidence window is the provider's own or this node's analytical
-/// choice. It is analytical unless the refusal names one; the view says so.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WindowProvenance {
-    /// The provider stated the window in its refusal.
-    ProviderReported,
-    /// This node chose the window to bound a query.
-    Analytical,
-}
-
 impl UsageRefusalView {
-    /// Whether this view's window came from the provider or from the query.
+    /// Whether this view's window came from the provider or from this node.
     pub fn window_provenance(&self) -> WindowProvenance {
-        match self.window {
-            Some(_) => WindowProvenance::ProviderReported,
-            None => WindowProvenance::Analytical,
-        }
+        self.window_basis
     }
 }
 
@@ -449,10 +444,75 @@ mod tests {
         });
     }
 
-    /// The window the query uses is this node's choice when the provider named
-    /// none, and the view says which it is.
+    /// What an Agent sees is the parsed fields and nothing quoted from the
+    /// provider's body: no excerpt, and no node-internal reading length. This is
+    /// the path `provider_limits` and `config accounts` hand a model.
     #[test]
-    fn an_unstated_window_is_marked_analytical() {
+    fn the_agent_facing_read_carries_no_excerpt_text() {
+        let now = at("2026-11-17T10:00:00Z");
+        let view = standing_refusal(&[grok_refusal(30)], now, Some(1200), 300)
+            .expect("the refusal stands");
+        // The operator's copy does carry the excerpt.
+        assert!(view.detail.contains("free usage"));
+
+        let seen = view.for_model();
+        let object = seen.as_object().expect("an object");
+        assert!(
+            !object.contains_key("detail"),
+            "a model never sees the provider's words: {seen}"
+        );
+        assert!(
+            !object.contains_key("evidence_window_hours"),
+            "the node's look-back length is an operator reading: {seen}"
+        );
+        // The parsed fields are all there, and the excerpt's text appears nowhere.
+        assert_eq!(object["window"], "rolling 24-hour");
+        assert_eq!(object["window_basis"], "provider_reported");
+        assert_eq!(object["used"], 691_791);
+        assert_eq!(object["cap"], 600_000);
+        assert!(object["resets_at"].is_null());
+        let rendered = seen.to_string();
+        assert!(
+            !rendered.contains("free usage") && !rendered.contains("tokens"),
+            "no fragment of the provider's body reaches a model: {rendered}"
+        );
+    }
+
+    /// A window this node chose is reported as the node's, so no reader can
+    /// mistake a local bound for the provider's own statement.
+    #[test]
+    fn a_window_this_node_chose_is_labelled_locally_estimated() {
+        let view = UsageRefusalView {
+            at: "2026-11-17T10:00:00Z".into(),
+            window: Some("24h".into()),
+            used: Some(10),
+            cap: Some(20),
+            resets_at: None,
+            consumed_by_node: Some(5),
+            detail: "quota".into(),
+            window_basis: WindowBasis::LocallyEstimated,
+            evidence_window_hours: 24,
+        };
+        assert_eq!(view.window_provenance(), WindowProvenance::LocallyEstimated);
+        // and a model still sees the label, so it can tell whose window it is
+        assert_eq!(view.for_model()["window_basis"], "locally_estimated");
+    }
+
+    /// A provider that states a window is reported under the provider's name —
+    /// "rolling 24-hour" in xAI's own words is provider-reported, not a guess.
+    #[test]
+    fn a_stated_window_is_provider_reported() {
+        let now = at("2026-11-17T10:00:00Z");
+        let view = standing_refusal(&[grok_refusal(30)], now, None, 300).expect("it stands");
+        assert_eq!(view.window.as_deref(), Some("rolling 24-hour"));
+        assert_eq!(view.window_provenance(), WindowProvenance::ProviderReported);
+    }
+
+    /// A provider that names no window leaves the view with none, and the view
+    /// says the window is unknown rather than presenting this node's look-back
+    /// as the provider's window.
+    #[test]
+    fn an_unstated_window_is_reported_as_unknown() {
         let bare = CallEvidence {
             at: at("2026-11-17T09:30:00Z"),
             call_state: "failed".to_owned(),
@@ -460,12 +520,15 @@ mod tests {
         };
         let view =
             standing_refusal(&[bare], at("2026-11-17T10:00:00Z"), None, 300).expect("stands");
-        assert!(view.window.is_none());
-        assert_eq!(view.window_provenance(), WindowProvenance::Analytical);
+        assert!(
+            view.window.is_none(),
+            "nothing stands in for a stated window"
+        );
+        assert_eq!(view.window_provenance(), WindowProvenance::Unknown);
         assert_eq!(
             evidence_since(at("2026-11-17T10:00:00Z")),
             at("2026-11-16T10:00:00Z"),
-            "the query reaches back the analytical window"
+            "the query reaches back this node's own look-back"
         );
     }
 }

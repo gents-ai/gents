@@ -45,11 +45,14 @@ pub struct UsageRefusalView {
     pub consumed_by_node: Option<u64>,
     /// A bounded excerpt of the provider's words, never the whole body.
     pub detail: String,
-    /// Whose window `window` names: the provider's own, or — when it named
-    /// none — this node's analytical bound, which is never reported as fact.
+    /// Whose window `window` names: `provider_reported` when the provider
+    /// stated one, `unknown` when it named none and this node asserts none (`window`
+    /// is then null),
+    /// `locally_estimated` for a window this node chose, which is never
+    /// reported as the provider's.
     pub window_provenance: String,
-    /// How far back this node looked in its own recorded calls. Analytical:
-    /// the provider never said its evidence window is this one.
+    /// How far back this node looked in its own recorded calls. Always this
+    /// node's choice: the provider never said its evidence window is this one.
     pub evidence_window_hours: i64,
 }
 
@@ -93,13 +96,19 @@ pub(crate) async fn account_usage_views(
             resets_at: refusal.resets_at.clone(),
             consumed_by_node: refusal.consumed_by_node,
             detail: refusal.detail.clone(),
-            window_provenance: match refusal.window_provenance() {
-                gents_inference::usage_refusal::WindowProvenance::ProviderReported => {
+            // Stated by the view, not inferred from `window.is_some()`: a
+            // provider that named no window leaves `window` null rather than
+            // borrowing the node's look-back as its own.
+            window_provenance: match refusal.window_basis {
+                gents_inference::usage_observation::WindowBasis::ProviderReported => {
                     "provider_reported".into()
                 }
-                gents_inference::usage_refusal::WindowProvenance::Analytical => "analytical".into(),
+                gents_inference::usage_observation::WindowBasis::Unknown => "unstated".into(),
+                gents_inference::usage_observation::WindowBasis::LocallyEstimated => {
+                    "locally_estimated".into()
+                }
             },
-            evidence_window_hours: gents_inference::usage_refusal::REFUSAL_EVIDENCE_WINDOW_HOURS,
+            evidence_window_hours: refusal.evidence_window_hours,
         };
     let views = reads
         .iter()

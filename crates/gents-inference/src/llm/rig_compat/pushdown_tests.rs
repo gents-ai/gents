@@ -636,13 +636,13 @@ fn context_overflow() -> InferenceError {
 const ACCOUNT_LIMIT_TEXT: &str = "account limit reached";
 
 fn account_limited_failure() -> gents_loop::error::ClassifiedFailure {
-    let error = InferenceError::UsageLimited(gents_loop::provider_limit::UsageLimit {
+    let error = InferenceError::UsageLimited(Box::new(gents_loop::provider_limit::UsageLimit {
         resets_at: None,
         detail: ACCOUNT_LIMIT_TEXT.to_string(),
         window: None,
         used: None,
         cap: None,
-    });
+    }));
     let mut failure = classified(&error, ACCOUNT_LIMIT_TEXT);
     failure.report.account_limited = true;
     failure

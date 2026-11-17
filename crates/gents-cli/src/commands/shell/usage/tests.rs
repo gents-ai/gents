@@ -135,6 +135,8 @@ fn a_refused_account_says_out_of_quota_above_its_windows() {
         resets_at: None,
         consumed_by_node: Some(1200),
         detail: "you have used all the included free usage".into(),
+        window_basis: gents_inference::usage_observation::WindowBasis::ProviderReported,
+        evidence_window_hours: 24,
     });
     let lines = shown(rows(&[refused], now));
     let text: Vec<&str> = lines.iter().map(|(text, _, _)| text.as_str()).collect();
@@ -158,6 +160,38 @@ fn a_refused_account_says_out_of_quota_above_its_windows() {
     );
 }
 
+/// A window this node chose never borrows the provider's authority: it is shown
+/// only with "locally estimated", and the node's own count says it is the node's.
+#[test]
+fn a_window_the_node_chose_is_labelled_locally_estimated() {
+    let now = Utc.with_ymd_and_hms(2026, 11, 8, 12, 0, 0).unwrap();
+    let mut refused = account("Grok", "xai-grok", UsageRead::Read, None);
+    refused.refusal = Some(gents_inference::usage_observation::UsageRefusalView {
+        at: now.to_rfc3339(),
+        window: None,
+        used: Some(691_791),
+        cap: Some(600_000),
+        resets_at: None,
+        consumed_by_node: Some(1200),
+        detail: "usage limit reached".into(),
+        window_basis: gents_inference::usage_observation::WindowBasis::Unknown,
+        evidence_window_hours: 24,
+    });
+    let lines = shown(rows(&[refused], now));
+    let text: Vec<&str> = lines.iter().map(|(text, _, _)| text.as_str()).collect();
+    assert!(
+        text.iter()
+            .any(|line| line.contains("1200 counted on this node, last 24h")),
+        "the node's own count is labelled as the node's: {text:?}"
+    );
+    assert!(
+        !text
+            .iter()
+            .any(|line| line.contains("window") && !line.contains("last 24h")),
+        "the provider named no window, so none is shown as its: {text:?}"
+    );
+}
+
 /// No reset stated is no reset shown: the line says only what the provider said.
 #[test]
 fn a_refusal_without_a_stated_reset_shows_no_reset() {
@@ -171,6 +205,8 @@ fn a_refusal_without_a_stated_reset_shows_no_reset() {
         resets_at: None,
         consumed_by_node: None,
         detail: "free usage exhausted".into(),
+        window_basis: gents_inference::usage_observation::WindowBasis::Unknown,
+        evidence_window_hours: 24,
     });
     let lines = shown(rows(&[refused], now));
     let headline = lines

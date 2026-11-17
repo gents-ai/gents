@@ -83,6 +83,18 @@ pub(super) fn rows(reads: &[AccountUsageRead], now: DateTime<Utc>) -> Vec<MenuRo
             };
             rows.push(row(format!("   Out of quota{when}{stated}"), Tone::Warn));
             rows.push(row(format!("   {}", refusal.detail), Tone::Label));
+            // This node's own count, labelled: it is this node's estimate over
+            // its own look-back, never the provider's counter and never a
+            // percentage.
+            if let Some(consumed) = refusal.consumed_by_node {
+                rows.push(row(
+                    format!(
+                        "   {consumed} counted on this node, last {}h",
+                        refusal.evidence_window_hours
+                    ),
+                    Tone::Label,
+                ));
+            }
         }
         let windows = read.usage.iter().flat_map(|usage| &usage.windows);
         let mut groups: Vec<(&str, Vec<&WindowView>)> = Vec::new();
@@ -126,8 +138,19 @@ fn refusal_statement(refusal: &gents_inference::usage_observation::UsageRefusalV
         (Some(used), None) => parts.push(format!(" · {used} consumed")),
         (None, None) => {}
     }
+    // A window only when the provider named one. A node-chosen window says so,
+    // so the reading never borrows the provider's authority for it.
     if let Some(window) = &refusal.window {
-        parts.push(format!(" · {window} window"));
+        match refusal.window_basis {
+            gents_inference::usage_observation::WindowBasis::ProviderReported => {
+                parts.push(format!(" · {window} window"))
+            }
+            // Any window the provider did not state is this node's, said so.
+            gents_inference::usage_observation::WindowBasis::LocallyEstimated
+            | gents_inference::usage_observation::WindowBasis::Unknown => {
+                parts.push(format!(" · {window} window, locally estimated"))
+            }
+        }
     }
     parts.concat()
 }

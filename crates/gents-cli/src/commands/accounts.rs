@@ -8,7 +8,7 @@ use gents_inference::auth::credential::{backend_account, AccountSummary};
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::backends::provider::BackendProviderOauthExt;
 use gents_inference::usage_observation::{
-    usage_view, AccountUsageRead, UsageRead, UsageTrigger, UsageView,
+    usage_view, AccountUsageRead, UsageRead, UsageRefusalView, UsageTrigger, UsageView, WindowBasis,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -33,6 +33,10 @@ pub(crate) struct AccountRow {
     pub(crate) profiles: Vec<String>,
     pub(crate) usage: Option<UsageView>,
     pub(crate) read: Option<UsageRead>,
+    /// A standing refusal, with the provider's bounded excerpt: this is the
+    /// operator's list, so the words it used are shown here and never in the
+    /// Agent-facing read (`UsageRefusalView::for_model`).
+    pub(crate) refusal: Option<UsageRefusalView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -278,6 +282,7 @@ pub(crate) async fn account_rows(
             profiles: snapshot.account_profiles(account),
             usage,
             read: None,
+            refusal: None,
         });
     }
     if provider.is_some() {
@@ -308,6 +313,7 @@ pub(crate) async fn account_rows(
             profiles: snapshot.profiles_on(&[backend.backend_id.as_str()]),
             usage,
             read: None,
+            refusal: None,
         });
     }
     Ok(rows)
@@ -385,6 +391,7 @@ pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, node_did
         if let Some(row) = row {
             row.read = Some(read.outcome.clone());
             row.usage = read.usage.clone();
+            row.refusal = read.refusal.clone();
         }
     }
 }
@@ -445,6 +452,45 @@ pub(crate) fn short_duration(secs: i64) -> String {
         (days, 0, _) => format!("{days}d"),
         (days, hours, _) => format!("{days}d{hours}h"),
     }
+}
+
+/// A refusal as the operator's table states it: what the provider said, in its
+/// own bounded words, plus this node's own count said to be the node's. No
+/// percentage appears, because a refusal establishes no cap and no counter.
+fn refusal_lines(row: &AccountRow) -> Vec<String> {
+    let Some(refusal) = &row.refusal else {
+        return Vec::new();
+    };
+    let mut stated: Vec<String> = Vec::new();
+    match (refusal.used, refusal.cap) {
+        (Some(used), Some(cap)) => stated.push(format!("{used} of {cap}")),
+        (None, Some(cap)) => stated.push(format!("cap {cap}")),
+        (Some(used), None) => stated.push(format!("{used} consumed")),
+        (None, None) => {}
+    }
+    if let Some(resets_at) = &refusal.resets_at {
+        stated.push(format!("resets {resets_at}"));
+    }
+    if let Some(window) = &refusal.window {
+        match refusal.window_basis {
+            WindowBasis::ProviderReported => stated.push(format!("{window} window")),
+            // A window the provider did not state is this node's, and says so.
+            WindowBasis::LocallyEstimated | WindowBasis::Unknown => {
+                stated.push(format!("{window} window, locally estimated"))
+            }
+        }
+    }
+    let mut lines = vec![format!("  out of quota: {}", stated.join(" · "))];
+    if !refusal.detail.trim().is_empty() {
+        lines.push(format!("    provider said: {}", refusal.detail));
+    }
+    if let Some(consumed) = refusal.consumed_by_node {
+        lines.push(format!(
+            "    {consumed} counted on this node, last {}h (locally estimated)",
+            refusal.evidence_window_hours
+        ));
+    }
+    lines
 }
 
 fn usage_cells(row: &AccountRow) -> Vec<[String; 5]> {
@@ -538,6 +584,16 @@ pub(crate) fn render_table(rows: &[AccountRow]) -> String {
                 Default::default()
             };
             lines.push(lead.into_iter().chain(usage).collect());
+        }
+        // A refusal is stated under its account, with the provider's own words
+        // and this node's own count labelled as the node's. The percent columns
+        // stay empty: a refusal establishes no cap and no counter.
+        for line in refusal_lines(row) {
+            lines.push(
+                std::iter::repeat_n(String::new(), headers.len() - 1)
+                    .chain(std::iter::once(line))
+                    .collect(),
+            );
         }
     }
     let mut widths = vec![0; headers.len()];

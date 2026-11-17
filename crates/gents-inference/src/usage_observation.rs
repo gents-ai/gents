@@ -654,8 +654,8 @@ pub struct UsageRefusalView {
     /// RFC 3339, when the refusal was observed.
     pub at: String,
     /// The window the provider named, e.g. "rolling 24-hour". `None` when it
-    /// named none — the analytical 24-hour window is labelled separately, never
-    /// here as fact.
+    /// named none — nothing else stands in for it. A node-chosen window is
+    /// reported as such by [`Self::window_basis`], never here as fact.
     pub window: Option<String>,
     /// The counter the provider reported, and the cap it named. Both `None`
     /// together when the refusal stated no pair.
@@ -666,9 +666,51 @@ pub struct UsageRefusalView {
     pub resets_at: Option<String>,
     /// How much this node has itself observed in the window, always an estimate.
     pub consumed_by_node: Option<u64>,
-    /// A bounded excerpt of what the provider said, for an operator. Never the
-    /// whole body.
+    /// A bounded excerpt of what the provider said. Operator-facing only: the
+    /// CLI and the desktop show it, and [`Self::for_model`] leaves it out.
     pub detail: String,
+    /// Whose window [`Self::window`] is. Present so no reader has to infer it
+    /// from `window.is_some()`: a provider that stated one is reported, and
+    /// anything this node chose says so.
+    pub window_basis: WindowBasis,
+    /// How far back this node looked in its own recorded calls. Always this
+    /// node's choice, never the provider's statement.
+    pub evidence_window_hours: i64,
+}
+
+/// Whose window a refusal view reports, so "locally estimated" is stated rather
+/// than inferred and never reads as the provider's own window.
+///
+/// The same three states the Lean model carries as `Provenance`
+/// (`Proofs.Inference.InferenceCall.Usage`): the runtime reports a window under
+/// exactly the standing the model gives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowBasis {
+    /// The provider stated the window in its own words.
+    ProviderReported,
+    /// This node bounded its own reading of its recorded calls to this window,
+    /// and the view says so wherever it shows that bound.
+    LocallyEstimated,
+    /// The provider stated nothing and this node is not asserting a window
+    /// either. [`UsageRefusalView::window`] is then `None`.
+    Unknown,
+}
+
+impl UsageRefusalView {
+    /// This refusal as a model sees it: the fields the provider stated and
+    /// nothing quoted from its body. The excerpt is operator-only, because a
+    /// refusal body can carry account details that are not this Agent's.
+    pub fn for_model(&self) -> serde_json::Value {
+        let mut view = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+        if let Some(object) = view.as_object_mut() {
+            object.remove("detail");
+            // The node's own look-back length is an operator reading; the
+            // window it used to judge is stated in `window`/`window_basis`.
+            object.remove("evidence_window_hours");
+        }
+        view
+    }
 }
 
 impl AccountUsageRead {
@@ -892,7 +934,11 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
             .map(|read| {
                 serde_json::json!({
                     "label": read.label, "provider": read.provider, "limits": read.usage,
-                    "refusal": read.refusal, "read": read.outcome,
+                    // The parsed fields only: the provider's own words are a
+                    // bounded excerpt for the operator's CLI and desktop, and
+                    // can name account details that are not this Agent's.
+                    "refusal": read.refusal.as_ref().map(UsageRefusalView::for_model),
+                    "read": read.outcome,
                 })
             })
             .collect();

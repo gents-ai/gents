@@ -1107,11 +1107,20 @@ async fn a_refused_account_is_exhausted_from_evidence_and_says_so_everywhere() {
     );
     assert_eq!(output["accounts"][0]["refusal"]["used"], 691_791);
     assert_eq!(output["accounts"][0]["refusal"]["cap"], 600_000);
+    assert_eq!(
+        output["accounts"][0]["refusal"]["window_basis"],
+        "provider_reported"
+    );
+    // The parsed fields and nothing quoted: the bounded excerpt is the
+    // operator's (the shell and the desktop), never a model's.
     assert!(
-        output["accounts"][0]["refusal"]["detail"]
-            .as_str()
-            .is_some_and(|detail| detail.len() <= 301),
-        "the excerpt is bounded: {output}"
+        output["accounts"][0]["refusal"].get("detail").is_none(),
+        "no excerpt reaches a model: {output}"
+    );
+    let rendered = output.to_string();
+    assert!(
+        !rendered.contains("free usage"),
+        "no fragment of the provider's body reaches a model: {rendered}"
     );
 }
 

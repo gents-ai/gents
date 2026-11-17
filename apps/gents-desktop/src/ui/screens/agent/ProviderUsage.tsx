@@ -269,7 +269,11 @@ export function usageWindowGroup(window: UsageWindowView) {
 }
 
 /** What a refusal states, in the words it stated it: no percentage is ever
-    derived here, because a refusal establishes no cap and no counter. */
+    derived here, because a refusal establishes no cap and no counter.
+
+    A window is shown only when the provider named one. When it named none the
+    node's own look-back is stated as exactly that, "locally estimated", and
+    never as the provider's window. */
 export function refusalDetail(refusal: UsageRefusalView) {
   const parts: string[] = [];
   if (refusal.used != null && refusal.cap != null)
@@ -277,8 +281,19 @@ export function refusalDetail(refusal: UsageRefusalView) {
   else if (refusal.cap != null) parts.push(`cap ${refusal.cap.toLocaleString()}`);
   else if (refusal.used != null)
     parts.push(`${refusal.used.toLocaleString()} consumed`);
-  if (refusal.window) parts.push(`${refusal.window} window`);
+  if (refusal.window && refusal.windowProvenance === "provider_reported")
+    parts.push(`${refusal.window} window`);
+  else if (refusal.windowProvenance === "locally_estimated" && refusal.window)
+    parts.push(`${refusal.window} window, locally estimated`);
   return parts.join(" · ");
+}
+
+/** What this node has itself counted in its own look-back, labelled so it can
+    never be read as the provider's counter. */
+export function nodeEstimate(refusal: UsageRefusalView): string | null {
+  return refusal.consumedByNode == null
+    ? null
+    : `${refusal.consumedByNode.toLocaleString()} counted on this node, last ${refusal.evidenceWindowHours}h`;
 }
 
 /** How a refusal reads in one line: the provider said the account is out, and
@@ -314,14 +329,17 @@ export function RefusalBanner({ refusal }: { refusal: UsageRefusalView }) {
       {refusal.detail && (
         <p
           title={
-            refusal.windowProvenance === "analytical"
-              ? `Searched this node's last ${refusal.evidenceWindowHours}h of calls`
+            refusal.windowProvenance === "unknown"
+              ? `Searched this node's last ${refusal.evidenceWindowHours}h of calls; the provider named no window`
               : undefined
           }
           className="line-clamp-2 text-muted-foreground"
         >
           {refusal.detail}
         </p>
+      )}
+      {nodeEstimate(refusal) && (
+        <p className="text-muted-foreground">{nodeEstimate(refusal)}</p>
       )}
     </div>
   );
