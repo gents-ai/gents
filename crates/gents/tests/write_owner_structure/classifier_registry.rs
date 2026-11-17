@@ -18,6 +18,18 @@ struct Registration {
 
 const REGISTRY: &[Registration] = &[
     Registration {
+        path: "crates/gents-service/src/service_update/preflight.rs",
+        function: "preflight_refusal",
+        result: "PreflightError",
+        kind: Kind::Owner,
+    },
+    Registration {
+        path: "crates/gents-host/src/http/pack_install_client.rs",
+        function: "legacy_handshake_refusal",
+        result: "LegacyHandshakeRefusal",
+        kind: Kind::PersistedText,
+    },
+    Registration {
         path: "crates/gents-tools/src/surface/root_admission.rs",
         function: "tool_root_refusal",
         result: "ToolRootRefusal",
@@ -150,7 +162,10 @@ pub(super) fn text_sites(path: &str, syntax: &syn::File) -> Vec<usize> {
 
 #[test]
 fn registrations_validate_contracts_and_do_not_hide_other_functions() {
-    let owner = &REGISTRY[0];
+    let owner = REGISTRY
+        .iter()
+        .find(|r| r.function == "tool_root_refusal")
+        .unwrap();
     let syntax: syn::File = syn::parse_quote! {
         #[derive(thiserror::Error)]
         pub enum ToolRootRefusal { Refused }
@@ -169,7 +184,10 @@ fn registrations_validate_contracts_and_do_not_hide_other_functions() {
     };
     assert!(!compliant(&invalid, function, owner));
 
-    let adapter = &REGISTRY[1];
+    let adapter = REGISTRY
+        .iter()
+        .find(|r| r.function == "unavailable_rejection_reason")
+        .unwrap();
     let syntax: syn::File = syn::parse_quote! {
         pub enum AgentReadinessUnavailableReason { Refused }
         /// External premise: persisted rejection text has no typed reason field.

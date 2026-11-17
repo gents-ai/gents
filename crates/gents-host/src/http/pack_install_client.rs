@@ -113,16 +113,16 @@ impl PackInstallSession {
             // Only the decode error means "unreadable handshake". A closed or
             // lost connection is its own case and must not be reported as a
             // build problem.
-            Err(error) => {
-                if error.downcast_ref::<serde_json::Error>().is_some() {
-                    return Err(PackInstallHandshakeError::UnreadableHandshake {
-                        client: client_build.summary(),
-                        detail: format!("{error:#}"),
-                    }
-                    .into());
+            Err(ReceiveError::Decode(error)) => {
+                return Err(PackInstallHandshakeError::UnreadableHandshake {
+                    client: client_build.summary(),
+                    detail: error.to_string(),
                 }
+                .into());
+            }
+            Err(error) => {
                 return Err(PackInstallHandshakeError::ConnectionLost {
-                    detail: format!("{error:#}"),
+                    detail: error.to_string(),
                 }
                 .into());
             }
@@ -137,7 +137,7 @@ impl PackInstallSession {
             // it rejects the client's `client_build` by name. That is the
             // "older runtime" case, and it has a different next step from a
             // plain failure.
-            ServerMessage::Failed { error, .. } if error.contains("client_build") => {
+            ServerMessage::Failed { error, .. } if legacy_handshake_refusal(&error).is_some() => {
                 return Err(PackInstallHandshakeError::OlderRuntime {
                     client: client_build.summary(),
                     detail: error,
@@ -344,26 +344,45 @@ async fn send(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, value: Va
         .context("remote pack install connection lost; inspect the runtime before retrying")
 }
 
-async fn receive(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) -> Result<ServerMessage> {
+#[derive(Debug, thiserror::Error)]
+enum ReceiveError {
+    #[error("invalid remote pack install message: {0}")]
+    Decode(#[from] serde_json::Error),
+    #[error("decoding remote pack install message: {0}")]
+    Worker(#[from] tokio::task::JoinError),
+    #[error("remote pack install connection closed; inspect the runtime before retrying")]
+    Closed,
+    #[error("remote pack install connection lost; inspect the runtime before retrying: {0}")]
+    Transport(#[from] tokio_tungstenite::tungstenite::Error),
+}
+
+pub(super) enum LegacyHandshakeRefusal {
+    OlderRuntime,
+}
+
+/// External premise: older runtimes reject the new request field in their
+/// unversioned Failed.error text rather than publishing a structured reason.
+fn legacy_handshake_refusal(error: &str) -> Option<LegacyHandshakeRefusal> {
+    error
+        .contains("client_build")
+        .then_some(LegacyHandshakeRefusal::OlderRuntime)
+}
+
+async fn receive(
+    socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+) -> std::result::Result<ServerMessage, ReceiveError> {
     loop {
         match socket.next().await {
             Some(Ok(Message::Text(text))) => {
-                return tokio::task::spawn_blocking(move || serde_json::from_str(&text))
-                    .await
-                    .context("decoding remote pack install message")?
-                    .context("invalid remote pack install message");
+                return Ok(
+                    tokio::task::spawn_blocking(move || serde_json::from_str(&text)).await??,
+                );
             }
             Some(Ok(Message::Ping(_)))
             | Some(Ok(Message::Pong(_)))
             | Some(Ok(Message::Frame(_))) => {}
-            Some(Ok(_)) | None => {
-                bail!("remote pack install connection closed; inspect the runtime before retrying")
-            }
-            Some(Err(error)) => {
-                return Err(error).context(
-                    "remote pack install connection lost; inspect the runtime before retrying",
-                )
-            }
+            Some(Ok(_)) | None => return Err(ReceiveError::Closed),
+            Some(Err(error)) => return Err(error.into()),
         }
     }
 }
@@ -1005,6 +1024,23 @@ mod tests {
 
     /// The older-runtime case is its own error with its own next step, and the
     /// connection and decode failures are not confused with each other.
+    #[test]
+    fn legacy_handshake_adapter_and_receive_errors_keep_distinct_causes() {
+        assert!(matches!(
+            legacy_handshake_refusal("unknown field `client_build`"),
+            Some(LegacyHandshakeRefusal::OlderRuntime)
+        ));
+        assert!(legacy_handshake_refusal("runtime unavailable").is_none());
+        let invalid = serde_json::from_str::<ServerMessage>("not json")
+            .err()
+            .unwrap();
+        let decoded = ReceiveError::from(invalid);
+        assert!(matches!(decoded, ReceiveError::Decode(_)));
+        let closed = ReceiveError::Closed;
+        assert!(!matches!(closed, ReceiveError::Decode(_)));
+        assert!(std::error::Error::source(&decoded).is_some());
+    }
+
     #[test]
     fn the_handshake_failures_are_distinguished_and_each_names_a_step() {
         let older = PackInstallHandshakeError::OlderRuntime {
