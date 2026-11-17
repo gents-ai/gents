@@ -762,7 +762,19 @@ pub(crate) async fn can_update_live(home: &Path) -> Result<bool> {
     if observed.build != installed {
         return Ok(false);
     }
-    match check_metadata(Some(home.to_path_buf())).await {
+    repair_preflight_with_reader(home, preflight::check_store_key).await
+}
+
+async fn repair_preflight_with_reader(
+    home: &Path,
+    reader: impl FnOnce(
+            &Path,
+            Option<&gents_store::local::store_key::StoreEncryption>,
+        ) -> std::result::Result<bool, preflight::PreflightError>
+        + Send
+        + 'static,
+) -> Result<bool> {
+    match check_metadata_with_reader(Some(home.to_path_buf()), reader).await {
         Ok(_) => Ok(true),
         Err(error)
             if gents_store::local::storage_backend::incompatible_store(

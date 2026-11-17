@@ -595,7 +595,7 @@ fn repair_live_update_propagates_missing_and_foreign_key_errors() {
     });
     let expected = missing.to_string();
     let error = runtime
-        .block_on(super::super::can_update_live_with_reader(
+        .block_on(super::super::repair_preflight_with_reader(
             home.path(),
             move |home, record| {
                 check_store_key_with(home, record, |_, _, _| {
@@ -611,7 +611,7 @@ fn repair_live_update_propagates_missing_and_foreign_key_errors() {
     ));
     assert_eq!(error.to_string(), expected);
 
-    // Exercise the public repair entry with the real loader: a foreign version
+    // Exercise the production repair preflight with the real loader: a foreign version
     // fails before accessing any custody backend, so no Keychain read occurs.
     let mut config = crate::home_state::read_init_config(home.path())
         .unwrap()
@@ -619,11 +619,14 @@ fn repair_live_update_propagates_missing_and_foreign_key_errors() {
     config.store_encryption.as_mut().unwrap().version = STORE_ENCRYPTION_VERSION + 1;
     crate::home_state::write_init_config(home.path(), &config).unwrap();
     let error = runtime
-        .block_on(super::super::can_update_live(home.path()))
+        .block_on(super::super::repair_preflight_with_reader(
+            home.path(),
+            check_store_key,
+        ))
         .expect_err("repair must stop, not silently skip a foreign key format");
     assert!(
         matches!(error.downcast_ref::<PreflightError>(), Some(PreflightError::StoreKeyRead(source))
-        if matches!(source.as_ref(), StoreKeyError::ForeignEncryptionVersion { .. }))
+        if matches!(source.as_ref(), StoreKeyError::Incompatible(store) if store.kind == IncompatibleStoreKind::ForeignVersion))
     );
     assert!(!error.to_string().contains("approve"));
 }
