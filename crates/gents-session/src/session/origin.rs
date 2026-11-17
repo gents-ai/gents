@@ -1017,124 +1017,91 @@ pub enum VerifiedCreation {
 
 /// Why a caller is not verified as the session that created a target, one
 /// variant per check of `verified_agent_new_creation`. Each is a fixed,
-/// value-free reason; infrastructure failures stay the outer `Err`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// value-free reason about rows that were read: missing, corrupt or not the
+/// caller's. A query the database could not answer is never a denial; it is
+/// the verifier's outer `Err` (`CreationCheckUnavailable`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CreationDenial {
     /// The caller scope does not name exactly one session.
+    #[error("the caller's session was not found")]
     CallerSessionNotFound,
     /// The target scope does not name exactly one session.
+    #[error("the target session was not found")]
     TargetSessionNotFound,
     /// The target has no signed creation receipt of an agent_new or plugin
     /// job (or not for the expected opening request).
+    #[error("the target has no verified agent_new creation receipt")]
     NoVerifiedCreationReceipt,
-    /// The receipt's opening request is not exactly one readable row.
+    /// The receipt's opening request is not exactly one row.
+    #[error("the target's opening request was not found")]
     OpeningRequestNotFound,
     /// The opening request row does not decode.
+    #[error("the target's opening request could not be read")]
     OpeningRequestUnreadable,
     /// The opening request's scope, agent, requester, admission signer or
     /// signature does not match the target and caller.
+    #[error("the target's opening request was not admitted by the caller's agent")]
     OpeningRequestMismatch,
     /// The plugin job spawn is not bound to this caller.
+    #[error("the plugin job is not bound to the caller")]
     PluginJobBindingMismatch,
     /// The opening request names no parent request and tool call.
+    #[error("the target's opening request names no starting call")]
     OpeningWithoutCause,
-    /// The parent request is not exactly one readable row.
+    /// The parent request is not exactly one row.
+    #[error("the starting request was not found")]
     ParentRequestNotFound,
     /// The parent request row does not decode.
+    #[error("the starting request could not be read")]
     ParentRequestUnreadable,
     /// The parent request's scope, request id or signature does not match.
+    #[error("the starting request is not the caller's")]
     ParentRequestMismatch,
-    /// The cause tool call is not exactly one readable row.
+    /// The cause tool call is not exactly one row.
+    #[error("the starting call was not found")]
     CauseCallNotFound,
     /// The cause tool call is not this caller's agent_new call of the parent
     /// request.
+    #[error("the starting call is not the caller's agent_new call")]
     CauseCallMismatch,
     /// The receipt's cause binding is not the cause tool call.
+    #[error("the creation receipt names another starting call")]
     CauseBindingMismatch,
     /// The cause tool call is missing from the caller's scope.
+    #[error("the starting call is missing from the caller's session")]
     CauseCallMissing,
-    /// The cause tool call could not be read.
+    /// The cause tool call row was read but does not decode.
+    #[error("the starting call could not be read")]
     CauseCallUnreadable,
     /// The cause tool call's identity, ancestry or admission is invalid.
+    #[error("the starting call's admission could not be verified")]
     CauseCallInvalid,
     /// The cause is a plugin effect whose parent call is missing.
+    #[error("the starting call's parent call is missing")]
     ParentMissing,
-    /// The cause is a plugin effect (or spawned call) whose parent call could
-    /// not be read as an accepted call.
+    /// The cause is a plugin effect (or spawned call) whose parent call was
+    /// read but is not an accepted call.
+    #[error("the starting call's parent call could not be read")]
     ParentUnreadable,
-    /// The cause call's result or effect receipt could not be read.
+    /// The cause call's result or effect receipt was read but is corrupt.
+    #[error("the starting call's receipt could not be read")]
     CauseReceiptUnreadable,
     /// Neither the cause call's result nor its effect receipt is the creation
     /// receipt of this session.
+    #[error("the starting call's receipt is not this session's creation")]
     CauseReceiptMismatch,
 }
 
-impl CreationDenial {
-    /// The fixed reason, for refusals.
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::CallerSessionNotFound => "the caller's session was not found",
-            Self::TargetSessionNotFound => "the target session was not found",
-            Self::NoVerifiedCreationReceipt => {
-                "the target has no verified agent_new creation receipt"
-            }
-            Self::OpeningRequestNotFound => "the target's opening request was not found",
-            Self::OpeningRequestUnreadable => "the target's opening request could not be read",
-            Self::OpeningRequestMismatch => {
-                "the target's opening request was not admitted by the caller's agent"
-            }
-            Self::PluginJobBindingMismatch => "the plugin job is not bound to the caller",
-            Self::OpeningWithoutCause => "the target's opening request names no starting call",
-            Self::ParentRequestNotFound => "the starting request was not found",
-            Self::ParentRequestUnreadable => "the starting request could not be read",
-            Self::ParentRequestMismatch => "the starting request is not the caller's",
-            Self::CauseCallNotFound => "the starting call was not found",
-            Self::CauseCallMismatch => "the starting call is not the caller's agent_new call",
-            Self::CauseBindingMismatch => "the creation receipt names another starting call",
-            Self::CauseCallMissing => "the starting call is missing from the caller's session",
-            Self::CauseCallUnreadable => "the starting call could not be read",
-            Self::CauseCallInvalid => "the starting call's admission could not be verified",
-            Self::ParentMissing => "the starting call's parent call is missing",
-            Self::ParentUnreadable => "the starting call's parent call could not be read",
-            Self::CauseReceiptUnreadable => "the starting call's receipt could not be read",
-            Self::CauseReceiptMismatch => {
-                "the starting call's receipt is not this session's creation"
-            }
-        }
-    }
-
-    /// The denial a failed load of the cause call is, by its typed failure.
-    fn of_load(error: &crate::tool_call::query::result::ToolCallLoadError) -> Self {
-        use crate::tool_call::query::result::ToolCallLoadError;
-        match error {
-            ToolCallLoadError::Missing(_) => Self::CauseCallMissing,
-            ToolCallLoadError::Unreadable(_) => Self::CauseCallUnreadable,
-            ToolCallLoadError::Invalid(_) => Self::CauseCallInvalid,
-            ToolCallLoadError::Parent { error, .. } => match **error {
-                ToolCallLoadError::Missing(_) => Self::ParentMissing,
-                _ => Self::ParentUnreadable,
-            },
-        }
-    }
-
-    fn of_read(error: &crate::tool_call::query::result::ToolCallReadError) -> Self {
-        match error {
-            crate::tool_call::query::result::ToolCallReadError::Load(error) => Self::of_load(error),
-            crate::tool_call::query::result::ToolCallReadError::Read(_) => {
-                Self::CauseReceiptUnreadable
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for CreationDenial {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.reason())
-    }
-}
+/// The starter could not be verified because the database did not answer a
+/// query. Not a denial: the caller may retry.
+#[derive(Debug, thiserror::Error)]
+#[error("could not verify which session started this one: a database read failed; retry")]
+pub struct CreationCheckUnavailable(#[source] Box<dyn std::error::Error + Send + Sync + 'static>);
 
 /// Whether `caller` created `target`: how it was verified, or the check that
-/// refused it. The outer `Err` is an infrastructure failure, never a denial.
+/// refused it. The verifier's outer `Err` is a query the database could not
+/// answer (`CreationCheckUnavailable` when it was the cause call's), never a
+/// denial.
 pub type CreationVerdict = std::result::Result<VerifiedCreation, CreationDenial>;
 
 pub async fn verified_agent_new_creation(
@@ -1324,78 +1291,242 @@ async fn verified_agent_new_creation_matching(
     {
         return Ok(Err(Denied::CauseCallMismatch));
     }
-    if receipt.cause_binding != call_doc {
-        return Ok(Err(Denied::CauseBindingMismatch));
+    let scope = crate::tool_call::query::result::ToolCallScope {
+        node_did: &caller.node_did,
+        session_id: &caller.session_id,
+        requester_did: caller.requester_did.as_deref(),
+    };
+    // The cause call is read in order, and only as far as the Lean-modelled
+    // `creation_verdict` needs: each read's observation goes to it as read,
+    // and a decided verdict returns at once.
+    use {CauseLoad as Load, EffectRead as Effect, ResultRead as Read};
+    let binding = receipt.cause_binding == call_doc;
+    let verdict = |load, result, effect| creation_verdict(binding, load, result, effect);
+    let decided = outcome_verdict;
+    if let Some(decided) = decided(verdict(Load::NotRead, Read::NotRead, Effect::NotRead), None)? {
+        return Ok(decided);
     }
-    let read = match crate::tool_call::query::result::load_tool_call_read_by(
-        loader,
-        access,
-        call_doc,
-        &caller.node_did,
-        &caller.session_id,
-        caller.requester_did.as_deref(),
+    // One load of the cause call and its accepted ancestry; its result and an
+    // effect's receipt are read from it.
+    let (load, accepted, failure) =
+        match crate::tool_call::query::result::load_accepted_call(loader, access, call_doc, scope)
+            .await
+        {
+            Ok(accepted) => (Load::Loaded, Some(accepted), None),
+            Err(error) => (Load::of(&error), None, Some(anyhow::Error::new(error))),
+        };
+    if let Some(decided) = decided(verdict(load, Read::NotRead, Effect::NotRead), failure)? {
+        return Ok(decided);
+    }
+    let accepted = accepted.context("a loaded cause call is kept")?;
+    let effect_request = accepted.plugin_effect_request().map(str::to_owned);
+    let (result, failure) = match crate::tool_call::query::result::read_accepted_call(
+        access, accepted, call_doc, scope,
     )
     .await
     {
-        Ok(read) => read,
-        Err(error) => return Ok(Err(Denied::of_read(&error))),
+        Ok(read)
+            if agent_receipt_matches(&read, &request, &receipt.opening_request_doc_id, call_id) =>
+        {
+            (Read::Matches, None)
+        }
+        Ok(_) => (Read::Differs, None),
+        Err(error) => (Read::of(&error), Some(anyhow::Error::new(error))),
     };
-    if agent_receipt_matches(&read, &request, &receipt.opening_request_doc_id, call_id) {
-        return Ok(creation_verdict(true, Ok(false)));
+    if let Some(decided) = decided(verdict(load, result, Effect::NotRead), failure)? {
+        return Ok(decided);
     }
-    let effect = match crate::tool_call::query::result::load_effect_creation_receipt_by(
-        loader,
-        access,
-        call_doc,
-        &caller.node_did,
-        &caller.session_id,
-        caller.requester_did.as_deref(),
-    )
-    .await
-    {
-        Ok(Some(text)) => Ok(effect_creation_evidence(
-            true,
-            true,
-            agent_receipt_text_matches(&text, &request, &receipt.opening_request_doc_id, call_id),
-            true,
-        )),
-        Ok(None) => Ok(false),
-        Err(error) => Err(Denied::of_read(&error)),
+    let (effect, failure) = match effect_request {
+        None => (Effect::Absent, None),
+        Some(effect_request) => {
+            match crate::tool_call::query::result::read_effect_acceptance_receipt(
+                access,
+                &effect_request,
+                call_doc,
+                scope,
+            )
+            .await
+            {
+                Ok(Some(text))
+                    if agent_receipt_text_matches(
+                        &text,
+                        &request,
+                        &receipt.opening_request_doc_id,
+                        call_id,
+                    ) =>
+                {
+                    (Effect::Matches, None)
+                }
+                Ok(Some(_)) => (Effect::Differs, None),
+                Ok(None) => (Effect::Absent, None),
+                Err(error) => (Effect::of(&error), Some(anyhow::Error::new(error))),
+            }
+        }
     };
-    Ok(creation_verdict(false, effect))
+    decided(verdict(load, result, effect), failure)?
+        .context("the creation verdict is decided once every read is done")
 }
 
-/// The verdict of the cause receipt: a direct result match, or the effect
-/// receipt's evidence (or the denial its read failed with).
-fn creation_verdict(
-    direct_match: bool,
-    effect: std::result::Result<bool, CreationDenial>,
-) -> CreationVerdict {
-    let effect_match = match effect {
-        Ok(matched) => matched,
-        Err(denial) if !direct_match => return Err(denial),
-        Err(_) => false,
-    };
-    if deferred_creation_allowed(true, true, true, direct_match || effect_match) {
-        Ok(if direct_match {
-            VerifiedCreation::CallResult
-        } else {
-            VerifiedCreation::EffectAcceptance
-        })
-    } else {
-        Err(CreationDenial::CauseReceiptMismatch)
+/// Loading the cause call and its accepted ancestry (Lean
+/// `DurableLineage.CauseLoad`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CauseLoad {
+    NotRead,
+    Loaded,
+    QueryFailed,
+    Missing,
+    Unreadable,
+    Invalid,
+    ParentMissing,
+    ParentUnreadable,
+}
+
+impl CauseLoad {
+    /// The observation a failed load is. A query the database could not answer
+    /// anywhere in the walk is `QueryFailed`, before any denial.
+    fn of(error: &crate::tool_call::query::result::ToolCallLoadError) -> Self {
+        use crate::tool_call::query::result::ToolCallLoadError;
+        if error.query_failed() {
+            return Self::QueryFailed;
+        }
+        match error {
+            ToolCallLoadError::Missing(_) => Self::Missing,
+            ToolCallLoadError::QueryFailed(_) => Self::QueryFailed,
+            ToolCallLoadError::Unreadable(_) => Self::Unreadable,
+            ToolCallLoadError::Invalid(_) => Self::Invalid,
+            ToolCallLoadError::Parent(parent) => match parent.error {
+                ToolCallLoadError::Missing(_) => Self::ParentMissing,
+                _ => Self::ParentUnreadable,
+            },
+        }
     }
 }
 
-// Terminal presentation is not creation authority; only authenticated effect
-// ancestry, its immutable receipt and exact binding contribute.
-fn effect_creation_evidence(
-    accepted_ancestry: bool,
-    signed_receipt: bool,
-    exact_binding: bool,
-    _terminal: bool,
-) -> bool {
-    accepted_ancestry && signed_receipt && exact_binding
+/// Reading the cause call's canonical result (Lean `DurableLineage.ResultRead`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultRead {
+    NotRead,
+    Matches,
+    Differs,
+    QueryFailed,
+    Unreadable,
+}
+
+impl ResultRead {
+    fn of(error: &crate::tool_call::query::result::ReadFailure) -> Self {
+        match error {
+            crate::tool_call::query::result::ReadFailure::QueryFailed(_) => Self::QueryFailed,
+            crate::tool_call::query::result::ReadFailure::Unreadable(_) => Self::Unreadable,
+        }
+    }
+}
+
+/// Reading a plugin effect's immutable acceptance receipt (Lean
+/// `DurableLineage.EffectRead`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectRead {
+    NotRead,
+    Matches,
+    Differs,
+    Absent,
+    QueryFailed,
+    Unreadable,
+}
+
+impl EffectRead {
+    fn of(error: &crate::tool_call::query::result::ReadFailure) -> Self {
+        match error {
+            crate::tool_call::query::result::ReadFailure::QueryFailed(_) => Self::QueryFailed,
+            crate::tool_call::query::result::ReadFailure::Unreadable(_) => Self::Unreadable,
+        }
+    }
+}
+
+/// The cause call's verdict (Lean `DurableLineage.CreationOutcome`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreationOutcome {
+    Pending,
+    CallResult,
+    EffectAcceptance,
+    Retry,
+    CauseBindingMismatch,
+    CauseCallMissing,
+    CauseCallUnreadable,
+    CauseCallInvalid,
+    ParentMissing,
+    ParentUnreadable,
+    CauseReceiptUnreadable,
+    CauseReceiptMismatch,
+}
+
+/// Lean `DurableLineage.creationVerdict`: the cause call's verdict from what
+/// its reads observed so far. The call's own result wins over an effect's
+/// acceptance receipt; a query failure is `Retry`, never a denial; a verdict
+/// that still needs an unread input is `Pending`.
+pub fn creation_verdict(
+    binding: bool,
+    load: CauseLoad,
+    result: ResultRead,
+    effect: EffectRead,
+) -> CreationOutcome {
+    use CreationOutcome as Outcome;
+    if !binding {
+        return Outcome::CauseBindingMismatch;
+    }
+    match load {
+        CauseLoad::NotRead => Outcome::Pending,
+        CauseLoad::QueryFailed => Outcome::Retry,
+        CauseLoad::Missing => Outcome::CauseCallMissing,
+        CauseLoad::Unreadable => Outcome::CauseCallUnreadable,
+        CauseLoad::Invalid => Outcome::CauseCallInvalid,
+        CauseLoad::ParentMissing => Outcome::ParentMissing,
+        CauseLoad::ParentUnreadable => Outcome::ParentUnreadable,
+        CauseLoad::Loaded => match result {
+            ResultRead::NotRead => Outcome::Pending,
+            ResultRead::QueryFailed => Outcome::Retry,
+            ResultRead::Unreadable => Outcome::CauseReceiptUnreadable,
+            ResultRead::Matches => Outcome::CallResult,
+            ResultRead::Differs => match effect {
+                EffectRead::NotRead => Outcome::Pending,
+                EffectRead::QueryFailed => Outcome::Retry,
+                EffectRead::Unreadable => Outcome::CauseReceiptUnreadable,
+                EffectRead::Matches => Outcome::EffectAcceptance,
+                EffectRead::Differs | EffectRead::Absent => Outcome::CauseReceiptMismatch,
+            },
+        },
+    }
+}
+
+/// What a decided outcome returns: the verified creation, the denial, or, for
+/// `Retry`, the failed query as `CreationCheckUnavailable`. `None` while the
+/// outcome is `Pending`.
+fn outcome_verdict(
+    outcome: CreationOutcome,
+    failure: Option<anyhow::Error>,
+) -> Result<Option<CreationVerdict>> {
+    use CreationDenial as Denied;
+    use CreationOutcome as Outcome;
+    Ok(Some(match outcome {
+        Outcome::Pending => return Ok(None),
+        Outcome::CallResult => Ok(VerifiedCreation::CallResult),
+        Outcome::EffectAcceptance => Ok(VerifiedCreation::EffectAcceptance),
+        Outcome::Retry => {
+            let failure = failure.context("a retry outcome carries its failed query")?;
+            return Err(CreationCheckUnavailable(failure.into()).into());
+        }
+        Outcome::CauseBindingMismatch => Err(Denied::CauseBindingMismatch),
+        Outcome::CauseCallMissing => Err(Denied::CauseCallMissing),
+        Outcome::CauseCallUnreadable => Err(Denied::CauseCallUnreadable),
+        Outcome::CauseCallInvalid => Err(Denied::CauseCallInvalid),
+        Outcome::ParentMissing => Err(Denied::ParentMissing),
+        Outcome::ParentUnreadable => Err(Denied::ParentUnreadable),
+        Outcome::CauseReceiptUnreadable => Err(Denied::CauseReceiptUnreadable),
+        Outcome::CauseReceiptMismatch => Err(Denied::CauseReceiptMismatch),
+    }))
 }
 
 fn verified_agent_creation_receipt<'a>(
@@ -1414,10 +1545,6 @@ fn verified_agent_creation_receipt<'a>(
         return None;
     }
     Some(receipt)
-}
-
-fn deferred_creation_allowed(kind: bool, receipt: bool, opening: bool, cause: bool) -> bool {
-    kind && receipt && opening && cause
 }
 
 #[cfg(test)]
@@ -1729,27 +1856,12 @@ where
 mod conformance {
     use super::*;
 
+    /// The production decision, replayed over every input of the Lean
+    /// `DurableLineage.creationVerdict` domain, `notRead` included.
     #[test]
-    fn effect_creation_evidence_matches_lean() {
-        gents_lean_vocab::families::durable_lineage_effect_creation_evidence::replay(|i| {
-            effect_creation_evidence(
-                i.accepted_ancestry,
-                i.signed_receipt,
-                i.exact_binding,
-                i._terminal,
-            )
-        });
-    }
-
-    #[test]
-    fn deferred_creation_allowed_matches_lean() {
-        gents_lean_vocab::families::durable_lineage_deferred_creation_allowed::replay(|i| {
-            deferred_creation_allowed(
-                i.signed_kind,
-                i.target_receipt,
-                i.exact_opening,
-                i.cause_visible,
-            )
+    fn creation_verdict_matches_lean() {
+        gents_lean_vocab::families::durable_lineage_creation_verdict::replay(|i| {
+            creation_verdict(i.binding, i.load, i.result, i.effect)
         });
     }
 }

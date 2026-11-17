@@ -317,79 +317,109 @@ pub async fn load_tool_call_read(
     .await
 }
 
-/// Load the immutable acceptance receipt of an authenticated plugin effect,
-/// independently of its later terminal presentation.
-///
-/// The accepted call, and every ancestor, is loaded through `loader`, and a
-/// load failure stays typed (`ToolCallReadError::Load`).
-pub(crate) async fn load_effect_creation_receipt_by(
+/// What reading a tool call's result or receipt failed on, told apart by its
+/// owner: an error the store owns (a `ConfigClientError` on its chain, asked
+/// through `TransactionFailure`) is a query the database could not answer,
+/// and anything else is a row that was read but is corrupt or invalid.
+#[derive(Debug, thiserror::Error)]
+pub enum ReadFailure {
+    /// The database could not answer; retrying may succeed.
+    #[error(transparent)]
+    QueryFailed(anyhow::Error),
+    /// A row was read but could not be decoded or is invalid.
+    #[error(transparent)]
+    Unreadable(anyhow::Error),
+}
+
+impl ReadFailure {
+    fn of(error: anyhow::Error) -> Self {
+        use gents_store::config_client::TransactionFailure;
+        if error.config_client_error().is_some() {
+            Self::QueryFailed(error)
+        } else {
+            Self::Unreadable(error)
+        }
+    }
+}
+
+/// Load a tool call and its accepted ancestry through `loader`, keeping the
+/// accepted call so its result and receipt are read from this one load.
+pub(crate) async fn load_accepted_call(
     loader: &dyn ToolCallLoader,
     access: &ConfigAccess,
     tool_call_doc_id: &str,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> std::result::Result<Option<String>, ToolCallReadError> {
-    let source = ReadSource::Access(access);
-    let (call, _, _, _, _) = load_accepted_tool_call_by(
-        loader,
-        source,
-        tool_call_doc_id,
-        node_did,
-        session_id,
-        requester_did,
-    )
-    .await
-    .map_err(ToolCallReadError::Load)?;
-    effect_creation_receipt(
-        source,
-        call,
-        tool_call_doc_id,
-        node_did,
-        session_id,
-        requester_did,
-    )
-    .await
-    .map_err(ToolCallReadError::Read)
+    scope: ToolCallScope<'_>,
+) -> std::result::Result<AcceptedToolCall, ToolCallLoadError> {
+    loader
+        .load(
+            ReadSource::Access(access),
+            tool_call_doc_id,
+            scope,
+            &mut ToolCallAncestry::default(),
+        )
+        .await
 }
 
-/// Why a canonical tool-call read failed: loading the accepted call (typed),
-/// or a later step.
-#[derive(Debug)]
-pub enum ToolCallReadError {
-    Load(ToolCallLoadError),
-    Read(anyhow::Error),
-}
-
-async fn effect_creation_receipt(
-    source: ReadSource<'_, '_>,
-    call: ToolCallIdentityRow,
-    tool_call_doc_id: &str,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<Option<String>> {
-    if call.plugin_parent_tool_call_doc_id.is_none() {
-        return Ok(None);
+impl AcceptedToolCall {
+    /// The request of a plugin effect, whose acceptance receipt is its own
+    /// source; `None` for any other call.
+    pub(crate) fn plugin_effect_request(&self) -> Option<&str> {
+        let call = &self.0 .0;
+        call.plugin_parent_tool_call_doc_id
+            .as_ref()
+            .and(call.request_doc_id.as_deref())
     }
-    let request = call
-        .request_doc_id
-        .as_deref()
-        .context("plugin effect lacks request identity")?;
-    let response = source
-        .execute(&gents_protocol::output::rows::request_output_segments_query(request))
-        .await?;
+}
+
+/// The canonical read of an accepted tool call, from its load.
+pub(crate) async fn read_accepted_call(
+    access: &ConfigAccess,
+    accepted: AcceptedToolCall,
+    tool_call_doc_id: &str,
+    scope: ToolCallScope<'_>,
+) -> std::result::Result<CanonicalToolCallRead, ReadFailure> {
+    finish_tool_call_read(
+        ReadSource::Access(access),
+        accepted.0,
+        tool_call_doc_id,
+        scope.node_did,
+        scope.session_id,
+        scope.requester_did,
+    )
+    .await
+    .map_err(ReadFailure::of)
+}
+
+/// A plugin effect's immutable acceptance receipt, queried by its source as
+/// the in-flight read does, whatever the effect's terminal presentation.
+pub(crate) async fn read_effect_acceptance_receipt(
+    access: &ConfigAccess,
+    request_doc_id: &str,
+    tool_call_doc_id: &str,
+    scope: ToolCallScope<'_>,
+) -> std::result::Result<Option<String>, ReadFailure> {
+    let receipt_source =
+        crate::session::plugin_effect_rows::receipt_source(scope.session_id, tool_call_doc_id);
+    let query =
+        gents_protocol::output::rows::source_output_segments_query(request_doc_id, &receipt_source)
+            .map_err(|error| ReadFailure::Unreadable(error.into()))?;
+    let response = access
+        .execute(&query)
+        .await
+        .map_err(|error| ReadFailure::QueryFailed(error.into()))?;
     let rows = response["data"]["AgentOutputSegment"]
         .as_array()
-        .context("plugin receipt omitted segments")?;
+        .context("plugin receipt read omitted segments")
+        .map_err(ReadFailure::Unreadable)?;
     crate::session::plugin_effect_rows::receipt_from_rows(
         rows,
-        node_did,
-        session_id,
-        requester_did,
-        request,
+        scope.node_did,
+        scope.session_id,
+        scope.requester_did,
+        request_doc_id,
         tool_call_doc_id,
     )
+    .map_err(ReadFailure::Unreadable)
 }
 
 pub async fn load_tool_call_arguments_in_txn(
@@ -451,39 +481,6 @@ async fn load_tool_call_read_source(
         requester_did,
     )
     .await
-}
-
-/// `load_tool_call_read` with the accepted call, and every ancestor, loaded
-/// through `loader`; a load failure stays typed (`ToolCallReadError::Load`).
-pub(crate) async fn load_tool_call_read_by(
-    loader: &dyn ToolCallLoader,
-    access: &ConfigAccess,
-    tool_call_doc_id: &str,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> std::result::Result<CanonicalToolCallRead, ToolCallReadError> {
-    let source = ReadSource::Access(access);
-    let accepted = load_accepted_tool_call_by(
-        loader,
-        source,
-        tool_call_doc_id,
-        node_did,
-        session_id,
-        requester_did,
-    )
-    .await
-    .map_err(ToolCallReadError::Load)?;
-    finish_tool_call_read(
-        source,
-        accepted,
-        tool_call_doc_id,
-        node_did,
-        session_id,
-        requester_did,
-    )
-    .await
-    .map_err(ToolCallReadError::Read)
 }
 
 async fn finish_tool_call_read(
@@ -889,41 +886,55 @@ pub struct ToolCallScope<'a> {
 pub struct ToolCallAncestry(rapidhash::RapidHashSet<String>);
 
 /// Why an accepted tool call could not be loaded, typed so a verifier tells a
-/// missing row from an unreadable one, and its own call from a parent's,
-/// without reading error text.
-#[derive(Debug)]
+/// failed query from a missing, corrupt or invalid row, and its own call from
+/// a parent's, without reading error text.
+#[derive(Debug, thiserror::Error)]
 pub enum ToolCallLoadError {
     /// No AgentToolCall row with this ID in the caller scope.
+    #[error("no AgentToolCall document {0} in the caller scope")]
     Missing(String),
-    /// The row could not be read: the query failed or returned errors.
+    /// The database could not answer a query of the walk; retrying may
+    /// succeed.
+    #[error(transparent)]
+    QueryFailed(anyhow::Error),
+    /// The row was read but could not be decoded.
+    #[error(transparent)]
     Unreadable(anyhow::Error),
     /// The row was read but its identity, ancestry or admission is invalid.
+    #[error(transparent)]
     Invalid(anyhow::Error),
     /// The parent (plugin effect or spawn owner) of the call failed to load.
-    Parent {
-        doc_id: String,
-        error: Box<ToolCallLoadError>,
-    },
+    #[error(transparent)]
+    Parent(Box<ParentLoadError>),
 }
 
-impl std::fmt::Display for ToolCallLoadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Missing(doc_id) => {
-                write!(f, "no AgentToolCall document {doc_id} in the caller scope")
-            }
-            Self::Unreadable(error) | Self::Invalid(error) => std::fmt::Display::fmt(error, f),
-            Self::Parent { error, .. } => std::fmt::Display::fmt(error, f),
+/// A parent of the call that could not be loaded as an accepted call.
+#[derive(Debug, thiserror::Error)]
+#[error("loading parent tool call {doc_id}")]
+pub struct ParentLoadError {
+    pub doc_id: String,
+    #[source]
+    pub error: ToolCallLoadError,
+}
+
+impl ToolCallLoadError {
+    /// A walk step's error: a query the database could not answer when the
+    /// store owns it, otherwise an invalid row.
+    fn of_step(error: anyhow::Error) -> Self {
+        use gents_store::config_client::TransactionFailure;
+        if error.config_client_error().is_some() {
+            Self::QueryFailed(error)
+        } else {
+            Self::Invalid(error)
         }
     }
-}
 
-impl std::error::Error for ToolCallLoadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    /// Whether a query failed anywhere in the walk, the parents' included.
+    pub fn query_failed(&self) -> bool {
         match self {
-            Self::Missing(_) => None,
-            Self::Unreadable(error) | Self::Invalid(error) => error.source(),
-            Self::Parent { error, .. } => error.source(),
+            Self::QueryFailed(_) => true,
+            Self::Parent(parent) => parent.error.query_failed(),
+            Self::Missing(_) | Self::Unreadable(_) | Self::Invalid(_) => false,
         }
     }
 }
@@ -1034,7 +1045,7 @@ pub async fn load_accepted_tool_call_with(
         call.spawned_by_tool_call_doc_id.is_some(),
         &call.tool_call_id,
     )
-    .map_err(ToolCallLoadError::Invalid)?;
+    .map_err(ToolCallLoadError::of_step)?;
     let parent_doc = effect
         .as_ref()
         .map(|effect| effect.parent_tool_call_doc_id.clone())
@@ -1043,10 +1054,20 @@ pub async fn load_accepted_tool_call_with(
         let AcceptedToolCall((parent, headers, _, parent_args, accepted)) = loader
             .load(source, &parent_doc, scope, ancestry)
             .await
-            .map_err(|error| ToolCallLoadError::Parent {
-                doc_id: parent_doc.clone(),
-                error: Box::new(error),
+            .map_err(|error| {
+                ToolCallLoadError::Parent(Box::new(ParentLoadError {
+                    doc_id: parent_doc.clone(),
+                    error,
+                }))
             })?;
+        // The loader answers for the parent it was asked for, or the walk
+        // would admit this call under another call's ancestry.
+        if parent.doc_id != parent_doc {
+            return Err(ToolCallLoadError::Invalid(anyhow!(
+                "the loader returned tool call {} for parent {parent_doc}",
+                parent.doc_id
+            )));
+        }
         let args = accept_derived(
             source,
             &call,
@@ -1057,13 +1078,13 @@ pub async fn load_accepted_tool_call_with(
             scope,
         )
         .await
-        .map_err(ToolCallLoadError::Invalid)?;
+        .map_err(ToolCallLoadError::of_step)?;
         return Ok(AcceptedToolCall((call, headers, None, args, accepted)));
     }
     accept_root(source, call, tool_call_doc_id, scope)
         .await
         .map(AcceptedToolCall)
-        .map_err(ToolCallLoadError::Invalid)
+        .map_err(ToolCallLoadError::of_step)
 }
 
 /// A derived call's admission: its parent's request and sequence, and the
@@ -1330,12 +1351,12 @@ async fn load_tool_call_identity(
     let resp = source
         .run(&rendered)
         .await
-        .map_err(ToolCallLoadError::Unreadable)?;
+        .map_err(ToolCallLoadError::QueryFailed)?;
     if resp
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))
     {
-        return Err(ToolCallLoadError::Unreadable(anyhow!(
+        return Err(ToolCallLoadError::QueryFailed(anyhow!(
             "loading AgentToolCall tool_call_doc_id={tool_call_doc_id}: {resp}"
         )));
     }
@@ -1465,5 +1486,49 @@ mod missing_parent_test {
             "{error:#}"
         );
         db.node.shutdown().await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod failure_class_test {
+    use super::{ParentLoadError, ReadFailure, ToolCallLoadError};
+
+    fn store_failure() -> anyhow::Error {
+        anyhow::Error::new(gents_store::config_client::ConfigClientError::BearerRequired)
+            .context("reading the session's canonical headers")
+    }
+
+    /// A failure the store owns is a query the database could not answer, at
+    /// any depth of the ancestry walk; any other failure is a row that was
+    /// read and is corrupt or invalid. Neither is told apart by its text.
+    #[test]
+    fn a_store_failure_is_a_failed_query_and_anything_else_a_bad_row() {
+        assert!(matches!(
+            ToolCallLoadError::of_step(store_failure()),
+            ToolCallLoadError::QueryFailed(_)
+        ));
+        assert!(matches!(
+            ToolCallLoadError::of_step(anyhow::anyhow!("tool call lacks a unique header")),
+            ToolCallLoadError::Invalid(_)
+        ));
+        assert!(matches!(
+            ReadFailure::of(store_failure()),
+            ReadFailure::QueryFailed(_)
+        ));
+        assert!(matches!(
+            ReadFailure::of(anyhow::anyhow!("plugin receipt has invalid ownership")),
+            ReadFailure::Unreadable(_)
+        ));
+        let nested = |error| {
+            ToolCallLoadError::Parent(Box::new(ParentLoadError {
+                doc_id: "grandparent".into(),
+                error: ToolCallLoadError::Parent(Box::new(ParentLoadError {
+                    doc_id: "parent".into(),
+                    error,
+                })),
+            }))
+        };
+        assert!(nested(ToolCallLoadError::of_step(store_failure())).query_failed());
+        assert!(!nested(ToolCallLoadError::Missing("parent".into())).query_failed());
     }
 }
