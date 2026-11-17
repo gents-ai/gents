@@ -638,6 +638,11 @@ fn strip_tool_result(
         "{STUB_HEAD}{tool_name}{argument}, call_id: {call_id}, \
          {byte_count} bytes{truncated}{STUB_JOIN}{STUB_RECOVERY}{recovery}{STUB_TAIL}"
     );
+    // Compare UTF-8 bytes of the actual candidate against the original
+    // payload. Non-text blocks use their JSON encoding, as in byte_count.
+    if stub.len() >= tool_result_byte_count(&tool_result) {
+        return tool_result;
+    }
     tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
     tool_result
 }

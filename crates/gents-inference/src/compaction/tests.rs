@@ -1615,6 +1615,19 @@ fn strip_rewrites_tool_results_into_stubs() {
 }
 
 #[test]
+fn strip_keeps_small_and_unicode_results_verbatim() {
+    for original in ["ok", "🙂🙂"] {
+        let messages = vec![
+            tool_call_msg("read_file", r#"{"path":"/tmp/x"}"#),
+            tool_result_msg("call-1", original),
+        ];
+        let (stripped, _) = strip_tool_results(messages.clone());
+        assert_eq!(sole_tool_result_text(&stripped[1]), original);
+        assert_eq!(strip_tool_results(stripped.clone()).0, stripped);
+    }
+}
+
+#[test]
 fn strip_extracts_read_and_modified_files() {
     let messages = vec![
         tool_call_msg("read", r#"{"file_path": "/src/main.rs"}"#),
