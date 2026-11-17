@@ -216,3 +216,117 @@ fn hosted_pin_move_selection_is_explicit_and_required_on_the_wire() {
     request.as_object_mut().unwrap().remove("move_pin_tools");
     assert!(refusal(&serde_json::to_vec(&request).unwrap()).contains("move_pin_tools"));
 }
+
+#[tokio::test]
+async fn hosted_fresh_install_preview_plans_wiring_without_publication() {
+    use serde_json::json;
+    let home = crate::test_support::ClientHome::new().await;
+    let owner = home.home.identity.did().to_owned();
+    let binding = home.agent("fixture").await;
+    let config = serde_json::from_value(json!({
+        "node": {"node_did": owner},
+        "tools": [{"tools_id": "preview-tools", "node_did": owner}],
+        "contexts": [{"context_id": "preview-context", "node_did": owner, "tools_id": "preview-tools"}],
+        "agents": [{"agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce,
+            "node_did": owner, "context_id": "preview-context",
+            "inference_profile_id": format!("{}:inference", binding.agent_did), "enabled": true}]
+    })).unwrap();
+    let plan = gents_documents::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    home.access
+        .transact_write("test.hosted_preview.seed", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    let (_fixture, path) =
+        gents_pack::test_support::fixture_pack_copy("job_plugin_fixture", &json!({}));
+    // This test exercises hosted install/wiring, not schema authority. Keep
+    // the fixture a job plugin without its unrelated application collection.
+    let manifest_path = path.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["schemas"] = json!([]);
+    manifest["assets"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|asset| asset.as_str() != Some("schemas/fixture_note.graphql"));
+    manifest["plugins"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("data");
+    std::fs::remove_file(path.join("schemas/fixture_note.graphql")).unwrap();
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    std::fs::write(path.join("pack_config.json"), serde_json::to_vec(&json!({
+        "node": {},
+        "agent_targets": [{"target_id": "preview-target", "target_node_did": "did:key:zPreviewForeign",
+            "agent_did": "did:key:zPreviewWorker", "name": "preview-target"}],
+        "tools": [{"tools_id": "preview-pack-tools", "integrations": {"plugins": [{
+            "plugin": "fixture/job_fixture", "job": {"agent_targets": ["preview-target"], "policy": {"dynamic": "check", "dynamic_targets": ["preview-target"]}}
+        }]}}]
+    })).unwrap()).unwrap();
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(&path).unwrap();
+    let archive = PackArchive::from_bytes(&bytes).unwrap();
+    let mut request: serde_json::Value =
+        serde_json::from_slice(&body(&archive, &[], &owner)).unwrap();
+    request["preview"] = true.into();
+    request["wire"] = json!([binding.agent_did]);
+    let received = decode_request(&serde_json::to_vec(&request).unwrap(), &owner).unwrap();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let query = "{ Tools { tools_id integrations _version {cid} } AgentContext {context_id skills _version {cid}} AgentTarget {target_id} PackInstallation {_docID} }";
+    let before = home.access.execute(query).await.unwrap();
+    assert!(before.get("errors").is_none(), "{before}");
+    let preview = install_owned(
+        &owner,
+        plugin_home.path().to_owned(),
+        received,
+        home.access.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(preview["wired"].as_array().unwrap().len(), 1, "{preview}");
+    assert_eq!(preview["wired"][0]["preview"], true);
+    assert_eq!(
+        preview["wired"][0]["report"]["job"]["policy"]["dynamic"],
+        "check"
+    );
+    assert_eq!(home.access.execute(query).await.unwrap(), before);
+    // Reading plugin records acquires the store lock. That coordination file
+    // is not a published plugin; nothing else may appear in the test home.
+    fn relative_files(root: &std::path::Path, at: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(at).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files.extend(relative_files(root, &path));
+            } else {
+                files.push(path.strip_prefix(root).unwrap().to_owned());
+            }
+        }
+        files.sort();
+        files
+    }
+    assert_eq!(
+        relative_files(plugin_home.path(), plugin_home.path()),
+        vec![std::path::PathBuf::from("plugins/.store.lock")],
+        "preview must not provision identities or publish plugins"
+    );
+    request["preview"] = false.into();
+    let received = decode_request(&serde_json::to_vec(&request).unwrap(), &owner).unwrap();
+    let applied = install_owned(
+        &owner,
+        plugin_home.path().to_owned(),
+        received,
+        home.access.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(preview["wired"][0]["report"], applied["wired"][0]["report"]);
+}

@@ -34,10 +34,6 @@ pub struct PluginWiring {
     pub remove: bool,
     /// Computes the same report and writes nothing.
     pub preview: bool,
-    /// The job settings owner's consent step, set when the node owner
-    /// approved dynamic scripts for this plugin: its job block goes from
-    /// `check` to `run` (Lean `consentedDynamic`).
-    pub dynamic_consent: bool,
     /// Set when the node owner approved this plugin calling the agent's own
     /// tools: its selection is written with `tool_calls: true`.
     pub tool_calls_consent: bool,
@@ -95,7 +91,6 @@ impl PluginWiring {
             targets_from: targets,
             remove: false,
             preview: false,
-            dynamic_consent: false,
             tool_calls_consent: false,
             next_step: String::new(),
         })
@@ -138,12 +133,6 @@ impl PluginWiring {
         tools: &Tools,
         context: &gents_documents::AgentContext,
     ) -> Result<(Tools, gents_documents::AgentContext, WireReport)> {
-        let existing = tools
-            .integrations
-            .as_ref()
-            .and_then(|i| i.plugins.as_ref())
-            .and_then(|entries| entries.iter().find(|e| e.plugin == self.coordinate()))
-            .and_then(|e| e.job.clone());
         let incoming = if self.remove {
             None
         } else {
@@ -167,15 +156,6 @@ impl PluginWiring {
                 &self.targets_from,
             )?
         };
-        if self.dynamic_consent && !self.remove {
-            super::consent_dynamic_run(
-                &mut tools,
-                &self.coordinate(),
-                &mut report,
-                existing.as_ref(),
-                incoming.as_ref(),
-            );
-        }
         if self.tool_calls_consent && !self.remove {
             consent_tool_calls(&mut tools, &self.coordinate(), &mut report);
         }
@@ -225,6 +205,27 @@ pub async fn apply_batch(
     preview: bool,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<Vec<WireReport>> {
+    apply_batch_with_config(txn, plans, preview, None, profile_policy).await
+}
+
+/// Validate wiring against the documents the pending install would provide,
+/// without publishing either the install or the wiring.
+pub(super) async fn preview_batch(
+    txn: &ConfigApplyTxn<'_>,
+    plans: &[PluginWiring],
+    config: Option<&gents_documents::PackConfig>,
+    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
+) -> Result<Vec<WireReport>> {
+    apply_batch_with_config(txn, plans, true, config, profile_policy).await
+}
+
+async fn apply_batch_with_config(
+    txn: &ConfigApplyTxn<'_>,
+    plans: &[PluginWiring],
+    preview: bool,
+    config: Option<&gents_documents::PackConfig>,
+    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
+) -> Result<Vec<WireReport>> {
     let mut tools_by_id = std::collections::BTreeMap::<String, Tools>::new();
     let mut contexts_by_id =
         std::collections::BTreeMap::<String, gents_documents::AgentContext>::new();
@@ -254,7 +255,23 @@ pub async fn apply_batch(
     if plans.is_empty() {
         return Ok(reports);
     }
-    let mut documents = Vec::new();
+    // The install's documents supply references (targets, skills, etc.) that
+    // do not exist yet. Computed wiring replaces any same-ID Tools/Context in
+    // that proposed graph; the combined graph still gets full validation.
+    let mut documents = if let Some(config) = config {
+        let mut config = config.clone();
+        config
+            .tools
+            .retain(|tools| !tools_by_id.contains_key(&tools.tools_id));
+        config
+            .contexts
+            .retain(|context| !contexts_by_id.contains_key(&context.context_id));
+        DesiredStateApplyPlan::from_pack_config(&config)?
+            .documents()
+            .to_vec()
+    } else {
+        Vec::new()
+    };
     let mut document = |collection, value: Value| {
         documents.push(DesiredStateApplyDocument {
             collection,

@@ -41,10 +41,6 @@ pub struct WireRequest {
     pub targets_from: Vec<String>,
     pub remove: bool,
     pub preview: bool,
-    /// The node owner approved dynamic scripts for this plugin (the init
-    /// approval of its pack): wiring raises its job block from `check` to
-    /// `run` (Lean `consentedDynamic`). The wire command never sets it.
-    pub dynamic_consent: bool,
     /// The node owner approved this plugin calling the agent's own tools
     /// (the init approval of its pack): its selection is wired with
     /// `tool_calls: true`. The wire command never sets it.
@@ -154,7 +150,6 @@ async fn wire_in_owned(
     .await?;
     plan.remove = request.remove;
     plan.preview = request.preview;
-    plan.dynamic_consent = request.dynamic_consent;
     plan.tool_calls_consent = request.tool_calls_consent;
     plan.next_step = explain_tools_command(&request.agent);
     let report = if request.preview {
@@ -234,82 +229,68 @@ pub async fn wire_pack_plugins(
     agents: &[String],
     held_user: LoadHeldUser,
 ) -> Result<Vec<Value>> {
-    wire_pack_plugins_consenting(access, owner, home, pack, agents, false, false, held_user).await
-}
-
-/// [`wire_pack_plugins`], with the node owner's consent to dynamic scripts
-/// for this pack's job blocks when `dynamic_consent` is set, and to its
-/// plugins calling each agent's own tools when `tool_calls_consent` is.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each consent is a separate flag the node owner approves"
-)]
-pub async fn wire_pack_plugins_consenting(
-    access: &ConfigAccess,
-    owner: &str,
-    home: &Path,
-    pack: &ResolvedPack,
-    agents: &[String],
-    dynamic_consent: bool,
-    tool_calls_consent: bool,
-    held_user: LoadHeldUser,
-) -> Result<Vec<Value>> {
     wire_pack_batch(
         access,
         owner,
         home,
         pack,
         agents,
-        dynamic_consent,
-        tool_calls_consent,
-        false,
+        WireBatchOptions::default(),
         held_user,
     )
     .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "batch has explicit consent and preview modes"
-)]
+/// Options for a wiring batch. Dynamic enablement is a separate operator
+/// transition; neither preview nor apply can elevate stored dynamic policy.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WireBatchOptions {
+    pub tool_calls_consent: bool,
+    pub preview: bool,
+    pub warning_surface: super::PolicyWarningSurface,
+}
+
 pub async fn wire_pack_batch(
     access: &ConfigAccess,
     owner: &str,
     home: &Path,
     pack: &ResolvedPack,
     agents: &[String],
-    dynamic_consent: bool,
-    tool_calls_consent: bool,
-    preview: bool,
+    options: WireBatchOptions,
     held_user: LoadHeldUser,
 ) -> Result<Vec<Value>> {
+    let WireBatchOptions {
+        tool_calls_consent,
+        preview,
+        warning_surface,
+    } = options;
     if agents.is_empty() || pack.manifest().metadata.plugins.is_empty() {
         return Ok(Vec::new());
     }
-    anyhow::ensure!(
-        preview || matches!(access, ConfigAccess::Local(_)),
-        "batch plugin wiring requires the owning local node transaction"
-    );
     let namespace = &pack.manifest().metadata.namespace;
     let lock_home = home.to_owned();
     let _guard =
         tokio::task::spawn_blocking(move || crate::plugin::store::try_lock_store(&lock_home))
             .await??;
     let preview_config = if preview && pack.manifest().config.is_some() {
-        Some(crate::pack::load_pack_config(
-            pack.manifest(),
-            &crate::pack::PackInstallOptions {
-                node_did: owner.to_owned(),
-            },
-            &|path| Ok(pack.asset(path)?.to_vec()),
-            &|name| {
-                if name == "GENTS_PACK_NODE_DID" {
-                    Some(owner.to_owned())
-                } else {
-                    None
-                }
-            },
-        )?)
+        Some(
+            crate::pack::load_pack_recorded_config(
+                access,
+                pack.manifest(),
+                &crate::pack::PackInstallOptions {
+                    node_did: owner.to_owned(),
+                },
+                &|path| Ok(pack.asset(path)?.to_vec()),
+                &|name| {
+                    if name == "GENTS_PACK_NODE_DID" {
+                        Some(owner.to_owned())
+                    } else {
+                        None
+                    }
+                },
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -350,6 +331,13 @@ pub async fn wire_pack_batch(
                 crate::pack::wiring::PluginWiring::read(access, owner, home, agent, plugin, &[])
                     .await?;
             if preview {
+                if let Some(config) = &preview_config {
+                    plan.skill_ids = config
+                        .skills
+                        .iter()
+                        .map(|skill| skill.skill_id.clone())
+                        .collect();
+                }
                 let coordinate = format!("{namespace}/{}", shipped.name);
                 plan.reviewed_override = Some(preview_config.as_ref().and_then(|config| {
                     config
@@ -367,7 +355,6 @@ pub async fn wire_pack_batch(
                 }));
             }
             plan.preview = preview;
-            plan.dynamic_consent = dynamic_consent;
             plan.tool_calls_consent = tool_calls_consent;
             plan.next_step = explain_tools_command(agent);
             plans.push(plan);
@@ -377,18 +364,19 @@ pub async fn wire_pack_batch(
         access
             .transact_readonly("pack.wire_batch.preview", |txn| {
                 let plans = &plans;
+                let preview_config = preview_config.as_ref();
                 Box::pin(async move {
-                    crate::pack::wiring::apply_batch(
+                    crate::pack::wiring::preview_batch(
                         txn,
                         plans,
-                        true,
+                        preview_config,
                         &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })
             })
             .await?
-    } else {
+    } else if matches!(access, ConfigAccess::Local(_)) {
         let client = held_user(home).await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
@@ -410,13 +398,28 @@ pub async fn wire_pack_batch(
         }).await.map_err(|failure| if failure.unconfirmed {
             failure.error.context("batch wiring commit was not confirmed; inspect all targets before retrying")
         } else { failure.error })?
+    } else {
+        // Hosted installs carry the caller's delegated signing endpoint, not
+        // a local held User key. Keep the entire batch in that one caller-
+        // authorized transaction, just as the single-plugin wire does.
+        access.transact_write_with_finality("pack.wire_batch", |txn| {
+            let plans = &plans;
+            Box::pin(async move {
+                crate::pack::wiring::apply_batch(txn, plans, false,
+                    &gents_inference::resolved::ProviderProfilePolicy).await
+            })
+        }).await.map_err(|failure| if failure.unconfirmed {
+            failure.error.context("batch wiring commit was not confirmed; inspect all targets before retrying")
+        } else { failure.error })?
     };
-    Ok(plans.iter().zip(reports).map(|(plan, report)| json!({
+    Ok(plans.iter().zip(reports).map(|(plan, mut report)| {
+        for warning in &mut report.policy_warnings { warning.render_for(warning_surface); }
+        json!({
         "plugin": format!("{}/{}", plan.plugin.namespace, plan.plugin.name),
         "agent": plan.agent, "preview": preview,
         "authority": describe_plugin_authority(&plan.plugin.declaration, &plan.plugin.ceiling()),
         "report": report,
-    })).collect())
+    })}).collect())
 }
 
 /// What the plugins of `manifest` and its `dependencies` ask for beyond a
@@ -678,7 +681,6 @@ mod remote_tests {
             targets_from: vec!["acme/pack".into()],
             remove: false,
             preview: false,
-            dynamic_consent: false,
             tool_calls_consent: false,
         }
     }

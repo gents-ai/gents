@@ -603,6 +603,14 @@ fn wire_fixture(reviewed_job: bool) -> Result<WireFixture> {
 
 /// `wire_fixture` with `init_extra` appended to the `gents init` arguments.
 fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixture> {
+    wire_fixture_installing(reviewed_job, init_extra, true)
+}
+
+fn wire_fixture_installing(
+    reviewed_job: bool,
+    init_extra: &[&str],
+    install_job: bool,
+) -> Result<WireFixture> {
     let tempdir = tempfile::tempdir().context("creating wire tempdir")?;
     let scratch = tempdir.path();
     let home = scratch.join("agent-home");
@@ -652,6 +660,9 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
             ],
         ),
     ] {
+        if pack == &job_pack && !install_job {
+            continue;
+        }
         let mut args = vec![
             "config",
             "pack",
@@ -1584,6 +1595,34 @@ fn pack_install_preview_reports_a_dependencys_slots_still_to_bind() -> Result<()
         preview["inference_needs"]["unbound"] == serde_json::json!([]),
         "binding each slot once does not bind the dependency's: {preview}"
     );
+    Ok(())
+}
+
+#[test]
+fn pack_install_wire_previews_a_not_yet_installed_pack() -> Result<()> {
+    let fixture = wire_fixture_installing(true, &[], false)?;
+    let before = fixture.agent_tools()?;
+    assert!(
+        gents_pack::plugin::store::read_record(&fixture.home, "fixture", "job_fixture").is_err()
+    );
+    assert!(
+        gents_pack::pack::read_home_install(&fixture.home, "fixture/job_plugin_fixture")?.is_none()
+    );
+    let preview = fixture.install_job_pack(&["--preview", "--wire", &fixture.agent])?;
+    assert_eq!(preview["wired"][0]["preview"], true, "{preview}");
+    assert_eq!(
+        preview["wired"][0]["report"]["job"]["agent_targets"],
+        serde_json::json!(["wf-fixture"])
+    );
+    assert_eq!(before, fixture.agent_tools()?);
+    assert!(
+        gents_pack::plugin::store::read_record(&fixture.home, "fixture", "job_fixture").is_err()
+    );
+    assert!(
+        gents_pack::pack::read_home_install(&fixture.home, "fixture/job_plugin_fixture")?.is_none()
+    );
+    let applied = fixture.install_job_pack(&["--wire", &fixture.agent])?;
+    assert_eq!(preview["wired"][0]["report"], applied["wired"][0]["report"]);
     Ok(())
 }
 

@@ -619,7 +619,6 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             targets_from: Vec::new(),
             remove: false,
             preview: false,
-            dynamic_consent: false,
             tool_calls_consent: false,
         };
         gents_pack::pack::plugin_wire::wire_in(
@@ -739,7 +738,6 @@ async fn wiring_holds_store_lock_through_pin_commit() {
                         targets_from: Vec::new(),
                         remove: false,
                         preview: false,
-                        dynamic_consent: false,
                         tool_calls_consent: false,
                     };
                     gents_pack::pack::plugin_wire::wire_in(
@@ -922,7 +920,6 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
             targets_from: vec![],
             remove,
             preview,
-            dynamic_consent: false,
             tool_calls_consent: false,
         };
         let error = gents_pack::pack::plugin_wire::wire_in_spawned(
@@ -992,7 +989,6 @@ async fn wire_reports_unconfirmed_when_the_served_endpoint_is_unreachable() {
         targets_from: vec![],
         remove: false,
         preview: false,
-        dynamic_consent: false,
         tool_calls_consent: false,
     };
     let error = gents_pack::pack::plugin_wire::wire_in(
@@ -1044,7 +1040,6 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
                 targets_from: vec![],
                 remove: false,
                 preview: false,
-                dynamic_consent: false,
                 tool_calls_consent: false,
             };
             let wired = gents_pack::pack::plugin_wire::wire_in(

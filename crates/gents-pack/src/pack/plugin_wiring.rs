@@ -23,7 +23,7 @@ fn union_into(list: &mut Vec<String>, items: &[String]) {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyWarningCode {
     DynamicModeKept,
@@ -39,7 +39,7 @@ pub enum PolicyWarningSurface {
 }
 
 /// Structured policy advisory carried by wire, preview and install receipts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct PolicyWarning {
     pub code: PolicyWarningCode,
     pub plugin: String,
@@ -105,6 +105,25 @@ impl PolicyWarning {
             }
         };
     }
+}
+
+/// Re-render a serialized wire receipt at a transport boundary without
+/// duplicating warning rules or relying on error/message text matching.
+pub fn render_wire_receipt(
+    value: &mut serde_json::Value,
+    surface: PolicyWarningSurface,
+) -> anyhow::Result<()> {
+    if let Some(warnings) = value
+        .pointer_mut("/report/policy_warnings")
+        .and_then(|v| v.as_array_mut())
+    {
+        for value in warnings {
+            let mut warning: PolicyWarning = serde_json::from_value(value.clone())?;
+            warning.render_for(surface);
+            *value = serde_json::to_value(warning)?;
+        }
+    }
+    Ok(())
 }
 
 fn policy_warning(
@@ -366,42 +385,34 @@ pub fn consent_tool_calls(tools: &mut Tools, coordinate: &str, report: &mut Wire
     ));
 }
 
-/// Applies the node owner's consent to dynamic scripts to `coordinate`'s job
-/// block (Lean `consentedDynamic`): `check` becomes `run`, and the report
-/// records the grant in place of the `check` warning.
-pub fn consent_dynamic_run(
+/// Explicit operator enable, not pack wiring (Lean `operatorEnableJob`).
+/// The receipt records exact before/after policy, including ordered targets.
+pub fn operator_enable_dynamic(
     tools: &mut Tools,
     coordinate: &str,
-    report: &mut WireReport,
-    existing: Option<&gents_protocol::job::PluginJobSettings>,
-    incoming: Option<&gents_protocol::job::PluginJobSettings>,
-) {
-    if existing.is_some()
-        || !incoming.is_some_and(|j| j.policy.dynamic == gents_protocol::job::DynamicMode::Run)
-    {
-        return;
-    }
-    let Some(job) = tools
+    targets: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    let job = tools
         .integrations
         .iter_mut()
-        .flat_map(|integrations| integrations.plugins.iter_mut().flatten())
-        .find(|plugin| plugin.plugin == coordinate)
-        .and_then(|plugin| plugin.job.as_mut())
-    else {
-        return;
-    };
-    let consented = gents_protocol::job_settings::consented_dynamic(true, job.policy.dynamic);
-    if consented == job.policy.dynamic {
-        return;
-    }
-    job.policy.dynamic = consented;
-    report.job = Some(job.clone());
-    report
-        .warnings
-        .retain(|warning| !warning.starts_with("dynamic_check: "));
-    report.changed.push(format!(
-        "set job.policy.dynamic run for {coordinate}: the node owner approved its dynamic scripts"
-    ));
+        .flat_map(|i| i.plugins.iter_mut().flatten())
+        .find(|p| p.plugin == coordinate)
+        .and_then(|p| p.job.as_mut())
+        .ok_or_else(|| anyhow::anyhow!("{coordinate} has no selected job block"))?;
+    let before = job.policy.clone();
+    job.policy.dynamic = gents_protocol::job::DynamicMode::Run;
+    job.policy.dynamic_targets = targets.to_vec();
+    union_into(&mut job.agent_targets, targets);
+    let after = job.policy.clone();
+    let agents = tools.agents.get_or_insert_with(Default::default);
+    union_into(&mut agents.target_ids, targets);
+    Ok(serde_json::json!({"plugin":coordinate, "before":before, "after":after}))
+}
+
+/// The single stored-policy predicate used by status and explicit enable.
+/// A run selected before this release or via tools set is equally enabled.
+pub fn dynamic_enabled(job: Option<&gents_protocol::job::PluginJobSettings>) -> bool {
+    job.is_some_and(|job| job.policy.dynamic == gents_protocol::job::DynamicMode::Run)
 }
 
 /// Inverse of [`wire_plugin`]. With no `targets_from`, drops the plugin entry

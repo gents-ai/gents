@@ -435,7 +435,6 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
                     targets_from: Vec::new(),
                     remove: false,
                     preview: false,
-                    dynamic_consent: false,
                     tool_calls_consent: false,
                 },
             });

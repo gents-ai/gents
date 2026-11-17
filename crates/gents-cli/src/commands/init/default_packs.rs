@@ -319,6 +319,7 @@ async fn engineer_of(
 /// enable whose grant failed names the command that makes the grant, and
 /// enabling the pack again makes it.
 async fn observed_wiring(
+    home: &Path,
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     record: &gents_pack::pack::HomePackInstall,
@@ -354,28 +355,104 @@ async fn observed_wiring(
         .await?
         .iter()
         .all(|(_, enabled)| *enabled);
+    let mut dynamic_plugins = Vec::new();
+    for shipped in &record.plugins {
+        let plugin = gents_pack::plugin::store::read_record(home, namespace, &shipped.name)?;
+        if plugin.declaration.job.0 {
+            dynamic_plugins.push(format!("{namespace}/{}", shipped.name));
+        }
+    }
     Ok(Wiring {
         wired,
         tool_calls: !selections.is_empty() && selections.iter().all(|plugin| plugin.tool_calls),
-        // This is only a consent signal to the wiring owner. Each plugin must
-        // independently request incoming run and have no existing job block.
-        consent_dynamic: selections.iter().any(|plugin| {
-            plugin
-                .job
-                .as_ref()
-                .is_some_and(|job| job.policy.dynamic == gents_protocol::job::DynamicMode::Run)
-        }),
+        consent_dynamic: dynamic_workflows_enabled(tools, &dynamic_plugins),
         root_readers: false,
         agents_active,
     })
 }
 
-/// The part of `wiring` a read of the Engineer's documents observes.
-fn on_the_engineer(wiring: Wiring) -> Wiring {
-    Wiring {
-        root_readers: false,
-        ..wiring
-    }
+/// Enabled is stored run policy for every dynamic plugin of this pack, not
+/// evidence that a particular command was run or that consent was recorded.
+fn dynamic_workflows_enabled(tools: &gents_documents::Tools, plugins: &[String]) -> bool {
+    !plugins.is_empty()
+        && plugins.iter().all(|coordinate| {
+            let job = tools
+                .integrations
+                .iter()
+                .flat_map(|i| i.plugins.iter().flatten())
+                .find(|p| &p.plugin == coordinate)
+                .and_then(|p| p.job.as_ref());
+            gents_pack::pack::dynamic_enabled(job)
+        })
+}
+
+/// Separate explicit operator transition. Wire/init never call this owner.
+async fn enable_dynamic_workflows(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+    engineer: &str,
+    source: &gents_pack::pack::resolved_pack::ResolvedPack,
+) -> Result<Value> {
+    let config = gents_pack::pack::load_pack_recorded_config(
+        access,
+        source.manifest(),
+        &gents_pack::pack::PackInstallOptions {
+            node_did: owner.to_owned(),
+        },
+        &|path| Ok(source.asset(path)?.to_vec()),
+        &|name| (name == "GENTS_PACK_NODE_DID").then(|| owner.to_owned()),
+    )
+    .await?;
+    let jobs: Vec<_> = source
+        .manifest()
+        .metadata
+        .plugins
+        .iter()
+        .filter(|p| p.job.0)
+        .map(|p| {
+            let coordinate = format!("{}/{}", source.manifest().metadata.namespace, p.name);
+            let job = config
+                .tools
+                .iter()
+                .flat_map(|t| t.integrations.iter())
+                .flat_map(|i| i.plugins.iter().flatten())
+                .find(|p| p.plugin == coordinate)
+                .and_then(|p| p.job.as_ref())
+                .with_context(|| format!("{coordinate} has no pack job targets"))?;
+            Ok((coordinate, job.agent_targets.clone()))
+        })
+        .collect::<Result<_>>()?;
+    anyhow::ensure!(!jobs.is_empty(), "Dynamic Workflows has no dynamic plugins");
+    access
+        .transact_write("operator.enable_dynamic_workflows", |txn| {
+            let jobs = &jobs;
+            Box::pin(async move {
+                let (_, tools) =
+                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer)
+                        .await?;
+                let mut tools = tools.context("Engineer has no Tools")?;
+                let mut policies = Vec::new();
+                for (coordinate, targets) in jobs {
+                    policies.push(gents_pack::pack::operator_enable_dynamic(
+                        &mut tools, coordinate, targets,
+                    )?);
+                }
+                let plugins: Vec<_> = jobs
+                    .iter()
+                    .map(|(coordinate, _)| coordinate.clone())
+                    .collect();
+                let enabled = dynamic_workflows_enabled(&tools, &plugins);
+                anyhow::ensure!(enabled, "explicit enable did not establish run policy");
+                gents_documents::write_tools_document_in_txn(
+                    txn,
+                    &tools,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
+                Ok(json!({"enabled":enabled, "policies":policies}))
+            })
+        })
+        .await
 }
 
 /// An installed core pack's record and what it leaves on the Engineer.
@@ -406,7 +483,7 @@ async fn engineer_packs(home: &Path) -> Result<Option<Vec<(CorePack, Option<Inst
             let installed = match gents_pack::pack::read_home_install(home, pack.coordinate())? {
                 Some(record) => {
                     let wiring =
-                        observed_wiring(&access, &owner, &record, &context, &tools).await?;
+                        observed_wiring(home, &access, &owner, &record, &context, &tools).await?;
                     Some((record, wiring))
                 }
                 None => None,
@@ -431,9 +508,7 @@ pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<Pa
         .map(|(pack, installed)| {
             let (state, version, reason) = match installed {
                 Some((record, observed)) => (
-                    if on_the_engineer(observed)
-                        == on_the_engineer(core_packs::enabled_wiring(pack))
-                    {
+                    if core_packs::observed_enabled(pack, observed) {
                         PackState::Installed
                     } else {
                         PackState::NotEnabled
@@ -649,14 +724,16 @@ async fn apply(
                 }
                 local => local.clone(),
             };
-            gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
+            gents_pack::pack::plugin_wire::wire_pack_batch(
                 &wire_access,
                 &owner,
                 home,
                 &source,
                 &[engineer.to_owned()],
-                wiring.consent_dynamic,
-                wiring.tool_calls,
+                gents_pack::pack::plugin_wire::WireBatchOptions {
+                    tool_calls_consent: wiring.tool_calls,
+                    ..Default::default()
+                },
                 gents_service::home_state::load_held_user_identity,
             )
             .await
@@ -665,6 +742,11 @@ async fn apply(
             })?
         } else {
             Vec::new()
+        };
+        let dynamic_enable = if consent == Consent::Explicit && pack == CorePack::DynamicWorkflows {
+            Some(enable_dynamic_workflows(&access, &owner, engineer, &source).await?)
+        } else {
+            None
         };
         let skills = if wiring.wired {
             gents_pack::pack::plugin_wire::attach_pack_skills(
@@ -686,11 +768,11 @@ async fn apply(
         let agents = set_pack_agents_active(&access, &owner, coordinate, wiring.agents_active)
             .await
             .with_context(|| format!("{coordinate} is installed, but its agents were not left as enabling says"))?;
-        Ok::<_, anyhow::Error>((wired, skills, readers, agents))
+        Ok::<_, anyhow::Error>((wired, skills, readers, agents, dynamic_enable))
     }
     .await;
     release(access).await;
-    let (wired, skills, host_tool_roots, agents) = applied?;
+    let (wired, skills, host_tool_roots, agents, dynamic_enable) = applied?;
     Ok(json!({
         "pack": coordinate,
         "version": source.manifest().version,
@@ -698,6 +780,7 @@ async fn apply(
         "wiring": wiring,
         "granted_permissions": requested,
         "wired": wired,
+        "dynamic_enable": dynamic_enable,
         "skills": skills,
         "host_tool_roots": host_tool_roots,
         "agents": agents,
@@ -1522,14 +1605,13 @@ mod tests {
         let concurrently_stored = edited.clone();
         let other_access = access.clone();
         let (result, raced) = ConfigApplyTxn::with_concurrent_write_before_commit(
-            gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
+            gents_pack::pack::plugin_wire::wire_pack_batch(
                 &access,
                 &owner,
                 home.path(),
                 &pack,
                 &[engineer.to_owned(), worker.to_owned()],
-                true,
-                false,
+                gents_pack::pack::plugin_wire::WireBatchOptions::default(),
                 gents_service::home_state::load_held_user_identity,
             ),
             async move {
@@ -1564,14 +1646,13 @@ mod tests {
         assert_eq!(raced_after[0][0], raced_before[0][0]);
         assert_eq!(raced_after[1], raced_before[1]);
         // A fresh retry reads and keeps the just-stored off policy.
-        let retry = gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
+        let retry = gents_pack::pack::plugin_wire::wire_pack_batch(
             &access,
             &owner,
             home.path(),
             &pack,
             &[engineer.to_owned(), worker.to_owned()],
-            true,
-            false,
+            gents_pack::pack::plugin_wire::WireBatchOptions::default(),
             gents_service::home_state::load_held_user_identity,
         )
         .await
@@ -1617,7 +1698,10 @@ mod tests {
         let before = call(json!({"argv":["tools","get"]})).await;
         let mut integrations = before["document"]["integrations"].clone();
         for plugin in integrations["plugins"].as_array_mut().unwrap() {
-            if plugin["plugin"] == "gents/workflow" {
+            if ["gents/workflow", "gents/workflow_check"]
+                .iter()
+                .any(|name| plugin["plugin"] == *name)
+            {
                 plugin["job"]["policy"]["dynamic"] = "check".into();
             }
         }
@@ -1649,15 +1733,20 @@ mod tests {
         drop(config);
         access.local_node().unwrap().shutdown().await.unwrap();
         drop(access);
-        // Re-running init and explicit enable must not treat pack-wide consent as
-        // consent to raise an existing job or a second plugin requesting check.
+        // Re-running init is not an operator enable command.
         crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &archives)
             .await
             .unwrap();
-        let enabled = enable(home.path(), &archives, &[CorePack::DynamicWorkflows])
-            .await
+        let listed = status(home.path(), &archives).await.unwrap();
+        let workflows = listed
+            .iter()
+            .find(|p| p.pack == CorePack::DynamicWorkflows.coordinate())
             .unwrap();
-        assert_eq!(enabled["failed"], json!([]), "{enabled}");
+        assert_eq!(workflows.state, PackState::NotEnabled);
+        assert!(serde_json::to_value(workflows)
+            .unwrap()
+            .to_string()
+            .contains("--enable"));
         let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
             .await
             .unwrap();
@@ -1688,7 +1777,95 @@ mod tests {
                 "{coordinate}"
             );
         }
+        // No enable metadata is consulted: this also represents pre-branch run.
+        let mut edited = tools.clone();
+        for plugin in edited
+            .integrations
+            .as_mut()
+            .unwrap()
+            .plugins
+            .as_mut()
+            .unwrap()
+        {
+            if ["gents/workflow", "gents/workflow_check"].contains(&plugin.plugin.as_str()) {
+                plugin.job.as_mut().unwrap().policy.dynamic = gents_protocol::job::DynamicMode::Run;
+            }
+        }
+        gents_documents::write_tools_document(
+            &access,
+            &edited,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         access.local_node().unwrap().shutdown().await.unwrap();
+        drop(access);
+        let listed = status(home.path(), &archives).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .find(|p| p.pack == CorePack::DynamicWorkflows.coordinate())
+                .unwrap()
+                .state,
+            PackState::Installed
+        );
+
+        // Explicit enable may raise both check and off, and replaces ordered
+        // dynamic targets with the pack's own targets, visibly in its receipt.
+        let (access, _) = command::resolve_scope_owner(&scope(home.path()))
+            .await
+            .unwrap();
+        for (index, plugin) in edited
+            .integrations
+            .as_mut()
+            .unwrap()
+            .plugins
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .filter(|p| ["gents/workflow", "gents/workflow_check"].contains(&p.plugin.as_str()))
+            .enumerate()
+        {
+            let job = plugin.job.as_mut().unwrap();
+            job.policy.dynamic = if index == 0 {
+                gents_protocol::job::DynamicMode::Check
+            } else {
+                gents_protocol::job::DynamicMode::Off
+            };
+            job.policy.dynamic_targets.clear();
+        }
+        gents_documents::write_tools_document(
+            &access,
+            &edited,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        access.local_node().unwrap().shutdown().await.unwrap();
+        drop(access);
+        let enabled = enable(home.path(), &archives, &[CorePack::DynamicWorkflows])
+            .await
+            .unwrap();
+        assert_eq!(enabled["failed"], json!([]), "{enabled}");
+        let receipt = &enabled["enabled"][0]["dynamic_enable"];
+        assert_eq!(receipt["enabled"], true);
+        for (index, before) in ["check", "off"].iter().enumerate() {
+            assert_eq!(receipt["policies"][index]["before"]["dynamic"], *before);
+            assert_eq!(receipt["policies"][index]["after"]["dynamic"], "run");
+            assert_eq!(
+                receipt["policies"][index]["after"]["dynamic_targets"],
+                json!(["wf-read-only"])
+            );
+        }
+        let listed = status(home.path(), &archives).await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .find(|p| p.pack == CorePack::DynamicWorkflows.coordinate())
+                .unwrap()
+                .state,
+            PackState::Installed
+        );
     }
 
     /// A home set up before any inference provider exists, as the desktop

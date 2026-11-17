@@ -113,11 +113,26 @@ pub fn enabled_wiring(pack: CorePack) -> Wiring {
         CorePack::DynamicWorkflows => Wiring {
             wired: true,
             tool_calls: false,
-            consent_dynamic: false,
+            consent_dynamic: true,
             root_readers: true,
             agents_active: true,
         },
         pack => init_wiring(pack),
+    }
+}
+
+/// Lean `Pack.CorePacks.observedEnabled`.
+pub fn observed_enabled(pack: CorePack, observed: Wiring) -> bool {
+    if pack == CorePack::DynamicWorkflows {
+        observed.consent_dynamic
+    } else {
+        Wiring {
+            root_readers: false,
+            ..observed
+        } == Wiring {
+            root_readers: false,
+            ..enabled_wiring(pack)
+        }
     }
 }
 
@@ -344,6 +359,23 @@ mod conformance {
     use gents_lean_vocab::families;
 
     use super::*;
+
+    #[test]
+    fn observed_enabled_matches_the_lean_model() {
+        families::pack_core_packs_observed_enabled_cases::replay(|input| {
+            let observed = &input.observed;
+            observed_enabled(
+                input.pack,
+                Wiring {
+                    wired: observed.wired,
+                    tool_calls: observed.tool_calls,
+                    consent_dynamic: observed.consent_dynamic,
+                    root_readers: observed.root_readers,
+                    agents_active: observed.agents_active,
+                },
+            )
+        });
+    }
 
     #[test]
     fn refuse_init_matches_the_lean_model() {

@@ -298,11 +298,10 @@ pub async fn install_handler(
         );
     }
     // Detached so a dropped client cannot cancel an install mid-commit.
-    let result =
-        tokio::spawn(
-            async move { install_owned(state, PathBuf::from(home), received, access).await },
-        )
-        .await;
+    let result = tokio::spawn(async move {
+        install_owned(&state.node_did, PathBuf::from(home), received, access).await
+    })
+    .await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => (
@@ -423,7 +422,7 @@ fn ensure_exact_closure(root: &ResolvedPack, dependencies: &[ResolvedPack]) -> R
 }
 
 async fn install_owned(
-    state: RuntimeHttpState,
+    node_did: &str,
     home: PathBuf,
     received: Received,
     access: gents_store::config_client::ConfigAccess,
@@ -452,7 +451,7 @@ async fn install_owned(
     };
     let mut result = gents_pack::pack::install_flow::install_documents_pack_resolved(
         &access,
-        &state.node_did,
+        node_did,
         &root,
         &args,
         explicit,
@@ -461,13 +460,18 @@ async fn install_owned(
     )
     .await
     .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
-    if !args.wire.is_empty() && !args.preview {
-        result["wired"] = gents_pack::pack::plugin_wire::wire_pack_plugins(
+    if !args.wire.is_empty() {
+        result["wired"] = gents_pack::pack::plugin_wire::wire_pack_batch(
             &access,
-            &state.node_did,
+            node_did,
             &home,
             &root,
             &args.wire,
+            gents_pack::pack::plugin_wire::WireBatchOptions {
+                preview: args.preview,
+                warning_surface: gents_pack::pack::PolicyWarningSurface::ConfigTool,
+                ..Default::default()
+            },
             gents_service::home_state::load_held_user_identity,
         )
         .await?

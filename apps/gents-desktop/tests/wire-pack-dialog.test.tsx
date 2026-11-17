@@ -55,15 +55,32 @@ describe("enabling a pack's plugin for an agent", () => {
 
   it("renders requested and kept policy without hiding the remedy", async () => {
     const wirePack = vi.fn(async () => ({
-      report: { job: null, next_call: null, warnings: [], policy_warnings: [{
-        code: "dynamic_mode_kept", plugin: "demo/hello_plugin",
-        requested: { dynamic: "run", dynamic_targets: ["a", "b"] },
-        kept: { dynamic: "check", dynamic_targets: ["a"] },
-        remedy: "No policy change is required to wire.",
-      }] }, authority: null,
+      report: {
+        job: null,
+        next_call: null,
+        warnings: [],
+        policy_warnings: [
+          {
+            code: "dynamic_mode_kept",
+            plugin: "demo/hello_plugin",
+            requested: { dynamic: "run", dynamic_targets: ["a", "b"] },
+            kept: { dynamic: "check", dynamic_targets: ["a"] },
+            tools_id: "engineer-tools",
+            remedy: "No policy change is required to wire.",
+          },
+        ],
+      },
+      authority: null,
     }));
-    renderIn(testApp({ api: { wirePack } }), <WirePackDialog
-      plugin="demo/hello_plugin" agents={deployment.agents} targetsFrom={[]} onClose={() => {}} />);
+    renderIn(
+      testApp({ api: { wirePack } }),
+      <WirePackDialog
+        plugin="demo/hello_plugin"
+        agents={deployment.agents}
+        targetsFrom={[]}
+        onClose={() => {}}
+      />,
+    );
     const warning = await screen.findByTestId("wire-policy-warning");
     expect(warning).toHaveTextContent("requested run [a, b]; kept check [a]");
     expect(warning).toHaveTextContent("No policy change is required to wire.");

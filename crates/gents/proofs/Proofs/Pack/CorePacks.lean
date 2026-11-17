@@ -72,9 +72,8 @@ structure Wiring where
   wired : Bool
   /-- Its plugins may call the Engineer's own tools. -/
   toolCalls : Bool
-  /-- Effective dynamic run authority left on the Engineer. Enabling a shipped
-  check-only pack does not raise it. Per-plugin fresh incoming run consent is
-  modeled separately in `Pack.PluginWiring.consentDynamic`. -/
+  /-- Stored dynamic run authority, set by the separate explicit operator enable
+  transition, never by pack wiring. -/
   consentDynamic : Bool
   /-- The agents it ships read the Engineer's tool root. -/
   rootReaders : Bool
@@ -101,13 +100,23 @@ def initWiring : CorePack → Wiring
   | .script => ⟨true, true, false, true, true⟩
   | _ => ⟨true, false, false, true, true⟩
 
-/-- What explicit enable leaves for the shipped check-only workflow defaults:
-wired, readers granted and agents enabled, but no implicit dynamic elevation.
-Existing policy remains authoritative; only a fresh incoming run block may use
-consent (B2 TPM ruling 2026-11-17). -/
+/-- Explicit operator enable is separate from install/wire and sets run.
+Wiring alone never changes an existing operator policy. -/
 def enabledWiring : CorePack → Wiring
-  | .dynamicWorkflows => ⟨true, false, false, true, true⟩
+  | .dynamicWorkflows => ⟨true, false, true, true, true⟩
   | pack => initWiring pack
+
+/-- Dynamic Workflows is enabled exactly when its stored dynamic plugins carry
+run policy. Agent readiness and unrelated grants are not enable history. Other
+core packs retain their wiring check; root readers are not observable here. -/
+def observedEnabled (pack : CorePack) (observed : Wiring) : Bool :=
+  if pack == .dynamicWorkflows then observed.consentDynamic
+  else { observed with rootReaders := false } ==
+    { enabledWiring pack with rootReaders := false }
+
+theorem dynamic_enabled_iff_stored_run (observed : Wiring) :
+    observedEnabled .dynamicWorkflows observed = observed.consentDynamic := by
+  simp [observedEnabled]
 
 theorem init_never_consents_dynamic (pack : CorePack) :
     (initWiring pack).consentDynamic = false := by
@@ -140,8 +149,8 @@ theorem only_script_calls_tools (pack : CorePack) :
     (initWiring pack).toolCalls = true ↔ pack = .script := by
   cases pack <;> simp [initWiring]
 
-theorem enabling_keeps_shipped_check :
-    (enabledWiring .dynamicWorkflows).consentDynamic = false := rfl
+theorem explicit_enable_runs_workflows :
+    (enabledWiring .dynamicWorkflows).consentDynamic = true := rfl
 
 /-- What the install reads of the profile a pack's inference slot is bound to:
 the profile with an enabled backend, with a disabled one, or with none. -/

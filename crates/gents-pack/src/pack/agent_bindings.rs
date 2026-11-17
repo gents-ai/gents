@@ -225,6 +225,49 @@ pub(super) fn bind_authored_agents(value: &mut Value, bindings: &PackAgentBindin
     rewrite_references(value, bindings)
 }
 
+/// Resolve authored configuration using recorded identities only. Reviewing or
+/// enabling a pack must never provision an identity as a side effect. A fresh
+/// pack with new agent slots must first complete its identity-binding install.
+pub async fn load_pack_recorded_config(
+    access: &ConfigAccess,
+    manifest: &PackManifest,
+    options: &PackInstallOptions,
+    read_asset: &(dyn Fn(&str) -> Result<Vec<u8>> + Sync),
+    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<PackConfig> {
+    super::validate_pack_manifest(manifest)?;
+    let mut value: Value = match manifest.config.as_deref() {
+        Some(path) => serde_json::from_slice(&read_asset(path)?)?,
+        None => serde_json::json!({"node": {}}),
+    };
+    let slots = authored_slots(&value)?;
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let (_, recorded) =
+        super::installation::read_agent_bindings(access, &options.node_did, &coordinate).await?;
+    let plan = plan_agent_bindings(&recorded, &slots, &PackAgentBindings::new())?;
+    let declared = declared_dependencies(manifest);
+    validate_slot_references(&value, &slots, &declared, None)?;
+    let mut references = plan.selected.clone();
+    for dependency in &declared {
+        let (_, bindings) =
+            super::installation::read_agent_bindings(access, &options.node_did, dependency).await?;
+        for (slot, binding) in bindings {
+            references.insert(format!("{dependency}#{slot}"), binding);
+        }
+    }
+    bind_authored_agents(&mut value, &references)?;
+    super::loader::load_pack_config_value(
+        &manifest_with_agent_bindings(manifest, &plan.selected),
+        options,
+        value,
+        read_asset,
+        &|name| match name.strip_prefix(AGENT_DID_VARIABLE_PREFIX) {
+            Some(slot) => references.get(slot).map(|bound| bound.agent_did.clone()),
+            None => environment(name),
+        },
+    )
+}
+
 pub async fn load_pack_install_config(
     access: &ConfigAccess,
     manifest: &PackManifest,

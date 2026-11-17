@@ -338,7 +338,7 @@ pub(super) async fn install_documents_report(
                 &home,
                 pack,
                 &args.wire,
-                false, false, args.preview,
+                gents_pack::pack::plugin_wire::WireBatchOptions { preview: args.preview, ..Default::default() },
                 gents_service::home_state::load_held_user_identity,
             )
             .await?
@@ -443,9 +443,10 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                         home,
                         &pack,
                         &args.wire,
-                        false,
-                        false,
-                        true,
+                        gents_pack::pack::plugin_wire::WireBatchOptions {
+                            preview: true,
+                            ..Default::default()
+                        },
                         gents_service::home_state::load_held_user_identity,
                     )
                     .await;

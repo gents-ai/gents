@@ -43,6 +43,7 @@ export type WireReport = {
     previous_digest: string | null;
     installed_digest: string;
     remedy: string;
+    tools_id: string;
   }[];
   next_call: string | null;
 };

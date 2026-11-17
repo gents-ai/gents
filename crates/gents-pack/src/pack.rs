@@ -10,8 +10,8 @@ pub use agent_bindings::{
 pub mod archive;
 pub use agent_bindings::{
     agent_binding_variable, agent_did_variable, agent_slot_reference, is_agent_binding_variable,
-    load_pack_authoring_config, load_pack_install_config, AuthoredPackConfig, BoundPackConfig,
-    PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
+    load_pack_authoring_config, load_pack_install_config, load_pack_recorded_config,
+    AuthoredPackConfig, BoundPackConfig, PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
 };
 pub mod authoring;
 pub mod core_packs;
@@ -102,8 +102,8 @@ pub use plugin::{
     PluginService, MAX_TOOL_INSTRUCTIONS_BYTES, PLUGIN_ARTIFACT_PREFIX, SUPPORTED_PLUGIN_LANGUAGES,
 };
 pub use plugin_wiring::{
-    consent_dynamic_run, consent_tool_calls, unwire_plugin, wire_plugin, PolicyWarning,
-    PolicyWarningCode, PolicyWarningSurface, WireReport,
+    consent_tool_calls, dynamic_enabled, operator_enable_dynamic, render_wire_receipt,
+    unwire_plugin, wire_plugin, PolicyWarning, PolicyWarningCode, PolicyWarningSurface, WireReport,
 };
 pub(crate) use provenance::pack_artifact_document_digest;
 pub use provenance::{

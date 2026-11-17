@@ -67,7 +67,7 @@ structure WiringStep where
   reviewed : Option Job
   skills : List String
   sources : List Source
-  consentDynamic : Bool
+  operatorEnable : Bool
   consentToolCalls : Bool
   deriving ToJson
 
@@ -86,7 +86,7 @@ def runWiring (surface : Surface) : List WiringStep → List (Option Outcome)
         (wire surface step.plugin step.reviewed step.skills step.sources).map fun wired =>
           let wired :=
             if step.consentToolCalls then consentToolCalls step.plugin.coordinate wired else wired
-          if step.consentDynamic then consentDynamic surface step.plugin step.reviewed step.sources wired else wired
+          if step.operatorEnable then operatorEnable step.plugin.coordinate ((step.reviewed.map (·.policy.dynamicTargets)).getD []) wired else wired
       | .unwire => unwire surface step.plugin step.skills step.sources
     outcome :: runWiring ((outcome.map (·.surface)).getD surface) rest
 
@@ -114,13 +114,13 @@ private def single (operatorInstalled : Bool := true) : Source :=
   { pack := "acme/content", targets := ["wf-a"], operatorInstalled }
 
 private def wireStep (plugin : Plugin) (reviewed : Option Job := none) (skills : List String := [])
-    (sources : List Source := []) (consentDynamic consentToolCalls : Bool := false) : WiringStep :=
-  { action := .wire, plugin, reviewed, skills, sources, consentDynamic, consentToolCalls }
+    (sources : List Source := []) (operatorEnable consentToolCalls : Bool := false) : WiringStep :=
+  { action := .wire, plugin, reviewed, skills, sources, operatorEnable, consentToolCalls }
 
 private def unwireStep (plugin : Plugin) (skills : List String := [])
     (sources : List Source := []) : WiringStep :=
   { action := .unwire, plugin, reviewed := none, skills, sources
-    consentDynamic := false, consentToolCalls := false }
+    operatorEnable := false, consentToolCalls := false }
 
 private def wiredWith (job : Option Job) (targets : List String) (enabled : Option Bool := none)
     (toolCalls : Bool := false) : Surface :=
@@ -148,7 +148,7 @@ private def policyWiringScripts : List WiringScript :=
           [step, step, wireStep runner (reviewed := some existing)]⟩
 
 /-- Exhaustive small input grid: two plugins, every mode pair, every presence
-combination, and consent on/off. Exercises consent isolation and repeated wiring. -/
+combination, and operator enable on/off. Exercises operator transition isolation and repeated wiring. -/
 private def twoPluginPolicyScripts : List WiringScript :=
   [.off, .check, .run].flatMap fun existingMode =>
     [.off, .check, .run].flatMap fun incomingMode =>
@@ -164,8 +164,8 @@ private def twoPluginPolicyScripts : List WiringScript :=
                  { plugin := other.coordinate, digest := other.digest, toolCalls := false,
                    job := if secondExists then some existing else none }]
               targets := ["a", "b"] }
-            let first := wireStep runner (reviewed := some incoming) (consentDynamic := consent)
-            let second := wireStep other (reviewed := some incoming) (consentDynamic := consent)
+            let first := wireStep runner (reviewed := some incoming) (operatorEnable := consent)
+            let second := wireStep other (reviewed := some incoming) (operatorEnable := consent)
             ⟨s!"two plugin grid {repr existingMode}/{repr incomingMode}/{firstExists}/{secondExists}/{consent}",
               start, [first, second, first, second]⟩
 
@@ -177,9 +177,9 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
     , ⟨"packs wired in without a reviewed block get the default block", fresh,
         [wireStep (runner (some "acme/engine")) (sources := [single])]⟩
     , ⟨"the owner's consent raises check to run", fresh,
-        [wireStep (runner (some "acme/engine")) (sources := [single]) (consentDynamic := true)]⟩
+        [wireStep (runner (some "acme/engine")) (sources := [single]) (operatorEnable := true)]⟩
     , ⟨"consent leaves a block that is off off", fresh,
-        [wireStep runner (reviewed := some (block ["wf-a"] .off)) (consentDynamic := true)]⟩
+        [wireStep runner (reviewed := some (block ["wf-a"] .off)) (operatorEnable := true)]⟩
     , ⟨"the owner's consent lets the plugin call the Agent's tools", fresh,
         [wireStep (runner (runsJobs := false)) (consentToolCalls := true)]⟩
     , ⟨"a reviewed block is written as reviewed", fresh,

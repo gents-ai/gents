@@ -21,6 +21,23 @@ deriving instance Lean.ToJson for CorePack, Origin, Wiring, InterfaceAdmission, 
 attribute [conformance_function] approvalRequired initWiring enabledWiring updateDecision
   slotBinding enableRoute refuseInit
 
+structure ObservedEnabledInput where
+  pack : CorePack
+  observed : Wiring
+  deriving Lean.ToJson
+
+/-- Every core pack and all combinations of observed wiring flags. -/
+@[conformance_family]
+def observedEnabledCases : Conformance.Family ObservedEnabledInput Bool where
+  inputs := all.flatMap fun pack =>
+    [false, true].flatMap fun wired =>
+      [false, true].flatMap fun toolCalls =>
+        [false, true].flatMap fun consentDynamic =>
+          [false, true].flatMap fun rootReaders =>
+            [false, true].map fun agentsActive =>
+              { pack, observed := { wired, toolCalls, consentDynamic, rootReaders, agentsActive } }
+  model := fun input => observedEnabled input.pack input.observed
+
 structure InterfaceInput where
   declared : Option Nat
   deriving Lean.ToJson

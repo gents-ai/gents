@@ -164,7 +164,7 @@ pub async fn wire(
     remove: bool,
     preview: bool,
 ) -> Result<Value> {
-    capture_report(command::wire::wire(PackWireArgs {
+    let mut receipt = capture_report(command::wire::wire(PackWireArgs {
         plugin,
         agent,
         targets_from,
@@ -172,7 +172,12 @@ pub async fn wire(
         preview,
         scope: scope(home),
     }))
-    .await
+    .await?;
+    gents_pack::pack::render_wire_receipt(
+        &mut receipt,
+        gents_pack::pack::PolicyWarningSurface::ConfigTool,
+    )?;
+    Ok(receipt)
 }
 
 /// Promotes a finished dynamic run into the installed, wired tool

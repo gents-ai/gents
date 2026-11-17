@@ -170,12 +170,6 @@ fn wiring_conforms_to_the_model() {
                         (source.pack.clone(), source.targets.clone(), via)
                     })
                     .collect();
-                let existing = tools
-                    .integrations
-                    .as_ref()
-                    .and_then(|i| i.plugins.as_ref())
-                    .and_then(|entries| entries.iter().find(|e| e.plugin == step.plugin.coordinate))
-                    .and_then(|e| e.job.clone());
                 let (after, after_context, report) = match step.action {
                     Action::Wire => wire_plugin(
                         &tools,
@@ -189,14 +183,30 @@ fn wiring_conforms_to_the_model() {
                         if step.consent_tool_calls {
                             consent_tool_calls(&mut tools, &step.plugin.coordinate, &mut report);
                         }
-                        if step.consent_dynamic {
-                            consent_dynamic_run(
-                                &mut tools,
-                                &step.plugin.coordinate,
-                                &mut report,
-                                existing.as_ref(),
-                                reviewed.as_ref(),
-                            );
+                        if step.operator_enable {
+                            let targets = reviewed
+                                .as_ref()
+                                .map(|j| j.policy.dynamic_targets.as_slice())
+                                .unwrap_or_default();
+                            if operator_enable_dynamic(&mut tools, &step.plugin.coordinate, targets)
+                                .is_ok()
+                            {
+                                report.job = tools
+                                    .integrations
+                                    .as_ref()
+                                    .unwrap()
+                                    .plugins
+                                    .as_ref()
+                                    .unwrap()
+                                    .iter()
+                                    .find(|p| p.plugin == step.plugin.coordinate)
+                                    .unwrap()
+                                    .job
+                                    .clone();
+                                report
+                                    .warnings
+                                    .retain(|w| !w.starts_with("dynamic_check: "));
+                            }
                         }
                         (tools, context, report)
                     }),
@@ -270,19 +280,14 @@ fn the_report_names_the_next_call_and_what_check_refuses() {
         "{warning}"
     );
 
-    let (mut consented, mut consented_report) = (tools.clone(), report);
-    let incoming = policy_block(DynamicMode::Run, &[]);
-    consent_dynamic_run(
-        &mut consented,
-        "acme/runner",
-        &mut consented_report,
-        None,
-        Some(&incoming),
+    let mut enabled = tools.clone();
+    let receipt = operator_enable_dynamic(&mut enabled, "acme/runner", &strs(&["wf-a"])).unwrap();
+    assert_eq!(receipt["before"]["dynamic"], "check");
+    assert_eq!(receipt["after"]["dynamic"], "run");
+    assert_eq!(
+        receipt["after"]["dynamic_targets"],
+        serde_json::json!(["wf-a"])
     );
-    assert!(consented_report
-        .changed
-        .iter()
-        .any(|change| change.contains("set job.policy.dynamic run for acme/runner")));
 
     let (_, _, report) = unwire_plugin(&tools, &context, &plugin, &[], &[content]).unwrap();
     assert!(report.next_call.unwrap().contains("non-job verbs only"));
@@ -430,4 +435,23 @@ fn rewire_run_across_digest_warns_once_but_same_digest_does_not() {
     let (_, _, repeated) =
         wire_plugin(&tools, &context, &updated, Some(&existing), &[], &[]).unwrap();
     assert!(repeated.policy_warnings.is_empty());
+}
+
+#[test]
+fn serialized_policy_receipt_renders_native_config_remedy() {
+    let mut receipt = serde_json::json!({"report": {"policy_warnings": [{
+        "code": "dynamic_mode_kept", "plugin": "fixture/job", "tools_id": "operator-tools",
+        "requested": {"dynamic": "check", "dynamic_targets": ["worker"]},
+        "kept": {"dynamic": "off"}, "previous_digest": null,
+        "installed_digest": "digest", "remedy": "stale CLI text"
+    }]}});
+    super::render_wire_receipt(&mut receipt, super::PolicyWarningSurface::ConfigTool).unwrap();
+    let warning = &receipt["report"]["policy_warnings"][0];
+    let remedy = warning["remedy"].as_str().unwrap();
+    assert!(remedy.contains("argv:[\"tools\",\"get\"]"));
+    assert!(remedy.contains("argv:[\"tools\",\"update\"]"));
+    assert!(remedy.contains("operator-tools"));
+    assert!(!remedy.contains("gents config"));
+    assert_eq!(warning["tools_id"], "operator-tools");
+    assert_eq!(warning["kept"]["dynamic"], "off");
 }
