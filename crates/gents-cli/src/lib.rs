@@ -391,6 +391,10 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
     }
     let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
+    // Before the dispatch, so both spellings of the foreground runtime install
+    // the stamped stderr sink through one site: the installed service runs
+    // top-level `server`, and a prompt may type `runtime server`.
+    install_service_sink_if_runtime(command.as_ref());
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
@@ -441,10 +445,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Config { command } => commands::config::dispatch(command).await,
         Command::Runtime { command } => match command {
             RuntimeCommand::Server(args) => {
-                // The one process the service manager runs, whose stderr becomes
-                // `runtime-errors.log`: from here every line it prints is stamped.
-                // An interactive command keeps its stderr untouched.
-                gents::runtime::native_logging::install_service_stderr_sink();
                 gents_host::serve::serve(
                     *args,
                     runtime,
@@ -847,6 +847,31 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
     )
 }
 
+/// Whether a parsed command starts the foreground runtime — the process a
+/// service definition runs, whose stderr the service manager captures into
+/// `runtime-errors.log`. Both spellings count: the installed definitions run
+/// top-level `gents server --home <home>` (`native_service.rs`), while a person
+/// at a prompt may type either `server` or `runtime server`.
+fn starts_foreground_runtime(command: Option<&Command>) -> bool {
+    matches!(
+        command,
+        Some(Command::Server(_))
+            | Some(Command::Runtime {
+                command: RuntimeCommand::Server(_),
+            })
+    )
+}
+
+/// Install the stamped stderr sink when this process is the service runtime, so
+/// every line it writes into the service manager's log starts with an instant.
+/// One call site for both spellings, so a definition cannot select an arm that
+/// forgets it.
+fn install_service_sink_if_runtime(command: Option<&Command>) {
+    if starts_foreground_runtime(command) {
+        gents::runtime::native_logging::install_service_stderr_sink();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,6 +880,49 @@ mod tests {
     use gents_service::home_state::write_init_config;
     use gents_service::state::StoredInitConfig;
     use gents_store::identity::NodeIdentity as _;
+
+    /// The blocker this closes: an installed service definition runs
+    /// `gents server --home <home>`, not `runtime server`, so the sink has to be
+    /// installed on the arm the definition actually selects. The argv strings
+    /// are the ones `native_service` writes (`launchd`/`systemd`, which both
+    /// emit `server --home <home>`), parsed by the real clap parser.
+    #[test]
+    fn the_installed_service_argv_selects_an_arm_that_installs_the_sink() {
+        use crate::{starts_foreground_runtime, Cli};
+
+        let launchd_argv = ["gents", "server", "--home", "/tmp/a home"];
+        let systemd_argv = ["gents", "server", "--home", "/tmp/a home"];
+        for argv in [launchd_argv, systemd_argv] {
+            let cli = Cli::try_parse_from(argv).expect("the definition is valid argv");
+            assert!(
+                starts_foreground_runtime(cli.command.as_ref()),
+                "the argv a service definition writes must install the sink: {argv:?}"
+            );
+        }
+        // The prompt spelling keeps working, and an interactive command stays
+        // out of the service path.
+        for argv in [
+            vec!["gents", "runtime", "server", "--home", "/tmp/h"],
+            vec!["gents", "server"],
+        ] {
+            let cli = Cli::try_parse_from(argv.clone()).expect("valid argv");
+            assert!(
+                starts_foreground_runtime(cli.command.as_ref()),
+                "a foreground runtime is the service runtime: {argv:?}"
+            );
+        }
+        for argv in [
+            vec!["gents", "status"],
+            vec!["gents", "config", "pack", "list"],
+            vec!["gents", "start"],
+        ] {
+            let cli = Cli::try_parse_from(argv.clone()).expect("valid argv");
+            assert!(
+                !starts_foreground_runtime(cli.command.as_ref()),
+                "an interactive command keeps its stderr bare: {argv:?}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {

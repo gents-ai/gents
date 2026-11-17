@@ -56,32 +56,38 @@ pub fn service_runtime_installed() -> bool {
 /// From here on every line this process puts on stderr starts with an RFC 3339
 /// UTC instant, so an outage can be placed from the log itself.
 ///
-/// Called once, from the `runtime server` entry point: the process launchd (or
-/// systemd) starts, which is the one whose stderr becomes `runtime-errors.log`.
+/// Called from the dispatch when the parsed command is the foreground runtime,
+/// either spelling: the process launchd (or systemd) starts, whose stderr
+/// becomes `runtime-errors.log`.
 /// Everything else the process would otherwise print bare goes through here --
 /// the fatal exits in `main`, the home-state exit, the startup diagnostics --
 /// and a panic hook stamps panics before delegating to the previous hook.
 pub fn install_service_stderr_sink() {
     SERVICE_RUNTIME.store(true, std::sync::atomic::Ordering::Relaxed);
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        // Stamp the panic through the same writer the fatal exits use; the
-        // default hook then prints its own location and message.
-        let text = panic_info
-            .payload()
-            .downcast_ref::<&str>()
-            .map(|text| (*text).to_owned())
-            .or_else(|| panic_info.payload().downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "panic".to_owned());
-        service_stderr_line(&format!(
-            "gents runtime: panic at {}: {text}",
-            panic_info
-                .location()
-                .map(|location| location.to_string())
-                .unwrap_or_else(|| "<unknown>".to_owned())
-        ));
-        previous(panic_info);
-    }));
+    // Once: a second install would chain our own hook and stamp the panic
+    // twice, once per hook in the chain.
+    static HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
+    HOOK_INSTALLED.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            // Stamp the panic through the same writer the fatal exits use; the
+            // previous hook then prints its own location and message.
+            let text = panic_info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+                .or_else(|| panic_info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".to_owned());
+            service_stderr(&format!(
+                "gents runtime: panic at {}: {text}",
+                panic_info
+                    .location()
+                    .map(|location| location.to_string())
+                    .unwrap_or_else(|| "<unknown>".to_owned())
+            ));
+            previous(panic_info);
+        }));
+    });
 }
 
 /// Write a diagnostic to the process's stderr on the sink's terms: stamped when
@@ -103,11 +109,6 @@ pub fn service_stderr_with(
         diagnostic.to_owned()
     };
     let _ = writeln!(writer, "{line}");
-}
-
-/// The panic path's line, which is a diagnostic like any other.
-fn service_stderr_line(diagnostic: &str) {
-    service_stderr(diagnostic);
 }
 
 /// One diagnostic as the error log carries it: an RFC 3339 UTC timestamp in
@@ -151,6 +152,33 @@ mod tests {
         SWITCH.get_or_init(|| std::sync::Mutex::new(()))
     }
 
+    /// The process-wide flag is shared, so a test sets it under the mutex and
+    /// this guard restores it on drop -- including when an assertion fails, so
+    /// one failing test cannot leave the flag set and poison the others.
+    struct ServiceMode<'a> {
+        _guard: std::sync::MutexGuard<'a, ()>,
+    }
+
+    impl ServiceMode<'_> {
+        fn installed() -> Self {
+            let guard = switch().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            SERVICE_RUNTIME.store(true, std::sync::atomic::Ordering::Relaxed);
+            Self { _guard: guard }
+        }
+
+        fn interactive() -> Self {
+            let guard = switch().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            SERVICE_RUNTIME.store(false, std::sync::atomic::Ordering::Relaxed);
+            Self { _guard: guard }
+        }
+    }
+
+    impl Drop for ServiceMode<'_> {
+        fn drop(&mut self) {
+            SERVICE_RUNTIME.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     const INSTANT: &str = "2026-11-17T01:30:00.250Z";
 
     fn instant() -> chrono::DateTime<chrono::Utc> {
@@ -164,8 +192,7 @@ mod tests {
     /// and the diagnostic follows it unchanged.
     #[test]
     fn a_service_runtime_line_starts_with_an_rfc3339_utc_timestamp() {
-        let _guard = switch().lock().unwrap();
-        SERVICE_RUNTIME.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _service = ServiceMode::installed();
         let mut written = Vec::new();
         service_stderr_with(
             "gents runtime: agent_config did:key:a unavailable: x",
@@ -185,7 +212,6 @@ mod tests {
             chrono::DateTime::parse_from_rfc3339(line.split(' ').next().unwrap()).unwrap(),
             instant().fixed_offset()
         );
-        SERVICE_RUNTIME.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The wiring, not just the formatter: the startup diagnostic the runtime
@@ -193,8 +219,7 @@ mod tests {
     /// process is the service runtime.
     #[test]
     fn the_startup_diagnostic_and_a_fatal_exit_both_reach_the_writer_stamped() {
-        let _guard = switch().lock().unwrap();
-        SERVICE_RUNTIME.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _service = ServiceMode::installed();
         // The startup path: `mirror_service_diagnostic` is its only caller.
         let mut startup = Vec::new();
         service_stderr_with(
@@ -212,15 +237,13 @@ mod tests {
             let line = String::from_utf8(written).unwrap();
             assert!(line.starts_with(starts_with), "{line}");
         }
-        SERVICE_RUNTIME.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// An interactive command typed in a terminal is unchanged: the same sink
     /// writes the diagnostic bare, exactly as stderr carried it before.
     #[test]
     fn an_interactive_process_writes_the_diagnostic_unchanged() {
-        let _guard = switch().lock().unwrap();
-        SERVICE_RUNTIME.store(false, std::sync::atomic::Ordering::Relaxed);
+        let _service = ServiceMode::interactive();
         let mut written = Vec::new();
         service_stderr_with(
             "gents runtime: agent_config did:key:a unavailable: x",
@@ -244,8 +267,7 @@ mod tests {
     /// lines keeps them together, unstamped, after the first.
     #[test]
     fn a_multi_line_diagnostic_carries_one_stamp_and_keeps_its_lines() {
-        let _guard = switch().lock().unwrap();
-        SERVICE_RUNTIME.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _service = ServiceMode::installed();
         let diagnostic = "gents runtime: first\n  caused by: second\n  at: third";
         let mut written = Vec::new();
         service_stderr_with(diagnostic, &mut written, instant());
@@ -267,6 +289,5 @@ mod tests {
             1,
             "exactly one stamp: {text}"
         );
-        SERVICE_RUNTIME.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }
