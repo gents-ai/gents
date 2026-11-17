@@ -273,6 +273,9 @@ pub async fn install_handler(
         Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
         Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
+    if let Err(refusal) = wiring_admitted(state.document_acp, &received.request) {
+        return refused(StatusCode::CONFLICT, refusal);
+    }
     if received.root.manifest().metadata.kind != PackKind::Documents {
         return refused(
             StatusCode::BAD_REQUEST,
@@ -301,6 +304,20 @@ pub async fn install_handler(
         )
             .into_response(),
     }
+}
+
+/// An install that wires its plugins has the runtime sign the wiring with
+/// the User key its home holds, which a home whose access control runs on
+/// Vera refuses (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`); the
+/// refusal comes before anything is installed or signed.
+fn wiring_admitted(
+    document_acp: gents_store::local::document_acp::DocumentAcp,
+    request: &InstallRequest,
+) -> Result<(), gents_store::local::document_acp::DocumentAcpError> {
+    if request.wire.is_empty() || request.preview {
+        return Ok(());
+    }
+    gents_store::local::document_acp::runtime_signs_with_held_user_key(document_acp)
 }
 
 fn delegated_install_access(

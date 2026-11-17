@@ -365,4 +365,4 @@ async fn version_handler() -> impl IntoResponse {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

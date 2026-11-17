@@ -32,7 +32,7 @@ fn desktop_endpoint(
         .unwrap()
 }
 
-fn state() -> RuntimeHttpState {
+pub(crate) fn state() -> RuntimeHttpState {
     let (activation_runtime, activation_observation) = empty_activation_state();
     RuntimeHttpState {
         graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
