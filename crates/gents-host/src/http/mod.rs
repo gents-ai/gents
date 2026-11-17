@@ -13,6 +13,7 @@ pub mod liveness;
 pub mod mcp_pool;
 pub mod mcp_server;
 pub mod metrics_scrape;
+mod owed_settlement;
 pub mod pack_install;
 pub mod pack_install_client;
 mod pack_watch;

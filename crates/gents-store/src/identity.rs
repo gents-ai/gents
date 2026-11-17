@@ -13,7 +13,7 @@ mod error;
 mod file_key;
 pub mod grant_sets;
 pub(crate) mod macos;
-mod provision_client;
+pub(crate) mod provision_client;
 mod registered;
 pub mod request_receipt;
 

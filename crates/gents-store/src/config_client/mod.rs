@@ -57,6 +57,9 @@ pub mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
 pub mod node_readiness;
+pub mod owed;
+#[cfg(test)]
+mod owed_conformance;
 mod owed_delivery;
 mod owner_staged_route;
 mod pack_effect;
@@ -381,6 +384,14 @@ impl GraphqlEndpoint {
             Some(port) => format!("{host}:{port}"),
             None => host.to_string(),
         })
+    }
+
+    /// Whether `authorization` mints a Vera delegation, which lapses within
+    /// minutes, rather than forwarding a bearer or minting an identity token.
+    pub fn mints_delegations(&self) -> bool {
+        self.delegated_authorization.is_none()
+            && self.client_signing_capability.is_some()
+            && self.delegation_audience.is_some()
     }
 
     pub fn authorization(&self) -> Result<Option<String>> {

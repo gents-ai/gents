@@ -621,6 +621,10 @@ async fn resolve_config_access_inner(
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
             let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql).await?;
+            gents_store::config_client::owed::spawn_settlement(
+                endpoint.clone(),
+                runtime_state.node_did,
+            );
             return Ok((
                 ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
                 home_dir,

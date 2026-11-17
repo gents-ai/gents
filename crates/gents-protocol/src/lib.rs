@@ -28,6 +28,7 @@ pub mod node_readiness;
 pub mod operations;
 pub mod output;
 pub mod owed_delivery;
+pub mod owed_settlement;
 pub mod owner_staged;
 pub mod pairing_reader;
 pub mod peer_schema;

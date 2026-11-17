@@ -218,6 +218,10 @@ pub fn runtime_contract_router(
             post(crate::http::agent_identity::admission),
         )
         .route("/status", get(status_route))
+        .route(
+            gents_protocol::owed_settlement::OWED_SETTLEMENT_PATH,
+            post(crate::http::owed_settlement::settle),
+        )
         .route("/fleet/slots", get(fleet_slots_handler))
         .route(
             gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,

@@ -54,6 +54,8 @@ enum ServerMessage {
 /// A single runtime-owned transaction, driven by the client's pack interpreter.
 pub struct PackInstallSession {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    endpoint: GraphqlEndpoint,
+    presented_at: std::time::Instant,
     actor: ClientSigningCapability,
     scope: PackApprovalScope,
     preparation: gents_pack::pack::HostedPackPreparation,
@@ -100,6 +102,7 @@ impl PackInstallSession {
         let (mut socket, _) = connect_async(upgrade)
             .await
             .context("connecting remote pack install")?;
+        let presented_at = std::time::Instant::now();
         let mut start = serde_json::Map::new();
         start.insert("type".into(), "start".into());
         start.insert("request".into(), request);
@@ -119,6 +122,8 @@ impl PackInstallSession {
         );
         Ok(Self {
             socket,
+            endpoint: endpoint.clone(),
+            presented_at,
             actor,
             scope,
             preparation,
@@ -131,17 +136,34 @@ impl PackInstallSession {
         &self.preparation
     }
 
+    /// Send `value`, first presenting a fresh delegation when the one the
+    /// session holds is due (`Identity.OwedRegistration.refreshDue`).
+    async fn send(&mut self, value: Value) -> Result<()> {
+        if self.endpoint.mints_delegations()
+            && gents_store::config_client::owed::refresh_due(self.presented_at.elapsed())
+        {
+            let authorization = self
+                .endpoint
+                .authorization()?
+                .context("client authentication is required")?;
+            self.presented_at = std::time::Instant::now();
+            send(
+                &mut self.socket,
+                json!({"type": "delegation", "authorization": authorization}),
+            )
+            .await?;
+        }
+        send(&mut self.socket, value).await
+    }
+
     pub async fn read(&mut self, document: &str, variables: &Value) -> Result<Value> {
         let id = self.next_id;
         self.next_id = self
             .next_id
             .checked_add(1)
             .context("pack install request ID exhausted")?;
-        send(
-            &mut self.socket,
-            json!({"type": "read", "id": id, "document": document, "variables": variables}),
-        )
-        .await?;
+        self.send(json!({"type": "read", "id": id, "document": document, "variables": variables}))
+            .await?;
         loop {
             match receive(&mut self.socket).await? {
                 ServerMessage::ReadResult {
@@ -184,11 +206,8 @@ impl PackInstallSession {
         };
         let evidence =
             prepare_pack_evidence_from_history(&self.actor, &self.scope, expected, history).await?;
-        send(
-            &mut self.socket,
-            json!({"type": "graph_evidence", "id": id, "evidence": evidence}),
-        )
-        .await?;
+        self.send(json!({"type": "graph_evidence", "id": id, "evidence": evidence}))
+            .await?;
         self.applied(id).await
     }
 
@@ -205,11 +224,8 @@ impl PackInstallSession {
             _ => bail!("runtime pack relationship differs from the client's installation plan"),
         };
         let evidence = prepare_pack_relationship(&self.actor, &self.scope, expected).await?;
-        send(
-            &mut self.socket,
-            json!({"type": "relationship_evidence", "id": id, "evidence": evidence}),
-        )
-        .await?;
+        self.send(json!({"type": "relationship_evidence", "id": id, "evidence": evidence}))
+            .await?;
         let result = self.applied(id).await?;
         ensure!(result.is_null(), "unexpected relationship result");
         Ok(())
@@ -237,11 +253,8 @@ impl PackInstallSession {
             _ => bail!("runtime pack timestamp differs from the client installation plan"),
         };
         let value = gents_store::config_client::mint_recreate_identity_timestamp();
-        send(
-            &mut self.socket,
-            json!({"type": "timestamp_value", "id": id, "value": value}),
-        )
-        .await?;
+        self.send(json!({"type": "timestamp_value", "id": id, "value": value}))
+            .await?;
         Ok(value)
     }
 
@@ -250,7 +263,7 @@ impl PackInstallSession {
             self.pending.is_none(),
             "runtime proposed an unexpected extra pack effect"
         );
-        send(&mut self.socket, json!({"type": "finish"})).await?;
+        self.send(json!({"type": "finish"})).await?;
         match receive(&mut self.socket).await? {
             ServerMessage::Finished { result } => Ok(result),
             ServerMessage::Failed { error, outcome } => {

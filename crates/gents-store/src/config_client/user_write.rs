@@ -150,11 +150,21 @@ fn admit_carried(
 
 /// The Vera delegation a request served in the runtime's own process
 /// presented as its bearer, for its authenticated caller.
+/// Clones share the delegation, so one a long-lived connection adopts
+/// (`Identity.OwedRegistration.adopt`) is what its later writes carry.
 #[derive(Clone)]
 pub struct PresentedDelegation {
     caller: String,
-    token: String,
+    token: std::sync::Arc<std::sync::RwLock<String>>,
 }
+
+/// A delegation presented again on a connection that its caller did not
+/// issue as a current general delegation for this node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the delegation presented again is not a current delegation of the connection's own caller"
+)]
+pub struct RefreshRefused;
 
 impl std::fmt::Debug for PresentedDelegation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -177,8 +187,45 @@ impl PresentedDelegation {
         let _verdict = node.document_acp().caller_of_delegation(&token)?;
         Some(Self {
             caller: caller.to_owned(),
-            token,
+            token: std::sync::Arc::new(std::sync::RwLock::new(token)),
         })
+    }
+
+    pub fn caller(&self) -> &str {
+        &self.caller
+    }
+
+    pub(crate) fn token(&self) -> String {
+        self.token
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Adopt `authorization`, a bearer the connection's client presented
+    /// again, for every clone of this delegation. External premise
+    /// (`DocumentACP::caller_of_delegation`): DefraDB verifies a general
+    /// delegation only, so a verified one is general.
+    pub fn refresh(
+        &self,
+        node: &defra_node::Node,
+        authorization: &str,
+    ) -> Result<(), RefreshRefused> {
+        let token = authorization
+            .strip_prefix("Bearer ")
+            .filter(|token| !token.is_empty())
+            .ok_or(RefreshRefused)?;
+        let verdict = verdict(node, &self.caller, token);
+        match super::owed::adopt(true, verdict) {
+            super::owed::Refresh::Adopted => {
+                *self
+                    .token
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = token.to_owned();
+                Ok(())
+            }
+            super::owed::Refresh::Refused => Err(RefreshRefused),
+        }
     }
 }
 
@@ -197,7 +244,7 @@ pub(crate) fn signer_credential(
     let presented = presented.filter(|presented| presented.caller == signer);
     let (carried, verdict) = match presented {
         None => (Carried::Absent, Verdict::Refused),
-        Some(presented) => (Carried::Bound, verdict(node, signer, &presented.token)),
+        Some(presented) => (Carried::Bound, verdict(node, signer, &presented.token())),
     };
     let admission = admit(
         crate::local::document_acp::provider_of(node),
@@ -210,15 +257,15 @@ pub(crate) fn signer_credential(
     );
     match (admission, presented) {
         (Admission::Unchanged, _) => Ok(defra_node::SignerCredential::None),
-        (Admission::Forwarded, Some(presented)) => Ok(defra_node::SignerCredential::Delegation(
-            presented.token.clone(),
-        )),
+        (Admission::Forwarded, Some(presented)) => {
+            Ok(defra_node::SignerCredential::Delegation(presented.token()))
+        }
         (Admission::Forwarded, None) => Err(UserWriteRefusal::DelegationRequired),
         (Admission::Refused(refusal), _) => Err(refusal),
     }
 }
 
-fn verdict(node: &defra_node::Node, signer: &str, token: &str) -> Verdict {
+pub(crate) fn verdict(node: &defra_node::Node, signer: &str, token: &str) -> Verdict {
     let acp = node.document_acp();
     match acp.caller_of_delegation(token) {
         Some(Ok(caller))

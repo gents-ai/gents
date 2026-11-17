@@ -47,6 +47,37 @@ enum ClientMessage {
     },
     Finish,
     Abort,
+    /// The client presents a fresh delegation before the one it opened the
+    /// session with lapses (`Identity.OwedRegistration.adopt`).
+    Delegation {
+        authorization: String,
+    },
+}
+
+/// The session's access as its User and what keeps that access's
+/// delegation current.
+struct UserSession {
+    access: ConfigAccess,
+    refresher: Refresher,
+}
+
+/// Adopts the delegations a session's client presents again, for the writes
+/// the session makes as its User.
+#[derive(Clone)]
+struct Refresher {
+    node: Arc<defra_node::Node>,
+    presented: Option<gents_store::config_client::user_write::PresentedDelegation>,
+}
+
+impl Refresher {
+    fn adopt(&self, authorization: &str) -> Result<()> {
+        let presented = self
+            .presented
+            .as_ref()
+            .ok_or(gents_store::config_client::user_write::RefreshRefused)?;
+        presented.refresh(&self.node, authorization)?;
+        Ok(())
+    }
 }
 
 pub async fn install_session(
@@ -91,8 +122,14 @@ pub async fn install_session(
         &identity.context(),
         actor.as_str(),
     );
-    let user_access =
-        ConfigAccess::local_as(node, actor.clone()).with_presented_delegation(presented);
+    let refresher = Refresher {
+        node: node.clone(),
+        presented: presented.clone(),
+    };
+    let user = UserSession {
+        access: ConfigAccess::local_as(node, actor.clone()).with_presented_delegation(presented),
+        refresher,
+    };
     upgrade
         .max_message_size(MAX_BODY.saturating_add(128))
         .max_frame_size(MAX_BODY.saturating_add(128))
@@ -102,7 +139,7 @@ pub async fn install_session(
                 state,
                 home,
                 access,
-                user_access,
+                user,
                 runtime_access,
                 actor,
             ))
@@ -113,13 +150,16 @@ pub async fn install_session(
         })
 }
 
-async fn receive(socket: &mut WebSocket) -> Result<ClientMessage> {
+async fn receive(socket: &mut WebSocket, refresher: &Refresher) -> Result<ClientMessage> {
     loop {
         match socket.next().await {
             Some(Ok(Message::Text(text))) => {
-                return Ok(
-                    tokio::task::spawn_blocking(move || serde_json::from_str(&text)).await??,
-                );
+                match tokio::task::spawn_blocking(move || serde_json::from_str(&text)).await?? {
+                    ClientMessage::Delegation { authorization } => {
+                        refresher.adopt(&authorization)?
+                    }
+                    message => return Ok(message),
+                }
             }
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
             Some(Ok(_)) | None => anyhow::bail!("pack session closed"),
@@ -136,6 +176,7 @@ async fn send(socket: &mut WebSocket, value: Value) -> Result<()> {
 
 struct SessionApprover {
     socket: Arc<Mutex<WebSocket>>,
+    refresher: Refresher,
     next_id: AtomicU64,
     pending_id: AtomicU64,
 }
@@ -155,7 +196,10 @@ impl SessionApprover {
         let mut socket = self.socket.lock().await;
         send(&mut socket, proposal).await.map_err(transport)?;
         loop {
-            match receive(&mut socket).await.map_err(transport)? {
+            match receive(&mut socket, &self.refresher)
+                .await
+                .map_err(transport)?
+            {
                 ClientMessage::Read {
                     id,
                     document,
@@ -290,7 +334,10 @@ impl PackEffectApprover for SessionApprover {
     async fn client_finished(&self, txn: &ConfigApplyTxn<'_>) -> Result<(), PackApprovalError> {
         let mut socket = self.socket.lock().await;
         loop {
-            match receive(&mut socket).await.map_err(transport)? {
+            match receive(&mut socket, &self.refresher)
+                .await
+                .map_err(transport)?
+            {
                 ClientMessage::Read {
                     id,
                     document,
@@ -328,21 +375,12 @@ async fn run(
     state: RuntimeHttpState,
     home: PathBuf,
     access: ConfigAccess,
-    user_access: ConfigAccess,
+    user: UserSession,
     runtime_access: ConfigAccess,
     actor: identity::Did,
 ) {
     let socket = Arc::new(Mutex::new(socket));
-    let result = run_inner(
-        &socket,
-        &state,
-        home,
-        access,
-        user_access,
-        runtime_access,
-        actor,
-    )
-    .await;
+    let result = run_inner(&socket, &state, home, access, user, runtime_access, actor).await;
     if let Err((error, outcome)) = result {
         let _ = send(
             &mut *socket.lock().await,
@@ -357,10 +395,14 @@ async fn run_inner(
     state: &RuntimeHttpState,
     home: PathBuf,
     access: ConfigAccess,
-    user_access: ConfigAccess,
+    user: UserSession,
     runtime_access: ConfigAccess,
     actor: identity::Did,
 ) -> std::result::Result<(), (anyhow::Error, &'static str)> {
+    let UserSession {
+        access: user_access,
+        refresher,
+    } = user;
     let runtime_did = identity::Did::new(&state.node_did)
         .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
     runtime_access
@@ -376,7 +418,9 @@ async fn run_inner(
         .await
         .map_err(|error| (error, "not_installed"))?;
     let prepare = async {
-        let ClientMessage::Start { request } = receive(&mut *socket.lock().await).await? else {
+        let ClientMessage::Start { request } =
+            receive(&mut *socket.lock().await, &refresher).await?
+        else {
             anyhow::bail!("pack session requires a start request");
         };
         anyhow::ensure!(
@@ -502,7 +546,7 @@ async fn run_inner(
     .map_err(|error| (error, "not_installed"))?;
     let evidence = match tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        receive(&mut *socket.lock().await),
+        receive(&mut *socket.lock().await, &refresher),
     )
     .await
     .map_err(|error| {
@@ -557,6 +601,7 @@ async fn run_inner(
     );
     let approver = Arc::new(SessionApprover {
         socket: socket.clone(),
+        refresher,
         next_id: AtomicU64::new(1),
         pending_id: AtomicU64::new(0),
     });
