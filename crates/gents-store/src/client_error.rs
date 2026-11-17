@@ -263,6 +263,7 @@ impl BridgeError {
         }
         let transport = crate::config_client::TransactionFailure::config_client_error(&error)
             .and_then(crate::config_client::ConfigClientError::transport_error)
+            .or_else(|| gents_protocol::graphql::graphql_transport_source(error.as_ref()))
             .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
         let message = gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string();
         let Some(transport) = transport else {

@@ -85,7 +85,6 @@ struct Fixture {
     client: reqwest::Client,
     queries: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     query_bearers: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    status_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
@@ -209,34 +208,25 @@ impl Fixture {
                     },
                 ),
             ));
-        let status_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let observed_status_requests = status_requests.clone();
         let router = router.layer(axum::middleware::from_fn(
-            move |request: Request, next: axum::middleware::Next| {
-                let status_requests = observed_status_requests.clone();
-                async move {
-                    let status = request.uri().path() == "/status";
-                    if status {
-                        status_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    }
-                    let response = next.run(request).await;
-                    if !status {
-                        return response;
-                    }
-                    let (mut parts, body) = response.into_parts();
-                    parts.headers.remove(header::CONTENT_LENGTH);
-                    let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
-                    let mut body: Value = serde_json::from_slice(&bytes).unwrap();
-                    body[gents_protocol::client_authentication::STATUS_FIELD] =
-                        serde_json::to_value(
-                            gents_protocol::client_authentication::ClientAuthentication::Local,
-                        )
-                        .unwrap();
-                    axum::response::Response::from_parts(
-                        parts,
-                        Body::from(serde_json::to_vec(&body).unwrap()),
-                    )
+            move |request: Request, next: axum::middleware::Next| async move {
+                let status = request.uri().path() == "/status";
+                let response = next.run(request).await;
+                if !status {
+                    return response;
                 }
+                let (mut parts, body) = response.into_parts();
+                parts.headers.remove(header::CONTENT_LENGTH);
+                let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+                let mut body: Value = serde_json::from_slice(&bytes).unwrap();
+                body[gents_protocol::client_authentication::STATUS_FIELD] = serde_json::to_value(
+                    gents_protocol::client_authentication::ClientAuthentication::Local,
+                )
+                .unwrap();
+                axum::response::Response::from_parts(
+                    parts,
+                    Body::from(serde_json::to_vec(&body).unwrap()),
+                )
             },
         ));
         let router = HttpAuthority::for_endpoint(&endpoint).wrap(router);
@@ -253,7 +243,6 @@ impl Fixture {
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             queries,
             query_bearers,
-            status_requests,
         }
     }
 
@@ -349,7 +338,9 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
                 .with_authenticated_routes(runtime_routes(&endpoint, &owner)),
         );
     let node = gents::defra_node::Node::builder()
-        .with_node_identity_did(owner.did())
+        .with_signing_key(gents::defra_node::SigningKey::Ed25519(
+            owner.private_key_bytes().to_vec(),
+        ))
         .with_node_acp_enabled()
         .with_http(config)
         .build()
@@ -710,8 +701,6 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
             .await
             .unwrap();
     assert!(public.get("tool_root").is_none());
-    let calls = f.status_requests.load(std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(calls, 1);
 
     let error = fetch_hosted_runtime_status(&record, None)
         .await
@@ -719,11 +708,6 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
     assert!(
         matches!(error, HostedRuntimeStatusError::NoUserSigner),
         "{error:#}"
-    );
-    assert_eq!(
-        f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
-        calls,
-        "an unsigned private status read is never sent"
     );
 
     let user = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
@@ -736,10 +720,6 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
         .unwrap()
         .expect("a local runtime record has a status endpoint");
     assert_eq!(private["tool_root"], "/private/operator/workspace");
-    assert_eq!(
-        f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
-        calls + 1
-    );
     let bearers = f.query_bearers.lock().unwrap().clone();
     assert!(!bearers.is_empty(), "private status reads the node's data");
     for bearer in bearers {

@@ -5,6 +5,25 @@ use super::fixtures::{
 use super::seeding::{seed_agent_request, seed_agent_tool_call};
 use super::*;
 
+async fn document_read_grant(
+    node: &Arc<defra_node::Node>,
+    actor: &identity::Did,
+    collection: &str,
+    doc: &str,
+) -> anyhow::Result<bool> {
+    use anyhow::Context;
+    let observed = gents_store::identity::observe_document_permissions(
+        node,
+        node.node_identity_did().context("node identity missing")?,
+        actor,
+        Some((collection, doc)),
+        &["read".to_owned()],
+    )
+    .await?
+    .context("document permission observation missing")?;
+    Ok(observed.held[0])
+}
+
 #[tokio::test]
 async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() -> anyhow::Result<()>
 {
@@ -183,8 +202,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             &filters,
         )
         .await?;
-    let peer = admin_node
-        .p2p()
+    let peer = crate::node_access::operations(admin_node)
         .context("admin has no P2P")?
         .local_peer_id()
         .await
@@ -213,7 +231,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             http_sees, embedded_sees,
             "receiver surfaces must agree: source reader tuple must not be assumed"
         );
-        http_sees
+        document_read_grant(admin_node, &reader, "NetworkEnrollmentRequest", &doc).await?
     };
     assert_eq!(
         count(&http(admin_address, &outsider)?.execute(&query).await?),
@@ -279,7 +297,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             http_sees, embedded_sees,
             "receiver surfaces must agree without a sender grant"
         );
-        http_sees
+        document_read_grant(admin_node, &reader, "NetworkEnrollmentRequest", &doc_b).await?
     };
     {
         let txn = admin_node.database().new_txn(false).await?;
@@ -302,7 +320,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             http_sees, embedded_sees,
             "receiver surfaces must agree once the relationship is delivered"
         );
-        http_sees
+        document_read_grant(admin_node, &reader, "NetworkEnrollmentRequest", &doc).await?
     };
     for receiver_case in &receiver_cases {
         let observed = match (
@@ -321,7 +339,13 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     replica_reads.insert(
         "pending",
         gents_lean_vocab::families::identity_operations_replica_grant_reads::ReplicaReads {
-            runtime_read: count(&admin_local.execute(&query).await?) != 0,
+            runtime_read: document_read_grant(
+                admin_node,
+                &reader,
+                "NetworkEnrollmentRequest",
+                &doc,
+            )
+            .await?,
             user_read: count(&http(admin_address, &user)?.execute(&query).await?) != 0,
             agent_read: count(&http(admin_address, &agent)?.execute(&query).await?) != 0,
             outsider_read: count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
@@ -352,7 +376,13 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     replica_reads.insert(
         "linked",
         gents_lean_vocab::families::identity_operations_replica_grant_reads::ReplicaReads {
-            runtime_read: count(&admin_local.execute(&query).await?) != 0,
+            runtime_read: document_read_grant(
+                admin_node,
+                &reader,
+                "NetworkEnrollmentRequest",
+                &doc,
+            )
+            .await?,
             user_read: count(&http(admin_address, &user)?.execute(&query).await?) != 0,
             agent_read: count(&http(admin_address, &agent)?.execute(&query).await?) != 0,
             outsider_read: count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
@@ -412,7 +442,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         txn.commit().await?;
     }
     let repaired_user_read = count(&http(admin_address, &user)?.execute(&query).await?) != 0;
-    let repaired_runtime_read = count(&admin_local.execute(&query).await?) != 0;
+    let repaired_runtime_read =
+        document_read_grant(admin_node, &reader, "NetworkEnrollmentRequest", &doc).await?;
     let repaired_agent_read = count(&http(admin_address, &agent)?.execute(&query).await?) != 0;
     let session = http(admin_address, &candidate)?.write(
         "test.transport.private_session",
@@ -424,11 +455,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
         escape_graphql_string(&session)
     );
-    assert!(gents_protocol::graphql::graphql_rows_from_response(
-        &admin_local.execute(&session_query).await?,
-        "AgentSession"
-    )
-    .is_empty());
+    assert!(!document_read_grant(admin_node, &reader, "AgentSession", &session).await?);
     assert!(gents_protocol::graphql::graphql_rows_from_response(
         &http(admin_address, &outsider)?
             .execute(&session_query)
@@ -519,11 +546,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             outsider_read: count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
         },
     );
-    let repaired_app_read = !gents_protocol::graphql::graphql_rows_from_response(
-        &admin_local.execute(&session_query).await?,
-        "AgentSession",
-    )
-    .is_empty();
+    let repaired_app_read =
+        document_read_grant(admin_node, &reader, "AgentSession", &session).await?;
 
     let runtime_registry = admin_local.write(
         "test.transport.runtime_registry",
@@ -710,9 +734,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         drop(view);
         txn.commit().await?;
     }
-    let reopened_local = ConfigAccess::local_as(reopened.clone(), reader.clone());
     assert_eq!(
-        count(&reopened_local.execute(&query).await?) != 0,
+        document_read_grant(&reopened, &reader, "NetworkEnrollmentRequest", &doc).await?,
         repaired_runtime_read,
         "a restart must not change the runtime's read of the repaired request"
     );
@@ -736,11 +759,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     );
     discovery.insert("revoked-user-write", revoked_wrote);
     assert_eq!(
-        !gents_protocol::graphql::graphql_rows_from_response(
-            &reopened_local.execute(&session_query).await?,
-            "AgentSession"
-        )
-        .is_empty(),
+        document_read_grant(&reopened, &reader, "AgentSession", &session).await?,
         repaired_app_read,
         "a restart must not change the runtime's read of the application session"
     );

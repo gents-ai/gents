@@ -194,12 +194,17 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 lifecycle.begin_owned_execution(&writer).await.unwrap();
                 lifecycle.validate_owned_execution().await.unwrap();
             }
-            // The runtime can see the Agent configuration but does not own this request.
-            let node_view = admin.execute("{ AgentRequest { _docID } }").await.unwrap();
-            assert!(node_view["data"]["AgentRequest"]
-                .as_array()
-                .unwrap()
-                .is_empty());
+            let permissions = gents_store::identity::observe_document_permissions(
+                &node,
+                runtime.did(),
+                &::identity::Did::new(runtime.did()).unwrap(),
+                Some(("AgentRequest", &lifecycle.request().doc_id)),
+                &["read".to_owned()],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(permissions.held, [false]);
             let doc_id = gents_store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
             agent_access
                 .write(

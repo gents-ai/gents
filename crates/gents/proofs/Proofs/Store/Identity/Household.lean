@@ -438,6 +438,9 @@ def allowedIn : List ResourceDefinition → Nat → State → DID → String →
             allowedIn definitions fuel state actor target targetId targetRelation)
     | _, _ => false
 
+/-- Document-specific ACP grants, independent of a native NAC administrator's
+query DAC bypass. Native conformance observes named document permissions; ordinary
+client query isolation also depends on the native node permissions it holds. -/
 def allowed (fuel : Nat) (state : State) (actor resource id permission : String) : Bool :=
   allowedIn policy fuel state actor resource id permission
 

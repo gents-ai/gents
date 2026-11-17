@@ -26,7 +26,9 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
     let node = EmbeddedNode::builder()
         .data_path(data_dir)
         .with_storage_backend(StorageBackend::Regolith)
-        .with_http(HttpConfig::with_addr(address))
+        .with_http(HttpConfig::with_addr(address).with_extra_routes(
+            gents_store::test_support::local_authentication_route(principal),
+        ))
         .with_p2p(gents_p2p::test_support::transport::test_p2p_config(
             &gents_p2p::test_support::transport::TestP2pAdmission::default(),
             data_dir,
@@ -91,7 +93,7 @@ async fn assert_access_control(
         .await
         .expect_err("an anonymous HTTP mutation must be refused");
     assert!(
-        refused.to_string().contains("not authorized"),
+        refused.is_permission_denied(),
         "unexpected refusal: {refused:#}"
     );
     let refused_schema = anonymous

@@ -271,3 +271,20 @@ pub async fn client_journal_node(
     node.add_collection(&unbound_journal_schema()).await?;
     Ok(node)
 }
+
+pub fn local_authentication_route(node_did: impl Into<String>) -> axum::Router {
+    let node_did = node_did.into();
+    axum::Router::new().route(
+        "/status",
+        axum::routing::get(move || {
+            let node_did = node_did.clone();
+            async move {
+                axum::Json(serde_json::json!({
+                    "node_did": node_did,
+                    (gents_protocol::client_authentication::STATUS_FIELD):
+                        gents_protocol::client_authentication::ClientAuthentication::Local,
+                }))
+            }
+        }),
+    )
+}

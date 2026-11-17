@@ -2575,7 +2575,7 @@ const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-observe/src/observe/trace_export.rs", &["looks_like_deadline_or_inference_failure"]),
     ("crates/gents-pack/src/plugin/store.rs", &["is_not_found"]),
     ("crates/gents-protocol/src/graphql/response.rs", &["is_collection_missing_error_message"]),
-    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_error_in_chain"]),
+    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_source"]),
     ("crates/gents-protocol/src/node_readiness.rs", &["is_behavior_unavailable_rejection"]),
     ("crates/gents-service/src/native_service.rs", &["ensure_launchd_result"]),
     ("crates/gents-session/src/workspace/action_plan.rs", &["parse_action_plan_json"]),

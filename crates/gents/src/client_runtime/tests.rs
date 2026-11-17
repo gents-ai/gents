@@ -111,7 +111,7 @@ fn desktop_graphql_rewrites_loopback_endpoint_for_remote_status_host() {
 }
 
 #[test]
-fn desktop_graphql_is_added_to_status_payload() {
+fn canonical_graphql_is_rewritten_in_status_payload() {
     let payload = normalize_runtime_connection_payload(
         serde_json::json!({
             "node_did": "did:key:z6MkNode",
@@ -121,9 +121,7 @@ fn desktop_graphql_is_added_to_status_payload() {
     );
 
     assert_eq!(
-        payload
-            .get("desktop_graphql")
-            .and_then(serde_json::Value::as_str),
+        payload.get("graphql").and_then(serde_json::Value::as_str),
         Some("http://100.73.235.38:9181/api/v0/graphql")
     );
 }

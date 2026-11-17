@@ -120,7 +120,7 @@ async fn planned_renewal_keeps_the_runtime_connected() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revoked_user_is_answered_with_omitted_roots() {
+async fn revoked_user_is_refused_by_the_served_runtime() {
     let home = crate::client_test_support::ServedRuntimeHome::start().await;
     let access = home.user_graphql_access();
     let before =
@@ -138,25 +138,22 @@ async fn revoked_user_is_answered_with_omitted_roots() {
         )
         .await
         .unwrap();
-    let read = access.execute("{ Node { _docID } }").await.unwrap();
-    assert!(read.get("errors").is_none(), "{read}");
-    assert!(read["data"].get("Node").is_none(), "{read}");
-    let mut resubscribed = access.subscribe(subscription).await.unwrap();
-    for stream in [&mut open, &mut resubscribed] {
-        assert!(
-            tokio::time::timeout(Duration::from_secs(2), stream.recv())
-                .await
-                .is_err(),
-            "the stream stays silent after revocation"
-        );
-    }
+    let read = access.execute("{ Node { _docID } }").await.unwrap_err();
+    assert!(read.is_permission_denied(), "{read}");
+    assert!(access.subscribe(subscription).await.is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), open.recv())
+            .await
+            .is_err(),
+        "the existing stream stays silent after revocation"
+    );
     let hidden =
         gents_observe::client_projection::query::load_node_snapshot_on(&access, home.node_did())
             .await
             .unwrap_err();
     assert!(matches!(
         hidden,
-        gents_observe::client_projection::query::SnapshotReadError::NodeUnavailable
+        gents_observe::client_projection::query::SnapshotReadError::Refused(_)
     ));
     home.shutdown().await;
 }

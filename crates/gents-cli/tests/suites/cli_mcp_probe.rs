@@ -457,11 +457,15 @@ impl McpFixture {
         let store_key = gents_store::local::store_key::open_home_store_key(&home, &data).await?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+        let routes = gents_store::test_support::local_authentication_route(node_did.clone());
         let node = Arc::new(
             gents_store::local::store_key::persistent_builder(&data, &store_key)?
                 .with_node_identity_did(node_did.clone())
                 .with_node_acp_enabled()
-                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
+                .with_http(
+                    gents::defra_node::HttpConfig::with_listener(listener)?
+                        .with_extra_routes(routes),
+                )
                 .build()
                 .await?,
         );

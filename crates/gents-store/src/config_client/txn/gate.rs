@@ -148,11 +148,7 @@ impl LocalConfigAccess {
             return Ok(());
         }
 
-        require_mutation_signer(
-            &self.node,
-            self.identity.as_ref(),
-            self.agent_signer.as_ref(),
-        )
+        self.require_mutation_signer()
     }
 
     pub(crate) fn require_mutation_signer(&self) -> Result<()> {
