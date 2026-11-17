@@ -362,6 +362,24 @@ impl ClientCore {
         &self.node_identity
     }
 
+    /// The User's endpoint at `url` of the saved home `record`, keeping what
+    /// its status reports with the saved record (`home_endpoint::user_saved`).
+    pub(crate) fn saved_user_endpoint(
+        &self,
+        url: &str,
+        record: &PeerRecord,
+    ) -> anyhow::Result<gents_store::config_client::GraphqlEndpoint> {
+        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+            self.node_identity.private_key_bytes(),
+        )?;
+        Ok(crate::client::home_endpoint::user_saved(
+            url,
+            &capability,
+            record,
+            &self.sync_state,
+        )?)
+    }
+
     pub fn node(&self) -> &EmbeddedNode {
         self.node.as_ref()
     }

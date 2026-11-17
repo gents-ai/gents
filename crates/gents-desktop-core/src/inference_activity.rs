@@ -32,10 +32,7 @@ impl crate::client::ClientCore {
             let Some(graphql) = record.graphql.as_deref() else {
                 return Ok(None);
             };
-            let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-                self.node_identity().private_key_bytes(),
-            )?;
-            crate::client::home_endpoint::user_on(graphql, &capability, record)?
+            self.saved_user_endpoint(graphql, record)?
         } else {
             return Ok(None);
         };

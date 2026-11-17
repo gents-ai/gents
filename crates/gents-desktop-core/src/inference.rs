@@ -510,7 +510,8 @@ impl crate::client::ClientCore {
             .graphql
             .as_deref()
             .context("runtime has no HTTP endpoint")?;
-        read_inference_setup_state_from(graphql, Some(record), node_did, self.node_identity()).await
+        let saved = self.saved_user_endpoint(graphql, record)?;
+        read_inference_setup_state_from(graphql, Some(saved), node_did, self.node_identity()).await
     }
 }
 
@@ -518,7 +519,7 @@ impl crate::client::ClientCore {
 /// opened; bound the HTTP wait as well as the response body.
 async fn read_inference_setup_state_from(
     graphql: &str,
-    record: Option<&crate::client::PeerRecord>,
+    saved: Option<gents_store::config_client::GraphqlEndpoint>,
     node_did: &str,
     client_identity: &crate::client::PrincipalIdentity,
 ) -> anyhow::Result<InferenceSetupState> {
@@ -542,12 +543,15 @@ async fn read_inference_setup_state_from(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-        client_identity.private_key_bytes(),
-    )?;
-    let endpoint = match record {
-        Some(record) => crate::client::home_endpoint::user_on(graphql, &capability, record)?,
-        None => crate::client::home_endpoint::user_at(graphql, &capability, None)?,
+    let endpoint = match saved {
+        Some(saved) => saved,
+        None => crate::client::home_endpoint::user_at(
+            graphql,
+            &gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+                client_identity.private_key_bytes(),
+            )?,
+            None,
+        )?,
     };
     let mut response = endpoint
         .send_resolving(|endpoint| endpoint.authorize(client.get(url.clone())))
