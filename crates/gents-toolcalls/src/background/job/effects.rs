@@ -1339,7 +1339,7 @@ mod tests {
         harness.close().await;
     }
 
-    /// C2: the staged spawn really is a workflow child. Its request carries the
+    /// The staged spawn really is a workflow child. Its request carries the
     /// `PluginJob` creation intent, which is what the runtime reads -- and
     /// verifies -- to decide whether to tell the child where its answer
     /// returns. A spawn without it would get an ordinary session's context.

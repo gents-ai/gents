@@ -140,9 +140,12 @@ pub(super) async fn render_request_context_message(
 }
 
 /// Whether `request` runs in a session a plugin job opened, from that session's
-/// verified creation receipt. A read that fails says `false`: one context
-/// sentence is not worth failing a turn over, and the absent sentence is the
-/// same as an ordinary session's.
+/// verified creation receipt.
+///
+/// A read that fails says `false`, because one context sentence is not worth
+/// failing a turn over -- but it **logs** at warn: a transient failure would
+/// otherwise drop the sentence mid-session with no trace, which changes the
+/// prompt's prefix and so the model's cache, for no visible reason.
 async fn plugin_job_child(node: &std::sync::Arc<defra_node::Node>, request: &AgentRequest) -> bool {
     let scope = gents_protocol::session::SessionScope {
         node_did: request.node_did.clone(),
@@ -150,9 +153,18 @@ async fn plugin_job_child(node: &std::sync::Arc<defra_node::Node>, request: &Age
         requester_did: request.requester_did.clone(),
     };
     let access = gents_store::config_client::ConfigAccess::local(node.clone());
-    gents_session::session::origin::verified_plugin_job_child(&access, &scope)
-        .await
-        .unwrap_or(false)
+    match gents_session::session::origin::verified_plugin_job_child(&access, &scope).await {
+        Ok(is_child) => is_child,
+        Err(error) => {
+            tracing::warn!(
+                node_did = %request.node_did,
+                session_id = %request.session_id,
+                error = %format!("{error:#}"),
+                "could not read the session's creation receipt; rendering its context as a non-child, so a workflow child may miss the sentence telling it where its answer returns"
+            );
+            false
+        }
+    }
 }
 
 fn assemble_request_context_message(

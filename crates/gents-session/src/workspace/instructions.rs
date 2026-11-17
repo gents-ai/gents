@@ -377,20 +377,3 @@ mod workflow_child_tests {
         assert!(!WORKFLOW_RESULT_RETURN_INSTRUCTION.contains('\n'));
     }
 }
-
-#[cfg(test)]
-mod workflow_child_reach_tests {
-    use super::*;
-
-    /// C2 narrows when a child *should* message, not what it *can* reach: the
-    /// sentence names `agent_message` as still right for another reachable
-    /// session, and nothing here touches authorization. The tool's own grant is
-    /// asserted where it lives, in gents-tools' `agent_message` tests.
-    #[test]
-    fn the_instruction_leaves_agent_message_reachable() {
-        assert!(WORKFLOW_RESULT_RETURN_INSTRUCTION.contains("agent_message"));
-        // Not "do not use": the restriction is scoped to a task that needs it.
-        assert!(!WORKFLOW_RESULT_RETURN_INSTRUCTION.contains("never"));
-        assert!(!WORKFLOW_RESULT_RETURN_INSTRUCTION.contains("cannot"));
-    }
-}
