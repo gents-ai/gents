@@ -552,6 +552,11 @@ jobs:
           afterburner: ${{ matrix.go }}
           role: ${{ matrix.role }}
 
+      # The native group's jobs run their tests under nextest.
+      - name: Install cargo-nextest
+        if: matrix.group == 'native'
+        run: .github/scripts/setup-nextest.sh
+
       - name: Run ${{ matrix.job }}
         run: make gate-run JOB="${{ matrix.job }}"
 

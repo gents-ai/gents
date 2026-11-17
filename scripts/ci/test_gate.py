@@ -113,10 +113,11 @@ class Selection(unittest.TestCase):
         selection = select("crates/gents-cli/src/lib.rs")
         selected = groups(selection)
         self.assertEqual(selected["cli"], ["gents-cli"])
-        self.assertEqual(set(selected), {"cli", "desktop", "native"})
+        self.assertEqual(set(selected), {"cli", "desktop", "native", gate.MACOS_ONLY})
         self.assertEqual(selected["desktop"], ["gents-client-host"])
         self.assertEqual(selected["native"], ["gents-desktop-bridge", "gents-fixture-host", "gents-desktop-tauri"])
-        native = next(entry for entry in selection["matrix"] if entry["group"] == "native")
+        self.assertEqual(selected[gate.MACOS_ONLY], [])
+        native = next(entry for entry in selection["matrix"] if entry["job"] == f"test:{gate.MACOS_ONLY}")
         self.assertEqual(native["macos_tests"], ["gents-cli", "gents-client-host"])
         self.assertTrue(native["journey"])
         self.assertTrue(native["go"])
@@ -127,14 +128,14 @@ class Selection(unittest.TestCase):
     def test_a_store_change_tests_everything_above_it(self):
         selection = select("crates/gents-store/src/graphql.rs")
         selected = groups(selection)
-        self.assertEqual(set(selected), {"store", "session", "runtime", "cli", "desktop", "native"})
+        self.assertEqual(set(selected), {"store", "session", "runtime", "cli", "desktop", "native", gate.MACOS_ONLY})
         self.assertEqual(selected["store"], gate.GROUPS[1].packages)
         self.assertNotIn("gents-protocol", selection["affected"])
         self.assertFalse(selection["contract"]["ratchets"])
 
     def test_proofs_replay_every_consumer_without_relinting(self):
         selection = select("crates/gents/proofs/Proofs/Request/CausalHop.lean")
-        self.assertEqual(set(groups(selection)), {group.name for group in gate.GROUPS})
+        self.assertEqual(set(groups(selection)), {group.name for group in gate.GROUPS} | {gate.MACOS_ONLY})
         self.assertEqual(selection["built"], [])
         self.assertIn("contract", selection["jobs"])
         self.assertNotIn("lint", selection["jobs"])
@@ -159,7 +160,7 @@ class Selection(unittest.TestCase):
         self.assertIn("lint", selection["jobs"])
         self.assertTrue(selection["contract"]["ratchets"])
         proofs = select("crates/gents/proofs/Proofs.lean", tier="draft")
-        self.assertEqual(set(groups(proofs)), {group.name for group in gate.GROUPS})
+        self.assertEqual(set(groups(proofs)), {group.name for group in gate.GROUPS} | {gate.MACOS_ONLY})
 
     def test_prose_selects_nothing(self):
         selection = select("docs/upgrade-from-rc1.md", "CHANGELOG.md", "AGENTS.md")
@@ -252,7 +253,7 @@ class Shards(unittest.TestCase):
 
     def test_the_portable_groups_build_once_and_run_as_slices(self):
         selection = sharded(4, everything=True)
-        self.assertEqual(set(groups(selection)), {"native"})
+        self.assertEqual(set(groups(selection)), {"native", gate.MACOS_ONLY})
         self.assertEqual(archived(selection), self.PORTABLE)
         self.assertTrue(selection["archives"][0]["go"])
         self.assertEqual([(entry["index"], entry["count"]) for entry in selection["shards"]],
@@ -271,7 +272,7 @@ class Shards(unittest.TestCase):
 
     def test_zero_or_unset_keeps_one_job_per_group(self):
         for selection in (select(everything=True), sharded(0, everything=True)):
-            self.assertEqual(set(groups(selection)), {group.name for group in gate.GROUPS})
+            self.assertEqual(set(groups(selection)), {group.name for group in gate.GROUPS} | {gate.MACOS_ONLY})
             self.assertEqual((selection["archives"], selection["shards"]), ([], []))
 
     def test_never_more_slices_than_crates_with_tests(self):
@@ -378,6 +379,112 @@ def labels_of(value):
     plain = plain.strip("[]")
     items = [item.strip().strip('"') for item in re.split(r"[,\s-]+\s", " " + plain + " ") if item.strip()]
     return {label for label in literals + items if label}
+
+
+class RepositoryVariables(unittest.TestCase):
+    """The plan a push to main and a pull request make with GENTS_CI_PORTABLE_SHARDS
+    and GENTS_CI_TEST_CACHE set, through the plan step's environment and outputs.
+
+    GitHub reads `vars` when it creates a run: a run created before a variable
+    changed plans with the old value, however late its plan job starts."""
+
+    NAMES = ("GATE_EVENT", "GATE_LABELS", "GATE_TEST_CACHE", "GATE_TEST_CACHE_INPUT", "GATE_TEST_CACHE_MAIN",
+             "GATE_PLAN", "GATE_PORTABLE_SHARDS", "GATE_EVERYTHING", "GATE_ONLY", "GATE_TIER", "GITHUB_OUTPUT",
+             "GITHUB_STEP_SUMMARY")
+
+    def planned(self, files=None, **environment):
+        saved = {name: os.environ.pop(name, None) for name in self.NAMES}
+        os.environ.update({"GATE_TEST_CACHE": "on", "GATE_PORTABLE_SHARDS": "1", "GATE_LABELS": "[]", **environment})
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                listed = None
+                if files is not None:
+                    listed = Path(directory) / "changed-files.txt"
+                    listed.write_text("\n".join(files) + "\n")
+                os.environ["GITHUB_OUTPUT"] = str(Path(directory) / "output")
+                arguments = type("Arguments", (), {"everything": False, "files": listed and str(listed),
+                                                   "base": "HEAD"})()
+                with contextlib.redirect_stdout(io.StringIO()):
+                    gate.emit(gate.resolve_plan(arguments))
+                lines = Path(os.environ["GITHUB_OUTPUT"]).read_text().splitlines()
+                return {key: json.loads(value) if key != "tests" else value
+                        for key, value in (line.split("=", 1) for line in lines)}
+        finally:
+            for name in self.NAMES:
+                os.environ.pop(name, None)
+            os.environ.update({name: value for name, value in saved.items() if value is not None})
+
+    def assert_cached_build(self, outputs, mode):
+        portable = {f"test:{group.name}" for group in gate.GROUPS if group.runner == "portable"}
+        self.assertIn("build:portable", outputs["jobs"])
+        self.assertNotIn("shard:portable", outputs["jobs"])
+        self.assertFalse(portable & set(outputs["jobs"]))
+        self.assertFalse(portable & {entry["job"] for entry in outputs["matrix"]["include"]})
+        [archive] = outputs["archives"]["include"]
+        self.assertTrue(archive["run"])
+        self.assertEqual(archive["test_cache"], mode)
+        self.assertEqual(outputs["shards"]["include"], [])
+
+    def test_the_plan_step_reads_the_repository_variables(self):
+        step = CI.split("- name: Select gate jobs", 1)[1].split("\n      - ", 1)[0]
+        for line in ("GATE_EVENT: ${{ github.event_name }}",
+                     "GATE_TEST_CACHE: ${{ vars.GENTS_CI_TEST_CACHE }}",
+                     "GATE_PORTABLE_SHARDS: ${{ inputs.portable_shards || vars.GENTS_CI_PORTABLE_SHARDS }}"):
+            self.assertIn(line, step)
+
+    def test_build_and_shard_read_the_plan_outputs_gate_writes(self):
+        jobs = workflow_jobs(CI)
+        for name in ("jobs", "archives", "shards", "matrix", "plan", "tests"):
+            self.assertIn(f"{name}: ${{{{ steps.plan.outputs.{name} }}}}", jobs["plan"])
+        self.assertIn("contains(fromJSON(needs.plan.outputs.jobs), 'build:portable')", jobs["build"])
+        self.assertIn("matrix: ${{ fromJSON(needs.plan.outputs.archives) }}", jobs["build"])
+        self.assertIn("contains(fromJSON(needs.plan.outputs.jobs), 'shard:portable')", jobs["shard"])
+        self.assertIn("matrix: ${{ fromJSON(needs.plan.outputs.shards) }}", jobs["shard"])
+
+    def test_a_push_to_main_builds_once_and_runs_the_cached_slice_in_full(self):
+        outputs = self.planned(GATE_EVENT="push", GATE_EVERYTHING="true", GATE_TIER="full")
+        self.assert_cached_build(outputs, "full")
+        self.assertEqual(outputs["archives"]["include"][0]["packages"].split(), Shards.PORTABLE)
+        self.assertIn(f"test:{gate.NATIVE}", outputs["jobs"])
+        self.assertIn(f"test:{gate.MACOS_ONLY}", outputs["jobs"])
+
+    def test_a_pull_request_builds_once_and_uses_the_cache(self):
+        outputs = self.planned(["crates/gents-store/src/graphql.rs"], GATE_EVENT="pull_request", GATE_TIER="full")
+        self.assert_cached_build(outputs, "on")
+        self.assertIn("gents-store", outputs["archives"]["include"][0]["packages"].split())
+
+    def test_more_slices_build_once_and_shard_uncached(self):
+        outputs = self.planned(GATE_EVENT="push", GATE_EVERYTHING="true", GATE_PORTABLE_SHARDS="3")
+        self.assertIn("build:portable", outputs["jobs"])
+        self.assertIn("shard:portable", outputs["jobs"])
+        self.assertEqual(len(outputs["shards"]["include"]), 3)
+        self.assertEqual(outputs["archives"]["include"][0]["test_cache"], "off")
+
+    def test_with_the_variables_unset_each_portable_group_is_its_own_job(self):
+        outputs = self.planned(GATE_EVENT="push", GATE_EVERYTHING="true", GATE_PORTABLE_SHARDS="0",
+                               GATE_TEST_CACHE="off")
+        self.assertNotIn("build:portable", outputs["jobs"])
+        self.assertIn("test:foundation", outputs["jobs"])
+
+
+class NativeNextest(unittest.TestCase):
+    def test_macos_only_targets_build_in_invocations_that_select_no_other_target(self):
+        packages = [package for group in gate.GROUPS if group.runner == "portable" for package in group.packages
+                    if gate.macos_only_tests(package)]
+        invocations = gate.macos_invocations(packages)
+        self.assertEqual(sorted(package for members, _ in invocations for package in members), sorted(packages))
+        for members, flags in invocations:
+            for package in members:
+                self.assertEqual(gate.target_arguments(package) & set(flags), set(gate.macos_only_tests(package)))
+        self.assertLess(len(invocations), len(packages))
+
+    def test_the_filterset_names_each_binary_and_filter(self):
+        filterset = gate.macos_filterset(["gents", "gents-cli"])
+        self.assertIn("(binary_id(=gents-cli::plugin_build_sandbox))", filterset)
+        self.assertIn("test(~a_skipped_gate_releases_the_bound_workspace)", filterset)
+        self.assertEqual(gate.binary_id("gents-client-host", ("--bin", "gents-client-host")),
+                         "gents-client-host::bin/gents-client-host")
+        self.assertEqual(gate.binary_id("gents", ("--lib",)), "gents")
 
 
 class Runners(unittest.TestCase):
@@ -561,7 +668,7 @@ class MacosOnlyTests(unittest.TestCase):
         self.assertEqual(gate.macos_only_tests("gents-host"), {})
         self.assertNotIn("editor_store_installed::",
                          gate.macos_only_tests("gents-client-host")[("--test", "integration")])
-        native = next(entry for entry in select(everything=True)["matrix"] if entry["group"] == gate.NATIVE)
+        native = next(entry for entry in select(everything=True)["matrix"] if entry["job"] == f"test:{gate.MACOS_ONLY}")
         portable = {package for group in gate.GROUPS if group.runner == "portable" for package in group.packages}
         self.assertEqual(set(native["macos_tests"]), {package for package in portable if gate.macos_only_tests(package)})
 
