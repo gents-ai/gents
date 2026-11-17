@@ -174,15 +174,13 @@ pub fn unavailable_rejection_reason(
     if failure_reason.starts_with(WORKSPACE_ROOT_READER_MISSING_PREFIX) {
         return Some(AgentReadinessUnavailableReason::WorkspaceRootReaderMissing);
     }
+    let public_reason = failure_reason
+        .strip_suffix(PLUGIN_PUBLICATION_BUSY_MESSAGE)
+        .and_then(|prefix| prefix.strip_suffix(": "))
+        .unwrap_or(failure_reason);
     AgentReadinessUnavailableReason::ALL
         .into_iter()
-        .find(|reason| {
-            reason.public_message() == failure_reason
-                || failure_reason
-                    .strip_prefix(reason.public_message())
-                    .and_then(|suffix| suffix.strip_prefix(": "))
-                    == Some(PLUGIN_PUBLICATION_BUSY_MESSAGE)
-        })
+        .find(|reason| reason.public_message() == public_reason)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -4464,10 +4464,11 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let fixture = SelfConfigFixture::new("native-pack").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
+    fixture.grant_agent_catalog().await;
     fixture.publish_workspace_root(workspace.path()).await;
     let node = fixture.db.node.clone();
     let did = fixture.db.node_identity.did().to_owned();
-    let mut cfg = config(&["tools", "agent"]);
+    let mut cfg = config(&["tools", "agent", "node"]);
     cfg.agent_did = fixture.agent_did().to_owned();
     cfg.enable_pack_install = true;
     cfg.process_ceiling.file_mode = gents_documents::FileToolMode::ReadOnly;
@@ -4623,8 +4624,8 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     .unwrap();
     assert_eq!(status["installed"]["version"], "2.0.0");
 
-    // A rebuilt artifact meets the pin: the refusal is the Tools edit that
-    // moves it, and after that edit the same update goes through.
+    // A rebuilt artifact meets the pin: guidance names the Tools explicitly
+    // in an atomic pack update; no separate pre-install pin edit is allowed.
     let (_rebuilt_dir, rebuilt_path, rebuilt) =
         gents_pack::pack::plugin_lifecycle::tests::fixture_with_output(
             "3.0.0",
@@ -4646,11 +4647,18 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         "{failure}"
     );
     let move_pin = &failure["recovery"]["next_call"];
-    assert_eq!(move_pin["argv"], json!(["tools", "update"]), "{failure}");
     assert_eq!(
-        move_pin["set"]["integrations"]["lsp"]["timeout_secs"], 31,
-        "the pin move keeps the other integrations: {failure}"
+        move_pin["argv"],
+        json!([
+            "pack",
+            "update",
+            path,
+            "--move-pin-tools",
+            format!("{}:tools", fixture.agent_did())
+        ]),
+        "{failure}"
     );
+    assert_eq!(move_pin["options"]["digest"], rebuilt.digest());
     assert_eq!(
         gents_pack::pack::read_home_install(home.path(), "fixture/native_echo_pack")
             .unwrap()
@@ -4667,9 +4675,15 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     .unwrap();
     let rebuilt_record =
         gents_pack::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+    let moved: Value =
+        serde_json::from_str(&config_call(&tools, &["tools", "get"]).await.unwrap()).unwrap();
     assert_eq!(
-        move_pin["set"]["integrations"]["plugins"][0]["digest"],
+        moved["document"]["integrations"]["plugins"][0]["digest"],
         rebuilt_record.digest.as_str()
+    );
+    assert_eq!(
+        moved["document"]["integrations"]["lsp"]["timeout_secs"], 31,
+        "atomic pin movement must preserve other integrations"
     );
     let removal = config_call(&tools, &["pack", "remove", "fixture/native_echo_pack"])
         .await

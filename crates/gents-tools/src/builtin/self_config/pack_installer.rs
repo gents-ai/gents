@@ -372,8 +372,15 @@ pub fn pin_update_call(
         .iter()
         .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>();
-    let mut next =
-        json!({"argv":argv,"options":{"digest":digest,"var":vars,"inference-slot":slots}});
+    let mut next = json!({"argv":argv,"options":{"digest":digest}});
+    // Empty arrays are not repeatable option values: config encodes them as
+    // the literal token "[]". Omit absent bindings in executable guidance.
+    if !vars.is_empty() {
+        next["options"]["var"] = json!(vars);
+    }
+    if !slots.is_empty() {
+        next["options"]["inference-slot"] = json!(slots);
+    }
     match edited {
         EditedDocuments::Refuse => {}
         EditedDocuments::Keep => next["options"]["edited"] = json!("keep"),
@@ -385,6 +392,21 @@ pub fn pin_update_call(
 #[cfg(test)]
 mod review_tests {
     use super::*;
+
+    #[test]
+    fn empty_binding_guidance_omits_options_that_would_be_literal_arrays() {
+        let args = PackChangeInput::of("acme/pack");
+        let next = pin_update_call(
+            PackOperation::Update,
+            &args,
+            &[],
+            "digest",
+            EditedDocuments::Refuse,
+        );
+        assert!(next["options"].get("var").is_none());
+        assert!(next["options"].get("inference-slot").is_none());
+        assert_eq!(next["options"]["digest"], "digest");
+    }
 
     #[test]
     fn guidance_keeps_the_operation_and_all_pin_moves() {
