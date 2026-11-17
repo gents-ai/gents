@@ -2,8 +2,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
-use std::time::Duration;
-use tokio::time::Instant;
 
 use gents::{DocumentRuntimeOptions, Gents};
 use gents_documents::{
@@ -20,6 +18,7 @@ use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
+use crate::support::live_inference::STALL_CEILING;
 #[cfg(feature = "live-e2e")]
 use crate::support::live_inference::{live_target, InferenceTarget};
 use crate::support::snapshots::SnapshotReader;
@@ -131,7 +130,7 @@ async fn boot_cycle(cycle: &Cycle, root: &Path) -> BootedAgent {
         &cycle.access,
         "NodeReadiness",
         &query,
-        Duration::from_secs(20),
+        STALL_CEILING,
         |data| {
             let row = data["NodeReadiness"]
                 .as_array()
@@ -1081,7 +1080,6 @@ async fn wait_integrator_outcome(
     closure_doc_id: &str,
     request_id: &str,
 ) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(10);
     let mut changes = access.subscribe_changes("FireOutcome").await;
     loop {
         let query = format!(
@@ -1095,11 +1093,14 @@ async fn wait_integrator_outcome(
         if let Some(row) = rows.first() {
             return row.clone();
         }
-        assert!(
-            Instant::now() < deadline,
-            "completed integrator FireOutcome did not appear for {work_unit_id}/{closure_doc_id}/{request_id}: {response:#}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!(
+                "completed integrator FireOutcome did not appear for {work_unit_id}/{closure_doc_id}/{request_id}: {response:#}"
+            );
+        }
     }
 }
 
@@ -1129,7 +1130,6 @@ async fn wait_rows(
     writing_agents: &[&str],
     ready: impl Fn(&[Value]) -> bool,
 ) -> Vec<Value> {
-    let deadline = Instant::now() + Duration::from_secs(90);
     let mut changes = access.subscribe_changes(collection).await;
     let mut request_changes = access.subscribe_changes("AgentRequest").await;
     loop {
@@ -1143,17 +1143,17 @@ async fn wait_rows(
                 panic!("cycle request terminated before writing {collection}: {failures:#?}");
             }
         }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for {collection} {work_unit_id}; last rows: {rows:#?}"
-        );
-        let _ = tokio::time::timeout_at(deadline, async {
+        if tokio::time::timeout(STALL_CEILING, async {
             tokio::select! {
                 _ = changes.recv() => (),
                 _ = request_changes.recv() => (),
             }
         })
-        .await;
+        .await
+        .is_err()
+        {
+            panic!("timed out waiting for {collection} {work_unit_id}; last rows: {rows:#?}");
+        }
     }
 }
 
@@ -1239,7 +1239,6 @@ async fn cycle_failure_diagnostics(
 
 #[cfg(feature = "live-e2e")]
 async fn wait_for_writer(access: &ConfigAccess, work_unit_id: &str, writer: &str) -> Vec<Value> {
-    let deadline = Instant::now() + Duration::from_secs(20);
     let mut changes = access.subscribe_changes("ChangeUnitImplementation").await;
     let mut request_changes = access.subscribe_changes("AgentRequest").await;
     loop {
@@ -1253,18 +1252,20 @@ async fn wait_for_writer(access: &ConfigAccess, work_unit_id: &str, writer: &str
         if !rows.is_empty() {
             return rows;
         }
-        assert!(
-            Instant::now() < deadline,
-            "writer implementation missing for {work_unit_id}: {:?}",
-            cycle_failure_diagnostics(access, work_unit_id, &[writer]).await
-        );
-        let _ = tokio::time::timeout_at(deadline, async {
+        if tokio::time::timeout(STALL_CEILING, async {
             tokio::select! {
                 _ = changes.recv() => (),
                 _ = request_changes.recv() => (),
             }
         })
-        .await;
+        .await
+        .is_err()
+        {
+            panic!(
+                "writer implementation missing for {work_unit_id}: {:?}",
+                cycle_failure_diagnostics(access, work_unit_id, &[writer]).await
+            );
+        }
     }
 }
 
@@ -1280,7 +1281,6 @@ async fn wait_receipts(
         "{{ WorkspaceReceipt(filter: {{work_unit_id: {{_eq: \"{}\"}}, kind: {{_eq: \"{kind}\"}}}}) {{ receipt_id produced_by_request_id workspace_id work_unit_id kind base_sha seal_hash head_sha changed_files }} }}",
         escape_graphql_string(work_unit_id),
     );
-    let deadline = Instant::now() + Duration::from_secs(90);
     let mut changes = access.subscribe_changes("WorkspaceReceipt").await;
     loop {
         let response = access.execute(&fields).await.unwrap();
@@ -1291,11 +1291,12 @@ async fn wait_receipts(
         if rows.len() >= count {
             return rows;
         }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for {kind} receipt of {work_unit_id}: {response:#}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("timed out waiting for {kind} receipt of {work_unit_id}: {response:#}");
+        }
     }
 }
 
@@ -1304,7 +1305,6 @@ async fn wait_callback_result(access: &ConfigAccess, work_unit_id: &str) -> Valu
     let query = format!(
         "{{ CallbackResult(filter: {{ work_unit_id: {{ _eq: \"{work_unit_id}\" }} }}) {{ _docID binding_id work_unit_id workspace_id }} }}"
     );
-    let deadline = Instant::now() + Duration::from_secs(15);
     let mut changes = access.subscribe_changes("CallbackResult").await;
     loop {
         let response = access.execute(&query).await.unwrap();
@@ -1312,11 +1312,14 @@ async fn wait_callback_result(access: &ConfigAccess, work_unit_id: &str) -> Valu
         if let Some(row) = rows.first() {
             return row.clone();
         }
-        assert!(
-            Instant::now() < deadline,
-            "workspace callback did not produce CallbackResult for {work_unit_id}: {response:#}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!(
+                "workspace callback did not produce CallbackResult for {work_unit_id}: {response:#}"
+            );
+        }
     }
 }
 
@@ -1325,7 +1328,6 @@ async fn wait_failure_outcome(access: &ConfigAccess, work_unit_id: &str) -> Valu
     let query = format!(
         "{{ FireOutcome(filter: {{ trigger_id: {{ _eq: \"change-unit-test-failure\" }}, source_handoff_id: {{ _eq: \"{work_unit_id}\" }} }}) {{ _docID source_collection source_doc_id request_id source_handoff_id reply_session_id attempt terminal_state trigger_id reason }} }}"
     );
-    let deadline = Instant::now() + Duration::from_secs(20);
     let mut changes = access.subscribe_changes("FireOutcome").await;
     loop {
         let response = access.execute(&query).await.unwrap();
@@ -1333,11 +1335,12 @@ async fn wait_failure_outcome(access: &ConfigAccess, work_unit_id: &str) -> Valu
         if let Some(row) = rows.first() {
             return row.clone();
         }
-        assert!(
-            Instant::now() < deadline,
-            "failed stage did not publish a FireOutcome for {work_unit_id}: {response:#}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("failed stage did not publish a FireOutcome for {work_unit_id}: {response:#}");
+        }
     }
 }
 
@@ -1346,7 +1349,6 @@ async fn wait_supervisor_inbox(access: &ConfigAccess, work_unit_id: &str) -> Val
     let query = format!(
         "{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: \"change-unit-supervisor-inbox\" }}, caused_by_correlation: {{ _eq: \"{work_unit_id}\" }} }}) {{ request_id requester_did session_id agent_did lifecycle_state failure_reason content }} }}"
     );
-    let deadline = Instant::now() + Duration::from_secs(20);
     let mut changes = access.subscribe_changes("AgentRequest").await;
     loop {
         let response = access.execute(&query).await.unwrap();
@@ -1359,11 +1361,12 @@ async fn wait_supervisor_inbox(access: &ConfigAccess, work_unit_id: &str) -> Val
                 return row.clone();
             }
         }
-        assert!(
-            Instant::now() < deadline,
-            "failed-stage inbox request did not settle: {response:#}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("failed-stage inbox request did not settle: {response:#}");
+        }
     }
 }
 
@@ -1373,7 +1376,7 @@ async fn wait_request_completed(access: &ConfigAccess, request_id: &str) {
         crate::support::live_inference::wait_for_request_terminal(
             access,
             request_id,
-            Duration::from_secs(10),
+            STALL_CEILING,
         )
         .await,
         "completed"
@@ -1386,7 +1389,6 @@ async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<
     let result_query = format!(
         "{{ ChangeUnitResult(filter: {{work_unit_id: {{_eq: \"{unit}\"}}}}) {{ result_id work_unit_id handoff_id reply_session_id attempt closure_id implementation_id review_id workspace_id status writer_receipt_id writer_seal_hash integrator_receipt_id integrator_seal_hash head_sha summary }} }}"
     );
-    let deadline = Instant::now() + Duration::from_secs(15);
     let mut changes = access.subscribe_changes("ChangeUnitResult").await;
     loop {
         let response = access.execute(&result_query).await.unwrap();
@@ -1397,14 +1399,16 @@ async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<
         if rows.iter().any(|row| row["status"] == "rejected") {
             return rows;
         }
-        if Instant::now() >= deadline {
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
             let diagnostic = format!(
                 "{{ Trigger(filter: {{trigger_id: {{_eq: \"change-unit-rejected\"}}}}) {{ trigger_id last_status last_error fire_count }} TriggerFire(filter: {{trigger_id: {{_eq: \"change-unit-rejected\"}}}}) {{ request_id task_id source_doc_id }} AgentRequest(filter: {{caused_by_correlation: {{_eq: \"{unit}\"}}}}) {{ request_id agent_did lifecycle_state failure_reason }} AgentToolCall {{ request_id tool_name lifecycle_state denial_reason tool_failure_class }} }}"
             );
             let state = access.execute(&diagnostic).await.unwrap();
             panic!("rejected result not written: result={rows:#?}; runtime={state:#}");
         }
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -1414,7 +1418,6 @@ async fn wait_cycle_requests_completed(access: &ConfigAccess, work_unit_id: &str
     let query = format!(
         "{{ AgentRequest(filter: {{caused_by_correlation: {{_eq: \"{work_unit_id}\"}}}}) {{ request_id agent_did lifecycle_state failure_reason }} }}"
     );
-    let deadline = Instant::now() + Duration::from_secs(20);
     let mut changes = access.subscribe_changes("AgentRequest").await;
     loop {
         let response = access.execute(&query).await.unwrap();
@@ -1436,10 +1439,11 @@ async fn wait_cycle_requests_completed(access: &ConfigAccess, work_unit_id: &str
         {
             return;
         }
-        assert!(
-            Instant::now() < deadline,
-            "cycle requests did not finish for {work_unit_id}: {relevant:#?}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("cycle requests did not finish for {work_unit_id}: {relevant:#?}");
+        }
     }
 }
