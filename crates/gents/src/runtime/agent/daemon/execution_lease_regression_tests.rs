@@ -175,7 +175,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
             .collect::<Vec<_>>(),
         vec![
             Message::user("<context>\nYour profile's model: scripted.\n</context>"),
-            Message::user("backend recovery"),
+            Message::user("route this reply"),
         ],
         "resuming preserves exactly one context and one authored prompt"
     );
