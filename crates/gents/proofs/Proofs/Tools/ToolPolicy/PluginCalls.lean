@@ -1,4 +1,5 @@
 import Mathlib.Data.Nat.Basic
+import Proofs.Shared.ToolPolicy.Presentation
 import Proofs.Session.ToolPolicy.PluginCallLimits
 
 namespace ToolPolicy.PluginCalls
@@ -77,6 +78,17 @@ those the request selected, and only while it holds tool access. Reading one
 runs nothing and reserves no effect, so describing a tool grants no authority
 a call to it would not. -/
 def describable (toolAccess selected : Bool) : Bool := toolAccess && selected
+
+/-- Presentation does not change the surface a composing plugin discovers or
+calls; dispatcher availability and child admission are still mandatory. -/
+theorem presentation_preserves_description (toolAccess selected hidden : Bool) :
+    describable toolAccess (ToolPresentation.admissible selected hidden false) =
+      describable toolAccess selected := rfl
+
+theorem presentation_preserves_child_admission (selected hidden admitted : Bool)
+    (route : DispatchRoute) :
+    childAdmissible (ToolPresentation.admissible selected hidden false) route admitted =
+      childAdmissible selected route admitted := rfl
 
 theorem described_tool_is_selected (toolAccess selected : Bool)
     (h : describable toolAccess selected = true) : selected = true := by

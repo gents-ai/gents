@@ -1,3 +1,4 @@
+import Proofs.Shared.ToolPolicy.Presentation
 import Proofs.Shared.AccountRotation.Policy
 import Proofs.Shared.CompletionRetry.OutputObligation
 import Proofs.Conformance.Family
@@ -24,3 +25,9 @@ def loopTerminal : Conformance.Family GateConfiguration TerminalAnswer where
   model := fun configuration => terminalAnswer configuration.obligations
 
 end CompletionRetry.OutputObligation
+
+attribute [conformance_function]
+  ToolPresentation.advertised
+  ToolPresentation.directAdmissible
+  ToolPresentation.admissible
+  ToolPresentation.configurationValid
