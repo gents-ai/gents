@@ -1,0 +1,4 @@
+---- MODULE MCStoreHandoffReleaseOnLastGateOwner ----
+EXTENDS StoreHandoff
+
+====
