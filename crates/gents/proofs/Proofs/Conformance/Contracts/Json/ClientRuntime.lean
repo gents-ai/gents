@@ -1030,6 +1030,9 @@ structure CompactionReducerApplyOutput where
   reducerIsIdentity : Bool
   reducerIsIdempotent : Bool
   stubbedResults : Nat
+  stubbedOriginalBytes : Nat
+  stubbedBytes : Nat
+  stubbedBytesRemoved : Nat
   deriving Lean.ToJson
 
 def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReducerApplyOutput :=
@@ -1037,7 +1040,10 @@ def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReduce
   { postMessageCount := c.postMessageCount, retainedCount := c.retainedCount
     preservesPairs := c.preservesPairs, preservesOrder := c.preservesOrder
     reducerIsIdentity := c.reducerIsIdentity, reducerIsIdempotent := c.reducerIsIdempotent
-    stubbedResults := c.stubbedResults }
+    stubbedResults := c.stubbedResults
+    stubbedOriginalBytes := c.stubbedOriginalBytes
+    stubbedBytes := c.stubbedBytes
+    stubbedBytesRemoved := c.stubbedBytesRemoved }
 
 @[conformance_family]
 def compactionReducerApply : Family CompactionReducerInput CompactionReducerApplyOutput where

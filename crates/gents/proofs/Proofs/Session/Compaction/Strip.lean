@@ -96,6 +96,49 @@ theorem stripKey_keeps_unless_smaller {sizes : ResultSizes} {key : ToolResultKey
   · rfl
   · exact absurd ((stubEligible_iff _ _).mp hs) h
 
+/-- Numbers emitted by the stripping reducer, not inferred from stub identities.
+Only candidates it actually replaces contribute their original/stub byte sizes. -/
+structure StubbingFigures where
+  count : Nat := 0
+  originalBytes : Nat := 0
+  stubBytes : Nat := 0
+  deriving DecidableEq, Repr
+
+def StubbingFigures.removedBytes (figures : StubbingFigures) : Nat :=
+  figures.originalBytes - figures.stubBytes
+
+def stripFigures (sizes : ResultSizes) : List MessageRow → StubbingFigures
+  | [] => {}
+  | row :: rest =>
+    let tail := stripFigures sizes rest
+    match row.kind with
+    | .toolResult _ key =>
+      if stubs sizes key then
+        { count := tail.count + 1
+          originalBytes := tail.originalBytes + (sizes key).originalBytes
+          stubBytes := tail.stubBytes + (sizes key).stubBytes }
+      else tail
+    | _ => tail
+
+@[simp] theorem stripFigures_nil (sizes : ResultSizes) : stripFigures sizes [] = {} := rfl
+
+theorem stripFigures_floor (sizes : ResultSizes) (row : MessageRow) (rest : List MessageRow)
+    (h : ∀ call key, row.kind = .toolResult call key → stubs sizes key = false) :
+    stripFigures sizes (row :: rest) = stripFigures sizes rest := by
+  cases hk : row.kind <;> simp [stripFigures, hk, h _ _ hk]
+
+theorem stripFigures_no_expansion (sizes : ResultSizes) (rows : List MessageRow) :
+    (stripFigures sizes rows).stubBytes ≤ (stripFigures sizes rows).originalBytes := by
+  induction rows with
+  | nil => simp [stripFigures]
+  | cons row rest ih =>
+    cases hk : row.kind <;> simp only [stripFigures, hk]
+    · exact ih
+    · exact ih
+    · split
+      · exact Nat.add_le_add ih (Nat.le_of_lt (stubEligible_no_expansion _ _ (by assumption)))
+      · exact ih
+
 def stripKind (sizes : ResultSizes) : MessageKind → MessageKind
   | .toolResult callId key => .toolResult callId (stripKey sizes key)
   | k => k
