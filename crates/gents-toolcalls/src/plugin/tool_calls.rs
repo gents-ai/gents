@@ -292,6 +292,7 @@ mod tests {
         impl ToolEffectDispatcher for Forms {
             fn call<'a>(
                 &'a self,
+                _parent: &'a gents_loop::tool::ToolCallEnvelope,
                 _ordinal: u32,
                 _name: &'a str,
                 arguments: &'a str,
@@ -325,7 +326,8 @@ mod tests {
 
         let forms = Arc::new(Forms::default());
         gents_loop::tool_effects::scope(Some(forms.clone()), async {
-            let mut session = Session::for_call(true).unwrap();
+            let mut session =
+                Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).unwrap();
             for (name, arguments) in [
                 ("files", json!({"path": "a"})),
                 ("files", json!({"path": "a", "raw_json": false})),

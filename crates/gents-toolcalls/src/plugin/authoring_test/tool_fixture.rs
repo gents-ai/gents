@@ -40,7 +40,10 @@ impl ToolFixture {
         );
         let fixture = Arc::new(self);
         let tools = tool_effects::scope(Some(fixture.clone()), async {
-            super::super::tool_calls::Session::for_call(true)
+            super::super::tool_calls::Session::for_call(
+                true,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
         })
         .await;
         let outcome =
@@ -63,6 +66,7 @@ impl ToolEffectDispatcher for ToolFixture {
 
     fn call<'a>(
         &'a self,
+        _parent: &'a gents_loop::tool::ToolCallEnvelope,
         ordinal: u32,
         name: &'a str,
         arguments: &'a str,

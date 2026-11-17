@@ -883,7 +883,7 @@ mod tests {
         let outcome = scope_request_tool_execution(
             None,
             tokio_util::sync::CancellationToken::new(),
-            dispatcher.call(1, "unlisted", "{}"),
+            dispatcher.call(&ToolCallEnvelope::ambient(), 1, "unlisted", "{}"),
         )
         .await
         .unwrap();

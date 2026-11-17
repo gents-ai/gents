@@ -18,6 +18,7 @@ impl ToolEffectDispatcher for Files {
 
     fn call<'a>(
         &'a self,
+        _parent: &'a gents_loop::tool::ToolCallEnvelope,
         ordinal: u32,
         name: &'a str,
         arguments: &'a str,
@@ -73,7 +74,7 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
             const files = await Promise.all([tools.read_file({path: 'a.txt'}), tools.read_file({path: 'b.txt'})]);
             return {names, types: files.map(f => typeof f), contents: files.map(f => f.content), ok: files.every(f => f.ok)};
         "#}),
-        None, true, None,
+        super::super::executor::ToolInvocation { tool_root: None, tool_calls: true, context: &gents_loop::tool::ToolCallEnvelope::ambient() }, None,
     )).await.unwrap();
     assert_eq!(
         result.outcome.verdict,
@@ -94,8 +95,11 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
             const path = 'x'.repeat(600000);
             await Promise.all([tools.read_file({path}), tools.read_file({path})]);
         "#}),
-            None,
-            true,
+            super::super::executor::ToolInvocation {
+                tool_root: None,
+                tool_calls: true,
+                context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+            },
             None,
         ),
     )
