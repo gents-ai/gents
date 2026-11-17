@@ -100,6 +100,7 @@ pub(super) async fn run_control_watcher_with_timing(
     let mut dirty = false;
     let mut pending_visibility = false;
     let mut settle_deadline = None;
+    let mut publication_deadline = None;
     let mut last_proposed_fingerprint = None::<String>;
     let mut phase_transition_pending = false;
     let mut resync_required = false;
@@ -116,6 +117,7 @@ pub(super) async fn run_control_watcher_with_timing(
 
     loop {
         tokio::select! {
+            biased;
             _ = shutdown.changed() => return Ok(()),
             _ = &mut sleep, if dirty => {
                 backend_admission.validate(&node).await?;
@@ -140,7 +142,8 @@ pub(super) async fn run_control_watcher_with_timing(
                                 || settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline)
                             {
                                 dirty = true;
-                                sleep.as_mut().reset(tokio::time::Instant::now() + timing.settle_retry);
+                                publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
+                                sleep.as_mut().reset(publication_retry_at(publication_deadline, timing.settle_retry));
                             } else {
                                 dirty = false;
                                 settle_deadline = None;
@@ -164,10 +167,11 @@ pub(super) async fn run_control_watcher_with_timing(
                         .publish_error(&pending_summary)
                         .await;
                 }
-                if pending_visibility
+                if pending_visibility && publication_deadline.is_none_or(|deadline| tokio::time::Instant::now() < deadline)
                 {
                     dirty = true;
-                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.settle_retry);
+                    publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
+                    sleep.as_mut().reset(publication_retry_at(publication_deadline, timing.settle_retry));
                     continue;
                 }
                 let phase_announced = phase_transition_pending;
@@ -180,24 +184,41 @@ pub(super) async fn run_control_watcher_with_timing(
                 let mut proposed_update = false;
                 let mut resolve_failed = false;
                 let mut publication_busy = false;
-                match async {
-                    let _publication = gents_tools::surface::publication_guard_until(tool_runtime.plugin_home(), tokio::time::Instant::now() + timing.publication_wait).await?;
-                    // The cached view may predate a pin move committed while
-                    // publication was fenced. Resolve fresh under that fence.
+                let deadline = *publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
+                let resolution = async {
+                    let publication = match gents_tools::surface::publication_guard_until(tool_runtime.plugin_home(), deadline).await {
+                        Ok(guard) => guard,
+                        Err(error) if super::startup::snapshot::preserve_generation_for_surface_error(&error) => {
+                            publication_busy = true;
+                            if defer_authority(true, tokio::time::Instant::now() < deadline) {
+                                return Err(error);
+                            }
+                            // Budget exhausted: authority is no longer contingent
+                            // on plugin publication. Resolve latest config now;
+                            // busy plugin surfaces become unavailable with cause.
+                            None
+                        }
+                        Err(error) => return Err(error),
+                    };
                     if tool_runtime.plugin_home().is_some() {
                         document_view = document_view::load_document_runtime_view_as(&node, &node_did, resolve_context.identity.did()).await?;
                     }
                     let mut snapshot = document_view::resolve_document_runtime_snapshot_from_view(
-                        &node,
-                        &resolve_context,
-                        &document_view,
-                    )
-                    .await?;
-                    super::startup::snapshot::demote_unbuildable_agents(&tool_runtime, &mut snapshot).await?;
+                        &node, &resolve_context, &document_view,
+                    ).await?;
+                    super::startup::snapshot::demote_unbuildable_agents_until(
+                        &tool_runtime, &mut snapshot, deadline,
+                        defer_authority(publication_busy, tokio::time::Instant::now() < deadline),
+                    ).await?;
+                    drop(publication);
                     anyhow::Ok(snapshot)
-                }
-                .await
-                {
+                };
+                let resolved = tokio::select! {
+                    biased;
+                    _ = shutdown.changed() => return Ok(()),
+                    resolved = resolution => resolved,
+                };
+                match resolved {
                     Ok(snapshot) => {
                         let fingerprint = snapshot.configuration_fingerprint();
                         if phase_announced || last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()) {
@@ -229,9 +250,10 @@ pub(super) async fn run_control_watcher_with_timing(
                         .is_some_and(|deadline| tokio::time::Instant::now() < deadline))
                     {
                         dirty = true;
+                        publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
                         sleep
                             .as_mut()
-                            .reset(tokio::time::Instant::now() + timing.settle_retry);
+                            .reset(publication_retry_at(publication_deadline, timing.settle_retry));
                     } else {
                         dirty = false;
                         settle_deadline = None;
@@ -246,9 +268,10 @@ pub(super) async fn run_control_watcher_with_timing(
                         .set_reconcile_phase(ReconcilePhase::Idle)
                         .await;
                 }
-                dirty = false;
+                dirty = publication_busy;
                 settle_deadline = None;
-                sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
+                if !publication_busy { publication_deadline = None; }
+                sleep.as_mut().reset(tokio::time::Instant::now() + if publication_busy { timing.settle_retry } else { timing.idle_sleep });
             }
             Some(()) = health_events_rx.recv() => {
                 tracing::info!(
@@ -256,11 +279,12 @@ pub(super) async fn run_control_watcher_with_timing(
                     "backend measured-health transition detected; scheduling reconcile"
                 );
                 dirty = true;
+                publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
                 phase_transition_pending = true;
                 runtime_status
                     .set_reconcile_phase(ReconcilePhase::Debouncing)
                     .await;
-                sleep.as_mut().reset(tokio::time::Instant::now() + timing.debounce);
+                sleep.as_mut().reset((tokio::time::Instant::now() + timing.debounce).min(publication_deadline.unwrap_or_else(tokio::time::Instant::now)));
             }
             batch = subscription.recv() => {
                 let Some(batch) = batch else {
@@ -275,13 +299,14 @@ pub(super) async fn run_control_watcher_with_timing(
                     );
                     resync_required = true;
                     dirty = true;
+                    publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
                     phase_transition_pending = true;
                     settle_deadline =
                         Some(tokio::time::Instant::now() + timing.settle_window);
                     runtime_status
                         .set_reconcile_phase(ReconcilePhase::Debouncing)
                         .await;
-                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.debounce);
+                    sleep.as_mut().reset((tokio::time::Instant::now() + timing.debounce).min(publication_deadline.unwrap_or_else(tokio::time::Instant::now)));
                     continue;
                 }
 
@@ -338,8 +363,9 @@ pub(super) async fn run_control_watcher_with_timing(
                                     runtime_status.publish_error(&format!("{error:#}")).await;
                                     resync_required = true;
                                     dirty = true;
+                                    publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
                                     sleep.as_mut().reset(
-                                        tokio::time::Instant::now() + timing.settle_retry,
+                                        publication_retry_at(publication_deadline, timing.settle_retry),
                                     );
                                     break;
                                 }
@@ -371,8 +397,9 @@ pub(super) async fn run_control_watcher_with_timing(
                                         .await;
                                     resync_required = true;
                                     dirty = true;
+                                    publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
                                     sleep.as_mut().reset(
-                                        tokio::time::Instant::now() + timing.settle_retry,
+                                        publication_retry_at(publication_deadline, timing.settle_retry),
                                     );
                                     break;
                                 }
@@ -388,6 +415,7 @@ pub(super) async fn run_control_watcher_with_timing(
                         "runtime control update detected"
                     );
                     dirty = true;
+                    publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
                     phase_transition_pending = true;
                     settle_deadline =
                         Some(tokio::time::Instant::now() + timing.settle_window);
@@ -400,7 +428,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     } else {
                         timing.local_debounce
                     };
-                    sleep.as_mut().reset(tokio::time::Instant::now() + debounce);
+                    sleep.as_mut().reset((tokio::time::Instant::now() + debounce).min(publication_deadline.unwrap_or_else(tokio::time::Instant::now)));
                 }
             }
         }
@@ -417,4 +445,42 @@ fn publication_retry_outlives_the_settle_window() {
     gents_lean_vocab::families::runtime_reconcile_surface_publication_retry_proposal::replay(|i| {
         retry_proposal(i.busy, i.within_settle_window)
     });
+}
+
+fn defer_authority(busy: bool, budget_remaining: bool) -> bool {
+    busy && budget_remaining
+}
+
+#[cfg(test)]
+#[test]
+fn bounded_authority_deferral_replays_the_lean_owner() {
+    gents_lean_vocab::families::runtime_reconcile_surface_publication_defer_authority::replay(
+        |i| defer_authority(i.busy, i.budget_remaining),
+    );
+}
+
+fn publication_retry_at(
+    deadline: Option<tokio::time::Instant>,
+    retry: Duration,
+) -> tokio::time::Instant {
+    let now = tokio::time::Instant::now();
+    let retry_at = now + retry;
+    deadline
+        .filter(|deadline| *deadline > now)
+        .map_or(retry_at, |deadline| deadline.min(retry_at))
+}
+
+#[cfg(test)]
+#[tokio::test(start_paused = true)]
+async fn publication_retry_cannot_sleep_past_the_epoch_budget_or_spin_after_expiry() {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    assert_eq!(
+        publication_retry_at(Some(deadline), Duration::from_secs(5)),
+        deadline
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(
+        publication_retry_at(Some(deadline), Duration::from_secs(5)),
+        deadline + Duration::from_secs(5)
+    );
 }

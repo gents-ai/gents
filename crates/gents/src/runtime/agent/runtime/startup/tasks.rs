@@ -53,6 +53,7 @@ pub(super) fn runtime_context(
         agent.service_admission(),
     );
     let runtime = RuntimeContext {
+        document_context: agent.document_runtime_context().cloned(),
         node: agent.node.clone(),
         tool_runtime,
         admission_registry: admission_registry.clone(),

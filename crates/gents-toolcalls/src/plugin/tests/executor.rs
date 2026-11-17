@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::plugin::executor::PluginExecutor;
+use crate::plugin::executor::{digest_in_pins, PluginExecutor};
 use crate::plugin::tool::PluginTool;
 pub use crate::test_support::{
     asking_plugin_wat, host_call_plugin_wat, installed_echo, installed_plugin,
@@ -2412,4 +2412,17 @@ mod job_calls {
         );
         finish(admission).await;
     }
+}
+
+#[test]
+fn running_digest_must_belong_to_the_current_pin_set() {
+    gents_lean_vocab::families::plugin_publication_digest_authorized::replay(|i| {
+        let pins = i
+            .pinned_digests
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let refs = pins.iter().map(String::as_str).collect::<Vec<_>>();
+        digest_in_pins(&refs, &i.running_digest.to_string())
+    });
 }

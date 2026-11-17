@@ -331,8 +331,11 @@ async fn run_agent_owned(
     .with_usage_cache(agent.usage_cache().clone());
     registry::probe_and_promote_enabled_backends(&agent.node).await;
 
-    let (control_subscription, resolved_snapshot) =
-        resolve_startup(&agent, &tool_runtime, &runtime_status).await?;
+    let (control_subscription, resolved_snapshot) = tokio::select! {
+        biased;
+        _ = external_shutdown.changed() => return Ok(()),
+        result = resolve_startup(&agent, &tool_runtime, &runtime_status) => result?,
+    };
 
     let startup_barrier = Arc::new(StartupBarrier::new(
         &resolved_snapshot

@@ -37,6 +37,21 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
 ) -> Result<()> {
+    demote_unbuildable_agents_until(
+        tool_runtime,
+        snapshot,
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        true,
+    )
+    .await
+}
+
+pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents_until(
+    tool_runtime: &ToolRuntimeContext,
+    snapshot: &mut ResolvedRuntimeSnapshot,
+    deadline: tokio::time::Instant,
+    defer_busy: bool,
+) -> Result<()> {
     let mut agent_dids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
     agent_dids.sort();
 
@@ -50,8 +65,11 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
             .get(&agent_did)
             .ok_or_else(|| anyhow!("missing resolved agent {agent_did} during tool admission"))?;
         let tool_runtime = tool_runtime.for_agent(agent);
-        if let Err(error) = tool_surface.build_tools(&tool_runtime).await {
-            if preserve_generation_for_surface_error(&error) {
+        if let Err(error) = tool_surface
+            .build_tools_until(&tool_runtime, deadline)
+            .await
+        {
+            if defer_busy && preserve_generation_for_surface_error(&error) {
                 return Err(error)
                     .context("plugin publication deferred; keeping the active runtime generation");
             }

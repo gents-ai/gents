@@ -106,6 +106,31 @@ async fn request_submitted_while_another_process_holds_the_plugin_store_complete
     )
     .await;
 
+    let (waiting_tx, mut waiting_rx) = mpsc::unbounded_channel();
+    let subscriber = Registry::default().with(PublicationWaitCapture(waiting_tx));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let run = tokio::spawn(agent.run(shutdown_rx).with_subscriber(subscriber));
+    let ready_query = format!(
+        r#"{{NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{snapshot_json}}}}"#,
+        escape_graphql_string(&node_did)
+    );
+    rows_when(
+        &fixture.agent_access,
+        "NodeReadiness",
+        &ready_query,
+        |data| {
+            data["NodeReadiness"][0]["snapshot_json"]
+                .as_str()
+                .and_then(|json| serde_json::from_str::<NodeReadinessSnapshot>(json).ok())
+                .is_some_and(|snapshot| {
+                    snapshot.process_state == NodeReadinessProcessState::Ready
+                        && snapshot.agents.iter().any(|a| {
+                            a.agent_did == agent_did && a.state == AgentReadinessState::Ready
+                        })
+                })
+        },
+    )
+    .await;
     let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
         .args([
             LOCK_CHILD_TEST,
@@ -135,10 +160,15 @@ async fn request_submitted_while_another_process_holds_the_plugin_store_complete
     .await
     .expect("lock child stalled");
 
-    let (waiting_tx, mut waiting_rx) = mpsc::unbounded_channel();
-    let subscriber = Registry::default().with(PublicationWaitCapture(waiting_tx));
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let run = tokio::spawn(agent.run(shutdown_rx).with_subscriber(subscriber));
+    merge_fixture_document(
+        &fixture.user_access,
+        "test.ready_publication.wake",
+        gents_store::collection::Collection::AgentContext,
+        &node_did,
+        &format!("{agent_did}:context"),
+        serde_json::json!({"system_prompt":"changed while ready and publishing"}),
+    )
+    .await;
     tokio::time::timeout(STALL_CEILING, waiting_rx.recv())
         .await
         .expect("surface constructor never observed contention")
@@ -157,8 +187,11 @@ async fn request_submitted_while_another_process_holds_the_plugin_store_complete
         escape_graphql_string(&request_doc_id)
     );
     let pending = fixture.agent_access.execute(&query).await.unwrap();
-    assert_eq!(
-        pending["data"]["AgentRequest"][0]["lifecycle_state"], "pending",
+    assert!(
+        !matches!(
+            pending["data"]["AgentRequest"][0]["lifecycle_state"].as_str(),
+            Some("failed" | "dead")
+        ),
         "{pending}"
     );
     child.stdin.take().unwrap().write_all(&[1]).await.unwrap();
@@ -235,6 +268,26 @@ async fn configured_publication_agent(
 
 #[tokio::test]
 async fn publication_retry_recovers_after_the_settle_window_without_another_event() {
+    bounded_publication_case(PublicationChange::None).await;
+}
+
+#[tokio::test]
+async fn busy_publication_cannot_defer_a_committed_revocation_and_honours_shutdown() {
+    bounded_publication_case(PublicationChange::DisableAgent).await;
+}
+
+#[tokio::test]
+async fn busy_publication_applies_a_tools_revocation_before_the_writer_releases() {
+    bounded_publication_case(PublicationChange::RevokePlugin).await;
+}
+
+enum PublicationChange {
+    None,
+    DisableAgent,
+    RevokePlugin,
+}
+
+async fn bounded_publication_case(change: PublicationChange) {
     crate::test_support::root::enable_scoped_event_capture();
     let endpoint = MockModelEndpoint::start("default").unwrap();
     let fixture = plugin_runtime_fixture(
@@ -262,49 +315,93 @@ async fn publication_retry_recovers_after_the_settle_window_without_another_even
     )
     .with_plugins(context.plugins.clone());
     let guard = gents_pack::plugin::store::try_lock_store(home.path()).unwrap();
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let subscriber = Registry::default().with(PublicationWaitCapture(observed_tx));
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
     let (health_tx, health_rx) = mpsc::channel(1);
-    let watcher = tokio::spawn(
-        run_control_watcher_with_timing(
-            ControlWatcherInputs {
-                node: fixture.node.clone(),
-                backend_admission: fixture.admission(),
-                subscription: subscribe_control_changes(&fixture.node).unwrap(),
-                node_did: node_did.clone(),
-                resolve_context: context,
-                tool_runtime,
-                proposals_tx: proposal_tx,
-                runtime_status,
-                health_events_rx: health_rx,
-                shutdown: shutdown_rx,
-            },
-            ControlWatcherTiming {
-                publication_wait: Duration::from_millis(20),
-                debounce: Duration::from_millis(1),
-                local_debounce: Duration::from_millis(1),
-                settle_retry: Duration::from_millis(1),
-                settle_window: Duration::from_millis(1),
-                idle_sleep: Duration::from_secs(3600),
-            },
-        )
-        .with_subscriber(subscriber),
-    );
+    let watcher = tokio::spawn(run_control_watcher_with_timing(
+        ControlWatcherInputs {
+            node: fixture.node.clone(),
+            backend_admission: fixture.admission(),
+            subscription: subscribe_control_changes(&fixture.node).unwrap(),
+            node_did: node_did.clone(),
+            resolve_context: context,
+            tool_runtime,
+            proposals_tx: proposal_tx,
+            runtime_status,
+            health_events_rx: health_rx,
+            shutdown: shutdown_rx,
+        },
+        ControlWatcherTiming {
+            publication_wait: Duration::from_millis(20),
+            debounce: Duration::from_millis(1),
+            local_debounce: Duration::from_millis(1),
+            settle_retry: Duration::from_millis(1),
+            settle_window: Duration::from_millis(1),
+            idle_sleep: Duration::from_secs(3600),
+        },
+    ));
+    match change {
+        PublicationChange::None => {}
+        PublicationChange::DisableAgent => {
+            merge_fixture_document(
+                &fixture.user_access,
+                "test.publication.revoke_agent",
+                gents_store::collection::Collection::Agent,
+                &node_did,
+                &agent_did,
+                serde_json::json!({"enabled":false}),
+            )
+            .await;
+        }
+        PublicationChange::RevokePlugin => {
+            merge_fixture_document(
+                &fixture.user_access,
+                "test.publication.revoke_plugin",
+                gents_store::collection::Collection::Tools,
+                &node_did,
+                &format!("{agent_did}:tools"),
+                serde_json::json!({"integrations":{"plugins":null}}),
+            )
+            .await;
+        }
+    }
     health_tx.send(()).await.unwrap();
-    // Each construction logs once, so two events prove the first bounded
-    // wait expired and the watcher retried beyond its generic settle window.
-    for _ in 0..2 {
-        tokio::time::timeout(STALL_CEILING, observed_rx.recv())
+    let demotion = tokio::time::timeout(STALL_CEILING, proposal_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    if !matches!(change, PublicationChange::None) {
+        match change {
+            PublicationChange::DisableAgent => {
+                assert_eq!(
+                    demotion.unavailable_agents[&agent_did].public_reason,
+                    AgentReadinessUnavailableReason::AgentDisabled
+                );
+                assert!(!demotion.agents.contains_key(&agent_did));
+            }
+            PublicationChange::RevokePlugin => {
+                assert!(demotion.agents.contains_key(&agent_did));
+                assert!(demotion.tool_surfaces[&agent_did]
+                    .plugin_resolutions()
+                    .is_empty());
+            }
+            PublicationChange::None => unreachable!(),
+        }
+        assert!(
+            gents_pack::plugin::store::try_lock_store_shared(home.path()).is_err(),
+            "revocation must precede lock release"
+        );
+        let _ = shutdown_tx.send(true);
+        tokio::time::timeout(STALL_CEILING, watcher)
             .await
             .unwrap()
+            .unwrap()
             .unwrap();
+        drop(guard);
+        return;
     }
-    assert!(
-        proposal_rx.try_recv().is_err(),
-        "busy must never publish a demotion"
-    );
+    let cause = &demotion.unavailable_agents[&agent_did].diagnostic;
+    assert!(cause.contains("plugin store is busy"), "{cause}");
     drop(guard); // Rollback/release emits no new document or health event.
     let proposal = tokio::time::timeout(STALL_CEILING, proposal_rx.recv())
         .await
@@ -347,7 +444,7 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for Publicati
 #[tokio::test]
 async fn named_pin_update_never_publishes_an_unavailable_agent() {
     crate::test_support::root::enable_scoped_event_capture();
-    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let endpoint = crate::support::mock_endpoint::MockModelEndpoint::start("default").unwrap();
     let fixture = plugin_runtime_fixture(
         "publication-pin-update",
         "backend-publication-pin",
@@ -360,6 +457,37 @@ async fn named_pin_update_never_publishes_an_unavailable_agent() {
     let node_did = fixture.runtime.did().to_owned();
     let agent_did = agent.default_agent_did().to_owned();
     let tools_id = format!("{agent_did}:tools");
+    let stale_pair = agent
+        .agents
+        .iter()
+        .find(|pair| pair.agent.agent_did == agent_did)
+        .unwrap()
+        .clone();
+    let resolve_context = agent.document_runtime_context().cloned().unwrap();
+    let stale_surface = Arc::new(
+        stale_pair
+            .tools
+            .resolve_with_available_agent_targets(
+                &fixture.node,
+                &node_did,
+                &std::iter::once(agent_did.clone()).collect(),
+                &*resolve_context.plugins,
+            )
+            .await
+            .unwrap(),
+    );
+    let requester = stale_pair.agent.agent_identity.clone();
+    grant_held_agent_operations(&fixture.node, fixture.runtime.as_ref(), requester.as_ref()).await;
+    create_user_agent_session(
+        &fixture.user_access,
+        &node_did,
+        Some(&agent_did),
+        "pin-commit-session",
+        &agent_did,
+        Some(&agent_did),
+    )
+    .await;
+
     let old_plugin =
         gents_pack::plugin::store::read_record(home.path(), "fixture", "list_files").unwrap();
     let omitted: Tools = serde_json::from_value(serde_json::json!({
@@ -430,6 +558,8 @@ async fn named_pin_update_never_publishes_an_unavailable_agent() {
     let install_owner = node_did.clone();
     let (staged_tx, staged_rx) = tokio::sync::oneshot::channel();
     let (continue_tx, continue_rx) = tokio::sync::oneshot::channel();
+    let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
     let install = tokio::spawn(async move {
         gents_pack::pack::plugin_lifecycle::install(
             &install_home,
@@ -452,7 +582,10 @@ async fn named_pin_update_never_publishes_an_unavailable_agent() {
                     &edits,
                     &gents_inference::resolved::ProviderProfilePolicy,
                 )
-                .await
+                .await?;
+                let _ = committed_tx.send(());
+                finish_rx.await.expect("release committed publication");
+                Ok(())
             },
         )
         .await
@@ -478,6 +611,22 @@ async fn named_pin_update_never_publishes_an_unavailable_agent() {
         .unwrap()
         .unwrap();
     continue_tx.send(()).unwrap();
+    tokio::time::timeout(STALL_CEILING, committed_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    // Native pins have committed but the stage still holds its fence, so
+    // the watcher cannot swap surfaces before this request is submitted.
+    let request_id = create_held_agent_request(
+        &fixture.node,
+        &node_did,
+        requester.as_ref(),
+        "between-commit-and-swap",
+        "pin-commit-session",
+        "hello after commit",
+    )
+    .await;
+    finish_tx.send(()).unwrap();
     tokio::time::timeout(STALL_CEILING, install)
         .await
         .unwrap()
@@ -497,6 +646,57 @@ async fn named_pin_update_never_publishes_an_unavailable_agent() {
     })
     .await
     .expect("updated pin was not admitted");
+    let tool_runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
+        fixture.node.clone(),
+        Default::default(),
+        Default::default(),
+        "localhost",
+        None,
+        &node_did,
+        Some(resolve_context.identity.clone()),
+    )
+    .with_plugins(resolve_context.plugins.clone());
+    // A slot proposal resolved before the install still has the old pin.
+    // It must refresh once from current documents, never accept new bytes
+    // against that old pin or consume its failure budget on the mismatch.
+    let refreshed = super::super::context::build_slot_surface_fenced(
+        &tool_runtime,
+        Some(&resolve_context),
+        stale_pair.clone(),
+        stale_surface.clone(),
+    )
+    .await
+    .unwrap();
+    for (pin, installed) in refreshed.surface.plugin_resolutions() {
+        assert_eq!(
+            pin.digest.as_deref(),
+            Some(replacements[&pin.plugin].as_str())
+        );
+        assert_eq!(
+            installed.as_ref().unwrap().digest,
+            replacements[&pin.plugin]
+        );
+    }
+    let request_query = format!(
+        r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{lifecycle_state failure_reason}}}}"#,
+        escape_graphql_string(&request_id)
+    );
+    let terminal = rows_when(
+        &fixture.agent_access,
+        "AgentRequest",
+        &request_query,
+        |data| {
+            matches!(
+                data["AgentRequest"][0]["lifecycle_state"].as_str(),
+                Some("completed" | "failed" | "dead")
+            )
+        },
+    )
+    .await;
+    assert_eq!(
+        terminal["AgentRequest"][0]["lifecycle_state"], "completed",
+        "{terminal}"
+    );
     let all = capture.snapshots.lock().unwrap().clone();
     assert!(
         !all.iter()
@@ -530,4 +730,58 @@ async fn named_pin_update_never_publishes_an_unavailable_agent() {
         .unwrap()
         .unwrap()
         .unwrap();
+    merge_fixture_document(
+        &fixture.user_access,
+        "test.stale_pin.revoked_agent",
+        gents_store::collection::Collection::Agent,
+        &node_did,
+        &agent_did,
+        serde_json::json!({"enabled":false}),
+    )
+    .await;
+    let error = super::super::context::build_slot_surface_fenced(
+        &tool_runtime,
+        Some(&resolve_context),
+        stale_pair,
+        stale_surface,
+    )
+    .await
+    .err()
+    .expect("refresh must reject a now-disabled agent");
+    assert!(format!("{error:#}").contains("revoked or became unavailable"));
+}
+
+#[tokio::test]
+async fn startup_shutdown_cancels_publication_wait_without_releasing_the_writer() {
+    crate::test_support::root::enable_scoped_event_capture();
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let fixture = plugin_runtime_fixture(
+        "shutdown-publication",
+        "backend-shutdown-publication",
+        endpoint.endpoint(),
+    )
+    .await
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let agent = configured_publication_agent(&fixture, home.path()).await;
+    let guard = gents_pack::plugin::store::try_lock_store(home.path()).unwrap();
+    let (wait_tx, mut wait_rx) = mpsc::unbounded_channel();
+    let subscriber = Registry::default().with(PublicationWaitCapture(wait_tx));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let run = tokio::spawn(agent.run(shutdown_rx).with_subscriber(subscriber));
+    tokio::time::timeout(STALL_CEILING, wait_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(STALL_CEILING, run)
+        .await
+        .expect("shutdown must interrupt the 60s publication wait")
+        .unwrap()
+        .unwrap();
+    assert!(
+        gents_pack::plugin::store::try_lock_store_shared(home.path()).is_err(),
+        "test still owns writer exclusion"
+    );
+    drop(guard);
 }

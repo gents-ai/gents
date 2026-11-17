@@ -405,7 +405,7 @@ where
                     node_did.as_str(),
                     request,
                     resolution.agent_did.as_str(),
-                    public_reason.public_message(),
+                    &unavailable_failure_reason(public_reason, diagnostic),
                 )
                 .await?;
             }
@@ -696,4 +696,24 @@ pub(super) fn format_pending_visibility_error(details: &[String]) -> String {
         "waiting for referenced control documents to become visible: {}",
         details.join("; ")
     )
+}
+
+fn unavailable_failure_reason(
+    reason: gents_protocol::node_readiness::AgentReadinessUnavailableReason,
+    diagnostic: &str,
+) -> String {
+    format!("{}: {diagnostic}", reason.public_message())
+}
+
+#[cfg(test)]
+#[test]
+fn unavailable_requests_keep_publication_failure_diagnostics() {
+    let cause = anyhow::Error::new(gents_pack::plugin::store::PublishedPluginReadError::Busy)
+        .context("plugin publication wait exhausted after bounded retries");
+    let reason = unavailable_failure_reason(
+        gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+        &format!("{cause:#}"),
+    );
+    assert!(reason.contains("plugin store is busy"), "{reason}");
+    assert!(reason.contains("wait exhausted"), "{reason}");
 }

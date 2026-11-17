@@ -371,6 +371,18 @@ impl ToolSurface {
     }
 
     pub async fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
+        self.build_tools_until(
+            runtime,
+            tokio::time::Instant::now() + publication::PUBLICATION_WAIT,
+        )
+        .await
+    }
+
+    pub async fn build_tools_until(
+        &self,
+        runtime: &ToolRuntimeContext,
+        publication_deadline: tokio::time::Instant,
+    ) -> Result<Vec<Box<dyn ToolDyn>>> {
         if let Some(guard) = &self.root_execution_guard {
             let agent = runtime
                 .agent_identity
@@ -676,7 +688,6 @@ impl ToolSurface {
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
-        let publication_deadline = tokio::time::Instant::now() + publication::PUBLICATION_WAIT;
         for plugin in &self.plugin_tools {
             let tool = publication::wait(publication_deadline, || {
                 runtime.plugins.clone().plugin_tool(
