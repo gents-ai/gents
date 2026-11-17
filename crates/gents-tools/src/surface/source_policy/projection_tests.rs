@@ -127,7 +127,8 @@ async fn observe_plugin_permission(
 }
 
 #[tokio::test]
-async fn selected_datastore_query_grants_collection_access_until_removed() -> anyhow::Result<()> {
+async fn selected_schema_tool_controls_changes_and_preserves_baseline_reads() -> anyhow::Result<()>
+{
     let (_directory, runtime, node) = projection_node().await?;
     let binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let sibling_binding = gents_store::identity::provision_agent_identity(&runtime)?;
@@ -189,18 +190,18 @@ async fn selected_datastore_query_grants_collection_access_until_removed() -> an
             .as_array()
             .unwrap()
             .iter()
-            .any(|source| source["permission"] == "get-collection")
+            .any(|source| source["permission"] == "patch-collection")
     };
     assert_eq!(
         node.nac_manager()
-            .check_permission(&agent, NodePermission::CollectionGet)
+            .check_permission(&agent, NodePermission::CollectionPatch)
             .await?,
         expected("datastore-query"),
     );
     assert!(access.collection_version("Node").await?.is_some());
     assert_eq!(
         node.nac_manager()
-            .check_permission(&sibling, NodePermission::CollectionGet)
+            .check_permission(&sibling, NodePermission::CollectionPatch)
             .await?,
         expected("none"),
     );
@@ -208,18 +209,18 @@ async fn selected_datastore_query_grants_collection_access_until_removed() -> an
     owner.write("test.tool_projection.surface_disable", &format!(r#"mutation {{ update_DatastoreToolSurface(filter: {{node_did:{{_eq:"{node_value}"}},surface_id:{{_eq:"surface"}}}},input:{{enabled:false}}) {{_docID}} }}"#)).await?;
     assert_eq!(
         node.nac_manager()
-            .check_permission(&agent, NodePermission::CollectionGet)
+            .check_permission(&agent, NodePermission::CollectionPatch)
             .await?,
         expected("schema"),
     );
     owner.write("test.tool_projection.schema_disable", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#)).await?;
     assert_eq!(
         node.nac_manager()
-            .check_permission(&agent, NodePermission::CollectionGet)
+            .check_permission(&agent, NodePermission::CollectionPatch)
             .await?,
         expected("none"),
     );
-    assert!(access.collection_version("Node").await.is_err());
+    assert!(access.collection_version("Node").await?.is_some());
     node.shutdown().await?;
     Ok(())
 }
