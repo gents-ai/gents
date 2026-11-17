@@ -22,6 +22,35 @@ pub struct AccountUsageView {
     pub read_at: Option<String>,
     pub read_error: Option<String>,
     pub read: Option<String>,
+    /// The provider's own refusal, when one stands. Beside the windows rather
+    /// than among them: a refusal states a fact, not a percentage.
+    pub refusal: Option<UsageRefusalView>,
+}
+
+/// A standing provider refusal, as the provider stated it. Every field past
+/// the timestamp is optional because a refusal establishes only what it says:
+/// plain "free usage exhausted" gives no cap, no counter and no reset, and the
+/// screen shows those as unknown rather than as 0 or 100%.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageRefusalView {
+    pub at: String,
+    /// The window the provider named, e.g. "rolling 24-hour".
+    pub window: Option<String>,
+    pub used: Option<u64>,
+    pub cap: Option<u64>,
+    /// Absolute only; a relative "refreshes in 24 hours" leaves this null.
+    pub resets_at: Option<String>,
+    /// What this node itself observed in the window: an estimate, always.
+    pub consumed_by_node: Option<u64>,
+    /// A bounded excerpt of the provider's words, never the whole body.
+    pub detail: String,
+    /// Whose window `window` names: the provider's own, or — when it named
+    /// none — this node's analytical bound, which is never reported as fact.
+    pub window_provenance: String,
+    /// How far back this node looked in its own recorded calls. Analytical:
+    /// the provider never said its evidence window is this one.
+    pub evidence_window_hours: i64,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -55,6 +84,23 @@ pub(crate) async fn account_usage_views(
         .filter(|reads| reads.node_did == node_did)
         .map_or(&[][..], |reads| reads.reads.as_slice());
     let time = |at: chrono::DateTime<chrono::Utc>| at.to_rfc3339();
+    let refusal_view =
+        |refusal: &gents_inference::usage_observation::UsageRefusalView| UsageRefusalView {
+            at: refusal.at.clone(),
+            window: refusal.window.clone(),
+            used: refusal.used,
+            cap: refusal.cap,
+            resets_at: refusal.resets_at.clone(),
+            consumed_by_node: refusal.consumed_by_node,
+            detail: refusal.detail.clone(),
+            window_provenance: match refusal.window_provenance() {
+                gents_inference::usage_refusal::WindowProvenance::ProviderReported => {
+                    "provider_reported".into()
+                }
+                gents_inference::usage_refusal::WindowProvenance::Analytical => "analytical".into(),
+            },
+            evidence_window_hours: gents_inference::usage_refusal::REFUSAL_EVIDENCE_WINDOW_HOURS,
+        };
     let views = reads
         .iter()
         .map(|read| {
@@ -96,6 +142,7 @@ pub(crate) async fn account_usage_views(
                     UsageRead::Disabled => "disabled".into(),
                     UsageRead::Unavailable(reason) => format!("unavailable: {reason}"),
                 }),
+                refusal: read.refusal.as_ref().map(refusal_view),
             }
         })
         .collect();

@@ -185,6 +185,7 @@ impl UsageRefusalView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_lean_vocab::families::provider_usage_refusal_standing as wire;
 
     fn at(text: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(text)
@@ -297,6 +298,93 @@ mod tests {
         let view = standing_refusal(&[long], at("2026-11-17T10:00:00Z"), None, 40).expect("stands");
         assert!(view.detail.chars().count() <= 41, "{}", view.detail);
         assert!(view.detail.ends_with('…'), "{}", view.detail);
+    }
+
+    /// The Lean `provider_usage_refusal_standing` family, replayed against this
+    /// implementation rather than a table copied from it. Each case's evidence
+    /// is rendered the way a persisted call renders it — the classifier's own
+    /// `Display` text in `failure_reason` — so the replay also proves the
+    /// classifier reads back what it wrote. Whole seconds since the epoch are
+    /// the family's `Int` moments: that is the resolution the classifier renders
+    /// a reset at, so a reset survives the round trip exactly.
+    #[test]
+    fn the_refusal_rules_follow_the_executable_model() {
+        use gents_loop::provider_limit::persisted_failure_reason;
+
+        let moment = |seconds: i64| {
+            DateTime::<Utc>::from_timestamp(seconds, 0).expect("a representable moment")
+        };
+        let moment_of = |at: DateTime<Utc>| at.timestamp();
+        // The text a refused call persisted, built the way production builds it:
+        // the provider's own words, the classifier's marker when it stated an
+        // absolute reset, then the classifier's `Display` rendering. So a reset
+        // reaches the derivation the only way it ever does — through the text.
+        let rendered = |window: Option<&str>,
+                        used: Option<u64>,
+                        cap: Option<u64>,
+                        reset: Option<i64>| {
+            let now = moment(reset.unwrap_or_default());
+            let statement = match (window, used, cap) {
+                (Some(window), Some(used), Some(cap)) => {
+                    format!("; {window} window; tokens {used}/{cap}")
+                }
+                _ => String::new(),
+            };
+            // The marker's own leading space is part of it: without it the
+            // classifier reads the annotation as prose and the reset is lost.
+            let marker = reset.map_or_else(String::new, |reset| {
+                format!(" [provider-limit reset-at={}]", moment(reset).to_rfc3339())
+            });
+            // "status code 429" is how the provider's status reaches the
+            // classifier; the marker itself is only read from a statused text.
+            let raw = format!(
+                "ProviderError: status code 429, you have used all the included free usage{statement}{marker}"
+            );
+            persisted_failure_reason(&raw, now)
+        };
+
+        let call = |evidence: &wire::CallWire| CallEvidence {
+            at: moment(evidence.observed_at),
+            call_state: if evidence.completed {
+                "completed"
+            } else {
+                "failed"
+            }
+            .to_owned(),
+            failure_reason: evidence.refusal.as_ref().map(|refusal| {
+                rendered(
+                    refusal.window.as_deref(),
+                    refusal.used,
+                    refusal.cap,
+                    refusal.reset_at,
+                )
+            }),
+        };
+        wire::replay(|input: &wire::RefusalInput| {
+            let calls: Vec<CallEvidence> = input.calls.iter().map(call).collect();
+            let established = standing_refusal(&calls, moment(input.now), None, usize::MAX);
+            let exhausted = established.is_some();
+            wire::RefusalOutput {
+                standing: established.map(|view: UsageRefusalView| wire::RefusalWire {
+                    observed_at: moment_of(
+                        DateTime::parse_from_rfc3339(&view.at)
+                            .expect("the view states an instant")
+                            .with_timezone(&Utc),
+                    ),
+                    window: view.window,
+                    used: view.used,
+                    cap: view.cap,
+                    reset_at: view.resets_at.as_deref().map(|text| {
+                        moment_of(
+                            DateTime::parse_from_rfc3339(text)
+                                .expect("an absolute reset is an instant")
+                                .with_timezone(&Utc),
+                        )
+                    }),
+                }),
+                exhausted,
+            }
+        });
     }
 
     /// The window the query uses is this node's choice when the provider named

@@ -82,12 +82,23 @@ impl ConfigCommandTool {
                     })
                     .and_then(|read| read.usage.clone())
             });
+            let refusal = kind.filter(|_| account.enabled).and_then(|_| {
+                reads
+                    .iter()
+                    .find(|read| {
+                        read.backend_id.is_none()
+                            && read.provider == account.provider
+                            && read.account_ref == account.account_ref
+                    })
+                    .and_then(|read| read.refusal.clone())
+            });
             items.push(json!({
                 "provider": account.provider,
                 "label": account.label,
                 "state": if account.enabled { "enabled" } else { "disabled" },
                 "profiles": profiles_on(&serving),
                 "usage": usage,
+                "refusal": refusal,
             }));
         }
         for backend in &backends {
@@ -105,18 +116,27 @@ impl ConfigCommandTool {
                         .and_then(|read| read.usage.clone())
                 })
                 .flatten();
+            let refusal = (state == "enabled")
+                .then(|| {
+                    reads
+                        .iter()
+                        .find(|read| read.matches_backend(backend))
+                        .and_then(|read| read.refusal.clone())
+                })
+                .flatten();
             items.push(json!({
                 "provider": backend.provider_kind.as_str(),
                 "label": backend.name,
                 "state": state,
                 "profiles": profiles_on(&[backend.backend_id.as_str()]),
                 "usage": usage,
+                "refusal": refusal,
             }));
         }
         ordered! {
             "resource": "accounts",
             "items": items,
-            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage endpoints are read when due; header-only limits use the latest runtime observation.",
+            "note": "Read-only. Accounts are managed by the operator with `gents accounts`; a profile may keep its account, use an account-free backend or move to another provider's default account, never to another account of one provider. Usage endpoints are read when due; header-only limits use the latest runtime observation. A `refusal` is the provider's own out-of-quota statement read from this node's recorded calls: it is evidence, not a percentage, and every field the provider did not state is null. It is scoped to this node's calls through these backends, so it is partial, and no refusal means none was evidenced, not that the account is whole.",
         }
         .pretty()
     }

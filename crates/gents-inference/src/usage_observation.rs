@@ -843,7 +843,7 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
     async fn definition(&self, _prompt: String) -> gents_loop::tool::ToolDefinition {
         gents_loop::tool::ToolDefinition {
             name: Self::NAME.into(),
-            description: "Read this node's provider limits, resets and freshness. Contacts usage endpoints when the last read is older than five minutes; selects no account.".into(),
+            description: "Read this node's provider limits, resets and freshness. Contacts usage endpoints when the last read is older than five minutes; selects no account. A provider's own refusal appears as `refusal` beside `limits`: it is evidence the account is out of quota, with the fields the provider stated and null where it stated none, so an unstated cap or reset stays unknown rather than becoming a percentage.".into(),
             parameters: serde_json::json!({"type":"object", "properties":{}, "additionalProperties":false}),
         }
     }
@@ -863,7 +863,8 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
             .into_iter()
             .map(|read| {
                 serde_json::json!({
-                    "label": read.label, "provider": read.provider, "limits": read.usage, "read": read.outcome,
+                    "label": read.label, "provider": read.provider, "limits": read.usage,
+                    "refusal": read.refusal, "read": read.outcome,
                 })
             })
             .collect();

@@ -289,4 +289,83 @@ theorem an_unstated_reset_stands (refusal : Refusal) (now : Int) (unstated : ref
     refusal.standsAt now = true := by
   simp [Refusal.standsAt, unstated]
 
+/-- One call's contribution to the refusal rules: when it happened, whether it
+completed, and the refusal it stated. A completion states none, so an earlier
+success cannot establish a refusal or clear one it followed. -/
+structure CallFact where
+  observedAt : Int
+  completed : Bool := false
+  /-- The refusal this call stated, when it stated one. Its own `observedAt`
+  is this call's time. -/
+  refusal : Option Refusal := none
+  deriving DecidableEq, Repr
+
+/-- The newest stated refusal in the evidence: a newer refusal replaces an older
+one, and evidence stating none states none. Two refusals at the same moment
+are the same refusal restated, so the one later in the evidence is kept. -/
+def latestRefusal : List CallFact → Option Refusal
+  | [] => none
+  | call :: rest =>
+    match call.refusal, latestRefusal rest with
+    | none, newest => newest
+    | some refusal, none => some refusal
+    | some refusal, some newest =>
+        if refusal.observedAt > newest.observedAt then some refusal else some newest
+
+/-- A completion strictly after the refusal clears it. A completion at the
+refusal's own moment is the refusing call's neighbour, not evidence it passed. -/
+def CallFact.clears (call : CallFact) (refusal : Refusal) : Bool :=
+  call.completed && call.observedAt > refusal.observedAt
+
+/-- The refusal the evidence establishes, if one still stands: the newest stated
+refusal, while its own reset has not passed and no call completed after it.
+`none` means no refusal stands, never that the account is whole. -/
+def standingRefusal (calls : List CallFact) (now : Int) : Option Refusal :=
+  match latestRefusal calls with
+  | none => none
+  | some refusal =>
+      if refusal.standsAt now && !calls.any (fun call => call.clears refusal)
+      then some refusal else none
+
+theorem no_evidence_establishes_no_refusal (now : Int) : standingRefusal [] now = none := rfl
+
+/-- Evidence whose every candidate has closed establishes no refusal, whatever
+it otherwise contains. -/
+theorem closed_evidence_establishes_no_refusal (calls : List CallFact) (now : Int)
+    (closed : ∀ refusal, latestRefusal calls = some refusal → refusal.standsAt now = false) :
+    standingRefusal calls now = none := by
+  unfold standingRefusal
+  cases current : latestRefusal calls with
+  | none => rfl
+  | some refusal => simp [closed refusal current]
+
+/-- The refusal the rules establish is the one the provider stated, field for
+field: a plain "free usage exhausted" keeps its unknowns unknown rather than
+becoming a cap, a counter or a reset. -/
+theorem witnesses_the_refusal_rules :
+    standingRefusal
+        [{ observedAt := 10, refusal := some
+            { observedAt := 10, window := some "rolling 24-hour"
+              used := some 691791, cap := some 600000 } }] 20
+      = some { observedAt := 10, window := some "rolling 24-hour"
+               used := some 691791, cap := some 600000 } ∧
+    standingRefusal [{ observedAt := 10, refusal := some { observedAt := 10 } }] 20
+      = some { observedAt := 10 } ∧
+    standingRefusal
+        [{ observedAt := 10, refusal := some { observedAt := 10 } },
+         { observedAt := 12, completed := true }] 20 = none ∧
+    standingRefusal
+        [{ observedAt := 8, completed := true },
+         { observedAt := 10, refusal := some { observedAt := 10 } }] 20
+      = some { observedAt := 10 } ∧
+    standingRefusal
+        [{ observedAt := 10, refusal := some { observedAt := 10 } },
+         { observedAt := 10, completed := true }] 20 = some { observedAt := 10 } ∧
+    standingRefusal
+        [{ observedAt := 10, refusal := some { observedAt := 10, resetAt := some 15 } }] 20 = none ∧
+    standingRefusal
+        [{ observedAt := 10, refusal := some { observedAt := 10, resetAt := some 25 } }] 20
+      = some { observedAt := 10, resetAt := some 25 } := by
+  native_decide
+
 end InferenceCall.Usage
