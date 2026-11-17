@@ -1,0 +1,4 @@
+---- MODULE MCTranscriptScrollObservationFrameBudget ----
+EXTENDS TranscriptScrollObservation
+
+====

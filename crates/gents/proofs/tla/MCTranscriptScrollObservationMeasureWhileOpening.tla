@@ -1,0 +1,4 @@
+---- MODULE MCTranscriptScrollObservationMeasureWhileOpening ----
+EXTENDS TranscriptScrollObservation
+
+====

@@ -1,0 +1,4 @@
+---- MODULE MCTranscriptScrollObservationNoStepAfterCommit ----
+EXTENDS TranscriptScrollObservation
+
+====
