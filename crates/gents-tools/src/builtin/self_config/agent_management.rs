@@ -926,41 +926,9 @@ async fn agent_apply_in_txn(
                 )?)?),
                 None => None,
             };
-            if operation == "clone" {
-                if let Some(source) = tools.as_ref() {
-                    let mut report = |name: &str, value: Value| {
-                        overridden_on_request.push(format!(
-                            "{name}: overridden on request (source value: {value})"
-                        ));
-                    };
-                    if args.root.is_present() {
-                        report(
-                            "host.root",
-                            json!(source.host.as_ref().and_then(|host| host.root.as_ref())),
-                        );
-                    }
-                    if args.network_mode.is_some() {
-                        report(
-                            "host.bash.network_mode",
-                            json!(source
-                                .host
-                                .as_ref()
-                                .and_then(|host| host.bash.as_ref())
-                                .and_then(|bash| bash.network_mode)),
-                        );
-                    }
-                    if args.enable_lsp.is_some() {
-                        report(
-                            "integrations.lsp.enabled",
-                            json!(source
-                                .integrations
-                                .as_ref()
-                                .and_then(|i| i.lsp.as_ref())
-                                .is_some()),
-                        );
-                    }
-                }
-            }
+            let source_override_values = (operation == "clone")
+                .then(|| tools.as_ref().map(clone_override_values))
+                .flatten();
             let dropped_self_config = if clone_omitted_self_config(
                 operation == "clone",
                 tools
@@ -1039,6 +1007,20 @@ async fn agent_apply_in_txn(
                     stored_root.as_deref(),
                 )?;
                 apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
+                if let Some(source) = source_override_values {
+                    let selected = clone_override_values(&tools);
+                    for ((name, before), ((_, after), requested)) in
+                        source.into_iter().zip(selected.into_iter().zip([
+                            args.root.is_present(),
+                            args.network_mode.is_some(),
+                            args.enable_lsp.is_some(),
+                        ]))
+                    {
+                        if let Some(note) = clone_override_note(name, before, after, requested) {
+                            overridden_on_request.push(note);
+                        }
+                    }
+                }
                 let mut omitted: Vec<(&str, Value)> = Vec::new();
                 if let Some(dropped) = dropped_self_config {
                     omitted.push(("config", json!({"self_config": dropped})));
@@ -1049,15 +1031,11 @@ async fn agent_apply_in_txn(
                     patch["node_did"] = json!(owner);
                     let payload = serde_json::to_string(&patch)?;
                     let quoted = format!("'{}'", payload.replace('\'', "'\\''"));
-                    let home_arg = home
-                        .map(|h| {
-                            format!(" --home '{}'", h.to_string_lossy().replace('\'', "'\\''"))
-                        })
-                        .unwrap_or_default();
+                    let (grant_command, target_note) = clone_grant_command(&quoted, home);
                     not_copied.push(AgentOmittedCapability {
                         capability: name.to_owned(),
-                        target_note: home.is_none().then(|| "No home is available here; select the intended node with --home or --graphql before running this command.".to_owned()),
-                        grant_command: format!("( f=$(mktemp) && printf '%s' {quoted} > \"$f\" && gents config tools set{home_arg} --file \"$f\"; status=$?; rm -f \"$f\"; exit $status )"),
+                        target_note,
+                        grant_command,
                     });
                     if context
                         .system_prompt
@@ -1331,7 +1309,10 @@ mod clone_omission_conformance {
 fn prompt_mentions_tool(prompt: &str, name: &str) -> bool {
     prompt
         .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .any(|word| word.eq_ignore_ascii_case(name))
+        .any(|word| {
+            word.eq_ignore_ascii_case(name)
+                || (name == "config" && word.eq_ignore_ascii_case("self_config"))
+        })
 }
 
 #[cfg(test)]
@@ -1342,16 +1323,95 @@ mod clone_prompt_tests {
             "Use config to inspect Tools.",
             "Use `config`.",
             "CONFIG is unavailable.",
+            "Use self_config to inspect Tools.",
+            "Use `SELF_CONFIG`.",
         ] {
             assert!(super::prompt_mentions_tool(prompt, "config"));
         }
         for prompt in [
             "Configure yourself.",
             "Check the configuration.",
-            "self_config",
+            "self_configure",
             "configurator",
         ] {
             assert!(!super::prompt_mentions_tool(prompt, "config"));
+        }
+    }
+}
+
+fn clone_override_values(tools: &Tools) -> [(&'static str, Value); 3] {
+    [
+        (
+            "host.root",
+            json!(tools.host.as_ref().and_then(|host| host.root.as_ref())),
+        ),
+        (
+            "host.bash.network_mode",
+            json!(tools
+                .host
+                .as_ref()
+                .and_then(|host| host.bash.as_ref())
+                .and_then(|bash| bash.network_mode)),
+        ),
+        (
+            "integrations.lsp.enabled",
+            json!(tools
+                .integrations
+                .as_ref()
+                .and_then(|integrations| integrations.lsp.as_ref())
+                .is_some()),
+        ),
+    ]
+}
+
+fn clone_override_note(name: &str, before: Value, after: Value, requested: bool) -> Option<String> {
+    (requested && before != after)
+        .then(|| format!("{name}: overridden on request (source value: {before})"))
+}
+
+fn clone_grant_command(
+    quoted_payload: &str,
+    home: Option<&std::path::Path>,
+) -> (String, Option<String>) {
+    let home_arg = home
+        .map(|h| format!(" --home '{}'", h.to_string_lossy().replace('\'', "'\\''")))
+        .unwrap_or_default();
+    (
+        format!("( f=$(mktemp) && printf '%s' {quoted_payload} > \"$f\" && gents config tools set{home_arg} --file \"$f\"; status=$?; rm -f \"$f\"; exit $status )"),
+        home.is_none().then(|| "No home is available here; select the intended node with --home or --graphql before running this command.".to_owned()),
+    )
+}
+
+#[cfg(test)]
+mod clone_receipt_nit_tests {
+    use super::*;
+
+    #[test]
+    fn tool_path_without_home_names_target_selection_without_a_placeholder() {
+        let (command, note) = clone_grant_command("'{}'", None);
+        assert!(!command.contains("--home"));
+        assert!(!command.contains("<HOME>"));
+        let note = note.expect("tool-path receipts explain how to select this node");
+        assert!(note.contains("--home"));
+        assert!(note.contains("--graphql"));
+        let (command, note) =
+            clone_grant_command("'{}'", Some(std::path::Path::new("/fixture node")));
+        assert!(command.contains("--home '/fixture node'"));
+        assert!(note.is_none());
+    }
+
+    #[test]
+    fn only_changed_requested_overrides_are_reported() {
+        for (name, value) in [
+            ("host.root", json!("/fixture")),
+            ("host.bash.network_mode", json!("deny")),
+            ("integrations.lsp.enabled", json!(true)),
+        ] {
+            assert!(clone_override_note(name, value.clone(), value.clone(), true).is_none());
+            assert!(clone_override_note(name, value.clone(), Value::Null, false).is_none());
+            assert!(clone_override_note(name, value, Value::Null, true)
+                .unwrap()
+                .contains("overridden on request"));
         }
     }
 }
