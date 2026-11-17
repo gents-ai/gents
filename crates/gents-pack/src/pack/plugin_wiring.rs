@@ -22,12 +22,25 @@ fn union_into(list: &mut Vec<String>, items: &[String]) {
     }
 }
 
-/// Merges `new` into `existing` without widening anything `existing` grants
-/// (targets and trusted packs are the additions).
+/// A pack cannot rewrite the operator's dynamic authority. Compatibility is
+/// checked before a merged block can be returned (Lean `policySufficient`).
+#[derive(Debug, thiserror::Error)]
+enum DynamicPolicyConflict {
+    #[error("existing policy.dynamic {existing:?} is narrower than incoming {incoming:?}; pack wire does not grant dynamic authority")]
+    Mode {
+        existing: gents_protocol::job::DynamicMode,
+        incoming: gents_protocol::job::DynamicMode,
+    },
+    #[error("existing policy.dynamic_targets is insufficient; missing requested targets: {}", .missing.join(", "))]
+    Targets { missing: Vec<String> },
+}
+
+/// Preserve existing dynamic authority exactly, or refuse. Targets, trust and
+/// ceilings keep their existing merge rules (Lean `merge`).
 fn merge_job_blocks(
     existing: &gents_protocol::job::PluginJobSettings,
     new: &gents_protocol::job::PluginJobSettings,
-) -> gents_protocol::job::PluginJobSettings {
+) -> Result<gents_protocol::job::PluginJobSettings, DynamicPolicyConflict> {
     use gents_protocol::job::DynamicMode;
     fn rank(mode: DynamicMode) -> u8 {
         match mode {
@@ -35,6 +48,22 @@ fn merge_job_blocks(
             DynamicMode::Check => 1,
             DynamicMode::Run => 2,
         }
+    }
+    if rank(existing.policy.dynamic) < rank(new.policy.dynamic) {
+        return Err(DynamicPolicyConflict::Mode {
+            existing: existing.policy.dynamic,
+            incoming: new.policy.dynamic,
+        });
+    }
+    let missing: Vec<_> = new
+        .policy
+        .dynamic_targets
+        .iter()
+        .filter(|id| !existing.policy.dynamic_targets.contains(id))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        return Err(DynamicPolicyConflict::Targets { missing });
     }
     let mut merged = existing.clone();
     union_into(&mut merged.agent_targets, &new.agent_targets);
@@ -46,14 +75,7 @@ fn merge_job_blocks(
         .min(new.max_messages_per_slot);
     merged.result_bytes = existing.result_bytes.min(new.result_bytes);
     merged.max_wall_secs = existing.max_wall_secs.min(new.max_wall_secs);
-    if rank(new.policy.dynamic) < rank(existing.policy.dynamic) {
-        merged.policy.dynamic = new.policy.dynamic;
-    }
-    merged
-        .policy
-        .dynamic_targets
-        .retain(|id| new.policy.dynamic_targets.contains(id));
-    merged
+    Ok(merged)
 }
 
 /// Wires an installed plugin into an agent's Tools and Context: the plugin
@@ -70,6 +92,7 @@ pub fn wire_plugin(
     skill_ids: &[String],
     targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
 ) -> anyhow::Result<(Tools, AgentContext, WireReport)> {
+    use anyhow::Context as _;
     use gents_documents::plugin_job_settings;
     use gents_protocol::job::{JobPolicy, PluginJobSettings};
 
@@ -124,7 +147,12 @@ pub fn wire_plugin(
         if let Some(incoming) = incoming {
             let merged = job.is_some();
             let mut block = match &job {
-                Some(existing) => merge_job_blocks(existing, &incoming),
+                Some(existing) => merge_job_blocks(existing, &incoming).with_context(|| {
+                    format!(
+                        "cannot wire {coordinate}: existing workflow policy is unchanged. To authorize different policy explicitly, run `gents config tools show '{}' --home <node-home> > tools.json`, remove the read-only _docID field (retain tools_id, node_did and every settings group), then edit only this plugin's job.policy, then run `gents config tools set --file tools.json --home <node-home>` and retry pack wire. Use the same home/endpoint as this request; do not drop unrelated settings",
+                        tools.tools_id.replace('\'', "'\"'\"'")
+                    )
+                })?,
                 None => incoming,
             };
             for (pack, pack_targets, via) in targets_from {

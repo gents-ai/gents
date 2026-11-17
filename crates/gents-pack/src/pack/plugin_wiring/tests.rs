@@ -276,3 +276,118 @@ fn wiring_never_grants_p2p_collections() {
     )
     .is_err());
 }
+
+fn policy_block(mode: DynamicMode, targets: &[&str]) -> PluginJobSettings {
+    PluginJobSettings {
+        agent_targets: strs(&["a", "b", "c"]),
+        policy: gents_protocol::job::JobPolicy {
+            dynamic: mode,
+            dynamic_targets: strs(targets),
+            ..Default::default()
+        },
+        max_live: PluginJobSettings::DEFAULT_MAX_LIVE,
+        max_spawns: PluginJobSettings::DEFAULT_MAX_SPAWNS,
+        max_messages_per_slot: PluginJobSettings::DEFAULT_MAX_MESSAGES_PER_SLOT,
+        result_bytes: PluginJobSettings::DEFAULT_RESULT_BYTES,
+        max_wall_secs: PluginJobSettings::DEFAULT_MAX_WALL_SECS,
+    }
+}
+
+#[test]
+fn rewire_preserves_exact_operator_policy_and_keeps_other_merge_rules() {
+    let mut existing = policy_block(DynamicMode::Run, &["c", "a", "b"]);
+    existing.max_live = 2;
+    existing.policy.trusted_packs = strs(&["operator/kept"]);
+    let mut incoming = policy_block(DynamicMode::Check, &["a"]);
+    incoming.max_spawns = 7;
+    incoming.policy.trusted_packs = strs(&["pack/added"]);
+    let merged = merge_job_blocks(&existing, &incoming).unwrap();
+    assert_eq!(merged.policy.dynamic, existing.policy.dynamic);
+    assert_eq!(
+        merged.policy.dynamic_targets,
+        existing.policy.dynamic_targets
+    );
+    assert_eq!(
+        merged.policy.trusted_packs,
+        strs(&["operator/kept", "pack/added"])
+    );
+    assert_eq!(merged.max_live, 2);
+    assert_eq!(merged.max_spawns, 7);
+    assert_eq!(merge_job_blocks(&merged, &incoming).unwrap(), merged);
+}
+
+#[test]
+fn rewire_refuses_insufficient_mode_or_targets_with_explicit_edit_remedy() {
+    for (existing_mode, incoming_mode, existing_targets, incoming_targets, missing) in [
+        (
+            DynamicMode::Off,
+            DynamicMode::Check,
+            vec!["a"],
+            vec!["a"],
+            false,
+        ),
+        (
+            DynamicMode::Check,
+            DynamicMode::Run,
+            vec!["a"],
+            vec!["a"],
+            false,
+        ),
+        (
+            DynamicMode::Run,
+            DynamicMode::Run,
+            vec!["a"],
+            vec!["a", "b"],
+            true,
+        ),
+    ] {
+        let existing = policy_block(existing_mode, &existing_targets);
+        let incoming = policy_block(incoming_mode, &incoming_targets);
+        let (tools, context) = start(Some(false));
+        let (mut tools, context, _) = wire_plugin(
+            &tools,
+            &context,
+            &installed(true, None),
+            Some(&existing),
+            &[],
+            &[],
+        )
+        .unwrap();
+        tools.tools_id = "operator-tools".to_owned();
+        let before = (tools.clone(), context.clone());
+        let error = wire_plugin(
+            &tools,
+            &context,
+            &installed(true, None),
+            Some(&incoming),
+            &strs(&["new-skill"]),
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!((tools, context), before);
+        assert!(
+            matches!(
+                merge_job_blocks(&existing, &incoming).err().as_ref(),
+                Some(DynamicPolicyConflict::Targets { .. })
+            ) == missing
+        );
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains("config tools show 'operator-tools'"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("config tools set --file tools.json"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("existing workflow policy is unchanged"),
+            "{diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains("--enable-dynamic-jobs"),
+            "{diagnostic}"
+        );
+        assert!(!diagnostic.contains("--allow-drop"), "{diagnostic}");
+    }
+}

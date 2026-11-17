@@ -763,6 +763,147 @@ fn pack_wire_uses_the_packs_reviewed_block() -> Result<()> {
     Ok(())
 }
 
+/// Real stored operator edits survive both preview and repeated pack wire. The
+/// refusal's show/edit/set remedy is exercised against this isolated file home.
+#[test]
+fn pack_wire_preserves_operator_workflow_policy_or_refuses_without_writes() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    fixture.wire(&[])?;
+    let set_tools = |fixture: &WireFixture, tools: &serde_json::Value| -> Result<()> {
+        let file = fixture.tempdir.path().join("tools.json");
+        let mut writable = tools.clone();
+        writable.as_object_mut().unwrap().remove("_docID");
+        write_json_file(&file, &writable)?;
+        run_cli_json(
+            fixture.tempdir.path(),
+            &[
+                "config",
+                "tools",
+                "set",
+                "--file",
+                dir_arg(&file),
+                "--home",
+                dir_arg(&fixture.home),
+            ],
+        )?;
+        Ok(())
+    };
+    let with_policy = |mut tools: serde_json::Value, mode: &str, targets: serde_json::Value| {
+        let entry = tools["integrations"]["plugins"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|entry| entry["plugin"] == "fixture/job_fixture")
+            .unwrap();
+        entry["job"]["policy"]["dynamic"] = mode.into();
+        entry["job"]["policy"]["dynamic_targets"] = targets;
+        tools
+    };
+    let tools = with_policy(
+        fixture.agent_tools()?,
+        "run",
+        serde_json::json!(["wf-fixture"]),
+    );
+    set_tools(&fixture, &tools)?;
+    let operator = fixture.agent_tools()?;
+    for args in [&["--preview"][..], &[][..], &[][..]] {
+        let report = fixture.wire(args)?;
+        assert_eq!(report["report"]["job"]["policy"]["dynamic"], "run");
+        assert_eq!(
+            report["report"]["job"]["policy"]["dynamic_targets"],
+            serde_json::json!(["wf-fixture"])
+        );
+        assert_eq!(
+            fixture.agent_tools()?,
+            operator,
+            "rewire changed the operator's Tools"
+        );
+    }
+
+    for (mode, targets, reason) in [
+        ("off", serde_json::json!(["wf-fixture"]), "policy.dynamic"),
+        ("check", serde_json::json!([]), "policy.dynamic_targets"),
+    ] {
+        // Start each refusal from its own stored policy. Removing a previously
+        // granted target is intentionally forbidden by the Tools save guard.
+        let fixture = wire_fixture(true)?;
+        fixture.wire(&[])?;
+        let initial = fixture.agent_tools()?;
+        let operator = with_policy(initial.clone(), "run", serde_json::json!(["wf-fixture"]));
+        // Simulate the installed pack's reviewed request for dynamic check + target.
+        let reviewed = with_policy(
+            fixture.tools("job-fixture-caller")?,
+            "check",
+            serde_json::json!(["wf-fixture"]),
+        );
+        set_tools(&fixture, &reviewed)?;
+        set_tools(&fixture, &with_policy(initial, mode, targets))?;
+        let before = fixture.agent_tools()?;
+        let context_id = format!("{}-context", fixture.agent);
+        let context = || -> Result<serde_json::Value> {
+            let snapshot = tempfile::tempdir_in(fixture.tempdir.path())?;
+            let root = snapshot.path().join("refusal-snapshot");
+            run_cli_text(
+                fixture.tempdir.path(),
+                &[
+                    "config",
+                    "export",
+                    "--root",
+                    dir_arg(&root),
+                    "--home",
+                    dir_arg(&fixture.home),
+                ],
+            )?;
+            let config = read_json_file(&root.join("pack_config.json"))?;
+            config["contexts"]
+                .as_array()
+                .and_then(|contexts| contexts.iter().find(|c| c["context_id"] == context_id))
+                .cloned()
+                .context("agent Context missing from snapshot")
+        };
+        let before_context = context()?;
+        for preview in [true, false] {
+            let mut args = vec![
+                "config",
+                "pack",
+                "wire",
+                "fixture/job_fixture",
+                "--agent",
+                &fixture.agent,
+                "--home",
+                dir_arg(&fixture.home),
+            ];
+            if preview {
+                args.push("--preview");
+            }
+            let refusal = run_cli_failure_stderr(fixture.tempdir.path(), &args)?;
+            assert!(refusal.contains(reason), "{refusal}");
+            assert!(refusal.contains("config tools show"), "{refusal}");
+            assert!(
+                refusal.contains("config tools set --file tools.json"),
+                "{refusal}"
+            );
+            assert_eq!(fixture.agent_tools()?, before, "refusal changed Tools");
+            assert_eq!(context()?, before_context, "refusal changed Context");
+        }
+        // Execute the printed show/edit/set remedy, retaining the complete document.
+        let shown = fixture.tools(&format!("{}-tools", fixture.agent))?;
+        set_tools(
+            &fixture,
+            &with_policy(shown, "run", serde_json::json!(["wf-fixture"])),
+        )?;
+        let preview = fixture.wire(&["--preview"])?;
+        let applied = fixture.wire(&[])?;
+        assert_eq!(preview["report"], applied["report"]);
+        assert_eq!(
+            fixture.agent_tools()?,
+            operator,
+            "remedy dropped unrelated settings"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn pack_wire_targets_from_adds_targets_and_trust() -> Result<()> {
     let fixture = wire_fixture(true)?;
