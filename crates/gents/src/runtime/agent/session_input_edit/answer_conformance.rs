@@ -11,7 +11,7 @@ enum Admission {
     DelegationNotRequestBound,
     DelegationForAnotherWrite,
     RequestBoundTakesNoUpdate,
-    StoredEditAwaitsVerifiedPermission,
+    ProviderDecides,
     DelegationRefused,
     IssuerNotSigner,
 }
@@ -28,7 +28,7 @@ fn a_refused_user_write_is_answered_as_the_lean_model_says() {
     gents_lean_vocab::families::identity_session_input_edit_answer::replay::<Admission, Outcome>(
         |input| {
             let admission = match input.admission {
-                Admission::Unchanged | Admission::Forwarded => Ok(()),
+                Admission::Unchanged | Admission::Forwarded | Admission::ProviderDecides => Ok(()),
                 Admission::DelegationRequired => Err(UserWriteRefusal::DelegationRequired),
                 Admission::DelegationNotBound => Err(UserWriteRefusal::DelegationNotBound),
                 Admission::DelegationNotRequestBound => {
@@ -39,9 +39,6 @@ fn a_refused_user_write_is_answered_as_the_lean_model_says() {
                 }
                 Admission::RequestBoundTakesNoUpdate => {
                     Err(UserWriteRefusal::RequestBoundTakesNoUpdate)
-                }
-                Admission::StoredEditAwaitsVerifiedPermission => {
-                    Err(UserWriteRefusal::StoredEditAwaitsVerifiedPermission)
                 }
                 Admission::DelegationRefused => Err(UserWriteRefusal::DelegationRefused),
                 Admission::IssuerNotSigner => Err(UserWriteRefusal::IssuerNotSigner),

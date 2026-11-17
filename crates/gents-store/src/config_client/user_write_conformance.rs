@@ -69,7 +69,7 @@ enum ModelAdmission {
     DelegationNotRequestBound,
     DelegationForAnotherWrite,
     RequestBoundTakesNoUpdate,
-    StoredEditAwaitsVerifiedPermission,
+    ProviderDecides,
     DelegationRefused,
     IssuerNotSigner,
 }
@@ -124,6 +124,7 @@ fn the_admission_of_a_user_write_matches_the_lean_model() {
         match admission {
             Admission::Unchanged => ModelAdmission::Unchanged,
             Admission::Forwarded => ModelAdmission::Forwarded,
+            Admission::ProviderDecides => ModelAdmission::ProviderDecides,
             Admission::Refused(refusal) => match refusal {
                 UserWriteRefusal::DelegationRequired => ModelAdmission::DelegationRequired,
                 UserWriteRefusal::DelegationNotBound => ModelAdmission::DelegationNotBound,
@@ -135,9 +136,6 @@ fn the_admission_of_a_user_write_matches_the_lean_model() {
                 }
                 UserWriteRefusal::RequestBoundTakesNoUpdate => {
                     ModelAdmission::RequestBoundTakesNoUpdate
-                }
-                UserWriteRefusal::StoredEditAwaitsVerifiedPermission => {
-                    ModelAdmission::StoredEditAwaitsVerifiedPermission
                 }
                 UserWriteRefusal::DelegationRefused => ModelAdmission::DelegationRefused,
                 UserWriteRefusal::IssuerNotSigner => ModelAdmission::IssuerNotSigner,

@@ -70,11 +70,6 @@ pub enum UserWriteRefusal {
     )]
     RequestBoundTakesNoUpdate,
     #[error(
-        "this home decides document access through Vera, which does not yet admit an update or \
-         a delete a User signed into a stored command; make the change directly from the client"
-    )]
-    StoredEditAwaitsVerifiedPermission,
-    #[error(
         "the Vera delegation this write carried was refused: it is expired, not yet valid, or \
          minted for another runtime; mint a new one for the audience the runtime's public status \
          reports"
@@ -105,6 +100,7 @@ impl UserWriteRefusal {
 pub enum Admission {
     Unchanged,
     Forwarded,
+    ProviderDecides,
     Refused(UserWriteRefusal),
 }
 
@@ -126,7 +122,7 @@ pub fn admit(
         (DocumentAcp::Vera, Author::User)
             if carrier == Carrier::Stored && write != WriteKind::Create =>
         {
-            Admission::Refused(UserWriteRefusal::StoredEditAwaitsVerifiedPermission)
+            Admission::ProviderDecides
         }
         (DocumentAcp::Vera, Author::User) => admit_carried(carrier, write, carried, scope, verdict),
     }
@@ -266,7 +262,9 @@ pub(crate) fn signer_credential(
         verdict,
     );
     match (admission, presented) {
-        (Admission::Unchanged, _) => Ok(defra_node::SignerCredential::None),
+        (Admission::Unchanged | Admission::ProviderDecides, _) => {
+            Ok(defra_node::SignerCredential::None)
+        }
         (Admission::Forwarded, Some(presented)) => {
             Ok(defra_node::SignerCredential::Delegation(presented.token()))
         }
