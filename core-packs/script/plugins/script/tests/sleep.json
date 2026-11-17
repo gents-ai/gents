@@ -1,4 +1,8 @@
 {
-  "input": {"script": "let n = 3; await sleep(1); n *= 7; return {n};"},
-  "expect": {"n": 21}
+  "input": {
+    "script": "let n = 3; await Promise.all([sleep(0), sleep(1)]); n *= 7; return {n};"
+  },
+  "expect": {
+    "n": 21
+  }
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::tool::BoxFuture;
+use crate::tool::{BoxFuture, ToolDefinition};
 use crate::tool_call_lifecycle::ToolOutcome;
 
 #[derive(Debug)]
@@ -24,6 +24,10 @@ pub trait ToolEffectDispatcher: Send + Sync {
         name: &'a str,
         arguments: &'a str,
     ) -> BoxFuture<'a, Result<ToolOutcome, ToolEffectError>>;
+
+    /// The definitions of the tools `call` reaches: the request's selected
+    /// surface, in its order.
+    fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<ToolDefinition>>;
 
     /// Settle the children the invocation left unfinished once it has stopped
     /// with `stop`. A stopped invocation drops its in-flight child call, so no
