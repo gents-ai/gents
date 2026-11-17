@@ -733,6 +733,7 @@ impl std::fmt::Debug for AgentToolSurfaceConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentToolSurfaceConfig")
             .field("host_tools", &self.host_tools)
+            .field("hidden_tool_names", &self.hidden_tool_names)
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("enable_goal_tools", &self.enable_goal_tools)
             .field("enable_goal_creation", &self.enable_goal_creation)

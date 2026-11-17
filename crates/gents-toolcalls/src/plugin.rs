@@ -3,6 +3,8 @@ pub mod authoring_test;
 pub mod data;
 pub mod executor;
 #[cfg(test)]
+mod hidden_tools_tests;
+#[cfg(test)]
 mod host_call_surface_tests;
 pub mod host_calls;
 #[cfg(test)]

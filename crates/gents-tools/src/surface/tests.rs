@@ -3499,3 +3499,40 @@ async fn a_published_root_nested_under_a_broader_tool_root_does_not_cover_it() {
     assert!(!refusal.is_reader_missing());
     node.shutdown().await.unwrap();
 }
+
+#[test]
+fn hidden_tool_names_change_presentation_not_effective_grants_or_ceiling() {
+    let original = tools_document(serde_json::json!({
+        "built_ins":{"enable_schema_tool":true},
+        "integrations":{"plugins":[{"plugin":"script/script","tool_calls":true}]}
+    }));
+    let config = |document: &gents_documents::Tools, ceiling: &ToolCeiling| {
+        AgentToolSurfaceConfig::from_tools_document("hidden", document, ceiling, Vec::new())
+            .unwrap()
+    };
+    let ceiling = ToolCeiling::meta_only();
+    let mut hidden = original.clone();
+    hidden.hidden_tool_names = vec!["schema".into()];
+    let plain_config = config(&original, &ceiling);
+    let hidden_config = config(&hidden, &ceiling);
+    let plain_surface =
+        plain_config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
+    let surface =
+        hidden_config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
+    assert_eq!(plain_surface.tool_names(), surface.tool_names());
+    assert!(surface.tool_names().contains(&"schema".into()));
+    assert!(!surface.advertised_tool_names().contains(&"schema".into()));
+    assert_ne!(format!("{plain_surface:?}"), format!("{surface:?}"));
+    assert_ne!(format!("{plain_config:?}"), format!("{hidden_config:?}"));
+    let mut policy = ceiling.policy().clone();
+    policy.schema_management = false;
+    let narrowed = config(&hidden, &ceiling.clone().with_policy(policy));
+    let narrowed = narrowed.explain_with_runtime(false, "owner", &Default::default());
+    assert!(!narrowed.tool_names.contains(&"schema".into()));
+    assert!(!narrowed.advertised_tool_names.contains(&"schema".into()));
+    assert!(narrowed
+        .warnings
+        .iter()
+        .any(|warning| warning.code == "hidden_tool_unavailable"));
+    assert!(narrowed.tool_names.contains(&"script".into()));
+}

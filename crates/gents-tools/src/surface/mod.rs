@@ -763,27 +763,12 @@ impl ToolSurface {
                     .resolve(&plugin.plugin, plugin.digest.as_deref())
             })
             .transpose()?
-            .is_some_and(|record| record.declaration.imports_host_call())
-            && tools.iter().any(|tool| tool.name() == "script")
-            && !self
-                .hidden_tool_names
-                .iter()
-                .any(|name| gents_loop::tool_policy::presentation::is_gateway(name));
-        anyhow::ensure!(script_ready, "hidden_tool_names requires a selected, visible, working script with tool_calls: true after ceilings and availability");
-        let has_hidden = tools
-            .iter()
-            .any(|tool| self.hidden_tool_names.contains(&tool.name()));
-        Ok(tools
-            .into_iter()
-            .map(|tool| {
-                let name = tool.name();
-                gents_loop::tool_policy::presentation::PresentedTool::wrap(
-                    tool,
-                    self.hidden_tool_names.contains(&name),
-                    has_hidden && name == "script",
-                )
-            })
-            .collect())
+            .is_some_and(|record| record.declaration.imports_host_call());
+        Ok(gents_loop::tool_policy::presentation::present_tools(
+            tools,
+            &self.hidden_tool_names,
+            script_ready,
+        )?)
     }
 }
 

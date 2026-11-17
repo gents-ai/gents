@@ -64,6 +64,37 @@ pub fn admit(
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("hidden_tool_names requires a selected, visible, working script with tool_calls: true after ceilings and availability; presentation gateways must stay visible")]
+pub struct PresentationError;
+
+pub fn present_tools(
+    tools: Vec<Box<dyn ToolDyn>>,
+    hidden_names: &[String],
+    script_ready: bool,
+) -> Result<Vec<Box<dyn ToolDyn>>, PresentationError> {
+    let gateway_hidden = hidden_names.iter().any(|name| is_gateway(name));
+    let script_ready = script_ready && tools.iter().any(|tool| tool.name() == "script");
+    if !configuration_valid(!hidden_names.is_empty(), true, script_ready, gateway_hidden) {
+        return Err(PresentationError);
+    }
+    if hidden_names.is_empty() {
+        return Ok(tools);
+    }
+    let has_hidden = tools.iter().any(|tool| hidden_names.contains(&tool.name()));
+    Ok(tools
+        .into_iter()
+        .map(|tool| {
+            let name = tool.name();
+            PresentedTool::wrap(
+                tool,
+                hidden_names.contains(&name),
+                has_hidden && name == "script",
+            )
+        })
+        .collect())
+}
+
 const SCRIPT_HINT: &str = "Some granted tools are script-only: use `Object.keys(tools)`, then `tools.NAME.description` and `.parameters`.";
 
 pub struct PresentedTool {
@@ -130,6 +161,64 @@ impl ToolDyn for PresentedTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Named(&'static str);
+    impl ToolDyn for Named {
+        fn name(&self) -> String {
+            self.0.into()
+        }
+        fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
+            Box::pin(async move {
+                ToolDefinition {
+                    name: self.name(),
+                    description: "contract".into(),
+                    parameters: serde_json::json!({"type":"object"}),
+                }
+            })
+        }
+        fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+            Box::pin(async { Ok("called".into()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn hidden_presentation_has_one_conditional_hint_and_never_constructs_missing_tools() {
+        let surface = || -> Vec<Box<dyn ToolDyn>> {
+            vec![Box::new(Named("script")), Box::new(Named("query"))]
+        };
+        let empty = present_tools(surface(), &[], false).unwrap();
+        assert_eq!(
+            empty[0].definition(String::new()).await.description,
+            "contract"
+        );
+        let hidden = present_tools(surface(), &["query".into()], true).unwrap();
+        assert!(hidden[1].hidden());
+        assert!(!hidden[0].hidden());
+        assert_eq!(
+            hidden[0].definition(String::new()).await.description,
+            format!("contract\n{SCRIPT_HINT}")
+        );
+        assert_eq!(hidden[1].call("{}".into()).await.unwrap(), "called");
+        assert_eq!(
+            hidden[1].definition(String::new()).await.description,
+            "contract"
+        );
+        let unavailable = present_tools(surface(), &["unavailable".into()], true).unwrap();
+        assert_eq!(unavailable.len(), 2);
+        assert_eq!(
+            unavailable[0].definition(String::new()).await.description,
+            "contract"
+        );
+        assert!(matches!(
+            admit(&unavailable, "unavailable", InvocationOrigin::Composition),
+            Err(AdmissionRefusal::Unavailable { .. })
+        ));
+        assert!(present_tools(surface(), &["query".into()], false).is_err());
+        assert!(present_tools(vec![Box::new(Named("query"))], &["query".into()], true).is_err());
+        for gateway in ["script", "config", "load_skill", "spawn_process"] {
+            assert!(present_tools(surface(), &[gateway.into()], true).is_err());
+        }
+    }
 
     #[test]
     fn presentation_conforms_to_lean() {

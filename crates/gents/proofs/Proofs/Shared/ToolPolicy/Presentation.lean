@@ -13,12 +13,12 @@ def directAdmissible (granted hidden : Bool) : Bool := advertised granted hidden
 def admissible (granted hidden providerOrigin : Bool) : Bool :=
   if providerOrigin then directAdmissible granted hidden else granted
 
-/-- Nonempty presentation configuration needs an already-selected, visible
-script with tool access, and cannot hide a presentation gateway. Availability
-is checked again when the runtime constructs the effective surface. -/
 def isGateway (name : String) : Bool :=
   ["script", "config", "load_skill", "spawn_process"].contains name
 
+/-- Nonempty presentation configuration needs an already-selected, visible
+script with tool access, and cannot hide a presentation gateway. Availability
+is checked again when the runtime constructs the effective surface. -/
 def configurationValid (hasHidden allSelected scriptReady gatewayHidden : Bool) : Bool :=
   !hasHidden || (allSelected && scriptReady && !gatewayHidden)
 
