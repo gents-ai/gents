@@ -401,9 +401,26 @@ impl ContextInputComponents {
     }
 }
 
+/// Numeric-only figures emitted by history stripping for this dispatch's retained
+/// stub set. Not cumulative, and not a compaction or provider reduction.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryStubbing {
+    pub stubbed_results: usize,
+    pub original_bytes: usize,
+    pub stub_bytes: usize,
+}
+
+impl HistoryStubbing {
+    pub fn bytes_removed(&self) -> usize {
+        self.original_bytes.saturating_sub(self.stub_bytes)
+    }
+}
+
 /// Request-bound context accounting persisted with the exact rendered request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextAccounting {
+    /// Required numeric figures for this dispatch; no pre-1.0 upgrade path.
+    pub history_stubbing: HistoryStubbing,
     pub accounting_version: u32,
     #[serde(default)]
     pub turn_index: usize,
@@ -741,6 +758,7 @@ mod calibrated_components_tests {
 
     fn accounting(components: ContextInputComponents, estimated: usize) -> ContextAccounting {
         ContextAccounting {
+            history_stubbing: Default::default(),
             accounting_version: 3,
             turn_index: 0,
             attempt: 0,

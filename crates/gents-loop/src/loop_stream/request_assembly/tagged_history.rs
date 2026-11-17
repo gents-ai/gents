@@ -31,6 +31,7 @@ pub fn select_tagged_assistant_blocks(
         .map(|(index, block)| (index, block.clone()))
         .unzip();
     Ok(TaggedMessage {
+        history_stubs: source.history_stubs.clone(),
         message: Message::Assistant {
             request_id: request_id.clone(),
             id: id.clone(),
@@ -81,12 +82,7 @@ pub(super) fn tagged_from_sourced(
                 let mut selected = if original.physical_header.is_none()
                     && original.block_indices.is_empty()
                 {
-                    TaggedMessage {
-                        message: original.message.clone(),
-                        source: original.source.clone(),
-                        physical_header: None,
-                        block_indices: Vec::new(),
-                    }
+                    TaggedMessage::new(original.message.clone(), original.source.clone(), None, Vec::new())
                 } else {
                     if item.block_indices.windows(2).any(|pair| pair[0] >= pair[1]) {
                         return Err(replay_input_error(
@@ -105,15 +101,83 @@ pub(super) fn tagged_from_sourced(
                 selected.message = item.message;
                 Ok(selected)
             } else {
-                Ok(TaggedMessage {
-                    message: item.message,
-                    source: original.source.clone(),
-                    physical_header: original.physical_header.clone(),
-                    block_indices: Vec::new(),
-                })
+                let receipts = retained_stub_receipts(original, &item.message);
+                let mut tagged = TaggedMessage::new(item.message, original.source.clone(), original.physical_header.clone(), Vec::new());
+                tagged.history_stubs = receipts;
+                Ok(tagged)
             }
         })
         .collect()
+}
+
+fn retained_stub_receipts(
+    original: &TaggedMessage,
+    projected: &Message,
+) -> Vec<crate::compaction::history::StubReplacement> {
+    let Message::User { content } = projected else {
+        return Vec::new();
+    };
+    original.history_stubs.iter().filter(|receipt| content.iter().any(|part| {
+        matches!(part, UserContent::ToolResult(result) if crate::compaction::history::tool_result_key(result) == receipt.result_key)
+    })).cloned().collect()
+}
+
+pub(in crate::loop_stream) fn history_stubbing_for_dispatch<'a>(
+    rows: impl Iterator<Item = &'a TaggedMessage>,
+    dispatched: &CompletionRequest,
+    profile: ProviderInputProfile,
+) -> gents_protocol::rendered_request::HistoryStubbing {
+    // Match trusted receipts against the final request, not against stale rows
+    // before budgeting/reduction/repair. Multiplicity matters for repeated IDs.
+    let mut retained = rapidhash::RapidHashMap::<String, usize>::default();
+    for message in dispatched.chat_history.iter() {
+        if let rig::completion::Message::User { content } = message {
+            for part in content.iter() {
+                if let rig::message::UserContent::ToolResult(result) = part {
+                    *retained
+                        .entry(serde_json::to_string(&result).expect("tool result serializes"))
+                        .or_default() += 1;
+                }
+            }
+        }
+    }
+    let mut figures = gents_protocol::rendered_request::HistoryStubbing::default();
+    for row in rows {
+        for receipt in &row.history_stubs {
+            let Message::User { content } = &row.message else {
+                continue;
+            };
+            let Some(result) = content.iter().find_map(|part| match part {
+                UserContent::ToolResult(result)
+                    if crate::compaction::history::tool_result_key(result)
+                        == receipt.result_key =>
+                {
+                    Some(result)
+                }
+                _ => None,
+            }) else {
+                continue;
+            };
+            let mut rig = crate::rig_compat::to_rig_message(&Message::User {
+                content: vec![UserContent::ToolResult(result.clone())],
+            });
+            crate::provider_input::normalize_tool_call_ids(profile, &mut rig);
+            let rig::completion::Message::User { content } = rig else {
+                unreachable!()
+            };
+            let rig::message::UserContent::ToolResult(result) = content.first() else {
+                unreachable!()
+            };
+            let key = serde_json::to_string(&result).expect("tool result serializes");
+            if let Some(count) = retained.get_mut(&key).filter(|count| **count > 0) {
+                *count -= 1;
+                figures.stubbed_results += 1;
+                figures.original_bytes += receipt.sizes.original_bytes;
+                figures.stub_bytes += receipt.sizes.stub_bytes;
+            }
+        }
+    }
+    figures
 }
 
 pub fn sanitize_tagged_history(
@@ -130,8 +194,15 @@ pub fn provider_view_tagged(
     rows: Vec<TaggedMessage>,
 ) -> Result<Vec<TaggedMessage>, StreamingError> {
     let messages = rows.iter().map(|row| row.message.clone()).collect();
-    let (sourced, _) = crate::compaction::association_view_with_sources(messages);
-    tagged_from_sourced(&rows, sourced)
+    let (sourced, _, replacements) =
+        crate::compaction::association_view_with_sources_accounted(messages);
+    let mut originals = rows;
+    for replacement in replacements {
+        originals[replacement.source_index]
+            .history_stubs
+            .push(replacement);
+    }
+    tagged_from_sourced(&originals, sourced)
 }
 
 pub fn provider_messages(profile: ProviderInputProfile, rows: &[TaggedMessage]) -> Vec<Message> {

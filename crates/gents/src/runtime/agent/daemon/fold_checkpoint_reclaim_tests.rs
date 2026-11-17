@@ -1,16 +1,19 @@
 async fn create_user_message(
     db: &crate::support::TestDb,
-    author: (&gents_store::identity::KeyIdentity, &gents_store::config_client::ConfigAccess),
+    author: (
+        &gents_store::identity::KeyIdentity,
+        &gents_store::config_client::ConfigAccess,
+    ),
     agent_config: &ResolvedAgent,
     session_id: &str,
     content: &str,
     queued_after: Option<&str>,
     retry_parent: Option<&AgentRequest>,
 ) -> AgentRequest {
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_session::request::lifecycle::{
         ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
     };
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     let (user, client) = author;
     let request_id = uuid::Uuid::new_v4().to_string();
     let mut spec = RequestSpec::new(
@@ -120,7 +123,9 @@ async fn admit_client_claim(
 
 #[tokio::test]
 async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_restore() {
-    for (published_before_crash, persist_checkpoint) in [(0, false), (1, false), (2, false), (3, true)] {
+    for (published_before_crash, persist_checkpoint) in
+        [(0, false), (1, false), (2, false), (3, true)]
+    {
         let (db, user, client, agent_config) = held_daemon_fixture("daemon-fold-checkpoint").await;
         let node = db.node.clone();
         let agent_access = held_daemon_agent_access(&db, &agent_config);
@@ -195,16 +200,17 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         }
         if persist_checkpoint {
             let commit_cid = first.request_commit_cid().unwrap().to_owned();
-            let boundary = gents_session::session::provider_context_reduction::capture_source_boundary(
-                &agent_access,
-                &session_id,
-                agent_config.node_did(),
-                Some(user.did()),
-                &head.doc_id,
-                &commit_cid,
-            )
-            .await
-            .unwrap();
+            let boundary =
+                gents_session::session::provider_context_reduction::capture_source_boundary(
+                    &agent_access,
+                    &session_id,
+                    agent_config.node_did(),
+                    Some(user.did()),
+                    &head.doc_id,
+                    &commit_cid,
+                )
+                .await
+                .unwrap();
             let prefix = vec![gents_inference::llm::message::Message::user(
                 "an earlier, larger history",
             )];
@@ -212,11 +218,13 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 .iter()
                 .map(|(_, content)| gents_inference::llm::message::Message::user(content.clone()))
                 .collect::<Vec<_>>();
-            let row = |_| gents_session::session::provider_context_reduction::ReplayRowAssociation {
-                source: None,
-                physical_header: None,
-                block_indices: Vec::new(),
-            };
+            let row =
+                |_| gents_session::session::provider_context_reduction::ReplayRowAssociation {
+                    history_stubs: Vec::new(),
+                    source: None,
+                    physical_header: None,
+                    block_indices: Vec::new(),
+                };
             let signer = agent_config.agent_identity.managed_agent_signer().unwrap();
             gents_session::session::provider_context_reduction::persist(
                 &node,

@@ -19,6 +19,7 @@ fn provider_tag(turn_index: u32) -> ReplayTag {
 fn replay_prefix_bound_rejects_tagged_non_assistant() {
     let required = provider_tag(0);
     let rows = vec![TaggedMessage {
+        history_stubs: Vec::new(),
         message: Message::user("input"),
         source: Some(required.clone()),
         physical_header: None,
@@ -34,6 +35,7 @@ fn replay_prefix_bound_rejects_tagged_non_assistant() {
 fn provider_projection_composes_original_physical_block_indices() {
     let tag = provider_tag(0);
     let originals = vec![TaggedMessage {
+        history_stubs: Vec::new(),
         message: Message::Assistant {
             request_id: None,
             id: None,
@@ -73,6 +75,7 @@ fn provider_projection_composes_original_physical_block_indices() {
 #[test]
 fn association_rejects_a_provider_order_applied_before_it() {
     let original = TaggedMessage {
+        history_stubs: Vec::new(),
         message: Message::Assistant {
             request_id: None,
             id: None,
@@ -113,6 +116,7 @@ fn grouped_projection_of_a_projected_row_keeps_persisted_block_identity() {
     let persisted = vec![
         TaggedMessage::unassociated(Message::user("start")),
         TaggedMessage {
+            history_stubs: Vec::new(),
             message: Message::Assistant {
                 request_id: None,
                 id: None,
@@ -696,6 +700,7 @@ fn replay_assembly_history(tag: &ReplayTag) -> Vec<TaggedMessage> {
     vec![
         TaggedMessage::unassociated(Message::user("prompt")),
         TaggedMessage {
+            history_stubs: Vec::new(),
             message: Message::Assistant {
                 request_id: None,
                 id: None,
@@ -904,6 +909,7 @@ fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
     };
     let mut rows = vec![
         TaggedMessage {
+            history_stubs: Vec::new(),
             message: Message::Assistant {
                 request_id: None,
                 id: None,
@@ -1298,4 +1304,104 @@ async fn hidden_tool_provider_projection_preserves_default_bytes_and_reduces_acc
             .model_facing_text(),
         "rows"
     );
+}
+
+#[tokio::test]
+async fn stubbing_budgeted_reduction_counts_only_the_actual_dispatched_rows() {
+    use super::tagged_history::history_stubbing_for_dispatch;
+    use gents_protocol::message::{ToolResult, ToolResultContent};
+    let mut config = replay_assembly_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        crate::backend_provider::BackendProviderKind::OpenAiCompatible,
+        crate::openai_wire::OpenAiWireApi::ChatCompletions,
+        "test-model",
+    ));
+    config.context_window = 4_000;
+    config.compaction_threshold = 0.1;
+    config.max_tokens = Some(10);
+    let history = provider_view_tagged(vec![
+        TaggedMessage::unassociated(Message::user("budget-pressure ".repeat(4_000))),
+        TaggedMessage::unassociated(assistant_with(None, Some(("drop-call", "{}")))),
+        TaggedMessage::unassociated(Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: "drop-call".into(),
+                call_id: Some("drop-call".into()),
+                content: vec![ToolResultContent::text("x".repeat(4_000))],
+            })],
+        }),
+    ])
+    .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .map(|row| row.history_stubs.len())
+            .sum::<usize>(),
+        1
+    );
+    let originals = history.clone();
+    let prompt = Message::user("keep only this prompt");
+    let before = build_request(
+        &AssemblyOnlyModel,
+        prompt.clone(),
+        &message_values(&history),
+        &[],
+        &[],
+        &config,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        history_stubbing_for_dispatch(
+            history.iter(),
+            &before,
+            config.provider_input_counter.profile()
+        )
+        .stubbed_results,
+        1
+    );
+    config.turn_compactor = Some(Arc::new(|request| {
+        Box::pin(async move {
+            Ok(TurnCompactionOutcome::Reduced {
+                messages: vec![request.messages.last().unwrap().clone()],
+                reduction_key: "drop-stub".into(),
+                commit: TurnReductionCommit::new(|| async { Ok(()) }),
+            })
+        })
+    }));
+    let mut history = history;
+    let mut new_messages = vec![TaggedMessage::unassociated(prompt)];
+    let (reduced, decision) = super::turn_budget::build_budgeted_request(
+        &AssemblyOnlyModel,
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+        &mut LoopReplayInput::default(),
+        1,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(decision.reason, ContextCompactionReason::Compacted);
+    assert!(history.is_empty());
+    let prepared = super::dispatch::prepare_dispatch_attempt(&reduced, &config, None).unwrap();
+    // Even stale receipts cannot leak into accounting once their row was dropped.
+    let figures = history_stubbing_for_dispatch(
+        originals.iter().chain(new_messages.iter()),
+        prepared.request(),
+        config.provider_input_counter.profile(),
+    );
+    assert_eq!(figures, Default::default());
+    let accounting = super::dispatch::context_accounting_for_request(
+        &prepared,
+        &config,
+        1,
+        0,
+        decision.reason,
+        decision.pre_compaction_input_tokens,
+        figures,
+    );
+    assert_eq!(accounting.history_stubbing.stubbed_results, 0);
+    assert_eq!(accounting.history_stubbing.bytes_removed(), 0);
 }

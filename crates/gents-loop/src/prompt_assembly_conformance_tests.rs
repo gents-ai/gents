@@ -330,6 +330,7 @@ fn generated_mode_sanitize_cases_bind_composed_provider_view() {
             .enumerate()
             .map(|(row, message)| match &message {
                 Message::Assistant { content, .. } => TaggedMessage {
+                    history_stubs: Vec::new(),
                     block_indices: (0..content.len()).collect(),
                     source: Some(physical_replay_tag(row)),
                     physical_header: Some(format!("header-{row}")),
@@ -611,6 +612,7 @@ fn native_tagged_message(
     row: &gents_lean_vocab::claude_replay::Row,
 ) -> crate::loop_stream::TaggedMessage {
     crate::loop_stream::TaggedMessage {
+        history_stubs: Vec::new(),
         message: Message::Assistant {
             request_id: None,
             id: None,

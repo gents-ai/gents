@@ -464,6 +464,7 @@ where
                             attempt,
                             compaction_reason,
                             pre_compaction_input_tokens,
+                            request_assembly::tagged_history::history_stubbing_for_dispatch(history.iter().chain(new_messages.iter()), &dispatch_request, config.provider_input_counter.profile()),
                         ));
                         on_rendered_request(
                             turn_index,
@@ -1623,7 +1624,7 @@ where
                     if !committed.is_empty() {
                         if let Some(mut message) = accumulator.take_message() {
                             turn_ids.stamp(&mut message);
-                            new_messages.push(TaggedMessage {
+                            new_messages.push(TaggedMessage { history_stubs: Vec::new(),
                                 message, source: accepted_source.clone(),
                                 physical_header: None, block_indices: Vec::new(),
                             });
@@ -1641,12 +1642,7 @@ where
                     if !unmet.is_empty() {
                         if let Some(mut assistant_message) = accumulator.take_message() {
                             turn_ids.stamp(&mut assistant_message);
-                            new_messages.push(TaggedMessage {
-                                message: assistant_message,
-                                source: accepted_source.clone(),
-                                physical_header: None,
-                                block_indices: Vec::new(),
-                            });
+                            new_messages.push(TaggedMessage::new(assistant_message, accepted_source.clone(), None, Vec::new()));
                         }
                         let reminder = Message::user(
                             crate::output_obligation::continuation_message(&unmet),
@@ -1668,7 +1664,7 @@ where
                         FinishOrIntake::Continue(inputs) => {
                             if let Some(mut message) = accumulator.take_message() {
                                 turn_ids.stamp(&mut message);
-                                new_messages.push(TaggedMessage { message, source: accepted_source.clone(), physical_header: None, block_indices: Vec::new() });
+                                new_messages.push(TaggedMessage { history_stubs: Vec::new(), message, source: accepted_source.clone(), physical_header: None, block_indices: Vec::new() });
                             }
                             new_messages.extend(inputs.into_iter().map(|input| TaggedMessage::unassociated(input.message)));
                             continue 'turns;

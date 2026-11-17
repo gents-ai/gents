@@ -106,6 +106,7 @@ pub(super) fn close_streaming_turn(
     if let Some(mut assistant_message) = accumulator.take_message() {
         ids.stamp(&mut assistant_message);
         new_messages.push(TaggedMessage {
+            history_stubs: Vec::new(),
             message: assistant_message,
             source: assistant_source,
             physical_header: None,
