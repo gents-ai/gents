@@ -45,9 +45,9 @@ struct FailureEnvelope {
     store_key_failure_v1: String,
 }
 
-pub(super) fn preflight_refusal(
-    error: &(dyn std::error::Error + 'static),
-) -> Option<&PreflightError> {
+pub(super) fn preflight_refusal<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a PreflightError> {
     gents_protocol::error_chain::find_source::<PreflightError>(error)
 }
 
