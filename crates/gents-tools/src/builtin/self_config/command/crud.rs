@@ -386,7 +386,7 @@ impl ConfigCommandTool {
         self.target_core(agent, Some(target.category())).await
     }
 
-    fn ensure_crud_resource(&self, target: SelfConfigTarget) -> Result<()> {
+    pub(super) fn ensure_crud_resource(&self, target: SelfConfigTarget) -> Result<()> {
         if matches!(
             target,
             SelfConfigTarget::AgentContext | SelfConfigTarget::Tools

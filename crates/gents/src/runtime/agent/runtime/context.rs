@@ -17,6 +17,7 @@ use gents_tools::surface::{self, ToolRuntimeContext, ToolSurface};
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
+    pub(super) document_context: Option<crate::runtime::agent::DocumentResolveContext>,
     pub(super) node: Arc<defra_node::Node>,
     pub(super) tool_runtime: ToolRuntimeContext,
     pub(super) admission_registry: AdmissionRegistry,
@@ -125,6 +126,38 @@ impl RuntimeContext {
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
+        let mut cancel = shutdown.clone();
+        if *cancel.borrow() {
+            return Ok(());
+        }
+        let prepared = tokio::select! {
+            biased;
+            _ = cancel.changed() => return Ok(()),
+            result = build_slot_surface_fenced(
+                &self.tool_runtime,
+                self.document_context.as_ref(),
+                agent,
+                tool_surface,
+            ) => result?,
+        };
+        self.run_agent_inner(prepared, request_rx, capacity, slot_generation, shutdown)
+            .await
+    }
+
+    async fn run_agent_inner(
+        &self,
+        prepared: PreparedSlotSurface,
+        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
+        slot_generation: u64,
+        shutdown: watch::Receiver<bool>,
+    ) -> Result<()> {
+        let PreparedSlotSurface {
+            agent,
+            surface: tool_surface,
+            tools: mut loop_tools,
+            background,
+        } = prepared;
         let gents_tools::surface::AgentWithTools {
             agent: agent_config,
             tools: tool_config,
@@ -146,8 +179,6 @@ impl RuntimeContext {
             &allowed_targets,
         );
         let preamble = prompt_builder.preamble().to_string();
-        let tool_runtime = self.tool_runtime.for_agent(&agent_config);
-        let mut loop_tools = tool_surface.build_tools(&tool_runtime).await?;
         if tool_surface.includes_skills() && !agent_config.skills.is_empty() {
             let ceiling = gents_documents::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
@@ -163,10 +194,8 @@ impl RuntimeContext {
             ));
         }
         let loop_tools = std::sync::Arc::new(loop_tools);
-        let background_tool_registry = BackgroundToolRegistry::from_config(
-            tool_surface.build_tools(&tool_runtime).await?,
-            tool_surface.background_tools(),
-        );
+        let background_tool_registry =
+            BackgroundToolRegistry::from_config(background, tool_surface.background_tools());
         tracing::info!(
             agent_did = %agent_config.agent_did,
             did = %agent_config.node_did(),
@@ -306,6 +335,89 @@ impl RuntimeContext {
     }
 }
 
+/// Slot construction can race an install after its proposal was resolved.
+/// Refresh once, under the fence, on the typed mismatch. Never reinterpret a
+/// mismatch as permission to run the installed digest with the old pin.
+pub(in crate::runtime::agent::runtime) struct PreparedSlotSurface {
+    pub(in crate::runtime::agent::runtime) agent: surface::AgentWithTools,
+    pub(in crate::runtime::agent::runtime) surface: Arc<ToolSurface>,
+    pub(in crate::runtime::agent::runtime) tools: Vec<Box<dyn ToolDyn>>,
+    pub(in crate::runtime::agent::runtime) background: Vec<Box<dyn ToolDyn>>,
+}
+
+pub(in crate::runtime::agent::runtime) async fn build_slot_surface_fenced(
+    runtime: &ToolRuntimeContext,
+    resolve: Option<&crate::runtime::agent::DocumentResolveContext>,
+    mut agent: surface::AgentWithTools,
+    mut tool_surface: Arc<ToolSurface>,
+) -> Result<PreparedSlotSurface> {
+    let _guard = if needs_publication_fence(tool_surface.has_plugin_tools()) {
+        surface::publication_guard(runtime.plugin_home()).await?
+    } else {
+        None
+    };
+    let mut refreshed = false;
+    loop {
+        let tools = tool_surface
+            .build_tools(&runtime.for_agent(&agent.agent))
+            .await;
+        match tools {
+            Ok(tools) => {
+                let background = tool_surface
+                    .build_tools(&runtime.for_agent(&agent.agent))
+                    .await?;
+                return Ok(PreparedSlotSurface {
+                    agent,
+                    surface: tool_surface,
+                    tools,
+                    background,
+                });
+            }
+            Err(error)
+                if !refreshed
+                    && gents_toolcalls::plugin::executor::PluginResolutionError::error_chain_is_pin_mismatch(&error) =>
+            {
+                let Some(resolve) = resolve else {
+                    return Err(error);
+                };
+                refreshed = true;
+                let view = super::super::document_view::load_document_runtime_view_as(
+                    runtime.node(),
+                    agent.agent.node_did(),
+                    resolve.identity.did(),
+                )
+                .await?;
+                let mut snapshot =
+                    super::super::document_view::resolve_document_runtime_snapshot_from_view(
+                        runtime.node(),
+                        resolve,
+                        &view,
+                    )
+                    .await?;
+                let did = &agent.agent.agent_did;
+                let current = snapshot.agents.remove(did).ok_or_else(|| {
+                    anyhow::anyhow!(
+                    "agent {did} was revoked or became unavailable while refreshing a stale pin"
+                )
+                })?;
+                let tools = snapshot
+                    .tool_configs
+                    .remove(did)
+                    .ok_or_else(|| anyhow::anyhow!("current Tools missing for {did}"))?;
+                tool_surface = snapshot
+                    .tool_surfaces
+                    .remove(did)
+                    .ok_or_else(|| anyhow::anyhow!("current surface missing for {did}"))?;
+                agent = surface::AgentWithTools {
+                    agent: current,
+                    tools,
+                };
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod startup_barrier_tests {
     use super::*;
@@ -398,4 +510,14 @@ mod startup_barrier_tests {
             case.check(observed);
         }
     }
+}
+
+pub(in crate::runtime::agent::runtime) fn needs_publication_fence(has_plugins: bool) -> bool {
+    has_plugins
+}
+
+#[cfg(test)]
+#[test]
+fn plugin_free_surface_fencing_replays_the_lean_owner() {
+    gents_lean_vocab::families::runtime_reconcile_surface_publication_needs_publication_fence::replay(|i| needs_publication_fence(i.has_plugins));
 }

@@ -195,6 +195,9 @@ impl ConfigCommandTool {
                     })
                     .context("pack preview supports install, update, remove and wire")?;
                 let (change, _) = parse_pack_change(operation, &argv[2..])?;
+                if !change.move_pin_tools.is_empty() {
+                    self.ensure_crud_resource(SelfConfigTarget::Tools)?;
+                }
                 installer.preview(operation, change).await
             }
             "install" | "update" => {
@@ -204,6 +207,9 @@ impl ConfigCommandTool {
                     PackOperation::Update
                 };
                 let (change, edited) = parse_pack_change(operation, &argv[1..])?;
+                if !change.move_pin_tools.is_empty() {
+                    self.ensure_crud_resource(SelfConfigTarget::Tools)?;
+                }
                 self.execution.enter_mutation();
                 installer.apply(operation, change, edited, argv).await
             }
@@ -289,15 +295,16 @@ fn parse_pack_change(
         anyhow::ensure!(
             matches!(
                 name.as_str(),
-                "var" | "inference-slot" | "digest" | "edited"
+                "var" | "inference-slot" | "digest" | "edited" | "move-pin-tools"
             ),
-            "unknown pack option --{name}; accepted: --inference-slot, --var, --digest, --edited"
+            "unknown pack option --{name}; accepted: --inference-slot, --var, --digest, --edited, --move-pin-tools"
         );
     }
     let refusal = |error| PackInstaller::refusal(operation, &package, &[], error);
     let values = |name: &str| parsed.options.get(name).cloned().unwrap_or_default();
     Ok((
         PackChangeInput {
+            move_pin_tools: values("move-pin-tools"),
             variables: gents_pack::operations::pack::parse_variables(&values("var"))
                 .map_err(refusal)?,
             inference_slots: gents_pack::operations::pack::parse_inference_slots(&values(
@@ -309,4 +316,25 @@ fn parse_pack_change(
         },
         EditedDocuments::decision(parsed.one("edited")?).map_err(refusal)?,
     ))
+}
+
+#[cfg(test)]
+mod pin_move_tests {
+    use super::*;
+
+    #[test]
+    fn pack_update_retains_only_explicitly_named_tools_pin_edits() {
+        let words = [
+            "acme/pack",
+            "--move-pin-tools",
+            "one",
+            "--move-pin-tools",
+            "two",
+        ]
+        .map(str::to_owned);
+        let (change, _) = parse_pack_change(PackOperation::Update, &words).unwrap();
+        assert_eq!(change.move_pin_tools, ["one", "two"]);
+        let (without, _) = parse_pack_change(PackOperation::Update, &["acme/pack".into()]).unwrap();
+        assert!(without.move_pin_tools.is_empty());
+    }
 }

@@ -74,6 +74,7 @@ tokio-util = "0.7"
 tempfile = "3"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 gents-workspace-hack = { workspace = true }
 gents-tools = { path = ".", features = ["test-fixtures", "typescript"] }
 gents-store = { workspace = true, features = ["test-fixtures"] }

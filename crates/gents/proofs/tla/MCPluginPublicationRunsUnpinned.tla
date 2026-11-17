@@ -1,0 +1,3 @@
+---- MODULE MCPluginPublicationRunsUnpinned ----
+EXTENDS PluginPublicationRevocation
+====
