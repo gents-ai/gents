@@ -47,7 +47,7 @@ pub fn association_view_with_sources_accounted(
     let (stripped, activity, replacements) =
         history::strip_tool_results_sourced_accounted(history::source_messages(messages));
     let paired = pair_sourced(stripped);
-    let retained: std::collections::HashSet<_> = paired
+    let retained: rapidhash::RapidHashSet<_> = paired
         .iter()
         .flat_map(|row| {
             let keys: Vec<_> = match &row.message {

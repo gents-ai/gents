@@ -129,7 +129,7 @@ pub(in crate::loop_stream) fn history_stubbing_for_dispatch<'a>(
 ) -> gents_protocol::rendered_request::HistoryStubbing {
     // Match trusted receipts against the final request, not against stale rows
     // before budgeting/reduction/repair. Multiplicity matters for repeated IDs.
-    let mut retained = std::collections::HashMap::<String, usize>::new();
+    let mut retained = rapidhash::RapidHashMap::<String, usize>::default();
     for message in dispatched.chat_history.iter() {
         if let rig::completion::Message::User { content } = message {
             for part in content.iter() {
