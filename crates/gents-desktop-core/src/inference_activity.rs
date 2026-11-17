@@ -35,11 +35,11 @@ impl crate::client::ClientCore {
             let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                 self.node_identity().private_key_bytes(),
             )?;
-            gents_store::config_client::GraphqlEndpoint::as_principal(
+            crate::client::home_endpoint::user_at(
                 graphql,
-                self.node_identity().did(),
-            )
-            .with_client_signing_capability(capability)?
+                &capability,
+                record.delegation_audience.as_ref(),
+            )?
         } else {
             return Ok(None);
         };

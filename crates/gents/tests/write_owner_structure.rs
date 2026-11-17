@@ -5517,3 +5517,99 @@ fn lean_read_fence_counts_reads_after_a_lease_without_the_await() {
         assert_eq!(lean_reads_after_lease(&syntax), sites, "{source}");
     }
 }
+
+const CLIENT_ENDPOINT_OWNER: &str = "crates/gents-desktop-core/src/client/home_endpoint.rs";
+
+const CLIENT_ENDPOINT_CRATES: &[&str] = &[
+    "crates/gents-desktop-",
+    "crates/gents-client-host/",
+    "apps/",
+];
+
+#[derive(Default)]
+struct EndpointConstructionVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for EndpointConstructionVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if path_name(call).is_some_and(|name| {
+            [
+                "GraphqlEndpoint::as_principal",
+                "GraphqlEndpoint::anonymous",
+            ]
+            .iter()
+            .any(|constructor| name.ends_with(constructor))
+        }) {
+            self.sites += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+}
+
+fn endpoint_construction_sites(syntax: &syn::File) -> usize {
+    let mut visitor = EndpointConstructionVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+/// A client builds every endpoint to a home through `home_endpoint`, so the
+/// audience the home reports reaches the one minting point
+/// (`Identity.HeldAudience.recordCredential`).
+#[test]
+fn client_endpoints_are_built_by_their_owner() {
+    let root = repo_root();
+    let violations = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .filter(|(relative, _)| {
+            CLIENT_ENDPOINT_CRATES
+                .iter()
+                .any(|prefix| relative.starts_with(prefix))
+                && relative != CLIENT_ENDPOINT_OWNER
+        })
+        .filter(|(_, syntax)| endpoint_construction_sites(syntax) > 0)
+        .map(|(relative, _)| {
+            format!("{relative}: builds a GraphqlEndpoint; use gents_desktop_core::client::home_endpoint")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        violations.is_empty(),
+        "client endpoint ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn client_endpoint_fence_counts_constructors_outside_tests() {
+    for (source, sites) in [
+        ("fn f() { GraphqlEndpoint::as_principal(u, d); }", 1),
+        (
+            "fn f() { gents_store::config_client::GraphqlEndpoint::anonymous(u); }",
+            1,
+        ),
+        ("fn f() { home_endpoint::user_at(u, c, None); }", 0),
+        (
+            "#[cfg(test)] mod tests { fn f() { GraphqlEndpoint::anonymous(u); } }",
+            0,
+        ),
+        (
+            "impl S { #[cfg(test)] fn f() { GraphqlEndpoint::anonymous(u); } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(endpoint_construction_sites(&syntax), sites, "{source}");
+    }
+}

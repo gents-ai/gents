@@ -1,5 +1,6 @@
 pub mod canonical_output;
 mod core;
+pub mod home_endpoint;
 mod mutations;
 mod observe;
 mod paths;

@@ -568,11 +568,14 @@ impl ClientRouteManager {
                     .map_err(|error| {
                         gents_p2p::p2p_reconcile::RemoteP2pAdminError::LocalError(error.to_string())
                     })?;
-                gents_store::config_client::GraphqlEndpoint::as_principal(graphql, self.actor.did())
-                    .with_client_signing_capability(capability)
-                    .map_err(|error| {
-                        gents_p2p::p2p_reconcile::RemoteP2pAdminError::LocalError(error.to_string())
-                    })?
+                crate::client::home_endpoint::user_at(
+                    graphql,
+                    &capability,
+                    record.delegation_audience.as_ref(),
+                )
+                .map_err(|error| {
+                    gents_p2p::p2p_reconcile::RemoteP2pAdminError::LocalError(error.to_string())
+                })?
             }
         };
         Ok(admin.with_node_identity(endpoint))

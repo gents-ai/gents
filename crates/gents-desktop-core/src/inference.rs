@@ -510,7 +510,13 @@ impl crate::client::ClientCore {
             .graphql
             .as_deref()
             .context("runtime has no HTTP endpoint")?;
-        read_inference_setup_state_from(graphql, node_did, self.node_identity()).await
+        read_inference_setup_state_from(
+            graphql,
+            record.delegation_audience.as_ref(),
+            node_did,
+            self.node_identity(),
+        )
+        .await
     }
 }
 
@@ -518,11 +524,11 @@ impl crate::client::ClientCore {
 /// opened; bound the HTTP wait as well as the response body.
 async fn read_inference_setup_state_from(
     graphql: &str,
+    audience: Option<&gents_protocol::delegation_audience::DelegationAudience>,
     node_did: &str,
     client_identity: &crate::client::PrincipalIdentity,
 ) -> anyhow::Result<InferenceSetupState> {
     use anyhow::Context;
-    use gents_store::config_client::GraphqlEndpoint;
     let mut url = reqwest::Url::parse(graphql).context("runtime endpoint is invalid")?;
     anyhow::ensure!(
         matches!(url.scheme(), "http" | "https")
@@ -545,8 +551,7 @@ async fn read_inference_setup_state_from(
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         client_identity.private_key_bytes(),
     )?;
-    let endpoint = GraphqlEndpoint::as_principal(graphql, client_identity.did())
-        .with_client_signing_capability(capability)?;
+    let endpoint = crate::client::home_endpoint::user_at(graphql, &capability, audience)?;
     let mut response = endpoint
         .authorize(client.get(url))?
         .send()
@@ -632,6 +637,7 @@ mod tests {
             .await;
         let state = read_inference_setup_state_from(
             &format!("{}/api/v0/graphql", server.uri()),
+            None,
             node,
             &identity,
         )
@@ -674,6 +680,7 @@ mod tests {
                 .await;
             assert!(read_inference_setup_state_from(
                 &format!("{}/api/v0/graphql", server.uri()),
+                None,
                 "did:runtime",
                 &identity
             )
@@ -698,6 +705,7 @@ mod tests {
                 .await;
             let error = read_inference_setup_state_from(
                 &format!("{}/api/v0/graphql", server.uri()),
+                None,
                 "did:runtime",
                 &identity,
             )
@@ -722,6 +730,7 @@ mod tests {
             .await;
         let error = read_inference_setup_state_from(
             &format!("{}/api/v0/graphql", server.uri()),
+            None,
             "did:runtime",
             &identity,
         )
