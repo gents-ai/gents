@@ -1499,7 +1499,7 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
 /// the Interactive class intended for jobs whose responsiveness is user-facing.
 /// A successful child exit is not an operator Stop. Supervision ends when the
 /// job is unloaded; repeated exits remain subject to launchd's restart throttle.
-fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
+pub fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
     let executable = xml_path(&config.executable, "executable")?;
     let home = xml_path(&config.home, "home")?;
     let search_path = config
@@ -1561,7 +1561,7 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
     ))
 }
 
-fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
+pub fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
     let executable = systemd_arg(
         config
             .executable
@@ -1596,6 +1596,41 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
         "[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={}\nStandardOutput=journal\nStandardError={stderr}\nRestart=always\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE} {HOME_GONE_EXIT_CODE} {STORE_KEY_UNAVAILABLE_EXIT_CODE} {MISSING_STORE_KEY_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
         command.join(" ")
     ))
+}
+
+/// The executable a systemd `ExecStart=` runs to set its environment, so the
+/// unit's assignments and its invocation are one kernel-started argv.
+const SYSTEMD_ENV_EXECUTABLE: &str = "/usr/bin/env";
+
+/// The argv a rendered systemd unit executes, read out of its `ExecStart=`.
+/// `ExecStart` wraps the invocation in `/usr/bin/env GENTS_SYSTEM_LOG=1 …`, so
+/// the returned vector is what the kernel actually starts: the environment
+/// assignments first, then the executable and its arguments.
+pub fn systemd_arguments(unit: &str) -> Result<Vec<String>> {
+    let exec_start = unit
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))
+        .context("systemd definition has no ExecStart line")?;
+    // Every argument is quoted, and `%%`/`$$` escape systemd's own specifier
+    // and variable syntax, so each one is unquoted and unescaped in turn.
+    let mut values = Vec::new();
+    let mut rest = exec_start;
+    while let Some(start) = rest.find('"') {
+        let after = &rest[start + 1..];
+        let end = after.find('"').context("an argument's quote is unclosed")?;
+        values.push(
+            after[..end]
+                .replace("%%", "%")
+                .replace("$$", "$")
+                .replace("\\\\", "\\")
+                .replace("\\\"", "\""),
+        );
+        rest = &after[end + 1..];
+    }
+    if values.first().map(String::as_str) != Some(SYSTEMD_ENV_EXECUTABLE) {
+        bail!("systemd definition does not run through {SYSTEMD_ENV_EXECUTABLE}");
+    }
+    Ok(values)
 }
 
 /// `append:` takes the rest of the line as the path after specifier expansion.
@@ -1678,7 +1713,7 @@ fn launchd_executable(plist: &str) -> Result<String> {
     launchd_arguments(plist).map(|mut values| values.swap_remove(0))
 }
 
-fn launchd_arguments(plist: &str) -> Result<Vec<String>> {
+pub fn launchd_arguments(plist: &str) -> Result<Vec<String>> {
     let value = plist::Value::from_reader_xml(std::io::Cursor::new(plist.as_bytes()))
         .context("parsing launchd property list")?;
     let dictionary = value

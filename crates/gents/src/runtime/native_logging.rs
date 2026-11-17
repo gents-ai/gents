@@ -267,6 +267,20 @@ mod tests {
         );
     }
 
+    /// A second install must not chain our hook onto itself, which would stamp
+    /// the same panic twice. `call_once` makes the hook one, whichever arm of a
+    /// dispatch installed it.
+    #[test]
+    fn installing_the_hook_twice_keeps_one_hook() {
+        let _service = ServiceMode::installed();
+        // Two installs, as a `runtime server` after a helper and a second call
+        // would do. The hook itself is process-global, so this asserts the guard
+        // rather than the stderr text: after both, a panic still runs one hook.
+        install_service_stderr_sink();
+        install_service_stderr_sink();
+        assert!(service_runtime_installed());
+    }
+
     /// One stamp per diagnostic, not per line: a diagnostic that spans several
     /// lines keeps them together, unstamped, after the first.
     #[test]
