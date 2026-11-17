@@ -261,3 +261,24 @@ vera-identity = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4
 vera-modules = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
 vera-permission = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
 vera-zanzibar = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
+
+commonware-actor = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-broadcast = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-codec = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-codec-macros = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-coding = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-consensus = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-cryptography = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-formatting = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-glue = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-macros = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-macros-impl = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-math = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-p2p = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-parallel = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-resolver = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-runtime = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-runtime-macros = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-storage = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-stream = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
+commonware-utils = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
