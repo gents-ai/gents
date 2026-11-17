@@ -187,15 +187,15 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     let cancelled = gents_toolcalls::test_support::background_hook::tool_row(
         &fixture.access,
         &fixture.session_id,
-        &child,
+        child,
     )
     .await;
     assert_eq!(cancelled["lifecycle_state"], "cancelled");
     assert_eq!(
         gents_session::session::origin::verified_agent_new_creation(
             &fixture.access,
-            &target,
-            &parent
+            target,
+            parent
         )
         .await
         .unwrap(),
@@ -206,7 +206,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     assert_withheld_parent_is_denied(fixture, target, parent, script_doc, &composed.effect_doc)
         .await;
     let listed = control(
-        &fixture,
+        fixture,
         "list-before-message",
         "agent_session_list",
         json!({}),
@@ -220,7 +220,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
         .expect("child in session list");
     assert_eq!(entry["can_interrupt"], true, "list denied starter: {entry}");
     let message = control(
-        &fixture,
+        fixture,
         "queue-worker",
         "agent_message",
         json!({"session_id": target_session, "message": "continue", "delivery": "queue"}),
@@ -235,8 +235,8 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     assert!(
         gents_session::session::origin::verified_agent_new_creation(
             &fixture.access,
-            &target,
-            &parent
+            target,
+            parent
         )
         .await
         .unwrap()
@@ -244,7 +244,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
         "starter verification changed after message delivery"
     );
     let listed = control(
-        &fixture,
+        fixture,
         "list-after-message",
         "agent_session_list",
         json!({}),
@@ -362,7 +362,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     }
 
     let interrupted = control(
-        &fixture,
+        fixture,
         "interrupt-worker",
         "agent_interrupt",
         json!({"session_id": target_session}),
@@ -370,7 +370,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     .await;
     assert_eq!(interrupted["ok"], true, "interrupt rejected: {interrupted}");
     let stop = control(
-        &fixture,
+        fixture,
         "stop-worker",
         "agent_stop",
         json!({"session_id":target_session}),
@@ -384,7 +384,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     assert_eq!(
         gents_session::session::origin::verified_agent_new_creation(
             &fixture.access,
-            &target,
+            target,
             &unrelated
         )
         .await
