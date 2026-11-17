@@ -40,4 +40,22 @@ theorem hidden_configuration_requires_script (allSelected gatewayHidden : Bool) 
     configurationValid true allSelected false gatewayHidden = false := by
   simp [configurationValid]
 
+/-- Presentation refusal applies only to a selected hidden provider name.
+Unknown provider names retain the loop's existing hook/unknown-tool owner. -/
+def presentationRefused (granted hidden providerOrigin : Bool) : Bool :=
+  granted && hidden && providerOrigin
+
+/-- Runtime readiness can only turn hiding off, never grant execution. -/
+def effectiveHidden (hidden scriptReady : Bool) : Bool := hidden && scriptReady
+
+theorem unknown_provider_uses_existing_owner (hidden : Bool) :
+    presentationRefused false hidden true = false := by simp [presentationRefused]
+
+theorem empty_provider_uses_existing_owner (granted : Bool) :
+    presentationRefused granted false true = false := by simp [presentationRefused]
+
+theorem unavailable_script_advertises_grant (granted hidden : Bool) :
+    advertised granted (effectiveHidden hidden false) = granted := by
+  simp [effectiveHidden, advertised]
+
 end ToolPresentation
