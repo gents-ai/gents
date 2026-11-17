@@ -240,6 +240,7 @@ import Proofs.Conformance.StoreHandoff
 import Proofs.Conformance.StoreKeyCustody
 import Proofs.Conformance.DocumentAcpChoice
 import Proofs.Conformance.UserDelegation
+import Proofs.Conformance.OwedRegistration
 import Proofs.Conformance.BackgroundExecutionRegistry
 import Proofs.Conformance.BackgroundWaitChange
 import Proofs.Conformance.InvocationReply
