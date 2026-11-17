@@ -1394,7 +1394,7 @@ async fn hidden_serial_provider_calls_preserve_unknown_owner_and_refuse_only_hid
                 }
                 ToolOutcome::Failed { class, text, .. } => {
                     assert_eq!(*class, FailureClass::ArgumentInvalid);
-                    assert_eq!(text, "error: unknown tool");
+                    assert_eq!(text, "error: unknown tool 'outside_surface'");
                 }
                 ToolOutcome::Completed(text) => {
                     assert!(!hidden && name == "echo");
