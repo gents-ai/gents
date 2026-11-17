@@ -100,7 +100,7 @@ pub async fn prepare(
                     let edit = plan(before, replacements);
                     anyhow::ensure!(
                         edit.before != edit.after,
-                        "named Tools {id:?} has no pin changed by this archive graph"
+                        "named Tools {id:?} does not currently pin a changed plugin shipped by this archive graph"
                     );
                     edits.push(edit);
                 }
@@ -258,6 +258,71 @@ mod tests {
                 .as_deref(),
             Some(replacement.as_str())
         );
+        node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn named_tools_without_a_current_shipped_plugin_pin_refuse_the_whole_plan() {
+        use gents_store::identity::NodeIdentity;
+        let (_directory, runtime, node, access) = pin_fixture().await;
+        let owner = runtime.did();
+        let named = read_tools(&access, owner, "named").await;
+        let mut unrelated = read_tools(&access, owner, "not-named").await;
+        unrelated
+            .integrations
+            .as_mut()
+            .unwrap()
+            .plugins
+            .as_mut()
+            .unwrap()[0]
+            .plugin = "acme/other".into();
+        gents_documents::write_tools_document(
+            &access,
+            &unrelated,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        let replacements =
+            BTreeMap::from([("acme/one".into(), format!("sha256:{}", "2".repeat(64)))]);
+        // Even a valid name preceding the unrelated name cannot leave behind
+        // a partial edit. Planning is readonly and the install never starts.
+        let error = prepare(
+            &access,
+            owner,
+            &["named".into(), "not-named".into()],
+            &replacements,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("named Tools \"not-named\" does not currently pin"));
+        assert_eq!(read_tools(&access, owner, "named").await, named);
+        assert_eq!(read_tools(&access, owner, "not-named").await, unrelated);
+
+        // Selecting the shipped coordinate without a pin is not permission
+        // to introduce a pin. The operator must use the ordinary Tools edit.
+        let mut unpinned = unrelated;
+        let reference = &mut unpinned
+            .integrations
+            .as_mut()
+            .unwrap()
+            .plugins
+            .as_mut()
+            .unwrap()[0];
+        reference.plugin = "acme/one".into();
+        reference.digest = None;
+        gents_documents::write_tools_document(
+            &access,
+            &unpinned,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        let error = prepare(&access, owner, &["not-named".into()], &replacements)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("does not currently pin"));
+        assert_eq!(read_tools(&access, owner, "not-named").await, unpinned);
         node.shutdown().await.unwrap();
     }
 
