@@ -4,8 +4,9 @@ import Proofs.Conformance.Family
 namespace Identity.UserDelegation
 
 deriving instance Lean.ToJson for Carrier, Write, Carried, Scope, Verdict, Author, Admission, Credential,
-  Reported, Resolution
+  Reported, Resolution, Presented, Edge
 
 attribute [conformance_function] admit credential runtimeSignsWithHeldUserKey statusReports resolve
+  edge
 
 end Identity.UserDelegation

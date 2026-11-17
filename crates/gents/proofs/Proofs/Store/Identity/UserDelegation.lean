@@ -242,17 +242,40 @@ inductive Admission where
   | delegationForAnotherWrite
   /-- A request-bound delegation rides an update or a delete. -/
   | requestBoundTakesNoUpdate
+  /-- A stored command updates or deletes a document. -/
+  | storedEditAwaitsVerifiedPermission
   | delegationRefused
   | issuerNotSigner
   deriving DecidableEq, Repr
+
+/-- What a User's write that is not a stored edit comes to on a Vera home,
+by what it carries. -/
+def admitCarried (carrier : Carrier) (write : Write) (carried : Carried) (scope : Scope)
+    (verdict : Verdict) : Admission :=
+  match carried with
+  | .absent => .delegationRequired
+  | .lifted => .delegationNotBound
+  | .bound =>
+    if scope = .anotherWrite then .delegationForAnotherWrite
+    else if scope = .general ∧ carrier = .stored then .delegationNotRequestBound
+    else if scope = .thisWrite ∧ write ≠ .create then .requestBoundTakesNoUpdate
+    else match verdict with
+      | .issuedBySigner => .forwarded
+      | .issuedByAnother => .issuerNotSigner
+      | .refused => .delegationRefused
 
 /-- What the runtime does with a write it is about to make in its own process
 for the author of a command it verified. `provider` is the home's recorded
 choice. Decision (gents#3831): a stored command carries a request-bound
 delegation and a general one in it is refused, so a document never holds a
-credential for anything but its own write. A stored update or delete
-therefore has no delegation it may carry: it is refused either as general or
-as request-bound, until DefraDB takes a request-bound delegation for one.
+credential for anything but its own write. Decision (gents#3831): a stored
+update or delete carries no credential at all; it is to be admitted by the
+provider checking its signer's permission on its own, and until the provider
+does, it is refused whatever it carries. External premise
+(defradb.rs#2979, not built): no provider admits a verified update or delete
+on that check yet. Decision (gents#3831): a write for a User that carries no
+delegation is refused, never made under another authority; an identity token
+is no delegation.
 Admission comes before the command's nonce or receipt is consumed and before
 anything is written, so a refused command leaves no trace and is answered by
 signing a new one. -/
@@ -263,17 +286,8 @@ def admit (provider : Provider) (author : Author) (carrier : Carrier) (write : W
   | .embeddedVera, .node => .unchanged
   | .embeddedVera, .agent => .unchanged
   | .embeddedVera, .user =>
-    match carried with
-    | .absent => .delegationRequired
-    | .lifted => .delegationNotBound
-    | .bound =>
-      if scope = .anotherWrite then .delegationForAnotherWrite
-      else if scope = .general ∧ carrier = .stored then .delegationNotRequestBound
-      else if scope = .thisWrite ∧ write ≠ .create then .requestBoundTakesNoUpdate
-      else match verdict with
-        | .issuedBySigner => .forwarded
-        | .issuedByAnother => .issuerNotSigner
-        | .refused => .delegationRefused
+    if carrier = .stored ∧ write ≠ .create then .storedEditAwaitsVerifiedPermission
+    else admitCarried carrier write carried scope verdict
 
 def Admission.runs : Admission → Bool
   | .unchanged => true
@@ -292,8 +306,16 @@ def admitCommand (digest : Digest) (provider : Provider) (author : Author) (node
       (scope command delegation) (verdict node now command.signer delegation)
   | none => admit provider author command.carrier command.kind .absent .general .refused
 
+theorem admitCommand_stored_edit (digest : Digest) (node : Audience) (now : Nat)
+    (command : Command) (attached : Option Delegation)
+    (edit : command.carrier = .stored ∧ command.kind ≠ .create) :
+    admitCommand digest .embeddedVera .user node now command attached
+      = .storedEditAwaitsVerifiedPermission := by
+  cases attached <;> simp only [admitCommand, admit, if_pos edit]
+
 theorem admitCommand_attached (digest : Digest) (node : Audience) (now : Nat)
-    (command : Command) (delegation : Delegation) :
+    (command : Command) (delegation : Delegation)
+    (notEdit : ¬(command.carrier = .stored ∧ command.kind ≠ .create)) :
     admitCommand digest .embeddedVera .user node now command (some delegation) =
       if command.delegationDigest = some (digest.of delegation) then
         if scope command delegation = .anotherWrite then .delegationForAnotherWrite
@@ -305,21 +327,22 @@ theorem admitCommand_attached (digest : Digest) (node : Audience) (now : Nat)
           if delegation.issuer = command.signer then .forwarded else .issuerNotSigner
         else .delegationRefused
       else .delegationNotBound := by
+  simp only [admitCommand, admit, if_neg notEdit]
   by_cases named : command.delegationDigest = some (digest.of delegation)
   · by_cases another : scope command delegation = .anotherWrite
-    · simp [admitCommand, admit, carried, named, another]
+    · simp [admitCarried, carried, named, another]
     · by_cases general : scope command delegation = .general ∧ command.carrier = .stored
-      · simp [admitCommand, admit, carried, named, another, general]
+      · simp [admitCarried, carried, named, another, general]
       · by_cases update : scope command delegation = .thisWrite ∧ command.kind ≠ .create
-        · simp [admitCommand, admit, carried, named, another, general, update]
+        · simp [admitCarried, carried, named, another, general, update]
         · cases valid : delegation.validFor node now
-          · simp [admitCommand, admit, carried, verdict, named, another, general, update, valid]
+          · simp [admitCarried, carried, verdict, named, another, general, update, valid]
           · by_cases own : delegation.issuer = command.signer
-            · simp [admitCommand, admit, carried, verdict, named, another, general, update,
+            · simp [admitCarried, carried, verdict, named, another, general, update,
                 valid, own]
-            · simp [admitCommand, admit, carried, verdict, named, another, general, update,
+            · simp [admitCarried, carried, verdict, named, another, general, update,
                 valid, own]
-  · simp [admitCommand, admit, carried, named]
+  · simp [admitCarried, carried, named]
 
 theorem a_user_write_on_vera_runs_only_under_its_own_bound_current_delegation
     (digest : Digest) (node : Audience) (now : Nat) (command : Command)
@@ -335,10 +358,13 @@ theorem a_user_write_on_vera_runs_only_under_its_own_bound_current_delegation
       ∧ scope command delegation ≠ .anotherWrite
       ∧ (command.carrier = .stored →
           scope command delegation = .thisWrite ∧ command.kind = .create) := by
+  by_cases edit : command.carrier = .stored ∧ command.kind ≠ .create
+  · rw [admitCommand_stored_edit digest node now command attached edit] at h
+    simp [Admission.runs] at h
   cases attached with
-  | none => simp [admitCommand, admit, Admission.runs] at h
+  | none => simp [admitCommand, admit, if_neg edit, admitCarried, Admission.runs] at h
   | some delegation =>
-    rw [admitCommand_attached] at h
+    rw [admitCommand_attached _ _ _ _ _ edit] at h
     by_cases named : command.delegationDigest = some (digest.of delegation)
     · by_cases another : scope command delegation = .anotherWrite
       · simp [named, another, Admission.runs] at h
@@ -371,11 +397,20 @@ theorem a_user_write_on_vera_is_forwarded_or_refused (carrier : Carrier) (write 
     admit .embeddedVera .user carrier write carried scope verdict ≠ .unchanged := by
   cases carrier <;> cases write <;> cases carried <;> cases scope <;> cases verdict <;> decide
 
-/-- A stored update or delete has no delegation it may carry. -/
+/-- A stored update or delete is refused whatever it carries, until the
+provider admits it on its signer's permission. -/
 theorem a_stored_update_or_delete_is_refused (write : Write) (carried : Carried) (scope : Scope)
     (verdict : Verdict) (notCreate : write ≠ .create) :
-    (admit .embeddedVera .user .stored write carried scope verdict).runs = false := by
-  cases write <;> cases carried <;> cases scope <;> cases verdict <;> simp_all [admit, Admission.runs]
+    admit .embeddedVera .user .stored write carried scope verdict
+      = .storedEditAwaitsVerifiedPermission := by
+  cases write <;> simp_all [admit]
+
+/-- A write for a User that carries no delegation is refused wherever the
+runtime makes it in its own process. -/
+theorem a_user_write_without_a_delegation_is_refused (carrier : Carrier) (write : Write)
+    (scope : Scope) (verdict : Verdict) :
+    (admit .embeddedVera .user carrier write .absent scope verdict).runs = false := by
+  cases carrier <;> cases write <;> cases scope <;> cases verdict <;> decide
 
 /-- Whether request-bound delegations cover a write's policy commands: one for
 each, in order, and none besides. -/
@@ -393,19 +428,21 @@ theorem a_create_with_relationships_needs_a_delegation_for_each (policyCommands 
 another command is refused, whatever else holds of it. -/
 theorem a_lifted_delegation_is_refused (digest : Digest) (node : Audience) (now : Nat)
     (other : Command) (delegation : Delegation)
+    (notEdit : ¬(other.carrier = .stored ∧ other.kind ≠ .create))
     (notNamed : other.delegationDigest ≠ some (digest.of delegation)) :
     admitCommand digest .embeddedVera .user node now other (some delegation)
       = .delegationNotBound := by
-  rw [admitCommand_attached, if_neg notNamed]
+  rw [admitCommand_attached _ _ _ _ _ notEdit, if_neg notNamed]
 
 /-- A command names at most one delegation: one bound to another delegation
 does not admit this one. -/
 theorem a_command_bound_to_another_delegation_refuses_this_one (digest : Digest)
     (node : Audience) (now : Nat) (command : Command) (named attached : Delegation)
+    (notEdit : ¬(command.carrier = .stored ∧ command.kind ≠ .create))
     (names : command.delegationDigest = some (digest.of named)) (differs : named ≠ attached) :
     admitCommand digest .embeddedVera .user node now command (some attached)
       = .delegationNotBound := by
-  apply a_lifted_delegation_is_refused
+  apply a_lifted_delegation_is_refused _ _ _ _ _ notEdit
   rw [names]
   intro same
   exact differs (digest.injective _ _ (Option.some.inj same))
@@ -415,7 +452,10 @@ theorem a_general_delegation_in_a_stored_command_is_refused (digest : Digest) (n
     (stored : command.carrier = .stored) (general : delegation.request = none) :
     (admitCommand digest .embeddedVera .user node now command (some delegation)).runs = false := by
   have unbound : scope command delegation = .general := by simp [scope, general]
-  rw [admitCommand_attached]
+  by_cases edit : command.carrier = .stored ∧ command.kind ≠ .create
+  · rw [admitCommand_stored_edit _ _ _ _ _ edit]
+    rfl
+  rw [admitCommand_attached _ _ _ _ _ edit]
   by_cases named : command.delegationDigest = some (digest.of delegation)
   · simp [named, unbound, stored, Admission.runs]
   · simp [named, Admission.runs]
@@ -425,7 +465,10 @@ theorem a_delegation_for_another_write_is_refused (digest : Digest) (node : Audi
     (names : delegation.request = some request) (another : request ≠ command.write) :
     (admitCommand digest .embeddedVera .user node now command (some delegation)).runs = false := by
   have elsewhere : scope command delegation = .anotherWrite := by simp [scope, names, another]
-  rw [admitCommand_attached]
+  by_cases edit : command.carrier = .stored ∧ command.kind ≠ .create
+  · rw [admitCommand_stored_edit _ _ _ _ _ edit]
+    rfl
+  rw [admitCommand_attached _ _ _ _ _ edit]
   by_cases named : command.delegationDigest = some (digest.of delegation)
   · simp [named, elsewhere, Admission.runs]
   · simp [named, Admission.runs]
@@ -443,7 +486,10 @@ theorem an_invalid_delegation_fails_closed (digest : Digest) (node : Audience) (
     (command : Command) (delegation : Delegation)
     (invalid : delegation.validFor node now = false) :
     (admitCommand digest .embeddedVera .user node now command (some delegation)).runs = false := by
-  rw [admitCommand_attached]
+  by_cases edit : command.carrier = .stored ∧ command.kind ≠ .create
+  · rw [admitCommand_stored_edit _ _ _ _ _ edit]
+    rfl
+  rw [admitCommand_attached _ _ _ _ _ edit]
   by_cases named : command.delegationDigest = some (digest.of delegation)
   · by_cases another : scope command delegation = .anotherWrite
     · simp [named, another, Admission.runs]
@@ -488,7 +534,7 @@ theorem a_refused_command_is_signed_again (digest : Digest) (node : Audience) (n
   unfold mint at minted
   split at minted
   · cases minted
-    rw [admitCommand_attached]
+    rw [admitCommand_attached _ _ _ _ _ (by simp)]
     simp [scope, Delegation.validFor, Delegation.currentAt]
   · cases minted
 
@@ -501,6 +547,21 @@ theorem node_and_agent_writes_are_unchanged (provider : Provider) (author : Auth
 theorem a_home_on_the_node_store_is_unchanged (author : Author) (carrier : Carrier)
     (write : Write) (carried : Carried) (scope : Scope) (verdict : Verdict) :
     admit .nodeStore author carrier write carried scope verdict = .unchanged := rfl
+
+/-- A direct write the runtime makes in its own process for a request it
+serves. The delegation the caller presented as the request's bearer is the
+one the write carries: DefraDB authenticated the request by it, so it is
+bound to the request as nothing else could be, and it is general. -/
+def admitPresented (provider : Provider) (author : Author) (write : Write)
+    (presented : Bool) (verdict : Verdict) : Admission :=
+  admit provider author .direct write (if presented then .bound else .absent) .general verdict
+
+theorem a_presented_delegation_runs_a_user_write_only_as_its_issuer (write : Write)
+    (presented : Bool) (verdict : Verdict)
+    (h : (admitPresented .embeddedVera .user write presented verdict).runs = true) :
+    presented = true ∧ verdict = .issuedBySigner := by
+  cases write <;> cases presented <;> cases verdict
+    <;> simp_all [admitPresented, admit, admitCarried, Admission.runs]
 
 /-- The digest binding holds on the command path alone: a general delegation
 that is current for this node is its issuer's bearer at the HTTP boundary,
@@ -618,5 +679,68 @@ theorem a_home_on_the_node_store_gets_the_credential_it_got
     (forwardsCallerBearer principal holdsKey : Bool) :
     credential forwardsCallerBearer principal holdsKey false ≠ .delegation := by
   cases forwardsCallerBearer <;> cases principal <;> cases holdsKey <;> decide
+
+/-- What an authenticated request presents at the runtime's HTTP edge. -/
+inductive Presented where
+  | identityToken
+  | delegation
+  deriving DecidableEq, Repr
+
+inductive Edge where
+  /-- The request goes on as it did before this model; DefraDB judges a
+  presented delegation. -/
+  | unchanged
+  /-- The request is answered with a refusal that tells its client to mint a
+  delegation for the audience the status reports. -/
+  | delegationRequired
+  deriving DecidableEq, Repr
+
+/-- What the runtime does with an authenticated request at its HTTP edge.
+Decision (gents#3831): on a Vera home the runtime refuses a User's request
+that presents an identity token, since a write under it would reach Vera with
+no authority of that User. Decision: the edge refuses the request whole. It
+does not tell a read from a write, which would take interpreting each body,
+and a client that resolved its node (`resolve`) presents a delegation with
+every request. A request presenting nothing is not the edge's to judge, so
+the public status, which a client reads to resolve, stays open. Decision: the
+edge knows the Node by its DID and takes any other caller of an identity
+token as a User, since an Agent acts only in the runtime's own process. -/
+def edge (provider : Provider) (author : Author) (presented : Presented) : Edge :=
+  match provider, author, presented with
+  | .embeddedVera, .user, .identityToken => .delegationRequired
+  | _, _, _ => .unchanged
+
+theorem a_user_identity_token_is_refused_on_a_vera_home :
+    edge .embeddedVera .user .identityToken = .delegationRequired := rfl
+
+theorem the_edge_of_a_home_on_the_node_store_is_unchanged (author : Author)
+    (presented : Presented) : edge .nodeStore author presented = .unchanged := by
+  cases author <;> cases presented <;> rfl
+
+theorem the_edge_leaves_runtime_held_callers_unchanged (provider : Provider) (author : Author)
+    (presented : Presented) (runtimeHeld : author ≠ .user) :
+    edge provider author presented = .unchanged := by
+  cases provider <;> cases author <;> cases presented <;> simp_all [edge]
+
+/-- What a client's credential is at the HTTP edge. -/
+def Credential.presents : Credential → Option Presented
+  | .identityToken => some .identityToken
+  | .delegation => some .delegation
+  | _ => none
+
+/-- Mixed versions: a client that resolves no audience, as one older than this
+model does, mints an identity token, and a Vera home refuses it at the edge. -/
+theorem a_client_that_resolved_no_audience_is_refused_on_a_vera_home :
+    (credential false true true false).presents.map (edge .embeddedVera .user)
+      = some .delegationRequired := rfl
+
+theorem a_client_that_resolved_its_audience_passes_the_edge :
+    (credential false true true true).presents.map (edge .embeddedVera .user)
+      = some .unchanged := rfl
+
+theorem a_client_of_a_home_on_the_node_store_passes_the_edge (nodeNamesAudience : Bool) :
+    (credential false true true nodeNamesAudience).presents.map (edge .nodeStore .user)
+      = some .unchanged := by
+  cases nodeNamesAudience <;> rfl
 
 end Identity.UserDelegation
