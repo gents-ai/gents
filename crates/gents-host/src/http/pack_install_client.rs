@@ -1372,11 +1372,11 @@ mod tests {
         Ok(())
     }
 
-    /// The runtime's `failed` text is shown only for the class whose text is
-    /// build facts; every other class shows its own description, and an
-    /// unclassified message is shown by length only.
+    /// The runtime's `failed` text is shown only for a class whose text is a
+    /// typed error of identifiers and build facts; every other class shows its
+    /// own description, and an unclassified message is shown by length only.
     #[test]
-    fn runtime_failure_text_passes_only_for_build_facts() {
+    fn runtime_failure_text_passes_only_for_identifier_only_classes() {
         use crate::http::pack_install::failure::PackSessionFailureClass;
         let secret = "sk-live-0123456789";
         let quoted = format!("variable TOKEN resolved to {secret}");

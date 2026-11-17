@@ -80,8 +80,8 @@ pub use installation::{
     DriftPolicy, HostedDocumentGraph, HostedPackPreparation, InstallReport, InstalledCatalogEntry,
     InstalledPack, InstalledPackPlugin, InstallerRootAgent, PackAgentRoot, PackChangeError,
     PackIdentity, PackRemovalError, PackRootRecord, PackSource, PackSourceHistory,
-    PluginPinConflict, PluginSelection, PluginStoreChangeError, PluginStoreLocation,
-    PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
+    PluginPinConflict, PluginReferenceUnresolved, PluginSelection, PluginStoreChangeError,
+    PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{
     prepare_document_pack_archive_with_provisioner,

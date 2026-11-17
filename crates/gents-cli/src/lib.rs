@@ -1365,6 +1365,9 @@ mod tests {
         assert!(source.digests_computed());
         assert_eq!(calls(), 1, "computed once, on the first ask");
         assert_eq!(reported, current_build());
-        assert!(!reported.core_packs.is_empty());
+        // This test binary carries no embedded core pack unless the build ran
+        // `make core-packs`; either way the reported list is the digests' own,
+        // not a stale empty one.
+        assert_eq!(reported.core_packs, core_pack_digests().to_vec());
     }
 }

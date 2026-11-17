@@ -31,8 +31,8 @@ pub use documents::{
     plugin_data_unique_keys, prepare_document_pack_archive,
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
     prepare_hosted_document_pack_archive, tools_taking_installer_root, DependencyVariableOverrides,
-    HostedDocumentGraph, HostedPackPreparation, InstallerRootAgent, PreparedDependency,
-    PreparedDocumentPackInstall,
+    HostedDocumentGraph, HostedPackPreparation, InstallerRootAgent, PluginReferenceUnresolved,
+    PreparedDependency, PreparedDocumentPackInstall,
 };
 pub use hosted::{
     stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,

@@ -1499,6 +1499,37 @@ pub(super) fn ensure_plugin_references_resolve(
     ensure_plugin_references_resolve_with_inventory(packs, plugin_home, shipped_digests, None)
 }
 
+/// A Tools document's plugin reference that does not resolve on the installing
+/// node. Typed so a hosted install can show it to the client as written: it
+/// names identifiers only (the pack, the Tools id, the plugin coordinate and
+/// digests), never a field value or an install variable.
+#[derive(Debug, thiserror::Error)]
+pub enum PluginReferenceUnresolved {
+    #[error(
+        "pack {pack} Tools {tools:?} names plugin {plugin}, which neither the pack nor its \
+         dependencies ship and this node has not installed; install the pack that ships {plugin} \
+         first (`gents config pack install <namespace>/<pack>`), or declare that pack as a \
+         dependency of {root}"
+    )]
+    NotInstalled {
+        pack: String,
+        tools: String,
+        plugin: String,
+        root: String,
+    },
+    #[error(
+        "pack {pack} Tools {tools:?} pins plugin {plugin} to {pin}, but the installed artifact is \
+         {installed}; install the matching plugin or update the pin"
+    )]
+    PinMismatch {
+        pack: String,
+        tools: String,
+        plugin: String,
+        pin: String,
+        installed: String,
+    },
+}
+
 fn ensure_plugin_references_resolve_with_inventory(
     packs: &[(&super::super::PackManifest, &PackConfig)],
     plugin_home: Option<&Path>,
@@ -1557,19 +1588,27 @@ fn ensure_plugin_references_resolve_with_inventory(
                 match installed_plugin_record(home, namespace, name) {
                     Ok(record) => {
                         if let Some(pin) = &reference.digest {
-                            anyhow::ensure!(pin == &record.digest,
-                                "pack {} Tools {:?} pins plugin {} to {}, but the installed artifact is {}; install the matching plugin or update the pin",
-                                manifest.name, tools.tools_id, reference.plugin, pin, record.digest);
+                            if pin != &record.digest {
+                                return Err(PluginReferenceUnresolved::PinMismatch {
+                                    pack: manifest.name.clone(),
+                                    tools: tools.tools_id.clone(),
+                                    plugin: reference.plugin.clone(),
+                                    pin: pin.clone(),
+                                    installed: record.digest.clone(),
+                                }
+                                .into());
+                            }
                         }
                     }
-                    Err(error) if crate::plugin::store::is_not_found(&error) => anyhow::bail!(
-                        "pack {} Tools {:?} names plugin {}, which neither the pack nor its dependencies ship and this node has not installed; install the pack that ships {} first (`gents config pack install <namespace>/<pack>`), or declare that pack as a dependency of {}",
-                        manifest.name,
-                        tools.tools_id,
-                        reference.plugin,
-                        reference.plugin,
-                        root
-                    ),
+                    Err(error) if crate::plugin::store::is_not_found(&error) => {
+                        return Err(PluginReferenceUnresolved::NotInstalled {
+                            pack: manifest.name.clone(),
+                            tools: tools.tools_id.clone(),
+                            plugin: reference.plugin.clone(),
+                            root: root.clone(),
+                        }
+                        .into())
+                    }
                     Err(error) => {
                         return Err(error).with_context(|| {
                             format!("reading installed plugin {}", reference.plugin)
