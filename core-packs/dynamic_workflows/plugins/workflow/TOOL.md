@@ -22,17 +22,18 @@ Return exactly one of:
   another job's result. Child text is not in `children`: read it at
   `input.job_results.<id>.result.slots[slot].text`. Never request failed or
   interrupted children. The host immediately calls the step with
-  `job_results`; that round must return `effects`, `result`, `suspend` or
+  `job_results`; it exists only on the step after a read, so use it then or
+  carry what you need in `effects.state`. That round must return `effects`, `result`, `suspend` or
   `fail`, not another read request.
 - `{result: <any JSON>}` to finish.
 - `{suspend: {kind: "pause", message}}` to pause.
 - `{fail: {code, message}}` to fail.
 
-Use `children` states to decide phases. When all children are terminal, read,
-spawn or finish: an empty step with no live child fails `plugin_job_stalled`.
-Resending an existing slot and attempt is not a new spawn. Three malformed
-outputs in a row fail `plugin_job_step_failed`. Workers only have their own
-granted tools; prompts do not grant access.
+Decide the phase from `input.children`, never by re-sending step 0. A step
+with no live child that spawns nothing new and sends no message fails
+`plugin_job_stalled`. Resending an existing slot and attempt is not a new
+spawn. Three malformed outputs in a row fail `plugin_job_step_failed`. Put
+`state` inside `effects`; no other top-level keys are allowed.
 
 To promote a run, give the operator the command from its receipt, not a pack:
 `gents automation job promote <address> --name <snake_case_name>`. It installs
