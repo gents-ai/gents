@@ -382,9 +382,17 @@ async fn run(
     let socket = Arc::new(Mutex::new(socket));
     let result = run_inner(&socket, &state, home, access, user, runtime_access, actor).await;
     if let Err((error, outcome)) = result {
+        let error = if gents_store::config_client::user_write::UserWriteRefusal::in_chain(
+            error.as_ref(),
+        ) {
+            tracing::info!(error = %format!("{error:#}"), "hosted pack session refused a write for its User");
+            gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.to_owned()
+        } else {
+            format!("{error:#}")
+        };
         let _ = send(
             &mut *socket.lock().await,
-            json!({"type":"failed", "error":format!("{error:#}"), "outcome":outcome}),
+            json!({"type":"failed", "error":error, "outcome":outcome}),
         )
         .await;
     }

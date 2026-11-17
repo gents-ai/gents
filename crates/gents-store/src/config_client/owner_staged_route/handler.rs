@@ -135,6 +135,14 @@ async fn decide(
             OwnerStagedRefusal::OutOfKind,
             "This operation may not grant that target.",
         ),
+        Err(ConfigClientError::UserWrite(refusal)) => {
+            tracing::info!(%refusal, "owner-staged change refused for its User");
+            failure(
+                StatusCode::FORBIDDEN,
+                "updateRequired",
+                crate::config_client::user_write::REFUSED_FOR_A_PERSON,
+            )
+        }
         Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { .. }) => failure(
             StatusCode::CONFLICT,
             OwnerStagedRefusal::Unmanaged,

@@ -270,3 +270,57 @@ fn node_publication_matches_the_lean_model() {
         },
     );
 }
+
+#[test]
+fn what_a_person_reads_names_no_internals() {
+    let path = std::path::PathBuf::from("/home/data/vera/node");
+    let refusals = [
+        DocumentAcpError::Switch {
+            recorded: DocumentAcp::Local,
+            requested: DocumentAcp::Vera,
+        },
+        DocumentAcpError::Unavailable,
+        DocumentAcpError::NodeKeyCannotSign {
+            node: "did:key:z6Mk".into(),
+        },
+        DocumentAcpError::NotYetUsable,
+        DocumentAcpError::HeldUserKey,
+        DocumentAcpError::DelegationRequired,
+        DocumentAcpError::TransportGrantsAwaitProvider,
+        DocumentAcpError::DeploymentDiffers {
+            what: "consensus key",
+        },
+        DocumentAcpError::DeploymentMissing { path: path.clone() },
+        DocumentAcpError::DeploymentReplaced { path },
+    ];
+    let delegation = [crate::config_client::DelegationError::AudienceUnavailable];
+    let read = refusals
+        .iter()
+        .map(ToString::to_string)
+        .chain(delegation.iter().map(ToString::to_string))
+        .chain([
+            crate::config_client::user_write::REFUSED_FOR_A_PERSON.to_owned(),
+            crate::config_client::owed::OWED_FAILED_FOR_A_PERSON.to_owned(),
+        ]);
+    for text in read {
+        let lowered = text.replace("/home/data/vera/node", "").to_lowercase();
+        let words: Vec<&str> = lowered
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .collect();
+        for internal in [
+            "vera",
+            "defradb",
+            "acp",
+            "delegation",
+            "audience",
+            "registration",
+            "deployment",
+            "credential",
+            "chain",
+        ] {
+            assert!(!words.contains(&internal), "{text:?} names {internal:?}");
+        }
+        assert!(!lowered.contains("access control"), "{text:?}");
+    }
+}

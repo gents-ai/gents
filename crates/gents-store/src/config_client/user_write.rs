@@ -91,6 +91,16 @@ pub enum UserWriteRefusal {
 pub const REFUSED_FOR_A_PERSON: &str =
     "This change could not be applied on this home. Update Gents on this device and try again.";
 
+impl UserWriteRefusal {
+    /// Whether a refused write for a User, or a refused fresh delegation,
+    /// is in `error`'s chain; a person is then told `REFUSED_FOR_A_PERSON`
+    /// and the chain stays in the logs.
+    pub fn in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
+        gents_protocol::error_chain::find_source::<Self>(error).is_some()
+            || gents_protocol::error_chain::find_source::<RefreshRefused>(error).is_some()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
     Unchanged,

@@ -13,7 +13,7 @@ pub enum ConfigClientError {
     PackApproval(#[from] super::PackApprovalError),
     #[error(transparent)]
     Delegation(#[from] super::DelegationError),
-    #[error(transparent)]
+    #[error("a write for a User was refused")]
     UserWrite(#[from] super::user_write::UserWriteRefusal),
     #[error("verified pack effect failed")]
     PackEvidence(#[source] Box<super::PackEvidenceError>),

@@ -44,75 +44,56 @@ impl DocumentAcp {
 impl std::fmt::Display for DocumentAcp {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::Local => "the node's own store",
-            Self::Vera => "Vera",
+            Self::Local => "local",
+            Self::Vera => "vera",
         })
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocumentAcpError {
-    #[error(
-        "this home decides document access through {recorded} and cannot be switched to \
-         {requested}; initialize a new home to choose differently"
-    )]
+    #[error("this home cannot be changed to work differently; set up a new home instead")]
     Switch {
         recorded: DocumentAcp,
         requested: DocumentAcp,
     },
-    #[error(
-        "this home decides document access through an embedded Vera node, which this build does \
-         not include; use a build with the `vera` feature"
-    )]
+    #[error("this version of Gents cannot open this home; update Gents on this device")]
     Unavailable,
     #[error(
-        "{node} cannot sign for an embedded Vera node, which needs an Ed25519 node key; \
-         initialize the home with a file or macos-keychain identity"
+        "this home cannot be kept with a Secure Enclave device key; set it up with a file or \
+         keychain key instead"
     )]
     NodeKeyCannotSign { node: String },
-    #[error(
-        "a home that decides document access through an embedded Vera node cannot be created or \
-         opened yet, because client-signed writes and staged access-control writes are not \
-         supported on it; use a home initialized without `--document-acp vera`"
-    )]
+    #[error("this kind of home cannot be opened by this version of Gents yet")]
     NotYetUsable,
-    #[error(
-        "this home decides document access through Vera, where the runtime never signs with a \
-         User key; wire the plugin from the client that holds the key"
-    )]
+    #[error("make this change from the Gents app or CLI on your own device")]
     HeldUserKey,
     #[error(
         "this version of Gents cannot connect to this home; update Gents on this device and try \
          again"
     )]
     DelegationRequired,
-    #[error(
-        "this home decides document access through Vera, where the runtime does not yet publish \
-         peer records as its Node, since Vera has no grant of transport relationships yet \
-         (defradb.rs#2980)"
-    )]
+    /// The provider grants no transport relationships yet (defradb.rs#2980),
+    /// so the runtime publishes no peer records as its Node.
+    #[error("this home cannot be shared with other devices yet")]
     TransportGrantsAwaitProvider,
     #[error(
-        "this home's embedded Vera deployment was created under a different {what} than this \
-         Gents build and node identity give it; open the home with the Gents version that \
-         created it"
+        "this home was created by another version of Gents or with another device key; open it \
+         with the Gents version and key that created it"
     )]
     DeploymentDiffers { what: &'static str },
     #[error(
-        "this home decides document access through an embedded Vera node, whose directory {} is \
-         missing. It held the access records of the home's documents, so nothing was created in \
-         its place; restore it from a backup of this home",
+        "part of this home is missing ({}); nothing was created in its place. Restore the home \
+         from a backup",
         path.display()
     )]
     DeploymentMissing { path: PathBuf },
     #[error(
-        "the embedded Vera deployment in {} is not the one this home was created with, so it \
-         holds none of the access records of the home's documents; restore the directory from a \
-         backup of this home",
+        "part of this home ({}) belongs to another home; restore it from a backup of this home",
         path.display()
     )]
     DeploymentReplaced { path: PathBuf },
-    #[error("reading the embedded Vera deployment record {}", path.display())]
+    #[error("reading this home's record {}", path.display())]
     Record {
         path: PathBuf,
         #[source]

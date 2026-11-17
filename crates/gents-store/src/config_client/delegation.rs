@@ -11,18 +11,15 @@ pub const VERA_DELEGATION_LIFETIME: Duration = Duration::from_secs(120);
 
 #[derive(Debug, thiserror::Error)]
 pub enum DelegationError {
-    #[error("the held client key cannot sign a Vera delegation")]
+    #[error("this device's key cannot be used to connect to this home")]
     Signer(#[source] vera::vera_rs::SignerError),
-    #[error("the held client key signs as {signer}, not as {actor}")]
+    #[error("this device's key belongs to {signer}, not to {actor}")]
     Actor { signer: String, actor: String },
-    #[error("minting a Vera delegation")]
+    #[error("preparing this device's connection to the home")]
     Mint(#[source] vera::vera_rs::BearerError),
-    #[error("the Vera delegation signer did not sign at once")]
+    #[error("this device's key did not answer")]
     Pending,
-    #[error(
-        "the runtime decides document access through Vera but did not report the worker and \
-         deployment a delegation must name; retry once it is ready"
-    )]
+    #[error("this home's runtime is still starting; try again in a moment")]
     AudienceUnavailable,
 }
 
