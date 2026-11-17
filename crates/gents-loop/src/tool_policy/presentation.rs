@@ -7,25 +7,34 @@ pub fn advertised(granted: bool, hidden: bool) -> bool {
     granted && !hidden
 }
 
-pub fn direct_admissible(granted: bool, hidden: bool) -> bool {
-    advertised(granted, hidden)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvocationOrigin {
     Provider,
     Composition,
 }
 
-pub fn admissible(granted: bool, hidden: bool, origin: InvocationOrigin) -> bool {
-    match origin {
-        InvocationOrigin::Provider => direct_admissible(granted, hidden),
-        InvocationOrigin::Composition => granted,
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionDecision {
+    Allowed,
+    Hidden,
+    Unavailable,
 }
 
-pub fn presentation_refused(granted: bool, hidden: bool, provider_origin: bool) -> bool {
-    granted && hidden && provider_origin
+/// Mirror of ToolPresentation.admissionDecision, the entire presentation gate.
+/// Unknown provider names keep their existing hook and dispatch owners.
+pub fn admission_decision(granted: bool, hidden: bool, provider_origin: bool) -> AdmissionDecision {
+    if provider_origin {
+        if granted && hidden {
+            AdmissionDecision::Hidden
+        } else {
+            AdmissionDecision::Allowed
+        }
+    } else if granted {
+        AdmissionDecision::Allowed
+    } else {
+        AdmissionDecision::Unavailable
+    }
 }
 
 pub fn effective_hidden(hidden: bool, script_ready: bool) -> bool {
@@ -61,13 +70,10 @@ pub fn admit(
     let tool = tools.iter().find(|tool| tool.name() == name);
     let granted = tool.is_some();
     let hidden = tool.is_some_and(|tool| tool.hidden());
-    if presentation_refused(granted, hidden, origin == InvocationOrigin::Provider) {
-        Err(AdmissionRefusal::Hidden { name: name.into() })
-    } else if origin == InvocationOrigin::Composition && !granted {
-        Err(AdmissionRefusal::Unavailable { name: name.into() })
-    } else {
-        // Unknown provider names retain on_tool_call and the existing dispatch owner.
-        Ok(())
+    match admission_decision(granted, hidden, origin == InvocationOrigin::Provider) {
+        AdmissionDecision::Hidden => Err(AdmissionRefusal::Hidden { name: name.into() }),
+        AdmissionDecision::Unavailable => Err(AdmissionRefusal::Unavailable { name: name.into() }),
+        AdmissionDecision::Allowed => Ok(()),
     }
 }
 
@@ -82,6 +88,7 @@ pub fn present_tools(
 ) -> Result<Vec<Box<dyn ToolDyn>>, PresentationError> {
     let gateway_hidden = hidden_names.iter().any(|name| is_gateway(name));
     let script_ready = script_ready && tools.iter().any(|tool| tool.name() == "script");
+    // Reachable only by an unvalidated write; normal configuration rejects hidden gateways.
     if gateway_hidden {
         return Err(PresentationError);
     }
@@ -241,9 +248,29 @@ mod tests {
 
     #[test]
     fn presentation_conforms_to_lean() {
-        gents_lean_vocab::families::tool_presentation_presentation_refused::replay(|i| {
-            presentation_refused(i.granted, i.hidden, i.provider_origin)
-        });
+        gents_lean_vocab::families::tool_presentation_admission_decision::replay::<AdmissionDecision>(
+            |i| {
+                let tools: Vec<Box<dyn ToolDyn>> = if i.granted {
+                    vec![PresentedTool::wrap(
+                        Box::new(Named("target")),
+                        i.hidden,
+                        false,
+                    )]
+                } else {
+                    Vec::new()
+                };
+                let origin = if i.provider_origin {
+                    InvocationOrigin::Provider
+                } else {
+                    InvocationOrigin::Composition
+                };
+                match admit(&tools, "target", origin) {
+                    Ok(()) => AdmissionDecision::Allowed,
+                    Err(AdmissionRefusal::Hidden { .. }) => AdmissionDecision::Hidden,
+                    Err(AdmissionRefusal::Unavailable { .. }) => AdmissionDecision::Unavailable,
+                }
+            },
+        );
         gents_lean_vocab::families::tool_presentation_effective_hidden::replay(|i| {
             effective_hidden(i.hidden, i.script_ready)
         });
@@ -252,17 +279,6 @@ mod tests {
         }
         for case in gents_lean_vocab::families::tool_presentation_advertised::cases() {
             case.check(advertised(case.input.granted, case.input.hidden));
-        }
-        for case in gents_lean_vocab::families::tool_presentation_direct_admissible::cases() {
-            case.check(direct_admissible(case.input.granted, case.input.hidden));
-        }
-        for case in gents_lean_vocab::families::tool_presentation_admissible::cases() {
-            let origin = if case.input.provider_origin {
-                InvocationOrigin::Provider
-            } else {
-                InvocationOrigin::Composition
-            };
-            case.check(admissible(case.input.granted, case.input.hidden, origin));
         }
         for case in gents_lean_vocab::families::tool_presentation_configuration_valid::cases() {
             case.check(configuration_valid(
