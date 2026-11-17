@@ -86,6 +86,11 @@ pub enum UserWriteRefusal {
     IssuerNotSigner,
 }
 
+/// What a person reads where a refused write for them is answered; the
+/// refusal itself stays in the logs.
+pub const REFUSED_FOR_A_PERSON: &str =
+    "This change could not be applied on this home. Update Gents on this device and try again.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
     Unchanged,

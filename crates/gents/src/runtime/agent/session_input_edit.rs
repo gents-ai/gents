@@ -42,6 +42,17 @@ pub(super) async fn verified_receipt(
     Ok(Some(receipt))
 }
 
+/// The reason a stored command is rejected for, when the writes it carries
+/// for its User are refused (`Identity.SessionInputEdit.answer`).
+fn answer(
+    admission: Result<(), gents_store::config_client::user_write::UserWriteRefusal>,
+) -> Option<String> {
+    admission.err().map(|refusal| {
+        tracing::info!(%refusal, "stored command refused before any write");
+        gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.to_owned()
+    })
+}
+
 async fn intrinsic_rejection(
     identity: &dyn NodeIdentity,
     command: &SessionInputEdit,
@@ -449,6 +460,13 @@ pub(crate) async fn process_command(
                         let rejection = if now >= DateTime::parse_from_rfc3339(&command.expires_at)? {
                             Some("edit intent has expired".into())
                         } else { authority_rejection(txn, &command).await? };
+                        let rejection = match rejection {
+                            None if !command.replacements.is_empty() => answer(txn.admit_stored_user_write(
+                                &command.requester_did,
+                                gents_store::config_client::user_write::WriteKind::Create,
+                            )),
+                            other => other,
+                        };
                         match rejection {
                             Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
                             None => {
@@ -518,6 +536,8 @@ async fn test_signed_replacement_fields(
     (session_doc, agent_did, agent_doc, evidence)
 }
 
+#[cfg(test)]
+mod answer_conformance;
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]

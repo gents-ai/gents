@@ -73,6 +73,20 @@ pub(crate) async fn attach_client_goal_graphs(
     let Some(evidence) = command.native_evidence.as_ref() else {
         return Ok(Err("goal creation has no native graph evidence".into()));
     };
+    let writes = [
+        replacement
+            .is_some()
+            .then_some(gents_store::config_client::user_write::WriteKind::Delete),
+        Some(gents_store::config_client::user_write::WriteKind::Create),
+    ];
+    for write in writes.into_iter().flatten() {
+        if let Err(refusal) = txn.admit_stored_user_write(&command.requester_did, write) {
+            tracing::info!(%refusal, "goal control refused before any write");
+            return Ok(Err(
+                gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.into(),
+            ));
+        }
+    }
     if txn.managed_agent_signer().is_none()
         || txn.actor_did() != Some(command.agent_did.as_str())
         || request.admission.signer_did != command.requester_did

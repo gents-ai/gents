@@ -35,6 +35,28 @@ impl VerifiedGraph {
 }
 
 impl ConfigApplyTxn<'_> {
+    /// Whether this transaction may make, for the User `signer`, the `write`
+    /// a stored command carries, asked before anything is written. A stored
+    /// command carries no delegation yet.
+    pub fn admit_stored_user_write(
+        &self,
+        signer: &str,
+        write: WriteKind,
+    ) -> std::result::Result<(), user_write::UserWriteRefusal> {
+        let TxnBackend::Embedded { node, .. } = &self.backend else {
+            return Ok(());
+        };
+        user_write::signer_credential(
+            node,
+            user_write::author_of(node, signer, false),
+            Carrier::Stored,
+            write,
+            signer,
+            None,
+        )
+        .map(|_| ())
+    }
+
     /// The caller supplies only the already verified, exact client graph. Its
     /// signer determines the mutation actor; a managed Agent transaction may
     /// carry that graph for a separately authorized relationship operation.

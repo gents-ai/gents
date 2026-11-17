@@ -82,9 +82,8 @@ pub enum DocumentAcpError {
     )]
     HeldUserKey,
     #[error(
-        "this home decides document access through Vera, where a User's request presents a Vera \
-         delegation its client minted, not an identity token; read the runtime's public status \
-         and mint a delegation for the audience it reports"
+        "this version of Gents cannot connect to this home; update Gents on this device and try \
+         again"
     )]
     DelegationRequired,
     #[error(
