@@ -24,12 +24,6 @@ const REGISTRY: &[Registration] = &[
         kind: Kind::Owner,
     },
     Registration {
-        path: "crates/gents-host/src/http/pack_install_client.rs",
-        function: "legacy_handshake_refusal",
-        result: "LegacyHandshakeRefusal",
-        kind: Kind::PersistedText,
-    },
-    Registration {
         path: "crates/gents-tools/src/surface/root_admission.rs",
         function: "tool_root_refusal",
         result: "ToolRootRefusal",

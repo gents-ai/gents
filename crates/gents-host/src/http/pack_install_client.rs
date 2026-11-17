@@ -48,10 +48,178 @@ enum ServerMessage {
     Finished {
         result: Value,
     },
+    /// A preview's answer, with the runtime's build so the client checks it
+    /// exactly as it does at `ready`.
+    Previewed {
+        result: Value,
+        build: gents_protocol::build_info::BuildInfo,
+    },
     Failed {
         error: String,
         outcome: String,
+        /// The failed step, from `pack_install::failure`. Absent from an older
+        /// runtime, whose text is then shown by length only.
+        #[serde(default)]
+        class: Option<String>,
     },
+}
+
+impl ServerMessage {
+    /// The message's type, for an error that names what arrived instead.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Ready { .. } => "ready",
+            Self::ReadResult { .. } => "read_result",
+            Self::ApproveGraph { .. } => "approve_graph",
+            Self::ApproveRelationship { .. } => "approve_relationship",
+            Self::Applied { .. } => "applied",
+            Self::Timestamp { .. } => "timestamp",
+            Self::Finished { .. } => "finished",
+            Self::Previewed { .. } => "previewed",
+            Self::Failed { .. } => "failed",
+        }
+    }
+}
+
+type InstallSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// Open the runtime's install session and send the start request.
+async fn open_session(
+    endpoint: &GraphqlEndpoint,
+    request: Value,
+) -> Result<(InstallSocket, ClientSigningCapability)> {
+    let actor = endpoint.held_client_signing_capability()?.clone();
+    let mut url = reqwest::Url::parse(endpoint.url())?;
+    ensure!(
+        matches!(url.scheme(), "http" | "https")
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "remote pack install requires an HTTP URL without credentials"
+    );
+    let prefix = url
+        .path()
+        .strip_suffix("/api/v0/graphql")
+        .context("remote pack install requires a Gents runtime GraphQL endpoint")?
+        .to_owned();
+    url.set_path(&format!("{prefix}/packs/install/session"));
+    url.set_scheme(if url.scheme() == "https" { "wss" } else { "ws" })
+        .map_err(|_| anyhow::anyhow!("invalid runtime WebSocket URL"))?;
+    let mut upgrade = url.as_str().into_client_request()?;
+    let authorization = endpoint
+        .authorization()?
+        .context("client authentication is required")?;
+    let mut authorization =
+        authorization.parse::<tokio_tungstenite::tungstenite::http::HeaderValue>()?;
+    authorization.set_sensitive(true);
+    upgrade.headers_mut().insert(
+        tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+        authorization,
+    );
+    let (mut socket, _) = connect_async(upgrade)
+        .await
+        .context("connecting remote pack install")?;
+    let mut start = serde_json::Map::new();
+    start.insert("type".into(), "start".into());
+    start.insert("request".into(), request);
+    send(&mut socket, Value::Object(start)).await?;
+    Ok((socket, actor))
+}
+
+/// The runtime's first answer, with every failure typed: a decode error, a
+/// lost connection, an older runtime and the runtime's own refusal are each
+/// their own error, and none of them repeats the runtime's text.
+async fn first_reply(
+    socket: &mut InstallSocket,
+    client_build: &gents_protocol::build_info::BuildInfo,
+) -> std::result::Result<(ServerMessage, usize), PackInstallHandshakeError> {
+    match receive_sized(socket).await {
+        // Every failure of this build's runtime carries a class, so one without
+        // is an older runtime (its `InstallRequest` has `deny_unknown_fields`
+        // and refuses the client's `client_build`). That is the "older
+        // runtime" case, with its own next step, told by the missing class
+        // rather than by the runtime's text.
+        Ok((
+            ServerMessage::Failed {
+                error, class: None, ..
+            },
+            _,
+        )) => Err(PackInstallHandshakeError::OlderRuntime {
+            client: client_build.summary(),
+            detail_bytes: error.len(),
+        }),
+        Ok((
+            ServerMessage::Failed {
+                error,
+                outcome,
+                class,
+            },
+            _,
+        )) => Err(runtime_failure(&error, outcome, class.as_deref())),
+        Ok(sized) => Ok(sized),
+        // Only the decode error means "unreadable handshake". A closed or lost
+        // connection is its own case and must not be reported as a build
+        // problem.
+        Err(error @ ReceiveFailure::Unreadable { .. }) => {
+            Err(PackInstallHandshakeError::UnreadableHandshake {
+                client: client_build.summary(),
+                detail_bytes: format!("{error:#}").len(),
+            })
+        }
+        Err(error @ ReceiveFailure::Lost(_)) => Err(PackInstallHandshakeError::ConnectionLost {
+            detail_bytes: format!("{error:#}").len(),
+        }),
+    }
+}
+
+/// The build check at the handshake, on the client's side: a different build
+/// is refused, and two dirty builds of one commit are accepted with a typed
+/// warning the caller receives.
+fn check_runtime_build(
+    client_build: &gents_protocol::build_info::BuildInfo,
+    runtime_build: &gents_protocol::build_info::BuildInfo,
+) -> std::result::Result<Vec<PackInstallWarning>, PackInstallHandshakeError> {
+    if let Some(refusal) = PackInstallHandshakeError::build_mismatch(client_build, runtime_build) {
+        return Err(refusal);
+    }
+    let mut warnings = Vec::new();
+    if client_build.dirty_warning(runtime_build).is_some() {
+        warnings.push(PackInstallWarning::DirtyBuildPair {
+            commit: client_build
+                .git_sha
+                .clone()
+                .unwrap_or_else(|| "an unrecorded commit".to_owned()),
+        });
+    }
+    Ok(warnings)
+}
+
+/// A `failed` message as an error the client can show: the runtime's text only
+/// for a class that allows it, otherwise the class's own description. An
+/// unclassified message (an older runtime) is shown by length only.
+fn runtime_failure(error: &str, outcome: String, class: Option<&str>) -> PackInstallHandshakeError {
+    use super::pack_install::failure::PackSessionFailureClass;
+    match class.and_then(PackSessionFailureClass::from_wire) {
+        Some(known) => PackInstallHandshakeError::RuntimeFailed {
+            outcome,
+            class: class.unwrap_or_default().to_owned(),
+            reason: if known.shows_runtime_text() {
+                error.to_owned()
+            } else {
+                known.description().to_owned()
+            },
+        },
+        None => PackInstallHandshakeError::RuntimeFailed {
+            outcome,
+            class: "unclassified".to_owned(),
+            reason: format!(
+                "the runtime did not classify this failure, so its {} bytes of detail are not \
+                 shown, since they can quote install values",
+                error.len()
+            ),
+        },
+    }
 }
 
 /// A single runtime-owned transaction, driven by the client's pack interpreter.
@@ -62,6 +230,10 @@ pub struct PackInstallSession {
     preparation: gents_pack::pack::HostedPackPreparation,
     pending: Option<ServerMessage>,
     next_id: u64,
+    /// What the handshake accepted on a weaker guarantee. Read by the caller
+    /// after the install, so the desktop and library callers see it as well as
+    /// the CLI.
+    warnings: Vec<PackInstallWarning>,
 }
 
 impl PackInstallSession {
@@ -72,106 +244,31 @@ impl PackInstallSession {
         pack_digests: &[String],
         client_build: &gents_protocol::build_info::BuildInfo,
     ) -> Result<Self> {
-        let actor = endpoint.held_client_signing_capability()?.clone();
-        let mut url = reqwest::Url::parse(endpoint.url())?;
-        ensure!(
-            matches!(url.scheme(), "http" | "https")
-                && url.username().is_empty()
-                && url.password().is_none()
-                && url.query().is_none()
-                && url.fragment().is_none(),
-            "remote pack install requires an HTTP URL without credentials"
-        );
-        let prefix = url
-            .path()
-            .strip_suffix("/api/v0/graphql")
-            .context("remote pack install requires a Gents runtime GraphQL endpoint")?
-            .to_owned();
-        url.set_path(&format!("{prefix}/packs/install/session"));
-        url.set_scheme(if url.scheme() == "https" { "wss" } else { "ws" })
-            .map_err(|_| anyhow::anyhow!("invalid runtime WebSocket URL"))?;
-        let mut upgrade = url.as_str().into_client_request()?;
-        let authorization = endpoint
-            .authorization()?
-            .context("client authentication is required")?;
-        let mut authorization =
-            authorization.parse::<tokio_tungstenite::tungstenite::http::HeaderValue>()?;
-        authorization.set_sensitive(true);
-        upgrade.headers_mut().insert(
-            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
-            authorization,
-        );
-        let (mut socket, _) = connect_async(upgrade)
-            .await
-            .context("connecting remote pack install")?;
-        let mut start = serde_json::Map::new();
-        start.insert("type".into(), "start".into());
-        start.insert("request".into(), request);
-        send(&mut socket, Value::Object(start)).await?;
-        let ready = match receive(&mut socket).await {
-            Ok(ready) => ready,
-            // Only the decode error means "unreadable handshake". A closed or
-            // lost connection is its own case and must not be reported as a
-            // build problem.
-            Err(error @ ReceiveError::Decode(_)) => {
-                return Err(PackInstallHandshakeError::UnreadableHandshake {
-                    client: client_build.summary(),
-                    detail: gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        let (mut socket, actor) = open_session(endpoint, request).await?;
+        let (scope, preparation, runtime_build) =
+            match first_reply(&mut socket, client_build).await? {
+                (
+                    ServerMessage::Ready {
+                        scope,
+                        preparation,
+                        build,
+                    },
+                    _,
+                ) => (scope, preparation, build),
+                (other, bytes) => {
+                    return Err(PackInstallHandshakeError::UnexpectedMessage {
+                        kind: other.kind(),
+                        detail_bytes: bytes,
+                    }
+                    .into())
                 }
-                .into());
-            }
-            Err(error) => {
-                return Err(PackInstallHandshakeError::ConnectionLost {
-                    detail: gents_protocol::error_chain::ErrorChain(&error).to_string(),
-                }
-                .into());
-            }
-        };
-        let (scope, preparation, runtime_build) = match ready {
-            ServerMessage::Ready {
-                scope,
-                preparation,
-                build,
-            } => (scope, preparation, build),
-            // An older runtime's `InstallRequest` has `deny_unknown_fields`, so
-            // it rejects the client's `client_build` by name. That is the
-            // "older runtime" case, and it has a different next step from a
-            // plain failure.
-            ServerMessage::Failed { error, .. } if legacy_handshake_refusal(&error).is_some() => {
-                return Err(PackInstallHandshakeError::OlderRuntime {
-                    client: client_build.summary(),
-                    detail: error,
-                }
-                .into())
-            }
-            ServerMessage::Failed { error, outcome } => {
-                return Err(PackInstallHandshakeError::RuntimeFailed {
-                    outcome,
-                    detail: error,
-                }
-                .into())
-            }
-            _ => {
-                return Err(PackInstallHandshakeError::UnexpectedMessage {
-                    detail: "a message type this client does not handle".to_owned(),
-                }
-                .into())
-            }
-        };
+            };
         // The handshake is where a build mismatch is refused: a plan prepared by
         // two different builds is not the same plan, whatever it contains, and
-        // finding that out after planning is too late to say so usefully.
-        if let Some(refusal) =
-            PackInstallHandshakeError::build_mismatch(client_build, &runtime_build)
-        {
-            return Err(refusal.into());
-        }
-        // Two dirty builds of one commit agree, and the acceptance is said out
-        // loud: the install went ahead on a weaker guarantee than two clean
-        // builds of that commit would give.
-        if let Some(warning) = client_build.dirty_warning(&runtime_build) {
-            eprintln!("{warning}");
-        }
+        // finding that out after planning is too late to say so usefully. Two
+        // dirty builds of one commit agree, and that is recorded as a typed
+        // warning the desktop and library callers see, not printed here.
+        let warnings = check_runtime_build(client_build, &runtime_build)?;
         ensure!(
             scope.node_did == node_did
                 && scope.pack_digests == pack_digests
@@ -185,7 +282,14 @@ impl PackInstallSession {
             preparation,
             pending: None,
             next_id: 1,
+            warnings,
         })
+    }
+
+    /// What the handshake accepted on a weaker guarantee, for the caller to show
+    /// or log. Empty on an ordinary install.
+    pub fn warnings(&self) -> &[PackInstallWarning] {
+        &self.warnings
     }
 
     pub fn preparation(&self) -> &gents_pack::pack::HostedPackPreparation {
@@ -216,9 +320,11 @@ impl PackInstallSession {
                 {
                     self.pending = Some(proposal)
                 }
-                ServerMessage::Failed { error, outcome } => {
-                    bail!("remote pack install failed ({outcome}): {error}")
-                }
+                ServerMessage::Failed {
+                    error,
+                    outcome,
+                    class,
+                } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
                 _ => bail!("unexpected remote pack install response to read"),
             }
         }
@@ -227,7 +333,7 @@ impl PackInstallSession {
     async fn proposal(&mut self) -> Result<ServerMessage> {
         match self.pending.take() {
             Some(proposal) => Ok(proposal),
-            None => Ok(receive(&mut self.socket).await?),
+            None => receive(&mut self.socket).await,
         }
     }
 
@@ -238,9 +344,11 @@ impl PackInstallSession {
                 mutation,
                 history,
             } if mutation == *expected => (id, history),
-            ServerMessage::Failed { error, outcome } => {
-                bail!("remote pack install failed ({outcome}): {error}")
-            }
+            ServerMessage::Failed {
+                error,
+                outcome,
+                class,
+            } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
             ServerMessage::ApproveGraph { mutation, .. } => {
                 // A differing build is refused at the handshake, so both sides
                 // here are the same build and the difference is in the plan.
@@ -268,9 +376,11 @@ impl PackInstallSession {
             {
                 id
             }
-            ServerMessage::Failed { error, outcome } => {
-                bail!("remote pack install failed ({outcome}): {error}")
-            }
+            ServerMessage::Failed {
+                error,
+                outcome,
+                class,
+            } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
             ServerMessage::ApproveRelationship { relationship, .. } => bail!(
                 "runtime pack relationship differs from the client's installation plan: {}",
                 describe_relationship_disagreement(expected, &relationship)?
@@ -294,9 +404,11 @@ impl PackInstallSession {
                 id: received,
                 result,
             } if received == id => Ok(result),
-            ServerMessage::Failed { error, outcome } => {
-                bail!("remote pack install failed ({outcome}): {error}")
-            }
+            ServerMessage::Failed {
+                error,
+                outcome,
+                class,
+            } => Err(runtime_failure(&error, outcome, class.as_deref()).into()),
             _ => bail!("unexpected remote pack install effect response"),
         }
     }
@@ -304,9 +416,11 @@ impl PackInstallSession {
     async fn timestamp(&mut self, expected: &str) -> Result<String> {
         let id = match self.proposal().await? {
             ServerMessage::Timestamp { id, kind } if kind == expected => id,
-            ServerMessage::Failed { error, outcome } => {
-                bail!("remote pack install failed ({outcome}): {error}")
-            }
+            ServerMessage::Failed {
+                error,
+                outcome,
+                class,
+            } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
             _ => bail!("runtime pack timestamp differs from the client installation plan"),
         };
         let value = gents_store::config_client::mint_recreate_identity_timestamp();
@@ -326,15 +440,17 @@ impl PackInstallSession {
         send(&mut self.socket, json!({"type": "finish"})).await?;
         match receive(&mut self.socket).await? {
             ServerMessage::Finished { result } => Ok(result),
-            ServerMessage::Failed { error, outcome } => {
-                bail!("remote pack install failed ({outcome}): {error}")
-            }
+            ServerMessage::Failed {
+                error,
+                outcome,
+                class,
+            } => Err(runtime_failure(&error, outcome, class.as_deref()).into()),
             _ => bail!("unexpected remote pack install completion response"),
         }
     }
 }
 
-async fn send(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, value: Value) -> Result<()> {
+async fn send(socket: &mut InstallSocket, value: Value) -> Result<()> {
     let encoded = tokio::task::spawn_blocking(move || serde_json::to_string(&value))
         .await
         .context("encoding remote pack install message")??;
@@ -344,45 +460,53 @@ async fn send(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, value: Va
         .context("remote pack install connection lost; inspect the runtime before retrying")
 }
 
+async fn receive(socket: &mut InstallSocket) -> Result<ServerMessage> {
+    Ok(receive_sized(socket).await?.0)
+}
+
+/// Why no message arrived: one that could not be read, or a connection that
+/// went away. Typed, so the handshake tells them apart by variant.
 #[derive(Debug, thiserror::Error)]
-enum ReceiveError {
-    #[error("invalid remote pack install message")]
-    Decode(#[from] serde_json::Error),
-    #[error("decoding remote pack install message")]
-    Worker(#[from] tokio::task::JoinError),
-    #[error("remote pack install connection closed; inspect the runtime before retrying")]
-    Closed,
-    #[error("remote pack install connection lost; inspect the runtime before retrying")]
-    Transport(#[source] Box<tokio_tungstenite::tungstenite::Error>),
+enum ReceiveFailure {
+    #[error("invalid remote pack install message ({bytes} bytes)")]
+    Unreadable {
+        bytes: usize,
+        #[source]
+        error: serde_json::Error,
+    },
+    #[error(transparent)]
+    Lost(anyhow::Error),
 }
 
-pub(super) enum LegacyHandshakeRefusal {
-    OlderRuntime,
-}
-
-/// External premise: older runtimes reject the new request field in their
-/// unversioned Failed.error text rather than publishing a structured reason.
-fn legacy_handshake_refusal(error: &str) -> Option<LegacyHandshakeRefusal> {
-    error
-        .contains("unknown field `client_build`")
-        .then_some(LegacyHandshakeRefusal::OlderRuntime)
-}
-
-async fn receive(
-    socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-) -> std::result::Result<ServerMessage, ReceiveError> {
+/// A message and its size in bytes.
+async fn receive_sized(
+    socket: &mut InstallSocket,
+) -> std::result::Result<(ServerMessage, usize), ReceiveFailure> {
     loop {
         match socket.next().await {
             Some(Ok(Message::Text(text))) => {
-                return Ok(
-                    tokio::task::spawn_blocking(move || serde_json::from_str(&text)).await??,
-                );
+                let bytes = text.len();
+                let decoded = tokio::task::spawn_blocking(move || serde_json::from_str(&text))
+                    .await
+                    .context("decoding remote pack install message")
+                    .map_err(ReceiveFailure::Lost)?;
+                return decoded
+                    .map(|message| (message, bytes))
+                    .map_err(|error| ReceiveFailure::Unreadable { bytes, error });
             }
             Some(Ok(Message::Ping(_)))
             | Some(Ok(Message::Pong(_)))
             | Some(Ok(Message::Frame(_))) => {}
-            Some(Ok(_)) | None => return Err(ReceiveError::Closed),
-            Some(Err(error)) => return Err(ReceiveError::Transport(Box::new(error))),
+            Some(Ok(_)) | None => {
+                return Err(ReceiveFailure::Lost(anyhow::anyhow!(
+                    "remote pack install connection closed; inspect the runtime before retrying"
+                )))
+            }
+            Some(Err(error)) => {
+                return Err(ReceiveFailure::Lost(anyhow::Error::new(error).context(
+                    "remote pack install connection lost; inspect the runtime before retrying",
+                )))
+            }
         }
     }
 }
@@ -390,6 +514,9 @@ async fn receive(
 /// Serializes interpreter requests on the same authenticated session.
 pub struct PackReplaySession {
     inner: tokio::sync::Mutex<PackReplayState>,
+    /// The handshake's warnings, kept outside the session because the session is
+    /// consumed while the install runs.
+    warnings: Vec<PackInstallWarning>,
 }
 
 struct PackReplayState {
@@ -399,12 +526,21 @@ struct PackReplayState {
 
 impl PackReplaySession {
     pub fn new(session: PackInstallSession) -> Self {
+        // Taken before the session is consumed, so the caller can read them once
+        // the install has finished.
+        let warnings = session.warnings().to_vec();
         Self {
             inner: tokio::sync::Mutex::new(PackReplayState {
                 session: Some(session),
                 result: None,
             }),
+            warnings,
         }
+    }
+
+    /// What the handshake accepted on a weaker guarantee, if anything.
+    pub fn warnings(&self) -> &[PackInstallWarning] {
+        &self.warnings
     }
 
     pub async fn result(&self) -> Result<Value> {
@@ -510,6 +646,12 @@ impl PackReplayTransport for PackReplaySession {
     }
 }
 
+/// Install over the runtime's own install session, returning the runtime's
+/// outcome **and** what the handshake accepted on a weaker guarantee.
+///
+/// The warnings are returned rather than printed here, so every caller sees
+/// them: the CLI prints them, and the desktop and library callers can show or
+/// log them without the install having decided for them.
 pub async fn install_remote(
     endpoint: &GraphqlEndpoint,
     owner: &str,
@@ -518,7 +660,7 @@ pub async fn install_remote(
     args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
     explicit: bool,
     client_build: gents_protocol::build_info::BuildInfo,
-) -> Result<Value> {
+) -> Result<(Value, Vec<PackInstallWarning>)> {
     ensure!(args.wire.is_empty(), "remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately on the owning node");
     let request = super::pack_install::encode_install_request(
         pack,
@@ -608,38 +750,113 @@ pub async fn install_remote(
                     policy,
                     &gents_inference::resolved::ProviderProfilePolicy,
                 )
-                .await?;
+                .await
+                .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
                 Ok::<_, anyhow::Error>(())
             })
         })
         .await?;
-    replay.result().await
+    let result = replay.result().await?;
+    Ok((result, replay.warnings().to_vec()))
 }
 
-/// Why an install could not agree with the runtime before planning anything.
-/// Each variant names the next step, because the difference between them is
-/// exactly what an operator has to do about it.
+/// Preview an install over the runtime's install session, so the build check
+/// runs exactly as it does for an install: the runtime refuses a different
+/// build before it opens the archives, and the client checks the runtime's
+/// build in the answer. A preview writes nothing.
+///
+/// Returns the runtime's preview and what the build check accepted on a weaker
+/// guarantee, as `install_remote` does.
+pub async fn preview_remote(
+    endpoint: &GraphqlEndpoint,
+    owner: &str,
+    pack: &gents_pack::pack::resolved_pack::ResolvedPack,
+    dependencies: &[gents_pack::pack::resolved_pack::ResolvedPack],
+    args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
+    explicit: bool,
+    client_build: gents_protocol::build_info::BuildInfo,
+) -> Result<(Value, Vec<PackInstallWarning>)> {
+    ensure!(args.preview, "a remote preview is a request with --preview");
+    let request = super::pack_install::encode_install_request(
+        pack,
+        dependencies,
+        args,
+        owner,
+        explicit,
+        client_build.clone(),
+    )
+    .await?;
+    let (mut socket, _) = open_session(endpoint, request).await?;
+    match first_reply(&mut socket, &client_build).await? {
+        (ServerMessage::Previewed { result, build }, _) => {
+            let warnings = check_runtime_build(&client_build, &build)?;
+            Ok((result, warnings))
+        }
+        (other, bytes) => Err(PackInstallHandshakeError::UnexpectedMessage {
+            kind: other.kind(),
+            detail_bytes: bytes,
+        }
+        .into()),
+    }
+}
+
+/// What the handshake accepted on a weaker guarantee than two clean builds of
+/// one commit. The install went ahead; the caller decides how to show it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackInstallWarning {
+    /// Both builds are dirty builds of one commit, so they were accepted as the
+    /// same build on that commit and its core packs. The install is sound; the
+    /// guarantee is weaker than two clean builds of the commit would give.
+    ///
+    /// Typed rather than printed inside the install, so the desktop and library
+    /// callers see it too. The CLI prints it.
+    DirtyBuildPair { commit: String },
+}
+
+impl PackInstallWarning {
+    /// One line for a person, which the CLI prints and a UI can show.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::DirtyBuildPair { commit } => format!(
+                "both this client and the runtime are dirty builds of {commit}, so they were \
+                 accepted as the same build on the same commit and core packs; a clean install of \
+                 each is the stronger check"
+            ),
+        }
+    }
+}
+
+/// Why an install could not agree with the runtime, or why the runtime refused
+/// it: a typed error whose variants each name the next step, because the
+/// difference between them is exactly what an operator has to do about it. No
+/// variant repeats text the runtime did not write from build facts alone.
 #[derive(Debug, thiserror::Error)]
 pub enum PackInstallHandshakeError {
+    /// The class is known, the text is not shown: a decode error can quote the
+    /// bytes it choked on, which on a runtime-side message means runtime
+    /// values. The length is enough to tell "empty" from "long".
     #[error(
         "the runtime's install handshake was unreadable, which is what an older runtime looks like: \
          this client is `{client}`; run `gents runtime service update` to bring the runtime to this \
-         build, or install from a client of the runtime's build ({detail})"
+         build, or install from a client of the runtime's build ({detail_bytes} bytes of detail not \
+         shown, since a decode error can quote runtime-side values)"
     )]
-    UnreadableHandshake { client: String, detail: String },
+    UnreadableHandshake { client: String, detail_bytes: usize },
 
     #[error(
-        "the connection to the runtime was lost during the install handshake: {detail}; \
-         the install did not happen, so retry it when the runtime is reachable"
+        "the connection to the runtime was lost during the install handshake ({detail_bytes} bytes \
+         of detail not shown); the install did not happen, so retry it when the runtime is reachable"
     )]
-    ConnectionLost { detail: String },
+    ConnectionLost { detail_bytes: usize },
 
     #[error(
-        "the runtime predates this client's build fields ({detail}): this client is `{client}`; \
+        "the runtime predates this client's build fields ({detail_bytes} bytes of detail not shown, \
+         since the runtime's message can quote values): this client is `{client}`; \
          run `gents runtime service update` to update the runtime, or install from a client of \
          the runtime's build"
     )]
-    OlderRuntime { client: String, detail: String },
+    OlderRuntime { client: String, detail_bytes: usize },
 
     #[error(
         "this client and the runtime are different builds, so they cannot agree on an install: \
@@ -655,11 +872,25 @@ pub enum PackInstallHandshakeError {
     )]
     BuildUnverifiable { client: String },
 
-    #[error("the runtime refused the install ({outcome}): {detail}")]
-    RuntimeFailed { outcome: String, detail: String },
+    /// The runtime's own failure, by class. `reason` is the class's fixed
+    /// description, or the runtime's text for the one class whose text holds
+    /// build facts only (`failure::PackSessionFailureClass::shows_runtime_text`).
+    #[error("the runtime refused the install ({outcome}, {class}): {reason}")]
+    RuntimeFailed {
+        outcome: String,
+        class: String,
+        reason: String,
+    },
 
-    #[error("the runtime's first install message was not one this client understands: {detail}")]
-    UnexpectedMessage { detail: String },
+    #[error(
+        "the runtime answered the install with `{kind}` ({detail_bytes} bytes), not the message \
+         this client expected; run `gents runtime service update`, or install from a client of the \
+         runtime's build"
+    )]
+    UnexpectedMessage {
+        kind: &'static str,
+        detail_bytes: usize,
+    },
 }
 
 impl PackInstallHandshakeError {
@@ -1035,44 +1266,16 @@ mod tests {
     /// The older-runtime case is its own error with its own next step, and the
     /// connection and decode failures are not confused with each other.
     #[test]
-    fn legacy_handshake_adapter_and_receive_errors_keep_distinct_causes() {
-        assert!(matches!(
-            legacy_handshake_refusal("unknown field `client_build`"),
-            Some(LegacyHandshakeRefusal::OlderRuntime)
-        ));
-        assert!(legacy_handshake_refusal("runtime unavailable").is_none());
-        assert!(legacy_handshake_refusal("client_build mismatched").is_none());
-        assert!(legacy_handshake_refusal("unknown field `client_build_extra`").is_none());
-        let invalid = serde_json::from_str::<ServerMessage>("not json")
-            .err()
-            .unwrap();
-        let decoded = ReceiveError::from(invalid);
-        assert!(matches!(decoded, ReceiveError::Decode(_)));
-        let closed = ReceiveError::Closed;
-        assert!(!matches!(closed, ReceiveError::Decode(_)));
-        assert!(std::error::Error::source(&decoded).is_some());
-        let rendered = gents_protocol::error_chain::ErrorChain(&decoded).to_string();
-        assert!(
-            rendered.starts_with("invalid remote pack install message: "),
-            "{rendered}"
-        );
-        assert_eq!(rendered.matches("expected ident").count(), 1, "{rendered}");
-    }
-
-    #[test]
     fn the_handshake_failures_are_distinguished_and_each_names_a_step() {
         let older = PackInstallHandshakeError::OlderRuntime {
             client: "gents 1.0.0-rc2 (aaaaaaa)".to_owned(),
-            detail: "unknown field `client_build`".to_owned(),
+            detail_bytes: 30,
         }
         .to_string();
         assert!(older.contains("gents runtime service update"), "{older}");
-        assert!(older.contains("unknown field `client_build`"), "{older}");
+        assert!(older.contains("30 bytes"), "the length is stated: {older}");
 
-        let lost = PackInstallHandshakeError::ConnectionLost {
-            detail: "connection reset".to_owned(),
-        }
-        .to_string();
+        let lost = PackInstallHandshakeError::ConnectionLost { detail_bytes: 17 }.to_string();
         assert!(lost.contains("lost"), "{lost}");
         assert!(lost.contains("retry"), "{lost}");
         assert!(
@@ -1082,14 +1285,309 @@ mod tests {
 
         let unreadable = PackInstallHandshakeError::UnreadableHandshake {
             client: "gents 1.0.0-rc2 (aaaaaaa)".to_owned(),
-            detail: "expected value".to_owned(),
+            detail_bytes: 14,
         }
         .to_string();
         assert!(unreadable.contains("unreadable"), "{unreadable}");
+        assert!(unreadable.contains("14 bytes"), "{unreadable}");
+        assert!(
+            !unreadable.contains("expected value"),
+            "no verbatim runtime text leaks: {unreadable}"
+        );
         // The message must not carry a run of spaces where a continuation broke.
         assert!(
             !unreadable.contains("  "),
             "no collapsed continuation: {unreadable}"
         );
+    }
+
+    fn build(sha: &str, dirty: bool) -> gents_protocol::build_info::BuildInfo {
+        gents_protocol::build_info::BuildInfo::from_parts(
+            "1.0.0-rc2".to_owned(),
+            Some(sha.to_owned()),
+            Some(dirty),
+            Vec::new(),
+        )
+    }
+
+    fn ready(build: &gents_protocol::build_info::BuildInfo) -> Value {
+        json!({
+            "type": "ready",
+            "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
+            "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}},
+            "build": build,
+        })
+    }
+
+    /// A runtime that answers the start with `replies`, then waits for the
+    /// client to close.
+    async fn scripted_runtime(
+        replies: Vec<Value>,
+    ) -> Result<(
+        GraphqlEndpoint,
+        tokio::task::JoinHandle<Result<()>>,
+        tempfile::TempDir,
+    )> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let mut socket = accept_async(stream).await?;
+            let _ = socket.next().await.context("missing start")??;
+            for reply in replies {
+                socket.send(Message::Text(reply.to_string().into())).await?;
+            }
+            while let Some(Ok(message)) = socket.next().await {
+                if matches!(message, Message::Close(_)) {
+                    break;
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        let key_home = tempfile::tempdir()?;
+        let key = KeyIdentity::load_or_create(key_home.path().join("user.key"), None)?
+            .client_signing_capability()?;
+        let endpoint = GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            key.did().to_owned(),
+        )
+        .with_client_signing_capability(key)?;
+        Ok((endpoint, server, key_home))
+    }
+
+    async fn start(
+        endpoint: &GraphqlEndpoint,
+        client: &gents_protocol::build_info::BuildInfo,
+    ) -> Result<PackInstallSession> {
+        PackInstallSession::start(
+            endpoint,
+            json!({}),
+            "did:key:node",
+            &["sha256:root".to_owned()],
+            client,
+        )
+        .await
+    }
+
+    /// Two dirty builds of one commit are accepted, and the acceptance is in
+    /// the install's result: the session carries it, and the replay session
+    /// whose warnings `install_remote` returns keeps it after the session is
+    /// consumed.
+    #[tokio::test]
+    async fn a_dirty_build_pair_reaches_the_install_result() -> Result<()> {
+        let dirty = build("aaaaaaa", true);
+        let (endpoint, server, _key) = scripted_runtime(vec![ready(&dirty)]).await?;
+        let session = start(&endpoint, &dirty).await?;
+        let expected = vec![PackInstallWarning::DirtyBuildPair {
+            commit: "aaaaaaa".to_owned(),
+        }];
+        assert_eq!(session.warnings(), expected.as_slice());
+        let replay = PackReplaySession::new(session);
+        assert_eq!(replay.warnings(), expected.as_slice());
+        assert!(replay.warnings()[0].describe().contains("aaaaaaa"));
+        drop(replay);
+        server.await??;
+
+        // A clean pair carries no warning.
+        let clean = build("aaaaaaa", false);
+        let (endpoint, server, _key) = scripted_runtime(vec![ready(&clean)]).await?;
+        assert!(start(&endpoint, &clean).await?.warnings().is_empty());
+        server.await??;
+        Ok(())
+    }
+
+    /// The runtime's `failed` text is shown only for a class whose text is a
+    /// typed error of identifiers and build facts; every other class shows its
+    /// own description, and an unclassified message is shown by length only.
+    #[test]
+    fn runtime_failure_text_passes_only_for_identifier_only_classes() {
+        use crate::http::pack_install::failure::PackSessionFailureClass;
+        let secret = "sk-live-0123456789";
+        let quoted = format!("variable TOKEN resolved to {secret}");
+        for class in PackSessionFailureClass::ALL {
+            let code = serde_json::to_value(class).unwrap();
+            let shown = runtime_failure(&quoted, "not_installed".into(), code.as_str()).to_string();
+            if class.shows_runtime_text() {
+                assert!(shown.contains(&quoted), "{shown}");
+            } else {
+                assert!(!shown.contains(secret), "{class:?}: {shown}");
+                assert!(shown.contains(class.description()), "{shown}");
+            }
+            assert!(shown.contains("not_installed"), "{shown}");
+        }
+        for class in [None, Some("from_a_later_build")] {
+            let shown = runtime_failure(&quoted, "unconfirmed".into(), class).to_string();
+            assert!(!shown.contains(secret), "{shown}");
+            assert!(shown.contains("unclassified"), "{shown}");
+            assert!(!shown.contains("  "), "no lost line continuation: {shown}");
+            assert!(
+                shown.contains(&format!("{} bytes", quoted.len())),
+                "{shown}"
+            );
+        }
+    }
+
+    /// After the handshake a refusal is typed too: the runtime's text is not
+    /// what the operator sees for a class whose text can quote values.
+    #[tokio::test]
+    async fn a_refusal_after_the_handshake_shows_the_class_not_the_text() -> Result<()> {
+        let clean = build("aaaaaaa", false);
+        let secret = "sk-live-0123456789";
+        let (endpoint, server, _key) = scripted_runtime(vec![
+            ready(&clean),
+            json!({"type": "failed", "outcome": "not_installed", "class": "apply_rejected",
+                "error": format!("document rejected: token {secret}")}),
+        ])
+        .await?;
+        let mut session = start(&endpoint, &clean).await?;
+        let error = session
+            .read("{ Node { _docID } }", &json!({}))
+            .await
+            .expect_err("the runtime refused");
+        let shown = format!("{error:#}");
+        assert!(!shown.contains(secret), "{shown}");
+        assert!(shown.contains("apply_rejected"), "{shown}");
+        drop(session);
+        server.await??;
+        Ok(())
+    }
+
+    /// A first message of the wrong type is named, with its real size.
+    #[tokio::test]
+    async fn an_unexpected_first_message_is_named_with_its_size() -> Result<()> {
+        let finished = json!({"type": "finished", "result": {"pack": "early"}});
+        let bytes = finished.to_string().len();
+        let (endpoint, server, _key) = scripted_runtime(vec![finished]).await?;
+        let error = start(&endpoint, &build("aaaaaaa", false))
+            .await
+            .err()
+            .expect("an install is not finished before it is ready");
+        let error = error
+            .downcast_ref::<PackInstallHandshakeError>()
+            .expect("typed");
+        assert!(
+            matches!(
+                error,
+                PackInstallHandshakeError::UnexpectedMessage { kind: "finished", detail_bytes }
+                    if *detail_bytes == bytes
+            ),
+            "{error}"
+        );
+        assert!(error.to_string().contains(&format!("{bytes} bytes")));
+        server.await??;
+        Ok(())
+    }
+
+    /// A first-message decode failure and a closed socket have distinct typed
+    /// causes, with no decoded peer values exposed in the handshake remedy.
+    #[tokio::test]
+    async fn first_reply_distinguishes_decode_failure_from_connection_loss() -> Result<()> {
+        for unreadable in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await?;
+                let mut socket = accept_async(stream).await?;
+                let _ = socket.next().await.context("missing start")??;
+                if unreadable {
+                    socket
+                        .send(Message::Text("not json sk-live-private".into()))
+                        .await?;
+                } else {
+                    socket.close(None).await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            });
+            let home = tempfile::tempdir()?;
+            let key = KeyIdentity::load_or_create(home.path().join("user.key"), None)?
+                .client_signing_capability()?;
+            let endpoint = GraphqlEndpoint::as_principal(
+                format!("http://{address}/api/v0/graphql"),
+                key.did().to_owned(),
+            )
+            .with_client_signing_capability(key)?;
+            let (mut socket, _) = open_session(&endpoint, json!({})).await?;
+            let Err(error) = first_reply(&mut socket, &build("aaaaaaa", false)).await else {
+                panic!("invalid first message unexpectedly accepted");
+            };
+            if unreadable {
+                assert!(matches!(
+                    error,
+                    PackInstallHandshakeError::UnreadableHandshake { .. }
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    PackInstallHandshakeError::ConnectionLost { .. }
+                ));
+            }
+            assert!(!error.to_string().contains("sk-live-private"));
+            server.await??;
+        }
+        Ok(())
+    }
+
+    /// The structured runtime class wins even if its text resembles a legacy
+    /// peer's unknown-field refusal. Unknown classes remain safely unclassified.
+    #[tokio::test]
+    async fn first_reply_prefers_runtime_class_over_legacy_looking_text() -> Result<()> {
+        use crate::http::pack_install::failure::PackSessionFailureClass;
+        let client = build("aaaaaaa", false);
+        for class in PackSessionFailureClass::ALL
+            .into_iter()
+            .map(Some)
+            .chain(std::iter::once(None))
+        {
+            let mut reply = json!({"type":"failed", "outcome":"unconfirmed",
+                "error":"unknown field `client_build` sk-live-private"});
+            if let Some(class) = class {
+                reply["class"] = serde_json::to_value(class)?;
+            }
+            let (endpoint, server, _home) = scripted_runtime(vec![reply]).await?;
+            let (mut socket, _) = open_session(&endpoint, json!({})).await?;
+            let Err(error) = first_reply(&mut socket, &client).await else {
+                panic!("refusal accepted");
+            };
+            match class {
+                Some(class) => {
+                    let PackInstallHandshakeError::RuntimeFailed {
+                        outcome,
+                        class: code,
+                        reason,
+                    } = error
+                    else {
+                        panic!("structured runtime failure was misclassified");
+                    };
+                    assert_eq!(outcome, "unconfirmed");
+                    assert_eq!(PackSessionFailureClass::from_wire(&code), Some(class));
+                    if !class.shows_runtime_text() {
+                        assert!(!reason.contains("sk-live-private"));
+                    }
+                }
+                None => {
+                    assert!(matches!(
+                        error,
+                        PackInstallHandshakeError::OlderRuntime { .. }
+                    ));
+                    assert!(!error.to_string().contains("sk-live-private"));
+                }
+            }
+            drop(socket);
+            server.await??;
+        }
+        // A later peer's unknown class must not be mistaken for an older one.
+        let (endpoint, server, _home) = scripted_runtime(vec![json!({"type":"failed",
+            "outcome":"not_installed", "class":"future_class", "error":"unknown field `client_build` sk-live-private"})]).await?;
+        let (mut socket, _) = open_session(&endpoint, json!({})).await?;
+        let Err(error) = first_reply(&mut socket, &client).await else {
+            panic!("refusal accepted");
+        };
+        assert!(
+            matches!(&error, PackInstallHandshakeError::RuntimeFailed { class, .. } if class == "unclassified")
+        );
+        assert!(!error.to_string().contains("sk-live-private"));
+        drop(socket);
+        server.await??;
+        Ok(())
     }
 }

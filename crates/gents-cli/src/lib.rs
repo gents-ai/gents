@@ -330,29 +330,78 @@ pub fn run_cli() -> Result<()> {
     runtime.block_on(async_main(runtime.handle().clone()))
 }
 
-/// This binary's build identity. The core pack archives are compiled into this
-/// crate, so the list is assembled here and passed to whoever needs it (the
-/// install handshake), rather than every crate taking a dependency on them.
-pub fn current_build() -> gents_protocol::build_info::BuildInfo {
-    let core_packs = gents_core_packs::archives()
-        .iter()
-        .map(
-            |(coordinate, bytes)| gents_protocol::build_info::CorePackBuild {
-                coordinate: (*coordinate).to_owned(),
-                digest: format!(
-                    "sha256:{}",
-                    gents_pack::plugin::store::content_digest_hex(bytes)
-                ),
-            },
-        )
-        .collect();
+/// This binary's build identity from the version facts alone: no core-pack
+/// digests, so a command that never installs pays nothing for them.
+///
+/// The digests hash every embedded archive, so they are computed on first use by
+/// [`current_build`] and then kept. Ask for this one when only the version
+/// matters.
+pub fn current_build_without_packs() -> gents_protocol::build_info::BuildInfo {
     let build = version::build_version();
     gents_protocol::build_info::BuildInfo::from_parts(
         build.version.to_owned(),
         build.build.git_sha.map(str::to_owned),
         build.build.git_dirty,
-        core_packs,
+        Vec::new(),
     )
+}
+
+/// The core packs compiled into this binary, with the digest of each archive.
+///
+/// Hashed once and kept: an install handshake needs them, and every other
+/// command does not, so computing them here keeps a plain `gents status` from
+/// hashing every embedded archive.
+pub fn core_pack_digests() -> &'static [gents_protocol::build_info::CorePackBuild] {
+    #[cfg(test)]
+    CORE_PACK_DIGEST_CALLS.with(|calls| calls.set(calls.get() + 1));
+    static DIGESTS: std::sync::OnceLock<Vec<gents_protocol::build_info::CorePackBuild>> =
+        std::sync::OnceLock::new();
+    DIGESTS.get_or_init(|| {
+        gents_core_packs::archives()
+            .iter()
+            .map(
+                |(coordinate, bytes)| gents_protocol::build_info::CorePackBuild {
+                    coordinate: (*coordinate).to_owned(),
+                    digest: format!(
+                        "sha256:{}",
+                        gents_pack::plugin::store::content_digest_hex(bytes)
+                    ),
+                },
+            )
+            .collect()
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How often this thread asked for the core-pack digests: a test proves a
+    /// command that never installs does not.
+    static CORE_PACK_DIGEST_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Register this binary's build as the one an install served here reports:
+/// the version facts now, the core-pack digests on the first handshake that
+/// asks. Cheap, so it runs before every command.
+pub fn register_runtime_build() {
+    gents_host::http::pack_install::record_runtime_build(runtime_build_source());
+}
+
+/// This binary's build as the source an install handshake reads: the version
+/// facts, and the core-pack digests computed on first use.
+fn runtime_build_source() -> gents_host::http::pack_install::RuntimeBuildSource {
+    gents_host::http::pack_install::RuntimeBuildSource::new(current_build_without_packs(), || {
+        core_pack_digests().to_vec()
+    })
+}
+
+/// This binary's build identity **with** the core-pack digests, for an install
+/// handshake. The archives are compiled into this crate, so the list is
+/// assembled here and passed to whoever needs it, rather than every crate taking
+/// a dependency on them.
+pub fn current_build() -> gents_protocol::build_info::BuildInfo {
+    let mut build = current_build_without_packs();
+    build.core_packs = core_pack_digests().to_vec();
+    build
 }
 
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
@@ -426,8 +475,9 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     // Unconditionally, before the dispatch: more than the foreground runtime
     // serves installs -- `PrepareRuntime` and the desktop bridge do too -- and
     // each must report this binary's real identity rather than an unverifiable
-    // fallback.
-    gents_host::http::pack_install::set_runtime_build(current_build());
+    // fallback. Only the version facts are taken here; the core-pack digests
+    // are computed by the first install handshake that asks.
+    register_runtime_build();
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
@@ -1293,5 +1343,35 @@ mod tests {
             Some(&missing_owner)
         )
         .is_err());
+    }
+
+    /// Registering the runtime build runs before every command, so it must not
+    /// hash the core packs: only an install handshake asks for them. The
+    /// counter is this thread's, so other tests computing them do not count.
+    /// The test builds the source `register_runtime_build` records but does not
+    /// record it: tests never write the process-global build.
+    #[test]
+    fn a_command_that_does_not_install_computes_no_core_pack_digest() {
+        let calls = || CORE_PACK_DIGEST_CALLS.with(std::cell::Cell::get);
+        CORE_PACK_DIGEST_CALLS.with(|calls| calls.set(0));
+        // What every command does before its dispatch, then what a plain
+        // `version` prints.
+        let source = runtime_build_source();
+        let _ = version::version_text();
+        assert_eq!(calls(), 0, "no digest before an install asks");
+        assert!(current_build_without_packs().core_packs.is_empty());
+
+        // The handshake's ask computes them, once, and laziness changes
+        // nothing about the build it reports.
+        assert!(!source.digests_computed());
+        let reported = source.build().clone();
+        let _ = source.build();
+        assert!(source.digests_computed());
+        assert_eq!(calls(), 1, "computed once, on the first ask");
+        assert_eq!(reported, current_build());
+        // This test binary carries no embedded core pack unless the build ran
+        // `make core-packs`; either way the reported list is the digests' own,
+        // not a stale empty one.
+        assert_eq!(reported.core_packs, core_pack_digests().to_vec());
     }
 }
