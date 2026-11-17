@@ -206,4 +206,25 @@ theorem a_client_learns_its_audience_from_the_refusal (user : String) (node : Au
       ∧ presentedOverHttp node now fresh = some user :=
   ⟨rfl, rfl, rfl, a_client_mints_for_its_held_audience user node now fresh minted⟩
 
+/-- What a client tells the person of a request that stayed refused. -/
+inductive Told where
+  /-- Gents on this device is to be updated: the home asks for a credential
+  this version cannot present. -/
+  | update
+  /-- The refusal as the client told it before this model. -/
+  | refusal
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3831): a request still refused after the client read the
+status (`resend`) is told as an update when the edge of a Vera home answered
+that it requires a delegation (`UserDelegation.edge`): a client that resolves
+its audience never meets that answer, so one that does cannot present what the
+home asks for. External premise: only that edge answers with that code. -/
+def told (edgeRequiresDelegation : Bool) : Told :=
+  if edgeRequiresDelegation then .update else .refusal
+
+theorem a_client_refused_at_the_edge_is_told_to_update : told true = .update := rfl
+
+theorem a_home_on_the_node_store_tells_refusals_as_before : told false = .refusal := rfl
+
 end Identity.HeldAudience
