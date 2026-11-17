@@ -1627,7 +1627,7 @@ def runtimeDefaultAccountCase (name : String) (access : Configuration.RuntimeDef
     (visibleDefault : Option String) : Json :=
   Json.mkObj [("name", toJson name), ("runtime_actor", toJson access.runtimeActor),
     ("same_node", toJson access.sameNode), ("same_snapshot", toJson access.sameSnapshot),
-    ("native_read", toJson access.nativeRead), ("visible_default", toJson visibleDefault),
+    ("may_use", toJson access.mayUse), ("visible_default", toJson visibleDefault),
     ("allowed", toJson (Configuration.runtimeMayReadDefaultAccount access))]
 
 def runtimeDefaultAccountCases : List Json := Id.run do
@@ -1637,7 +1637,7 @@ def runtimeDefaultAccountCases : List Json := Id.run do
     runtimeDefaultAccountCase "foreign-node" { allowed with sameNode := false } (some "named"),
     runtimeDefaultAccountCase "agent-actor" { allowed with runtimeActor := false } (some "named"),
     runtimeDefaultAccountCase "other-snapshot" { allowed with sameSnapshot := false } (some "named"),
-    runtimeDefaultAccountCase "read-failed" { allowed with nativeRead := false } (some "named")]
+    runtimeDefaultAccountCase "use-revoked" { allowed with mayUse := false } (some "named")]
 
 def runtimeDefaultChoiceCase (name currentKind nextKind : String)
     (currentRef nextRef visibleDefault : Option String) : Json :=

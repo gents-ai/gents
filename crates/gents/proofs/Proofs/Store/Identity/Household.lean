@@ -1040,6 +1040,122 @@ theorem queued_revocation_needs_current_permission :
     (executeWithCachedPermission revoked).executed = true ∧
       (executeWithCurrentPermission revoked).executed = false := by decide
 
+/-- Whether the hosting runtime may use a document it reads: a credential it
+serves with, a backend it lists or probes, the Node whose hop cap bounds a
+spawn, or the Node through which it admits agent creation. It is document
+ACP's own `read` answer for the runtime's DID, never what its read observes.
+
+Decision (maintainer, 2026-11-17, gents#3935): the read past document ACP
+accepted in gents#3747 (`readObserved`) stays, and "may use" is a separate
+decision from "can read", so revoking `runtime_reader` on the Node or
+`runtime_writer` on a credential still stops the runtime from using them.
+External premise: DefraDB answers this through a named document capability
+check for an explicit DID (`DocumentAccessMode::Named`), which evaluates the
+document policy with the `bypass-dac` read switched off, on the snapshot of
+the transaction that makes the use. A use is decided in the same transaction
+as its effect (`queued_revocation_needs_current_permission`). -/
+def runtimeMayUse (fuel : Nat) (state : State) (runtime resource id : String) : Bool :=
+  allowed fuel state runtime resource id "read"
+
+/-- What the runtime acts on: a document it observes and may use. -/
+def usedRead (bypass : Bool) (fuel : Nat) (state : State) (runtime resource id : String) : Bool :=
+  nativeRead bypass fuel state runtime resource id && runtimeMayUse fuel state runtime resource id
+
+/-- Use is the read an actor without the bypass would observe. -/
+theorem runtime_use_is_the_read_without_bypass (fuel : Nat) (state : State)
+    (runtime resource id : String) :
+    runtimeMayUse fuel state runtime resource id = nativeRead false fuel state runtime resource id := by
+  simp [runtimeMayUse, nativeRead, readObserved]
+
+/-- The bypass changes what the runtime reads, never what it uses. -/
+theorem bypass_does_not_change_use (fuel : Nat) (state : State) (runtime resource id : String) :
+    usedRead true fuel state runtime resource id = usedRead false fuel state runtime resource id := by
+  cases h : runtimeMayUse fuel state runtime resource id <;>
+    simp_all [usedRead, nativeRead, readObserved, runtimeMayUse]
+
+/-- A revocation never widens use. -/
+theorem revocation_never_widens_use (fuel : Nat) (state : State) (relation : Relation)
+    (runtime resource id : String)
+    (h : runtimeMayUse fuel (apply state (.revoke relation)) runtime resource id = true) :
+    runtimeMayUse fuel state runtime resource id = true :=
+  allowed_mono fuel (apply state (.revoke relation)) state rfl
+    (fun _ member => (List.mem_filter.mp member).1) runtime resource id "read" h
+
+/-- The runtime work whose use #3935 decides, and the document deciding it. -/
+inductive RuntimeUse where
+  | oauthCredential
+  | backend
+  | hopCap
+  | agentCreation
+  deriving BEq, DecidableEq, Repr
+
+def RuntimeUse.all : List RuntimeUse := [.oauthCredential, .backend, .hopCap, .agentCreation]
+
+def RuntimeUse.wire : RuntimeUse → String
+  | .oauthCredential => "oauth_credential"
+  | .backend => "backend"
+  | .hopCap => "hop_cap"
+  | .agentCreation => "agent_creation"
+
+/-- An `OAuthCredential` is `secret_configuration` and an
+`InferenceBackendMetadata` is `configuration`, each with the Node as parent;
+the hop cap and agent creation read the Node itself. -/
+def RuntimeUse.document : RuntimeUse → String × String
+  | .oauthCredential => ("secret_configuration", "credential")
+  | .backend => ("configuration", "backend")
+  | .hopCap => ("nodes", "node")
+  | .agentCreation => ("nodes", "node")
+
+/-- A User-owned Node granting `runtime_reader`, a credential it parents that
+grants `runtime_writer`, and a backend it parents. -/
+def runtimeUseFixture : State :=
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"secret_configuration", "credential", "user"⟩,
+      ⟨"configuration", "backend", "user"⟩],
+    relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
+      ⟨"secret_configuration", "credential", "parent", .object "nodes" "node"⟩,
+      ⟨"secret_configuration", "credential", "runtime_writer", .actor "runtime"⟩,
+      ⟨"configuration", "backend", "parent", .object "nodes" "node"⟩],
+    enrolled := [] }
+
+def nodeReaderGrant : Relation := ⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩
+def credentialWriterGrant : Relation :=
+  ⟨"secret_configuration", "credential", "runtime_writer", .actor "runtime"⟩
+
+def runtimeUseRevoked (nodeReader credentialWriter : Bool) : State :=
+  let state := if nodeReader then apply runtimeUseFixture (.revoke nodeReaderGrant) else runtimeUseFixture
+  if credentialWriter then apply state (.revoke credentialWriterGrant) else state
+
+def runtimeMayUseFor (use : RuntimeUse) (nodeReader credentialWriter : Bool) : Bool :=
+  runtimeMayUse 5 (runtimeUseRevoked nodeReader credentialWriter) "runtime"
+    use.document.1 use.document.2
+
+def hostingRuntimeReads (use : RuntimeUse) (nodeReader credentialWriter : Bool) : Bool :=
+  nativeRead true 5 (runtimeUseRevoked nodeReader credentialWriter) "runtime"
+    use.document.1 use.document.2
+
+/-- With its grants in place the runtime uses every document. -/
+theorem granted_runtime_uses_every_document :
+    RuntimeUse.all.map (runtimeMayUseFor · false false) = [true, true, true, true] := by
+  native_decide
+
+/-- Revoking the Node's `runtime_reader` and the credential's `runtime_writer`
+stops every use, while the hosting runtime still reads every one of them. -/
+theorem revoked_grants_stop_every_use :
+    RuntimeUse.all.map (runtimeMayUseFor · true true) = [false, false, false, false] ∧
+      RuntimeUse.all.map (hostingRuntimeReads · true true) = [true, true, true, true] := by
+  native_decide
+
+/-- Revoking `runtime_reader` stops the backend, hop-cap and agent-creation
+uses; the credential stays usable through its own `runtime_writer`. -/
+theorem revoked_node_reader_leaves_the_credential_writer :
+    RuntimeUse.all.map (runtimeMayUseFor · true false) = [true, false, false, false] := by
+  native_decide
+
+/-- Revoking only `runtime_writer` leaves the credential usable through its
+Node parent's `runtime_reader`: stopping a credential's use withdraws both. -/
+theorem revoked_credential_writer_alone_leaves_the_parent_read :
+    runtimeMayUseFor .oauthCredential false true = true := by native_decide
+
 def check (state : State) : Action → Option Bool
   | .check actor resource id permission => some (allowed 5 state actor resource id permission)
   | _ => none

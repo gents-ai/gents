@@ -194,10 +194,12 @@ theorem duplicate_handle_is_suffixed_and_the_scratch_path_is_unchanged :
 
 /-- A later step of the adopted job `own`, whose one child in slot `s` is
 live, answering `spawn` (one spawn of `worker` in slot `later`) or nothing.
-The runtime reads its Node's hop cap: `capReadable` with `cap`, or a Node it
-cannot read. The Agent's own view of the Node plays no part. -/
+The runtime uses its Node's hop cap: `nodeUsable` with `cap`, or a Node it may
+not use (`Identity.Household.runtimeMayUse`), which is unavailable and bounds
+every spawn at hop 0 even though the hosting runtime still reads it (gents#3935).
+The Agent's own view of the Node plays no part. -/
 structure LaterStep where
-  capReadable : Bool
+  nodeUsable : Bool
   cap : Option Nat
   spawn : Bool
   deriving ToJson
@@ -216,7 +218,7 @@ private def laterOutput (spawn : Bool) : StepOutput :=
 
 private def laterContext (l : LaterStep) : StepContext :=
   { context with
-    maxHop := CausalHop.observedHopBound (if l.capReadable then some l.cap else none) }
+    maxHop := CausalHop.observedHopBound (if l.nodeUsable then some l.cap else none) }
 
 def laterObserved (l : LaterStep) : LaterObserved :=
   match admitStepGuarded (laterContext l) ownJob (laterOutput l.spawn) with
@@ -232,22 +234,12 @@ def laterObserved (l : LaterStep) : LaterObserved :=
 @[conformance_family]
 def laterStep : Conformance.Family LaterStep LaterObserved where
   inputs :=
-    [ { capReadable := true, cap := none, spawn := true }
-    , { capReadable := true, cap := some 0, spawn := true }
-    , { capReadable := true, cap := some 1, spawn := true }
-    , { capReadable := true, cap := some 0, spawn := false } ]
-  model := laterObserved
-
-/-- model-production-gap: the runtime reads its Node with the hosting node key,
-which holds `bypass-dac` (gents#3747, `Identity.Household.readObserved`), so
-revoking `runtime_reader` no longer hides the Node from it and no served
-fixture builds a Node the runtime cannot read. The model still bounds such a
-step at hop 0. -/
-@[conformance_family]
-def laterStepUnreached : Conformance.Family LaterStep LaterObserved where
-  inputs :=
-    [ { capReadable := false, cap := none, spawn := true }
-    , { capReadable := false, cap := none, spawn := false } ]
+    [ { nodeUsable := true, cap := none, spawn := true }
+    , { nodeUsable := true, cap := some 0, spawn := true }
+    , { nodeUsable := true, cap := some 1, spawn := true }
+    , { nodeUsable := false, cap := none, spawn := true }
+    , { nodeUsable := false, cap := none, spawn := false }
+    , { nodeUsable := true, cap := some 0, spawn := false } ]
   model := laterObserved
 
 theorem later_step_hop_cap_ignores_agent_node_visibility_and_fails_closed :
