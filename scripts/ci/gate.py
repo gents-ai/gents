@@ -723,6 +723,10 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             "tla": tla,
         },
         "core_packs": everything or "core-packs" in tags,
+        # The lint job's iOS check of gents-desktop-tauri: only when it or a
+        # workspace crate it depends on changed (the toolchain and lock change
+        # everything).
+        "ios_check": "gents-desktop-tauri" in built,
         "runs_on": {role: runner(role) for role in WORKFLOW_ROLES},
     }
 
@@ -908,10 +912,11 @@ def run_lint(selection):
         sh(["cargo", "build", "-p", "gents-lens-fixture-add-label", "--target", "wasm32-unknown-unknown", *profile])
     if "gents-desktop-tauri" in affected:
         sh(["./scripts/check-native-e2e-capabilities.sh"])
-        if sys.platform == "darwin":
-            # iOS shares the desktop crates; desktop-only Tauri APIs break it silently (#890).
-            sh("rustup target add aarch64-apple-ios-sim && cargo check -p gents-desktop-tauri --lib "
-               "--target aarch64-apple-ios-sim " + shlex.join(profile))
+    if selection.get("ios_check") and sys.platform == "darwin":
+        # iOS shares the desktop crates; desktop-only Tauri APIs break it silently (#890).
+        sh(["rustup", "target", "add", "aarch64-apple-ios-sim"])
+        sh(["cargo", "check", "-p", "gents-desktop-tauri", "--lib", "--target", "aarch64-apple-ios-sim", *profile],
+           env={**os.environ, **ios_check_env()})
 
 
 def run_contract(selection):
@@ -1478,6 +1483,22 @@ def lean_derived():
 def kept_target():
     """A kept Cargo target tree holds other commits' binaries; a test reading it is not keyed."""
     return [os.environ["CARGO_TARGET_DIR"]] if os.environ.get("CARGO_TARGET_DIR") else []
+
+
+def ios_check_env():
+    """The iOS check's own target tree inside the kept one, built incrementally.
+
+    It re-checks every workspace crate for another target, which took 38 min
+    from scratch on a Studio (#3926). sccache cannot serve that, so this tree is
+    incremental and its own: incremental units in the shared tree would
+    replace the non-incremental ones the other builds reuse. Inside the kept
+    tree, it survives the checkout's `git clean` and its size counts toward the
+    runner's reclamation.
+    """
+    target = os.environ.get("CARGO_TARGET_DIR")
+    if not target:
+        return {"CARGO_INCREMENTAL": "1"}
+    return {"CARGO_TARGET_DIR": str(Path(target) / "ios-check"), "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""}
 
 
 def keep_core_packs_fresh():

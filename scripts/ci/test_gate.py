@@ -153,6 +153,21 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(select(path)["contract"]["test_cache_model"])
 
+    def test_the_ios_check_runs_only_when_the_desktop_app_or_a_crate_it_uses_changed(self):
+        for path in ("apps/gents-desktop/src-tauri/src/lib.rs", "crates/gents-store/src/graphql.rs",
+                     "crates/gents-desktop-bridge/src/lib.rs", "Cargo.lock", "rust-toolchain.toml"):
+            with self.subTest(path=path):
+                self.assertTrue(select(path)["ios_check"])
+        for path in ("crates/gents-media-host/src/lib.rs", "packages/gents-desktop-ui/src/index.ts",
+                     "crates/gents/proofs/Proofs/Request/CausalHop.lean", "docs/upgrade-from-rc1.md"):
+            with self.subTest(path=path):
+                self.assertFalse(select(path)["ios_check"])
+
+    def test_the_ios_check_builds_incrementally_in_its_own_kept_tree(self):
+        with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a"}):
+            self.assertEqual(gate.ios_check_env(), {"CARGO_TARGET_DIR": "/cache/runner-a/ios-check",
+                                                    "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
+
     def test_a_draft_tests_what_it_changes_and_lints_what_depends_on_it(self):
         selection = select("crates/gents-store/src/graphql.rs", tier="draft")
         self.assertEqual(groups(selection), {"store": ["gents-store"]})
