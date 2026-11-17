@@ -634,6 +634,8 @@ async fn resolve_config_access_inner(
         }
     }
 
+    let config = read_init_config(&home_dir)?.context("home is not initialized")?;
+    gents_store::local::document_acp::ensure_home_opens(&config)?;
     let data_dir = default_data_dir(&home_dir);
     anyhow::ensure!(
         tokio::fs::metadata(&data_dir)
@@ -660,8 +662,6 @@ async fn resolve_config_access_inner(
         &data_dir, &store_key, &claim,
     )
     .await?;
-    let config = read_init_config(&home_dir)?.context("home is not initialized")?;
-    gents_store::local::document_acp::ensure_home_opens(&config)?;
     let runtime_identity = load_initialized_home_identity(&home_dir, &config)?;
     let protected = protected
         .preflight(&store_key, &runtime_identity, config.document_acp)
@@ -864,6 +864,7 @@ mod tests {
     use gents_service::home_state::write_init_config;
     use gents_service::state::StoredInitConfig;
     use gents_store::identity::NodeIdentity as _;
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {
@@ -972,9 +973,13 @@ mod tests {
         home
     }
 
-    /// A home as `gents init` leaves it: its config, store key and a fresh
-    /// protected store whose provenance names the runtime.
+    /// A home as `gents init` leaves it, beside the client identity it made:
+    /// its config, store key and a fresh protected store whose provenance
+    /// names the runtime.
     async fn initialized_home_with_store(temp: &Path) -> PathBuf {
+        gents_service::home_state::client_identity_for_new_node()
+            .await
+            .unwrap();
         let home = initialized_home(temp);
         let config = read_init_config(&home).unwrap().unwrap();
         let identity = load_initialized_home_identity(&home, &config).unwrap();
@@ -1052,6 +1057,61 @@ mod tests {
             gents_store::local::home::store_lock_held(error.as_ref()).is_some(),
             "{error:#}"
         );
+    }
+
+    fn home_contents(dir: &Path, contents: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                contents.insert(path.clone(), None);
+                home_contents(&path, contents);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                contents.insert(path, Some(bytes));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_offline_access_refuses_an_unfinished_vera_home_without_writing_to_it() {
+        gents_service::home_state::client_identity_for_new_node()
+            .await
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let home = initialized_home(temp.path());
+        let mut config = read_init_config(&home).unwrap().unwrap();
+        config.store_encryption = None;
+        config.document_acp = gents_store::local::document_acp::DocumentAcp::Vera;
+        write_init_config(&home, &config).unwrap();
+        std::fs::remove_file(gents_store::local::store_key::home_key_file(&home)).unwrap();
+        std::fs::create_dir_all(default_data_dir(&home)).unwrap();
+        let mut before = BTreeMap::new();
+        home_contents(temp.path(), &mut before);
+
+        let error = match resolve_config_access(Some(&home), None).await {
+            Ok(_) => panic!("an embedded Vera home cannot be opened yet"),
+            Err(error) => error,
+        };
+
+        let refusal = error
+            .downcast_ref::<gents_store::local::document_acp::DocumentAcpError>()
+            .unwrap_or_else(|| panic!("not a document access refusal: {error:#}"));
+        assert!(
+            matches!(
+                (refusal, cfg!(feature = "vera")),
+                (
+                    gents_store::local::document_acp::DocumentAcpError::NotYetUsable,
+                    true
+                ) | (
+                    gents_store::local::document_acp::DocumentAcpError::Unavailable,
+                    false
+                )
+            ),
+            "{error:#}"
+        );
+        let mut after = BTreeMap::new();
+        home_contents(temp.path(), &mut after);
+        assert_eq!(after, before);
     }
 
     #[tokio::test]

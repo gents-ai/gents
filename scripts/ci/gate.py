@@ -123,6 +123,15 @@ PACKAGE_FEATURES = {
     "gents-desktop-bridge": "notify/macos_kqueue",
 }
 
+# Tests behind a crate's `vera` feature: package -> libtest name filter for
+# its lib target. The feature brings in a Vera node and changes what other
+# crates see of gents-store, so these run in their own build beside the
+# package's or the archive's, never by enabling it there.
+VERA_TESTS = {
+    "gents-store": "local::document_acp::",
+    "gents-tools": "surface::source_policy::embedded_vera_tests::",
+}
+
 # Packages with no test of their own. The list only shrinks: a listed package
 # that runs a test fails the gate, as does an unlisted one that runs none.
 NO_TESTS = {
@@ -565,13 +574,22 @@ def portable_shards():
     return int(raw)
 
 
+def vera_tests(packages):
+    """The packages whose `vera` tests a job runs, space-separated: none on a
+    pull request, whose runs leave the Vera node's build to the merge queue."""
+    if os.environ.get("GATE_EVENT") == "pull_request":
+        return ""
+    return " ".join(package for package in packages if package in VERA_TESTS)
+
+
 def test_entry(group, job, role, packages, go, **extra):
     """One `test` matrix job: `job` is the group, or `<group>@macos` for a portable
     group's scheduled macOS run."""
     if role == "runtime" and os.environ.get("GATE_RUNTIME_ISOLATED") == "true":
         role = "runtime-isolated"
     return {"job": f"test:{job}", "group": group.name, "role": role, **placement(role),
-            "packages": " ".join(packages), "timeout": group.timeout, "go": go, **extra}
+            "packages": " ".join(packages), "vera": vera_tests(packages), "timeout": group.timeout, "go": go,
+            **extra}
 
 
 def balance(entries):
@@ -666,7 +684,8 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             # (TestCache.lean `skip_sound_on_any_host`).
             go = bool(AFTERBURNER & set(archived))
             archives.append({"archive": ARCHIVE, **placement("portable"), "run": single,
-                             "packages": " ".join(archived), "timeout": 150 if single else 90,
+                             "packages": " ".join(archived), "vera": vera_tests(archived),
+                             "timeout": 150 if single else 90,
                              "test_cache": mode, "go": go})
             # Slices alternate between host groups, so one run's slices split across hosts.
             shards = [] if single else [
@@ -958,14 +977,9 @@ def run_test(selection, name):
     for package in packages:
         cargo_test(package, ["-p", package, *feature_flags(package)], expect_tests=package not in NO_TESTS,
                    **options)
-    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
-        for package, test_filter in (
-            ("gents-store", "local::document_acp::"),
-            ("gents-tools", "surface::source_policy::embedded_vera_tests::"),
-        ):
-            if package in packages:
-                cargo_test(f"{package} (vera)", ["-p", package, "--lib", "--features", "vera"],
-                           **{**options, "harness": [test_filter, *options["harness"]]})
+    for package in entry.get("vera", "").split():
+        cargo_test(f"{package} (vera)", ["-p", package, "--lib", "--features", "vera"],
+                   **{**options, "harness": [VERA_TESTS[package], *options["harness"]]})
 
 
 def target_arguments(package):
@@ -1022,6 +1036,19 @@ def macos_filterset(packages):
                 selected += " & (" + " | ".join(f"test(~{name})" for name in filters) + ")"
             terms.append(f"({selected})")
     return " | ".join(terms)
+
+
+def run_vera_tests(packages):
+    """The `vera` tests of an archive's packages, built apart from the archive in
+    one `cargo nextest run`: enabling the feature in the archive would build
+    every archived crate against a gents-store with the Vera node."""
+    if not packages:
+        return
+    os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
+    features = ",".join(f"{package}/vera" for package in packages)
+    filterset = " | ".join(f"(binary_id(={package}) & test(~{VERA_TESTS[package]}))" for package in packages)
+    native_tests(f"{' '.join(packages)} --lib (vera)", packages, ["--lib", "--features", features], filterset,
+                 set(packages))
 
 
 def native_tests(label, packages, flags, filterset, expected):
@@ -1316,16 +1343,21 @@ def run_build(selection, name):
     results.append((f"check {name} archive", "ok" if not problems else "; ".join(problems),
                     f"{total} tests listed, {ignored} ignored", time.time() - started))
     if not problems and entry.get("run"):
-        # The whole archive, on this runner, from this job's own checkout.
-        os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
-        arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
-        if os.environ.get("RUST_TEST_THREADS"):
-            arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
-        if entry.get("test_cache", "off") == "off":
-            nextest(arguments, label=f"run {name}")
-            return
-        plan = plan_test_cache(entry, archive, source, output, name)
-        run_cached_slice(plan, arguments, f"run {name}")
+        run_archive(entry, archive, source, output, name)
+    run_vera_tests(entry.get("vera", "").split())
+
+
+def run_archive(entry, archive, source, output, name):
+    """The whole archive, on this runner, from this job's own checkout."""
+    os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
+    arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
+    if os.environ.get("RUST_TEST_THREADS"):
+        arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
+    if entry.get("test_cache", "off") == "off":
+        nextest(arguments, label=f"run {name}")
+        return
+    plan = plan_test_cache(entry, archive, source, output, name)
+    run_cached_slice(plan, arguments, f"run {name}")
 
 
 def run_shard(selection, name, index=None):
