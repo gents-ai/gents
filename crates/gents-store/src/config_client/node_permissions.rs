@@ -194,12 +194,18 @@ impl ConfigAccess {
         }
     }
 
-    /// The relationships on a document for an operator acting as the node
-    /// itself, which is who `list` and `show` already run as. The signature
-    /// gate [`Self::list_document_relationships`] applies is for an Agent's own
-    /// identity; an operator read signs nothing, exactly as the GraphQL route's
-    /// authenticated caller does not. Native DefraDB still decides the gate on
-    /// the actor.
+    /// The relationships on a document, read without an Agent signature, for
+    /// the offline operator CLI: the one access built with the endpoint holding
+    /// the client signing key (`with_client_signed_writes_through`), which no
+    /// Agent holds. Its actor is the client identity that endpoint proves, and
+    /// Native DefraDB still decides the read on it.
+    ///
+    /// The unsigned path is taken only on that proof, never on the mere absence
+    /// of an Agent signer: the runtime and session side build signer-less
+    /// [`Self::Local`] accesses too, and any of them asserting an identity must
+    /// not inherit this read. Every other access falls to
+    /// [`Self::list_document_relationships`], whose `ManagedAgentSignerRequired`
+    /// the `workspace-root` listing degrades to `unknown (<reason>)`.
     pub async fn list_document_relationships_as_node(
         &self,
         collection: &str,
@@ -209,17 +215,17 @@ impl ConfigAccess {
             Self::Local(local) if local.agent_signer().is_some() => {
                 self.list_document_relationships(collection, doc_id).await
             }
-            Self::Local(_) => {
+            // The client signing key proves the operator; nothing else does.
+            Self::Local(local) if local.client_endpoint().is_some() => {
                 self.list_document_relationships_unproved(collection, doc_id)
                     .await
             }
-            Self::Graphql(_) => self.list_document_relationships(collection, doc_id).await,
+            _ => self.list_document_relationships(collection, doc_id).await,
         }
     }
 
-    /// [`Self::list_document_relationships`] without the signer gate: the
-    /// caller runs as an operator (the node's own actor), so no Agent signature
-    /// is owed. Kept private so the gate stays the default for every caller.
+    /// [`Self::list_document_relationships`] without the signer gate, reachable
+    /// only through [`Self::list_document_relationships_as_node`]'s proof.
     async fn list_document_relationships_unproved(
         &self,
         collection: &str,

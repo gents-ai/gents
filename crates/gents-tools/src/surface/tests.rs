@@ -3304,7 +3304,14 @@ async fn a_refusal_without_the_home_states_the_grant_and_says_to_add_the_home() 
         root: Some(std::path::PathBuf::from("/work")),
         tool_root: std::path::PathBuf::from("/work"),
         home: None,
+        publishing: RootPublishing::PublishedEnabled,
+        denial: RootDenialKind::NoAllowedRoots,
     };
+    // The facts decide the cause, and here the model answers "missing reader".
+    assert_eq!(
+        tool_surface_reason(refusal.publishing(), refusal.denial()),
+        gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing
+    );
     let text = refusal.to_string();
     assert!(
         text.contains(
@@ -3322,4 +3329,124 @@ async fn a_refusal_without_the_home_states_the_grant_and_says_to_add_the_home() 
         Some(gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing),
         "{text}"
     );
+}
+
+/// A reader read the actor may not make degrades the listing, never fails it:
+/// `list` and `show` still return each root, saying the readers are unknown and
+/// why. The cause is a signer-less Local access with no client signing key, the
+/// one shape the unsigned read refuses.
+#[tokio::test]
+async fn a_reader_read_the_actor_may_not_make_reports_unknown_and_still_lists() {
+    use gents_protocol::operations::workspace_root::WorkspaceRootReaders;
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
+    let ceiling = tempfile::tempdir().unwrap();
+    let root = ceiling.path().join("shared-root");
+    std::fs::create_dir_all(&root).unwrap();
+    let root_text = root.to_string_lossy().into_owned();
+    let published = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        runtime.node_did.parse().unwrap(),
+    )
+    .write(
+        "test.workspace.root",
+        &format!(
+            r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{}", enabled:true}}) {{_docID}} }}"#,
+            gents_store::graphql::escape_graphql_string(&runtime.node_did),
+            gents_store::graphql::escape_graphql_string(&root_text),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(gents_store::graphql::created_doc_id(&published, "WorkspaceRoot").is_ok());
+
+    // An access of the shape the runtime builds for an Agent: an asserted
+    // identity, no Agent signer and no client signing key.
+    let refused = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        runtime.node_did.parse().unwrap(),
+    );
+    let listed = super::list_workspace_roots_with_readers(&refused)
+        .await
+        .expect("a reader read it may not make still lists every root");
+    let listed_root = listed
+        .iter()
+        .find(|listed| listed.root.root_path == root_text)
+        .unwrap_or_else(|| panic!("the published root is listed: {listed:?}"));
+    let WorkspaceRootReaders::Unknown { reason } = &listed_root.readers else {
+        panic!("the readers are unknown: {:?}", listed_root.readers);
+    };
+    assert!(
+        !reason.is_empty(),
+        "the listing says why the readers are unknown"
+    );
+
+    let shown = super::show_workspace_root_with_readers(&refused, &root_text)
+        .await
+        .expect("show still returns the root");
+    assert!(
+        matches!(shown.readers, WorkspaceRootReaders::Unknown { .. }),
+        "show reports the readers as unknown: {:?}",
+        shown.readers
+    );
+    node.shutdown().await.unwrap();
+}
+
+/// A published root nested *under* the tool root does not cover it: admission
+/// requires the tools to sit inside an allowed root, so the grant such a root
+/// would name admits nothing. Only a published root the tools sit inside does.
+#[tokio::test]
+async fn a_published_root_nested_under_a_broader_tool_root_does_not_cover_it() {
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
+    let ceiling = tempfile::tempdir().unwrap();
+    // The tools sit at the ceiling root; the published root is a folder inside.
+    let tool_root = ceiling.path().join("work");
+    std::fs::create_dir_all(&tool_root).unwrap();
+    let nested = tool_root.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let tool_root_text = tool_root.to_string_lossy().into_owned();
+    let nested_text = nested.to_string_lossy().into_owned();
+    let owner = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        runtime.node_did.parse().unwrap(),
+    );
+    let published = owner
+        .write(
+            "test.workspace.root.nested",
+            &format!(
+                r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{}", enabled:true}}) {{_docID}} }}"#,
+                gents_store::graphql::escape_graphql_string(&runtime.node_did),
+                gents_store::graphql::escape_graphql_string(&nested_text),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(gents_store::graphql::created_doc_id(&published, "WorkspaceRoot").is_ok());
+    let agent = runtime.agent_identity.clone().unwrap();
+    let mut document = preset_tools_document("nested", "ReadOnly", "Off", false, false);
+    document.host.as_mut().unwrap().root = Some(tool_root_text.clone());
+    let config = AgentToolSurfaceConfig::from_tools_document(
+        agent.did(),
+        &document,
+        &ToolCeiling::readonly_at(ceiling.path()),
+        Vec::new(),
+    )
+    .unwrap();
+    let surface = config
+        .resolve(&node, &runtime.node_did, &crate::plugin_host::NoPluginHost)
+        .await
+        .unwrap();
+    let guard = surface.root_execution_guard().cloned().unwrap();
+    let error = guard
+        .validate(&node, agent.as_ref())
+        .await
+        .expect_err("no published root contains the tool root");
+    let refusal = tool_root_refusal(error.as_ref()).expect("the refusal is typed");
+    assert!(
+        matches!(refusal, ToolRootRefusal::Denied { .. }),
+        "a nested published root is not the reader cause, since its grant admits nothing: {error:#}"
+    );
+    assert!(!refusal.is_reader_missing());
+    node.shutdown().await.unwrap();
 }

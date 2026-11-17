@@ -377,14 +377,11 @@ pub async fn show_workspace_root(
 /// The `reader` relation on a WorkspaceRoot: a User's grant to an Agent.
 pub const ROOT_READER_RELATION: &str = "reader";
 
-/// Who holds `reader` on a root, as a listing reports `readers`: the Agents the
-/// grant names, or, when the relationship read failed, why they are unknown.
-/// A failed read never fails the listing: an operator who may see roots but not
-/// their relationships still gets the roots, and the table says so.
-/// The `reader` holders on a root, or why they could not be read. The read runs
-/// as the node's actor — the same caller `list` and `show` already run as —
-/// and Native DefraDB still decides whether that actor may see the
-/// relationships.
+/// The `reader` holders on a root, or why they could not be read. A failed read
+/// never fails the listing: an operator who may see roots but not their
+/// relationships still gets the roots, and the table says so. The read runs as
+/// the offline operator CLI's access, whose client signing key proves the
+/// actor; Native DefraDB still decides whether it may see the relationships.
 async fn reader_agents_of(access: &ConfigAccess, doc_id: &str) -> WorkspaceRootReaders {
     match access
         .list_document_relationships_as_node("WorkspaceRoot", doc_id)
