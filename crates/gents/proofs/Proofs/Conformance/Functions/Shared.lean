@@ -26,12 +26,12 @@ def loopTerminal : Conformance.Family GateConfiguration TerminalAnswer where
 
 end CompletionRetry.OutputObligation
 
+deriving instance Lean.ToJson for ToolPresentation.AdmissionDecision
+
 attribute [conformance_function]
   ToolPresentation.advertised
-  ToolPresentation.directAdmissible
-  ToolPresentation.admissible
+  ToolPresentation.admissionDecision
   ToolPresentation.configurationValid
-  ToolPresentation.presentationRefused
   ToolPresentation.effectiveHidden
 
 namespace ToolPresentation
