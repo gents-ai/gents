@@ -24,6 +24,8 @@ mod task_hook_tests;
 mod terminal;
 mod title;
 mod wake_input;
+#[cfg(test)]
+mod workflow_child_context_tests;
 
 #[derive(Debug, thiserror::Error)]
 #[error("graceful shutdown could not confirm received provider output was retained: {reason}")]
