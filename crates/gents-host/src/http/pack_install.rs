@@ -65,7 +65,6 @@ impl<'de> Deserialize<'de> for Archive {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InstallRequest {
-    #[serde(default)]
     move_pin_tools: Vec<String>,
     node_did: String,
     root: Archive,

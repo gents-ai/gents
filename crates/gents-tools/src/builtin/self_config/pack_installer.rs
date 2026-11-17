@@ -167,8 +167,10 @@ impl PackInstaller {
     /// Refuses unacknowledged pin conflicts, naming the atomic update option.
     async fn require_pins_follow(
         &self,
+        operation: PackOperation,
         distribution: &Distribution,
         args: &PackChangeInput,
+        edited: EditedDocuments,
     ) -> anyhow::Result<()> {
         let conflicts = self
             .pin_conflicts(distribution)
@@ -187,12 +189,13 @@ impl PackInstaller {
             .collect::<BTreeSet<_>>();
         Err(command::CommandGuidance {
             message: format!(
-                "nothing was installed: Tools {:?} of agent {} pins {} at {}, and this install replaces it with {}. Repeat this update with --move-pin-tools naming each Tools ID you intend to change; the pins and install commit together.{}",
+                "nothing was installed: Tools {:?} of agent {} pins {} at {}, and this install replaces it with {}. Repeat this {} with --move-pin-tools naming each Tools ID you intend to change; the pins and install commit together.{}",
                 first.tools,
                 first.agent,
                 first.plugin,
                 first.pin,
                 first.replacement,
+                operation.as_str(),
                 if others.is_empty() {
                     String::new()
                 } else {
@@ -202,7 +205,7 @@ impl PackInstaller {
                     )
                 }
             ),
-            next_call: json!({"argv":["pack","update",args.package,"--move-pin-tools",first.tools],"options":{"digest":distribution.digest()}}),
+            next_call: pin_update_call(operation, args, &conflicts, distribution.digest(), edited),
         }
         .into())
     }
@@ -287,7 +290,8 @@ impl PackInstaller {
             distribution.digest(),
         )
         .map_err(|error| Self::refusal(operation, &args.package, words, error))?;
-        self.require_pins_follow(&distribution, &args).await?;
+        self.require_pins_follow(operation, &distribution, &args, edited)
+            .await?;
         if distribution.is_documents() {
             let access = self.core.access()?;
             gents_pack::operations::pack::admit_edited(
@@ -329,4 +333,120 @@ pub fn pin_move_call(conflict: &PluginPinConflict) -> Value {
         "options": {"agent": conflict.agent, "shared": "acknowledge"},
         "set": {"integrations": conflict.integrations},
     })
+}
+
+pub fn pin_update_call(
+    operation: PackOperation,
+    args: &PackChangeInput,
+    conflicts: &[PluginPinConflict],
+    digest: &str,
+    edited: EditedDocuments,
+) -> serde_json::Value {
+    let ids = args
+        .move_pin_tools
+        .iter()
+        .cloned()
+        .chain(conflicts.iter().map(|c| c.tools.clone()))
+        .collect::<BTreeSet<_>>();
+    let mut argv = vec![
+        "pack".to_owned(),
+        operation.as_str().to_owned(),
+        args.package.clone(),
+    ];
+    for id in ids {
+        argv.extend(["--move-pin-tools".into(), id]);
+    }
+    let vars = args
+        .variables
+        .shared
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .chain(args.variables.scoped.iter().flat_map(|(pack, variables)| {
+            variables
+                .iter()
+                .map(move |(key, value)| format!("{pack}:{key}={value}"))
+        }))
+        .collect::<Vec<_>>();
+    let slots = args
+        .inference_slots
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>();
+    let mut next =
+        json!({"argv":argv,"options":{"digest":digest,"var":vars,"inference-slot":slots}});
+    match edited {
+        EditedDocuments::Refuse => {}
+        EditedDocuments::Keep => next["options"]["edited"] = json!("keep"),
+        EditedDocuments::Overwrite => next["options"]["edited"] = json!("overwrite"),
+    }
+    next
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn guidance_keeps_the_operation_and_all_pin_moves() {
+        let mut args = PackChangeInput::of("acme/pack");
+        args.move_pin_tools = vec!["already-named".into()];
+        args.variables
+            .shared
+            .insert("greeting".into(), "hello".into());
+        args.variables.scoped.insert(
+            "acme/dependency".into(),
+            [("setting".into(), "value".into())].into_iter().collect(),
+        );
+        args.inference_slots
+            .insert("worker".into(), "profile".into());
+        let conflict = |id: &str| PluginPinConflict {
+            plugin: "acme/one".into(),
+            replacement: "new".into(),
+            agent: format!("agent-{id}"),
+            tools: id.into(),
+            pin: "old".into(),
+            integrations: json!({}),
+            previous_integrations: json!({}),
+        };
+        let conflicts = vec![conflict("A"), conflict("B")];
+        for operation in [PackOperation::Install, PackOperation::Update] {
+            let next = pin_update_call(
+                operation,
+                &args,
+                &conflicts,
+                "digest",
+                EditedDocuments::Keep,
+            );
+            assert_eq!(next["options"]["digest"], "digest");
+            assert_eq!(next["options"]["edited"], "keep");
+            assert_eq!(
+                next["options"]["var"],
+                json!(["greeting=hello", "acme/dependency:setting=value"])
+            );
+            assert_eq!(next["options"]["inference-slot"], json!(["worker=profile"]));
+            let argv = next["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(argv[1], operation.as_str());
+            let names = argv[3..]
+                .chunks_exact(2)
+                .map(|pair| {
+                    assert_eq!(pair[0], "--move-pin-tools");
+                    pair[1].clone()
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                names,
+                BTreeSet::from(["A".into(), "B".into(), "already-named".into()])
+            );
+            // The exact preflight filter used on the suggested call now has
+            // no outstanding conflicts, rather than alternating A and B.
+            assert!(!conflicts
+                .iter()
+                .any(|conflict| !names.contains(&conflict.tools)));
+        }
+    }
 }

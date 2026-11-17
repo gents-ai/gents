@@ -52,7 +52,11 @@ pub fn replacement_digests<'a>(
     Ok(replacements)
 }
 
-fn plan(before: Tools, replacements: &BTreeMap<String, String>) -> PluginPinMove {
+fn plan(
+    before: Tools,
+    named: &BTreeSet<String>,
+    replacements: &BTreeMap<String, String>,
+) -> PluginPinMove {
     let mut after = before.clone();
     for reference in after
         .integrations
@@ -62,7 +66,11 @@ fn plan(before: Tools, replacements: &BTreeMap<String, String>) -> PluginPinMove
         .flatten()
     {
         let replacement = replacements.get(&reference.plugin);
-        if move_pin(true, replacement.is_some(), reference.digest.is_some()) {
+        if move_pin(
+            named.contains(&before.tools_id),
+            replacement.is_some(),
+            reference.digest.is_some(),
+        ) {
             reference.digest = replacement.cloned();
         }
     }
@@ -82,11 +90,13 @@ pub async fn prepare(
     if tools.is_empty() {
         return Ok(Vec::new());
     }
+    let named = tools.iter().cloned().collect::<BTreeSet<_>>();
     let mut tools = tools.to_vec();
     tools.sort();
     access
         .transact_readonly("pack.pin_moves.prepare", |txn| {
             let tools = &tools;
+            let named = &named;
             Box::pin(async move {
                 let mut edits = Vec::new();
                 for id in tools {
@@ -97,10 +107,12 @@ pub async fn prepare(
                                 format!("named Tools {id:?} is missing or not readable")
                             })?;
                     let before: Tools = serde_json::from_value(value)?;
-                    let edit = plan(before, replacements);
+                    let satisfied = before.integrations.as_ref().and_then(|i| i.plugins.as_ref()).into_iter().flatten()
+                        .any(|reference| move_pin(named.contains(id), replacements.contains_key(&reference.plugin), reference.digest.is_some()));
+                    let edit = plan(before, named, replacements);
                     anyhow::ensure!(
-                        edit.before != edit.after,
-                        "named Tools {id:?} does not currently pin a changed plugin shipped by this archive graph"
+                        satisfied,
+                        "named Tools {id:?} does not currently pin a plugin shipped by this archive graph"
                     );
                     edits.push(edit);
                 }
@@ -161,6 +173,7 @@ mod tests {
         .unwrap();
         let edit = plan(
             tools.clone(),
+            &BTreeSet::from(["named".into()]),
             &BTreeMap::from([
                 ("acme/one".into(), "new".into()),
                 ("acme/three".into(), "new-three".into()),
@@ -327,6 +340,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repeat_after_a_possibly_committed_install_is_satisfied() {
+        use gents_store::identity::NodeIdentity;
+        let (_directory, runtime, node, access) = pin_fixture().await;
+        let owner = runtime.did();
+        let replacements =
+            BTreeMap::from([("acme/one".into(), format!("sha256:{}", "2".repeat(64)))]);
+        let names = vec!["named".into(), "not-named".into()];
+        for attempt in 0..2 {
+            let edits = prepare(&access, owner, &names, &replacements)
+                .await
+                .unwrap();
+            assert_eq!(edits.len(), 2);
+            if attempt == 1 {
+                assert!(edits.iter().all(|edit| edit.before == edit.after));
+            }
+            access
+                .transact_write("test.pin_moves.repeat", |txn| {
+                    let edits = &edits;
+                    Box::pin(async move {
+                        apply(
+                            txn,
+                            owner,
+                            edits,
+                            &gents_inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap();
+        }
+        node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn stale_tools_refuse_the_pin_transaction_and_preserve_concurrent_authority() {
         use gents_store::identity::NodeIdentity;
         let (_directory, runtime, node, access) = pin_fixture().await;
@@ -400,5 +448,25 @@ mod tests {
             .expect_err("the install must abort");
         assert_eq!(read_tools(&access, owner, "named").await, before);
         node.shutdown().await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn unnamed_is_a_real_planner_input() {
+        let before: Tools = serde_json::from_value(serde_json::json!({
+            "tools_id":"omitted", "node_did":"owner",
+            "integrations":{"plugins":[{"plugin":"acme/one","digest":"old"}]}
+        }))
+        .unwrap();
+        let edit = plan(
+            before.clone(),
+            &BTreeSet::from(["named".into()]),
+            &BTreeMap::from([("acme/one".into(), "new".into())]),
+        );
+        assert_eq!(edit.after, before);
     }
 }
