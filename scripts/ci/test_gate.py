@@ -487,6 +487,25 @@ class NativeNextest(unittest.TestCase):
         self.assertEqual(gate.binary_id("gents", ("--lib",)), "gents")
 
 
+    def test_a_crate_or_macos_target_that_ran_no_test_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def run(arguments, **_):
+                report = root / "target/nextest/ci/junit.xml"
+                report.parent.mkdir(parents=True, exist_ok=True)
+                report.write_text('<testsuites><testsuite name="gents-service">'
+                                  '<testcase classname="gents-service::native_service" name="a"/>'
+                                  '</testsuite></testsuites>')
+                return True
+
+            with mock.patch.object(gate, "ROOT", root), mock.patch.object(gate, "nextest", run), \
+                    mock.patch.object(gate, "results", []), contextlib.redirect_stdout(io.StringIO()):
+                gate.native_tests("native", ["gents-service", "gents-fixture-host"], [], None,
+                                  {"gents-service", "gents-fixture-host"})
+                self.assertEqual(gate.results[-1][1], "gents-fixture-host selected zero tests")
+
+
 class Runners(unittest.TestCase):
     """Jobs choose runners by role labels from .github/ci-runners.json, never by host."""
 

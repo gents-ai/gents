@@ -1016,10 +1016,10 @@ def macos_filterset(packages):
 def native_tests(label, packages, flags, filterset, expected):
     """One `cargo nextest run`: one build, one parallel pool across its crates and binaries.
 
-    It lists first, so a crate or a macOS-only name filter that selects no test
-    fails as `cargo_test` did; listing builds, and the run reuses that build.
-    `expected` maps a binary id (or a package, for every binary of it) to the
-    name filters that must each select a test; an empty list needs any test.
+    Its JUnit report then fails a crate, or a macOS-only target, that ran no
+    test, as `cargo_test` did. (A separate `nextest list` first would rebuild:
+    the core packs' build script reruns once a build has written beside them.)
+    `expected` holds binary ids, or packages for every binary of one.
     """
     arguments = [*[flag for package in packages for flag in ("-p", package)], *flags]
     features = sorted({feature for package in packages for feature in feature_flags(package)[1:]})
@@ -1034,42 +1034,34 @@ def native_tests(label, packages, flags, filterset, expected):
         drop = ("CARGO_TARGET_DIR",)
     if filterset:
         arguments += ["-E", filterset]
-    listing = []
-    if not nextest(["list", *arguments, "--message-format", "json", "--color", "never"], label=f"{label}: build",
-                   drop_env=drop, capture=listing):
+    arguments += ["--profile", "ci", "--no-tests", "fail"]
+    if os.environ.get("RUST_TEST_THREADS"):
+        arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
+    junit = ROOT / "target" / "nextest" / "ci" / "junit.xml"
+    junit.unlink(missing_ok=True)
+    nextest(["run", *arguments], label=label, drop_env=drop)
+    if not junit.exists():
         return
-    suites = json.loads("".join(listing))["rust-suites"].values()
+    ran = test_cache.junit_outcomes(junit)
     problems = []
-    for key, filters in sorted(expected.items()):
-        names = [name for suite in suites if key in (suite["binary-id"], suite["package-name"])
-                 for name, case in suite["testcases"].items()
-                 if case["filter-match"]["status"] == "matches" and not case.get("ignored")]
-        if key in NO_TESTS:
-            if names:
-                problems.append(f"{key} ran tests but is listed in NO_TESTS; remove it from the list")
-        elif not names:
+    for key in sorted(expected):
+        count = sum(1 for binary, _ in ran if binary == key or binary.startswith(key + "::"))
+        if key in NO_TESTS and count:
+            problems.append(f"{key} ran tests but is listed in NO_TESTS; remove it from the list")
+        elif key not in NO_TESTS and not count:
             problems.append(f"{key} selected zero tests")
-        problems += [f"{key}: the macOS-only filter {name!r} selects no test" for name in filters
-                     if not any(name in test for test in names)]
     for problem in problems:
         print(f"::error::{label}: {problem}", flush=True)
-    results.append((f"{label}: selection", "ok" if not problems else "; ".join(problems), "", 0))
-    if problems:
-        return
-    run = ["run", *arguments, "--profile", "ci", "--no-tests", "fail"]
-    if os.environ.get("RUST_TEST_THREADS"):
-        run += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
-    nextest(run, label=label, drop_env=drop)
+    results.append((f"{label}: selection", "ok" if not problems else "; ".join(problems), f"{len(ran)} ran", 0))
 
 
 def run_native(entry, packages):
     if sys.platform != "darwin":
         fail(f"test:{entry['job']} runs tests that compile only on macOS; this host is {sys.platform}")
     if packages:
-        native_tests(" ".join(packages), packages, [], None, {package: [] for package in packages})
+        native_tests(" ".join(packages), packages, [], None, set(packages))
     for members, flags in macos_invocations(entry.get("macos_tests", [])):
-        expected = {binary_id(package, target): filters for package in members
-                    for target, filters in macos_only_tests(package).items()}
+        expected = {binary_id(package, target) for package in members for target in macos_only_tests(package)}
         native_tests(f"{' '.join(members)} {' '.join(flag for pair in flags for flag in pair)} (macOS only)",
                      members, [flag for pair in flags for flag in pair], macos_filterset(members), expected)
     if entry.get("journey"):
@@ -1125,9 +1117,8 @@ def reproducible_paths(source):
 
 
 def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix=None, extra_env=None,
-            drop_env=(), capture=None):
-    """`cargo nextest`, recording the summary's counts. With `capture` (a list),
-    stdout is collected there and only stderr is shown."""
+            drop_env=()):
+    """`cargo nextest`, recording the summary's counts; `expect` checks the listed tests per package."""
     command = [*prefix, "cargo", "nextest", *arguments]
     env = {**os.environ, **(extra_env or {})}
     for name in drop_env:
@@ -1137,14 +1128,6 @@ def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix
     env.setdefault("RUST_MIN_STACK", "16777216")
     print(f"\n$ {shlex.join(command)}", flush=True)
     started = time.time()
-    if capture is not None:
-        process = subprocess.run(command, cwd=cwd, env=env, stdout=subprocess.PIPE)
-        capture.append(process.stdout.decode("utf-8", "replace"))
-        verdict = "ok" if process.returncode == 0 else f"exit {process.returncode}"
-        results.append((label or shlex.join(command), verdict, "", time.time() - started))
-        if verdict != "ok":
-            print(f"::error::{label}: {verdict}", flush=True)
-        return verdict == "ok"
     process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     counts = ""
     for raw in process.stdout:
