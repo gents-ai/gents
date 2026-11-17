@@ -76,6 +76,7 @@ impl ClientCore {
             super::CLIENT_START_STALL_TIMEOUT,
         )
         .await?;
+        let store_release = store_lock.release_notice();
         let store_key = open_or_create_client_store_key(&paths, &options, &mut checkpoint).await?;
         options.store_key_provider = None;
 
@@ -206,6 +207,7 @@ impl ClientCore {
             );
             Ok(Self {
                 store_access: tokio::sync::Mutex::new(None),
+                store_release: Some(store_release),
                 paths,
                 options,
                 node_identity,

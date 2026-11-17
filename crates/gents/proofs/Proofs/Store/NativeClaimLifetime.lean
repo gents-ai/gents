@@ -182,6 +182,22 @@ theorem cancelled_shutdown_waiter_does_not_release_claim_before_owner_returns :
       after.lifecycleGuardHeld = false ∧ claimHeld after = false := by
   decide
 
+/-- The store's OS lock in the desktop's lifecycle exclusion. It also covers the
+node's storage engine (`StoreHandoff.mayRelease`): regolith keeps the data
+directory locked until the engine drops with the node's last handle, and the
+exclusion's shutdown owner holds the client, and with it that handle, until it
+returns, which the lifecycle guard outlives. So the store stays held while the
+guard is, even after the claim itself was released. -/
+def exclusionStoreHeld (s : State) : Bool := claimHeld s || s.lifecycleGuardHeld
+
+theorem exclusion_store_is_held_until_its_owner_returns :
+    let returned := run clientShutdown [.nativeStarted, .callerCancelled, .nativeReturned,
+      .accessReleased]
+    let after := step returned .lifecycleGuardReleased
+    claimHeld returned = false ∧ exclusionStoreHeld returned = true ∧
+      exclusionStoreHeld after = false := by
+  decide
+
 theorem shutdown_exclusion_cannot_release_while_owner_or_access_live :
     let started := run clientShutdown [.nativeStarted, .callerCancelled]
     let earlyRelease := step started .lifecycleGuardReleased
