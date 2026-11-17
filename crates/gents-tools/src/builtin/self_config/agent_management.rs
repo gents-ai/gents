@@ -935,17 +935,6 @@ async fn agent_apply_in_txn(
             } else {
                 None
             };
-            if dropped_self_config.is_some()
-                && context
-                    .system_prompt
-                    .as_deref()
-                    .is_some_and(|prompt| prompt.to_lowercase().contains("config"))
-            {
-                prompt_warning = Some(
-                    "The cloned prompt mentions config, but the clone lacks self_config."
-                        .to_owned(),
-                );
-            }
             if let Some(preset) = args.preset.value() {
                 admit(
                     operation != "clone",
@@ -988,6 +977,7 @@ async fn agent_apply_in_txn(
             if args.enable_lsp.is_some() || args.network_mode.is_some() {
                 tools.get_or_insert_with(Tools::default);
             }
+            let source_tools = tools.clone();
             if let Some(mut tools) = tools {
                 tools.tools_id = format!("{id}:tools");
                 admit(
@@ -1014,17 +1004,73 @@ async fn agent_apply_in_txn(
                     stored_root.as_deref(),
                 )?;
                 apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
+                let mut omitted: Vec<(&str, Value)> = Vec::new();
                 if let Some(dropped) = dropped_self_config {
-                    let patch = json!({"tools_id": tools.tools_id, "node_did": owner, "self_config": dropped});
+                    omitted.push(("config", json!({"self_config": dropped})));
+                }
+                if operation == "clone" {
+                    if let Some(source) = source_tools.as_ref() {
+                        if let Some(lsp) = source.integrations.as_ref().and_then(|i| i.lsp.as_ref())
+                        {
+                            if tools
+                                .integrations
+                                .as_ref()
+                                .and_then(|i| i.lsp.as_ref())
+                                .is_none()
+                            {
+                                omitted.push(("lsp", json!({"integrations": {"lsp": lsp}})));
+                            }
+                        }
+                        if let Some(bash) = source.host.as_ref().and_then(|h| h.bash.as_ref()) {
+                            let old = bash.network_mode;
+                            let new = tools
+                                .host
+                                .as_ref()
+                                .and_then(|h| h.bash.as_ref())
+                                .and_then(|b| b.network_mode);
+                            if args.network_mode.is_some() && old != new && old.is_some() {
+                                omitted.push((
+                                    "bash network",
+                                    json!({"host": {"bash": {"network_mode": old}}}),
+                                ));
+                            }
+                        }
+                        if args.root.is_present() {
+                            let old = source.host.as_ref().and_then(|h| h.root.as_ref());
+                            let new = tools.host.as_ref().and_then(|h| h.root.as_ref());
+                            if old != new {
+                                if let Some(root) = old {
+                                    omitted.push(("host root", json!({"host": {"root": root}})));
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut warnings = Vec::new();
+                for (name, mut patch) in omitted {
+                    patch["tools_id"] = json!(tools.tools_id);
+                    patch["node_did"] = json!(owner);
                     let payload = serde_json::to_string(&patch)?;
                     let quoted = format!("'{}'", payload.replace('\'', "'\\''"));
                     let home_arg = home
                         .map(|h| format!("'{}'", h.to_string_lossy().replace('\'', "'\\''")))
                         .unwrap_or_else(|| "<HOME>".to_owned());
                     not_copied.push(AgentOmittedCapability {
-                        capability: "tools.self_config (all settings in this group)".to_owned(),
-                        grant_command: format!("printf '%s' {quoted} > ./clone-self-config.json && gents config tools set --home {home_arg} --file ./clone-self-config.json"),
+                        capability: name.to_owned(),
+                        grant_command: format!("( f=$(mktemp) && printf '%s' {quoted} > \"$f\" && gents config tools set --home {home_arg} --file \"$f\"; status=$?; rm -f \"$f\"; exit $status )"),
                     });
+                    if context
+                        .system_prompt
+                        .as_deref()
+                        .is_some_and(|prompt| prompt.to_lowercase().contains(name))
+                    {
+                        warnings.push(format!(
+                            "The cloned prompt mentions {name}, but the clone lacks that grant."
+                        ));
+                    }
+                }
+                if !warnings.is_empty() {
+                    prompt_warning = Some(warnings.join("\n"));
                 }
 
                 // A new Agent DID holds no WorkspaceRoot relationship yet.

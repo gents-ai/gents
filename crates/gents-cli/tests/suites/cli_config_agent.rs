@@ -130,11 +130,11 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     assert!(cloned["prompt_warning"]
         .as_str()
         .unwrap()
-        .contains("self_config"));
+        .contains("config"));
     assert!(omissions[0]["capability"]
         .as_str()
         .unwrap()
-        .contains("self_config"));
+        .contains("config"));
     assert!(omissions[0]["grant_command"]
         .as_str()
         .unwrap()
