@@ -148,7 +148,7 @@ impl Drop for ConsoleOutput {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn console_interrupt_releases_the_native_installation() -> Result<()> {
     use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
-    use gents_desktop_core::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
     use std::sync::Arc;
 
     let temp = tempfile::tempdir()?;

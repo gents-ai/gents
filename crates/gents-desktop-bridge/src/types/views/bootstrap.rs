@@ -95,7 +95,7 @@ pub struct ManagedServerStatus {
     pub runtime_booting: bool,
     pub error: Option<String>,
     #[ts(optional = nullable)]
-    pub error_code: Option<crate::error::BridgeErrorCode>,
+    pub error_code: Option<gents_store::client_error::BridgeErrorCode>,
     /// The local node's folder, once its node stopped because the folder was
     /// deleted; kept until a new setup writes the folder's `init.json`.
     #[ts(optional = nullable)]

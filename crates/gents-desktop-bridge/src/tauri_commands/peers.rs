@@ -1,12 +1,11 @@
 use super::emit_config_update_and_snapshot;
-use crate::{
-    error::BridgeError,
-    state::{current_core, DesktopAppState},
-    types::{
-        ClientAccessRequestView, DesktopClientSnapshot, RuntimeAccessConnectRequest,
-        RuntimeRemoveResponse,
-    },
-};
+use crate::state::current_core;
+use crate::state::DesktopAppState;
+use crate::types::ClientAccessRequestView;
+use crate::types::DesktopClientSnapshot;
+use crate::types::RuntimeAccessConnectRequest;
+use crate::types::RuntimeRemoveResponse;
+use gents_store::client_error::BridgeError;
 use tauri::{AppHandle, Runtime, State};
 
 #[tauri::command]

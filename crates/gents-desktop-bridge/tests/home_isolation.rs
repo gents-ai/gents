@@ -5,7 +5,7 @@ use gents_desktop_bridge::{
     resolve_policy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy,
     NodeHomePolicy, SnapshotGrants,
 };
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use tempfile::tempdir;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

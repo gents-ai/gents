@@ -14,7 +14,6 @@ pub(crate) mod status;
 
 use crate::config::ManagedServerPolicy;
 use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
     AgentWorkspaceRootSelectRequest, HomeResetDisposition, ManagedServerRepairResult,
@@ -30,6 +29,8 @@ use gents_desktop_core::preference::StoredManagedServer;
 use gents_protocol::operations::service::ServiceLifecycleAction;
 use gents_protocol::operations::workspace_root::AgentWorkspaceRoot;
 use gents_service::args::ServiceAction;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use launch::{fail_managed_start, install_then_launch, LaunchFailure, NativeLaunch};
 use native::{
     ensure_launchable_here, launchable_native_service, native_error, native_service, run_native,

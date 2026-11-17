@@ -8,7 +8,7 @@ use gents_protocol::row::AgentRequestRow;
 
 use super::{ensure_runtime_connection, observe_submitted_request, ClientRuntime};
 use gents::client_operations::SubmittedRequest;
-use gents_desktop_core::error::request_operation_failure;
+use gents_store::client_error::request_operation_failure;
 
 fn request_in_scope(
     rows: &[AgentRequestRow],

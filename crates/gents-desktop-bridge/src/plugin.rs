@@ -233,7 +233,7 @@ where
 /// Holds the process lock across the reset reservation for the app lifetime.
 fn hold_desktop_process<R>(
     app: &tauri::AppHandle<R>,
-    paths: &gents_desktop_core::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> anyhow::Result<()>
 where
     R: Runtime,
@@ -251,10 +251,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_desktop_core::client::DesktopPaths;
     use gents_desktop_core::home_reset::{
         lock_browser_store, lock_desktop_process, BrowserStoreLock, DesktopProcessLock,
     };
+    use gents_store::client_journal::paths::DesktopPaths;
 
     #[test]
     fn browser_store_and_process_locks_are_both_held_after_setup() {

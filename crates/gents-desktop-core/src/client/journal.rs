@@ -4,7 +4,8 @@ use anyhow::Result;
 use gents_store::config_client::ConfigAccess;
 use tokio::sync::Mutex;
 
-use super::{DesktopPaths, PrincipalIdentity};
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 
 pub mod keys;
 

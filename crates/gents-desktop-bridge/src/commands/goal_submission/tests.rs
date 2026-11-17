@@ -86,7 +86,7 @@ async fn missing_goal_preparation_never_allocates_or_resubmits_work() -> Result<
 
 #[tokio::test]
 async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparation() -> Result<()> {
-    use gents_desktop_core::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
     use std::sync::Arc;
     use std::time::Duration;
 

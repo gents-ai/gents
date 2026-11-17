@@ -534,7 +534,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
 
 #[test]
 fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
-    use gents_desktop_core::error::{BridgeError, BridgeErrorCode};
+    use gents_store::client_error::{BridgeError, BridgeErrorCode};
 
     let lookup = || super::super::SelectedRequestLookup {
         view: super::super::request_view("did:test:agent", "session", None),
@@ -605,7 +605,7 @@ fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
 
 #[test]
 fn selected_request_lookup_keeps_unobserved_rows_pending() {
-    use gents_desktop_core::error::{BridgeError, BridgeErrorCode};
+    use gents_store::client_error::{BridgeError, BridgeErrorCode};
 
     let data = serde_json::json!({ "AgentRequest": [] });
     let lookup = super::super::SelectedRequestLookup {
@@ -904,87 +904,4 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
         missing.observed_documents < 2,
         "the observer's missing-document predicate must distinguish this batch"
     );
-}
-
-#[tokio::test]
-async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers() -> Result<()> {
-    let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
-    let backend: InferenceBackend = serde_json::from_value(serde_json::json!({
-        "node_did":runtime.node_did(), "backend_id":"catalog-backend", "name":"Catalog",
-        "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
-        "auth":{"kind":"unauthenticated"}
-    }))?;
-    let access = runtime.user_access();
-    gents_documents::write_inference_backend_document(
-        &access,
-        &backend,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
-    // Catalog discovery is the runtime's own observation.
-    let observer = runtime.runtime_access();
-    for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
-        let catalog: gents_documents::BackendModelCatalog =
-            serde_json::from_value(serde_json::json!({
-                "node_did":null, "observed_at":observed_at,
-                "models":[{"model_name":"retained-model"}]
-            }))?;
-        observer
-            .transact_write("test.catalog.refresh", |txn| {
-                let backend = &backend;
-                let catalog = catalog.clone();
-                Box::pin(async move {
-                    gents_inference::backends::registry::record_model_catalog_in_txn(
-                        txn, backend, catalog,
-                    )
-                    .await
-                })
-            })
-            .await?;
-    }
-    let response = access
-        .execute("{ InferenceBackendMetadata { _docID } }")
-        .await?;
-    let doc_id = response["data"]["InferenceBackendMetadata"][0]["_docID"]
-        .as_str()
-        .unwrap();
-    let response = access
-        .execute("{ InferenceBackendObservation { _docID } }")
-        .await?;
-    let observation_doc = response["data"]["InferenceBackendObservation"][0]["_docID"]
-        .as_str()
-        .unwrap();
-    let snapshot = load_node_snapshot_on(&runtime.user_access(), runtime.node_did()).await?;
-    let operator = load_inference_configuration(&access, &backend.node_did).await?;
-    let patch = fetch_doc_patch(
-        &access,
-        runtime.node_did(),
-        INFERENCE_BACKEND_NAME,
-        &[doc_id],
-    )
-    .await?
-    .store;
-    let observation_patch = fetch_doc_patch(
-        &access,
-        runtime.node_did(),
-        INFERENCE_BACKEND_OBSERVATION_NAME,
-        &[observation_doc],
-    )
-    .await?
-    .store;
-    assert_eq!(patch.inference_backends.len(), 1);
-    assert!(patch.backend_observations.is_empty());
-    for store in [snapshot, operator, observation_patch] {
-        assert_eq!(store.backend_observations.len(), 1);
-        assert_eq!(
-            store.backend_observations[0].catalogs[0].observed_at,
-            "2026-10-28T02:00:00Z"
-        );
-        assert_eq!(
-            store.backend_observations[0].catalogs[0].models[0].model_name,
-            "retained-model"
-        );
-    }
-    runtime.shutdown().await;
-    Ok(())
 }

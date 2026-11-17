@@ -1,5 +1,5 @@
 use crate::client_runtime::ClientRuntime;
-use crate::BridgeError;
+use gents_store::client_error::BridgeError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]

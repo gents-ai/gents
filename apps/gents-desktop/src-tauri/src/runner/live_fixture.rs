@@ -15,8 +15,8 @@ use anyhow::{Context, Result};
 use gents::client_runtime::DesktopInitSummary;
 use gents::runtime::embedded::EmbeddedHome;
 use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
-use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::runtime_connection::RuntimeConnection;
+use gents_store::client_journal::paths::DesktopPaths;
 use tokio::sync::Mutex;
 use tracing_subscriber::prelude::*;
 
@@ -215,7 +215,10 @@ impl LiveBridgeFixture {
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
         desktop_paths.ensure_root_dirs().await?;
         let config_actor =
-            gents_desktop_core::client::PrincipalIdentity::load_or_create(&desktop_paths).await?;
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &desktop_paths,
+            )
+            .await?;
         let node_home = tempdir.path().join("agent-home");
 
         let p2p = Arc::new(move |path: &Path| gents::defra_node::P2PConfig {

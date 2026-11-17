@@ -4,9 +4,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents::client_test_support::ServedRuntimeHome;
 use gents_desktop_bridge::client_runtime::ClientRuntime;
-use gents_desktop_core::client::DesktopPaths;
 use gents_observe::client_projection::query::load_session_transcript_page_on;
 use gents_observe::client_projection::store::{ClientStore, ClientStoreRows};
+use gents_store::client_journal::paths::DesktopPaths;
 use tokio::time::timeout;
 
 #[test]

@@ -1,4 +1,4 @@
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::{BridgeError, BridgeErrorCode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
@@ -269,7 +269,10 @@ fn add_store_key(keys: &mut Vec<RetiredStoreKey>, key: RetiredStoreKey) {
 /// owners, as its records: the identity record, the store's custody record
 /// or pending upgrade journal, and a preference reviewed for a node. A path
 /// that merely exists proves nothing.
-fn decoded_desktop_records(paths: &crate::client::DesktopPaths, preference: &Path) -> Vec<PathBuf> {
+fn decoded_desktop_records(
+    paths: &gents_store::client_journal::paths::DesktopPaths,
+    preference: &Path,
+) -> Vec<PathBuf> {
     let read = |path: &Path| {
         std::fs::symlink_metadata(path)
             .is_ok_and(|metadata| metadata.is_file())
@@ -280,8 +283,10 @@ fn decoded_desktop_records(paths: &crate::client::DesktopPaths, preference: &Pat
     [
         (
             paths.principal_metadata_path().to_path_buf(),
-            crate::client::PrincipalIdentity::recorded_did(paths.principal_metadata_path())
-                .is_some(),
+            gents_store::client_journal::principal_identity::PrincipalIdentity::recorded_did(
+                paths.principal_metadata_path(),
+            )
+            .is_some(),
         ),
         (
             paths.store_encryption_path().to_path_buf(),
@@ -398,7 +403,7 @@ pub fn plan_home_reset(
     runtime_home: Option<&Path>,
     runtime_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     client_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
-    desktop_paths: &crate::client::DesktopPaths,
+    desktop_paths: &gents_store::client_journal::paths::DesktopPaths,
     user_home: &Path,
     binding: ClientBinding,
     unfinished_setup: bool,
@@ -423,7 +428,7 @@ pub fn plan_home_reset(
 /// Service shutdown and client exclusion precede filesystem retirement.
 pub fn plan_full_reset(
     runtime_home: Option<&Path>,
-    desktop_paths: &crate::client::DesktopPaths,
+    desktop_paths: &gents_store::client_journal::paths::DesktopPaths,
     user_home: &Path,
     service_definition: &Path,
 ) -> Result<HomeResetPlan, BridgeError> {
@@ -524,7 +529,7 @@ fn plan_reset(
     runtime_home: Option<&Path>,
     runtime_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     client_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
-    desktop_paths: &crate::client::DesktopPaths,
+    desktop_paths: &gents_store::client_journal::paths::DesktopPaths,
     user_home: &Path,
     binding: ClientBinding,
     scope: ResetScope,
@@ -680,7 +685,7 @@ fn plan_reset(
     if retires_client_state {
         // Entries are derived from the canonical root, never from the raw
         // configured path.
-        let canonical = crate::client::DesktopPaths::from_root(&desktop_root);
+        let canonical = gents_store::client_journal::paths::DesktopPaths::from_root(&desktop_root);
         let preference = desktop_root.join(MANAGED_SERVER_CONFIG);
         ownership_records.extend(decoded_desktop_records(&canonical, &preference));
         desktop_owned |= !ownership_records.is_empty();
@@ -696,7 +701,7 @@ fn plan_reset(
         }
     }
     if full_reset {
-        let lock = crate::client::DesktopPaths::from_root(&desktop_root)
+        let lock = gents_store::client_journal::paths::DesktopPaths::from_root(&desktop_root)
             .runtime_directory_path()
             .with_extension("lock");
         client_entries.retain(|entry| *entry != lock);
@@ -708,7 +713,7 @@ fn plan_reset(
     let mut delete_prunes_keys = None;
     let mut store_keys = Vec::new();
     if retires_client_state && desktop_owned {
-        let canonical = crate::client::DesktopPaths::from_root(&desktop_root);
+        let canonical = gents_store::client_journal::paths::DesktopPaths::from_root(&desktop_root);
         if let (true, Some(key)) = (
             full_reset,
             recorded_store_key(
@@ -1333,7 +1338,7 @@ fn reject_symlink_if_present(path: &Path, label: &str) -> Result<(), BridgeError
 /// client store. Lock files are never retired: replacing their inode would let
 /// another process open the state while retirement is still in progress.
 pub fn lock_desktop_process(
-    paths: &crate::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
     wait: bool,
 ) -> anyhow::Result<DesktopProcessLock> {
     lock_file(paths, ".desktop-process.lock", wait).map(|lock| DesktopProcessLock { _lock: lock })
@@ -1355,7 +1360,7 @@ pub struct BrowserStoreLock {
 /// A reset reserves the next process-lock acquisition before asking the app to
 /// exit. Startup takes this lock first, so it cannot overtake the waiting reset.
 pub fn lock_reset(
-    paths: &crate::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> anyhow::Result<gents_store::local::file_lock::FileLock> {
     lock_file(paths, ".reset.lock", false)
 }
@@ -1364,7 +1369,7 @@ pub fn lock_reset(
 /// store's lock, taken before the store opens, then the peer directory's
 /// writer lease. A desktop without the process lock is excluded by these.
 pub fn lock_client_state(
-    paths: &crate::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> anyhow::Result<(
     gents_store::local::home::StoreLock,
     gents_store::local::file_lock::FileLock,
@@ -1415,7 +1420,7 @@ fn lock_browser_store_in(
 }
 
 fn lock_file(
-    paths: &crate::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
     name: &str,
     wait: bool,
 ) -> anyhow::Result<gents_store::local::file_lock::FileLock> {
@@ -1456,7 +1461,9 @@ fn lock_in(
 /// The CLI defaults to the home the desktop actually reviewed. An unreadable
 /// preference requires an explicit home, so corruption cannot select a
 /// different node for a destructive reset.
-pub fn reviewed_reset_home(paths: &crate::client::DesktopPaths) -> anyhow::Result<Option<PathBuf>> {
+pub fn reviewed_reset_home(
+    paths: &gents_store::client_journal::paths::DesktopPaths,
+) -> anyhow::Result<Option<PathBuf>> {
     use anyhow::Context;
     let path = paths.root().join(MANAGED_SERVER_CONFIG);
     let bytes =
@@ -1480,7 +1487,7 @@ pub fn reviewed_reset_home(paths: &crate::client::DesktopPaths) -> anyhow::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
 
     fn write(path: &Path, value: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

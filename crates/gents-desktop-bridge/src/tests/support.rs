@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::client_runtime::ClientRuntime;
-use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::job::JobProgress;
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::graphql::escape_graphql_string;
 use tempfile::TempDir;
 

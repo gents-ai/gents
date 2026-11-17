@@ -5,7 +5,7 @@ use gents_session::views::requests::RequestRows;
 use gents_session::views::transcript::Scope;
 use gents_store::config_client::ConfigAccess;
 
-use gents_desktop_core::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::{BridgeError, BridgeErrorCode};
 
 use crate::client_projection::query::find_request_in_scope;
 

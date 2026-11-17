@@ -63,8 +63,9 @@ fn project_activity(
         Ok(Some(InferenceActivity::Unavailable)) => "unavailable",
         Ok(None) => return Ok(None),
         Err(error) => {
-            let classified = crate::error::BridgeError::classify_transport_error(error);
-            if classified.code == crate::error::BridgeErrorCode::PermissionDenied {
+            let classified =
+                gents_store::client_error::BridgeError::classify_transport_error(error);
+            if classified.code == gents_store::client_error::BridgeErrorCode::PermissionDenied {
                 return Err(classified.into());
             }
             "unavailable"

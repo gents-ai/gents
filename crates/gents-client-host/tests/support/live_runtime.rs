@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::{ensure, Context, Result};
 use gents::support::live_inference::{live_target, wait_for_request_terminal, InferenceTarget};
 use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
@@ -248,7 +248,9 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     drop(seed);
     let operator_paths = homes.cli_identity();
     let operator = tokio::task::spawn_blocking(move || {
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&operator_paths)
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+            &operator_paths,
+        )
     })
     .await??;
     let access = ConfigAccess::Graphql(
@@ -301,7 +303,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         client.try_call(1, "client_connect_local", json!({"nodeHome": home})).await?;
         client.try_call(2, "client_enroll_local", json!({"nodeHome": home})).await?;
         let author_paths = paths.clone();
-        let author = tokio::task::spawn_blocking(move || gents_desktop_core::client::PrincipalIdentity::load_existing(&author_paths)).await??;
+        let author = tokio::task::spawn_blocking(move || gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(&author_paths)).await??;
         ensure!(author.did() == client_did);
         let access = ConfigAccess::Graphql(GraphqlEndpoint::as_principal(ready["graphql"].as_str().context("runtime GraphQL endpoint")?, author.did()).with_client_signing_capability(author.client_signing_capability()?)?);
         let mut id = 3;
@@ -724,7 +726,8 @@ pub(super) async fn wait_client(
                 }
                 Ok(_) => {}
                 Err(error)
-                    if error.code == gents_desktop_bridge::BridgeErrorCode::ProjectionPending => {}
+                    if error.code
+                        == gents_store::client_error::BridgeErrorCode::ProjectionPending => {}
                 Err(error) => return Err(anyhow::Error::from(error)),
             }
             *id += 1;

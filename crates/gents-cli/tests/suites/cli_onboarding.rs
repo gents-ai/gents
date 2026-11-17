@@ -468,11 +468,12 @@ async fn observe_identity(case: &IdentityCase, command: &[&str]) -> Result<&'sta
     };
     place(&other, case.other.0, case.other.1)?;
     let held = if case.key_present {
-        let paths = gents_desktop_core::client::DesktopPaths::from_root(
+        let paths = gents_store::client_journal::paths::DesktopPaths::from_root(
             fixture.identities.path().join("cli"),
         );
         paths.ensure_root_dirs().await?;
-        gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(&paths)
+            .await?;
         Some(fs::read(fixture.key())?)
     } else {
         None
@@ -560,7 +561,7 @@ fn first_run_step(user_home: &Path, home: &Path, step: &str, graphql: &str) -> R
         .env("HOME", user_home)
         .env_remove("GENTS_HOME")
         .env(
-            gents_desktop_core::client::DESKTOP_HOME_ENV,
+            gents_store::client_journal::paths::DESKTOP_HOME_ENV,
             user_home.join("selected-desktop"),
         )
         .env(FIRST_RUN_HOME_ENV, home)
@@ -595,7 +596,7 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
         port,
         &["--home", home.to_str().context("home path")?],
         &[(
-            gents_desktop_core::client::DESKTOP_HOME_ENV,
+            gents_store::client_journal::paths::DESKTOP_HOME_ENV,
             user_home
                 .join("selected-desktop")
                 .to_str()
@@ -610,8 +611,9 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
     )
     .await?;
     first_run_step(user_home, &home, "desktop", &graphql)?;
-    let desktop =
-        gents_desktop_core::client::DesktopPaths::from_root(user_home.join("selected-desktop"));
+    let desktop = gents_store::client_journal::paths::DesktopPaths::from_root(
+        user_home.join("selected-desktop"),
+    );
     anyhow::ensure!(
         desktop.cli_client().identity_key_path().is_file(),
         "the selected desktop root has no administrator key"
@@ -658,7 +660,7 @@ async fn provisioning_refuses_a_desktop_root_the_process_does_not_resolve() -> R
 async fn desktop_first_run_in_fixture_home() -> Result<()> {
     let home = PathBuf::from(std::env::var_os(FIRST_RUN_HOME_ENV).context("fixture home")?);
     let step = std::env::var(FIRST_RUN_STEP_ENV).context("fixture step")?;
-    let resolved = gents_desktop_core::client::DesktopPaths::discover()?;
+    let resolved = gents_store::client_journal::paths::DesktopPaths::discover()?;
     if step == "provision" {
         return provision_as_the_desktop(home, resolved.root().to_path_buf()).await;
     }
@@ -669,7 +671,7 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
             .expect_err("a desktop root this process does not resolve is refused");
         let refusal = format!("{refusal:#}");
         anyhow::ensure!(
-            refusal.contains(gents_desktop_core::client::DESKTOP_HOME_ENV)
+            refusal.contains(gents_store::client_journal::paths::DESKTOP_HOME_ENV)
                 && refusal.contains(&foreign.display().to_string()),
             "the refusal does not name the root to start with: {refusal}"
         );
@@ -688,7 +690,9 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
     let owner = stored.node_did.as_str();
     let user = gents_service::home_state::client_identity_for(&home).await?;
     let desktop_user =
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&resolved.cli_client())?;
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+            &resolved.cli_client(),
+        )?;
     anyhow::ensure!(
         desktop_user.did() == user.did(),
         "the status signer differs from the provisioned administrator"

@@ -1,8 +1,6 @@
 use anyhow::{bail, Context, Result};
 #[cfg(test)]
 use defra_node::Node as EmbeddedNode;
-#[cfg(test)]
-use gents_documents::InferenceBackend;
 use gents_documents::Trigger;
 use gents_protocol::client_protocol::SessionRowObservation;
 #[cfg(test)]
@@ -34,10 +32,11 @@ pub use session_tip::{
 };
 mod snapshot_loaders;
 pub use snapshot_loaders::{
-    load_node_scoped_snapshot_with_connections, load_node_snapshot_on, SnapshotReadError,
+    load_inference_configuration, load_node_scoped_snapshot_with_connections,
+    load_node_snapshot_on, SnapshotReadError,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use document_patches::fetch_doc_patch;
 #[cfg(test)]
 pub(crate) use document_patches::supports_doc_patch_collection;
@@ -48,7 +47,8 @@ pub use session_transcript::{
     load_session_diagnostics_store_on, load_session_transcript_page_on,
     load_session_transcript_window_on, TranscriptWindow,
 };
-pub(crate) use snapshot_loaders::*;
+#[cfg(test)]
+use snapshot_loaders::{complete_access_snapshot_requests, scoped_session_heads};
 
 pub const DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 40;
 /// Bound a page's message read and the work needed to project it.
@@ -275,8 +275,8 @@ impl SelectedRequestLookup {
         );
         if selected.is_empty() {
             // A signed client request can arrive after its independently created session.
-            return Err(gents_desktop_core::error::BridgeError::new(
-                gents_desktop_core::error::BridgeErrorCode::ProjectionPending,
+            return Err(gents_store::client_error::BridgeError::new(
+                gents_store::client_error::BridgeErrorCode::ProjectionPending,
                 "selected request has not reached the session owner yet",
             )
             .into());

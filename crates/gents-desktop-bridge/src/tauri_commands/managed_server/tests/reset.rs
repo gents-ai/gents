@@ -377,7 +377,7 @@ fn write_peers(state: &DesktopAppState, peers: &[serde_json::Value]) {
 }
 
 async fn saved_peer_ids(state: &DesktopAppState) -> Vec<String> {
-    gents_desktop_core::client::runtime_directory::load_runtime_connections(
+    gents_store::client_journal::runtime_directory::load_runtime_connections(
         state.policy.desktop_paths.runtime_directory_path(),
     )
     .await

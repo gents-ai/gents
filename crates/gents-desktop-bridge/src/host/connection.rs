@@ -11,8 +11,9 @@ use tokio::task::JoinSet;
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::ClientUpdateEvent;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 use super::protocol::{
     ClientCommand, ClientMessage, HostMessage, MAX_FRAME_BYTES, MAX_PENDING_CALLS, PROTOCOL_VERSION,

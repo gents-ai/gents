@@ -13,10 +13,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use gents_desktop_core::client::runtime_directory::RuntimeDirectory;
-use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::runtime_connection::RuntimeConnection;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 
 use self::http::{http_get_json, read_json};
 
@@ -254,7 +254,7 @@ async fn load_status_signer(
 ) -> Option<gents_store::config_client::ClientSigningCapability> {
     use gents_store::identity::NodeIdentity as _;
     match tokio::task::spawn_blocking(move || {
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(&paths)
             .and_then(|user| Ok(user.client_signing_capability()?))
     })
     .await
@@ -280,8 +280,8 @@ pub async fn fetch_runtime_status_for_node(
     match read_runtime_status(endpoint, node_did).await? {
         RuntimeStatusRead::Payload(payload) => Ok(payload),
         RuntimeStatusRead::Refused(status) => Err(anyhow::Error::from(
-            gents_desktop_core::error::BridgeError::new(
-                gents_desktop_core::error::BridgeErrorCode::PermissionDenied,
+            gents_store::client_error::BridgeError::new(
+                gents_store::client_error::BridgeErrorCode::PermissionDenied,
                 format!("runtime status refused this client (HTTP {status})"),
             ),
         )),
@@ -323,7 +323,7 @@ async fn read_runtime_status(
         }
     };
     let response = request.send().await.map_err(|error| {
-        gents_desktop_core::error::BridgeError::runtime_http_error(
+        gents_store::client_error::BridgeError::runtime_http_error(
             error,
             format!("sending runtime status request to {status_url}"),
         )
@@ -341,7 +341,7 @@ async fn read_runtime_status(
         response.status(),
     );
     let payload: Value = response.json().await.map_err(|error| {
-        gents_desktop_core::error::BridgeError::runtime_http_error(
+        gents_store::client_error::BridgeError::runtime_http_error(
             error,
             "decoding authenticated runtime status".to_owned(),
         )

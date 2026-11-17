@@ -3,7 +3,8 @@ use gents_inference::backends::setup::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 const LOG_TARGET: &str = "crate::inference_setup";
 

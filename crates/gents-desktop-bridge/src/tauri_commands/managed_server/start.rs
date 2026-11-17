@@ -18,7 +18,6 @@ use super::readiness::{
 };
 use super::start_wait::{begin_start_wait, finish_start_wait, LifecycleGuard};
 use super::status::{emit_status, project_external_status, status_from};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{ManagedServerStartRequest, ManagedServerStatus};
 use gents::client_runtime::{init_standard_local_runtime, DesktopInitOptions};
@@ -26,6 +25,8 @@ use gents_desktop_core::preference::StoredManagedServer;
 use gents_protocol::operations::service::ServiceLifecycleAction;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
 use gents_service::args::ServiceAction;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use tauri::{AppHandle, Runtime};
 
 pub(super) async fn start_managed_server<'a, R>(

@@ -43,7 +43,7 @@ fn lineage_refusal(
     }
 }
 
-fn dirty_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::DesktopPaths) {
+fn dirty_home(temp: &Path) -> (PathBuf, gents_store::client_journal::paths::DesktopPaths) {
     let home = temp.join(".gents");
     write(&home.join("data/MANIFEST"), "REGOMAN old lineage");
     write(
@@ -58,7 +58,7 @@ fn dirty_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::DesktopPaths
         r#"{"node_did":"did:key:other"}"#,
     );
     write(&home.join("grok-port-home/data/MANIFEST"), "REGOMAN other");
-    let desktop = gents_desktop_core::client::DesktopPaths::from_root(temp.join("desktop"));
+    let desktop = gents_store::client_journal::paths::DesktopPaths::from_root(temp.join("desktop"));
     write(
         &desktop.node_data_dir().join("MANIFEST"),
         "REGOMAN old client",

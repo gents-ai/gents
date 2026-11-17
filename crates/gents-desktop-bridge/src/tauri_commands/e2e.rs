@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::error::BridgeError;
+use gents_store::client_error::BridgeError;
 
 #[cfg(feature = "native-e2e")]
 const E2E_STATUS_FILENAME: &str = "native-e2e-status.json";

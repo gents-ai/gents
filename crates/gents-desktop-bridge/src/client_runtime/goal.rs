@@ -224,7 +224,7 @@ mod tests {
     /// the Agent's published, signed projection, read as the User.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn followup_preparation_verifies_the_hosted_assignment_before_queueing() -> Result<()> {
-        use gents_desktop_core::client::DesktopPaths;
+        use gents_store::client_journal::paths::DesktopPaths;
 
         use gents::client_test_support::ServedRuntimeHome;
         use gents_store::collection::Collection;
@@ -389,7 +389,7 @@ mod tests {
     /// returns an empty list), never "no Goal"; a refusal stays an error.
     #[tokio::test]
     async fn cold_operator_goal_observation_stays_unknown_without_unlocking() -> Result<()> {
-        use gents_desktop_core::client::DesktopPaths;
+        use gents_store::client_journal::paths::DesktopPaths;
 
         use identity::Identity as _;
         use std::sync::Arc;

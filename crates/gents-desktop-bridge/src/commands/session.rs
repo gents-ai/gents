@@ -1,8 +1,9 @@
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_snapshot_for_node_with_transcript,
 };
 use crate::types::{DesktopSessionSnapshot, SessionRowsView, SessionRowsWindow};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 pub async fn session_snapshot(
     core: &std::sync::Arc<crate::client_runtime::ClientRuntime>,

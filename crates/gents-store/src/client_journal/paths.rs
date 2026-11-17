@@ -29,7 +29,7 @@ impl DesktopPaths {
                 .join("gents")
                 .join("desktop"),
         };
-        gents_store::local::home::refuse_real_gents_home(&root, DESKTOP_HOME_ENV);
+        crate::local::home::refuse_real_gents_home(&root, DESKTOP_HOME_ENV);
         Ok(Self::from_root(root))
     }
 

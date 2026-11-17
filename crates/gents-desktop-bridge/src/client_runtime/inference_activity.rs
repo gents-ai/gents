@@ -48,7 +48,7 @@ impl crate::client_runtime::ClientRuntime {
             .await
             .map_err(|error| {
                 let message = error.to_string();
-                gents_desktop_core::error::BridgeError::runtime_http_error(error, message)
+                gents_store::client_error::BridgeError::runtime_http_error(error, message)
             })?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -57,8 +57,8 @@ impl crate::client_runtime::ClientRuntime {
             response.status(),
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
         ) {
-            return Err(gents_desktop_core::error::BridgeError::new(
-                gents_desktop_core::error::BridgeErrorCode::PermissionDenied,
+            return Err(gents_store::client_error::BridgeError::new(
+                gents_store::client_error::BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
             )
             .into());
@@ -76,7 +76,7 @@ impl crate::client_runtime::ClientRuntime {
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|error| {
             let message = error.to_string();
-            gents_desktop_core::error::BridgeError::runtime_http_error(error, message)
+            gents_store::client_error::BridgeError::runtime_http_error(error, message)
         })? {
             anyhow::ensure!(
                 body.len().saturating_add(chunk.len()) <= 8192,

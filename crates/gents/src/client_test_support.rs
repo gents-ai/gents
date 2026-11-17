@@ -798,15 +798,16 @@ const OTHER_VERSION_SCHEMA: [(&str, &str); 2] = [
 /// migration owner refuses it. `encrypted` records a file-custody key first,
 /// as a store this build's upgrade already encrypted.
 pub async fn write_other_version_client_store(
-    paths: &gents_desktop_core::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
     enrolled: bool,
     encrypted: bool,
 ) {
     use gents_store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
     paths.ensure_root_dirs().await.unwrap();
-    let identity = gents_desktop_core::client::PrincipalIdentity::load_or_create(paths)
-        .await
-        .unwrap();
+    let identity =
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(paths)
+            .await
+            .unwrap();
     let mut builder = defra_node::Node::builder()
         .data_path(paths.node_data_dir())
         .with_storage_backend(defra_node::StorageBackend::Regolith)
@@ -858,7 +859,7 @@ pub async fn write_other_version_client_store(
 /// before the client records its key, as a start interrupted after the
 /// upgrade promoted its stage. Returns the record that start would write.
 pub async fn encrypt_client_store_without_its_record(
-    paths: &gents_desktop_core::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> gents_store::local::store_key::StoreEncryption {
     use gents_store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
     let data = paths.node_data_dir();

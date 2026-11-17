@@ -5,7 +5,7 @@ use gents_protocol::operations::session::{
 use gents_store::config_client::ConfigAccess;
 
 use super::{ensure_runtime_connection, ClientRuntime};
-use gents_desktop_core::error::session_operation_failure;
+use gents_store::client_error::session_operation_failure;
 
 impl ClientRuntime {
     /// Dismisses the mailbox item `doc_id` on `node_did`, the node whose own
@@ -18,7 +18,7 @@ impl ClientRuntime {
         let access = self.operator_access(node_did)?;
         let result = gents_session::operations::mailbox::dismiss(&access, doc_id)
             .await
-            .map_err(gents_desktop_core::error::mailbox_operation_failure);
+            .map_err(gents_store::client_error::mailbox_operation_failure);
         match result {
             Ok(item) => {
                 self.observe_committed_config(node_did, "dismiss mailbox item")

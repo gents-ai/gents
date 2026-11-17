@@ -12,14 +12,11 @@ anyhow.workspace = true
 thiserror.workspace = true
 async-trait = "0.1"
 blake3 = "1"
-crypto.workspace = true
 gents-store = { workspace = true }
 gents-protocol.workspace = true
 defra-node.workspace = true
 dirs.workspace = true
 futures = "0.3"
-identity.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"

@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use gents_store::identity::{
+use crate::identity::{
     load_file_identity, load_or_create_file_identity, IdentityError, NodeIdentity, ServiceAccount,
 };
+use anyhow::{Context, Result};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
 
@@ -147,12 +147,10 @@ impl NodeIdentity for PrincipalIdentity {
     fn client_signing_capability(
         &self,
     ) -> std::result::Result<
-        gents_store::config_client::ClientSigningCapability,
-        gents_store::config_client::ConfigClientError,
+        crate::config_client::ClientSigningCapability,
+        crate::config_client::ConfigClientError,
     > {
-        gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-            self.private_key_bytes(),
-        )
+        crate::config_client::ClientSigningCapability::from_ed25519_key(self.private_key_bytes())
     }
 
     fn did(&self) -> &str {

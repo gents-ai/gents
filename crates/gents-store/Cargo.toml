@@ -14,6 +14,7 @@ test-home-guard = []
 test-fixtures = ["test-home-guard", "axum/ws"]
 
 [dependencies]
+ts-rs = { version = "10.1", default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 acp.workspace = true
 vera.workspace = true
 schema.workspace = true

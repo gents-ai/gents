@@ -890,8 +890,8 @@ async fn fill_job_outcomes(
                 }
             }
             Err(gents_protocol::job::JobReadError::PermissionDenied) => {
-                return Err(crate::error::BridgeError::new(
-                    crate::error::BridgeErrorCode::PermissionDenied,
+                return Err(gents_store::client_error::BridgeError::new(
+                    gents_store::client_error::BridgeErrorCode::PermissionDenied,
                     "Access was denied. Check this client's permissions with the runtime owner.",
                 )
                 .into());

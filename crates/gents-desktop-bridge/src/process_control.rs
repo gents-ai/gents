@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::client_runtime::ClientRuntime;
-use crate::error::BridgeError;
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
+use gents_store::client_error::BridgeError;
 
 /// Native processes live in the owning runtime, not in the client's replica.
 /// The endpoint authenticates the client's identity.

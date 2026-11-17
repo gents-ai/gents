@@ -25,7 +25,7 @@ pub async fn observe_mailbox_item(
     match item {
         Ok(item) => Some(item),
         Err(MailboxOperationError::ItemMissing) => None,
-        Err(error) => return Err(gents_desktop_core::error::mailbox_operation_failure(error)),
+        Err(error) => return Err(gents_store::client_error::mailbox_operation_failure(error)),
     }
     .map(|item| {
         anyhow::ensure!(
@@ -104,7 +104,7 @@ pub(crate) fn question_reply_content(
                 .map(ToOwned::to_owned),
         },
     )
-    .map_err(gents_desktop_core::error::mailbox_operation_failure)
+    .map_err(gents_store::client_error::mailbox_operation_failure)
 }
 
 pub async fn dismiss_mailbox(core: &ClientRuntime, node_did: &str, item_id: &str) -> Result<()> {

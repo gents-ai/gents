@@ -31,7 +31,7 @@ pub async fn set_default_agent_on(
         .map(|_| ())
         .map_err(|error| {
             let next = error.edit_recovery();
-            gents_desktop_core::error::agent_operation_failure(error, next)
+            gents_store::client_error::agent_operation_failure(error, next)
         })
 }
 
@@ -193,7 +193,7 @@ pub(crate) fn agent_failure(
     error: gents_protocol::operations::agent::AgentOperationError,
 ) -> anyhow::Error {
     let next = error.edit_recovery();
-    gents_desktop_core::error::agent_operation_failure(error, next)
+    gents_store::client_error::agent_operation_failure(error, next)
 }
 
 /// The Agent edit a generic patch of the Agent target stands for. A field the

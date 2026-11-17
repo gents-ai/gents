@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
 use gents_desktop_bridge::host::local;
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use tokio::process::Command;
 
 use crate::support;

@@ -1,11 +1,11 @@
 use super::*;
 use anyhow::Context;
-use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::{
     goal_control::GoalOperation, operations::request::MessageSendInput,
     runtime_connection::RuntimeConnection,
 };
 use gents_store::client_journal::outbox;
+use gents_store::client_journal::paths::DesktopPaths;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() -> Result<()> {

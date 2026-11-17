@@ -1,6 +1,7 @@
 use super::*;
 use axum::{body::Bytes, routing::get};
-use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 use std::time::Duration;
 
 /// Longer than an ended stream needs, shorter than DefraDB's 30-second

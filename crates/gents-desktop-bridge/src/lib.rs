@@ -43,7 +43,6 @@ pub use config::{
     AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
     TracingConfig,
 };
-pub use error::{BridgeError, BridgeErrorCode};
 pub use gents_store::local::store_key::StoreKeyCustodyChoice;
 pub use package_tools::{prefer_host_tools, prepare_host_command};
 #[cfg(feature = "tauri-host")]

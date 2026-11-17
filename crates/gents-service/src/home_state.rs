@@ -311,7 +311,7 @@ pub async fn home_graphql_endpoint(
 async fn home_graphql_endpoint_with_paths(
     home_dir: &Path,
     url: impl Into<String>,
-    paths: &gents_desktop_core::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> Result<GraphqlEndpoint> {
     let identity = client_identity_in(home_dir, paths).await?;
     home_endpoint_as(home_dir, url, &identity)
@@ -320,7 +320,7 @@ async fn home_graphql_endpoint_with_paths(
 fn home_endpoint_as(
     home_dir: &Path,
     url: impl Into<String>,
-    identity: &gents_desktop_core::client::PrincipalIdentity,
+    identity: &gents_store::client_journal::principal_identity::PrincipalIdentity,
 ) -> Result<GraphqlEndpoint> {
     let url = url.into();
     anyhow::ensure!(
@@ -333,7 +333,7 @@ fn home_endpoint_as(
 
 fn client_signed_endpoint(
     url: impl Into<String>,
-    identity: &gents_desktop_core::client::PrincipalIdentity,
+    identity: &gents_store::client_journal::principal_identity::PrincipalIdentity,
     node_did: &str,
 ) -> Result<GraphqlEndpoint> {
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
@@ -347,24 +347,24 @@ fn client_signed_endpoint(
 }
 
 /// The CLI is a separate client principal, even when desktop and CLI share a user home.
-pub fn cli_identity_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+pub fn cli_identity_paths() -> Result<gents_store::client_journal::paths::DesktopPaths> {
     Ok(cli_identity_paths_under(&desktop_paths()?))
 }
 
 /// Unit tests share one throwaway CLI client home; see [`use_unit_test_homes`].
-fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+fn desktop_paths() -> Result<gents_store::client_journal::paths::DesktopPaths> {
     #[cfg(any(test, feature = "test-home-guard"))]
     if let Some(homes) = unit_test_homes() {
-        return Ok(gents_desktop_core::client::DesktopPaths::from_root(
+        return Ok(gents_store::client_journal::paths::DesktopPaths::from_root(
             homes.path().join("desktop"),
         ));
     }
-    gents_desktop_core::client::DesktopPaths::discover()
+    gents_store::client_journal::paths::DesktopPaths::discover()
 }
 
 fn cli_identity_paths_under(
-    desktop: &gents_desktop_core::client::DesktopPaths,
-) -> gents_desktop_core::client::DesktopPaths {
+    desktop: &gents_store::client_journal::paths::DesktopPaths,
+) -> gents_store::client_journal::paths::DesktopPaths {
     desktop.cli_client()
 }
 
@@ -456,7 +456,7 @@ fn home_is_set_up(home: &Path) -> std::io::Result<bool> {
 
 fn missing_client_identity(
     home: &Path,
-    paths: &gents_desktop_core::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> ClientIdentityError {
     match home_is_set_up(home) {
         Ok(true) => ClientIdentityError::MissingForSetUpHome {
@@ -470,8 +470,11 @@ fn missing_client_identity(
 
 fn existing_client_identity(
     home: &Path,
-    paths: &gents_desktop_core::client::DesktopPaths,
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    paths: &gents_store::client_journal::paths::DesktopPaths,
+) -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     if !paths
         .identity_key_path()
         .try_exists()
@@ -479,7 +482,7 @@ fn existing_client_identity(
     {
         return Err(missing_client_identity(home, paths));
     }
-    gents_desktop_core::client::PrincipalIdentity::load_existing(paths)
+    gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(paths)
         .map_err(ClientIdentityError::load)
 }
 
@@ -490,7 +493,10 @@ fn existing_client_identity(
 /// [`ClientIdentityError::MissingForSetUpHome`].
 pub async fn client_identity_for(
     home: &Path,
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+) -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     client_identity_in(
         home,
         &cli_identity_paths().map_err(ClientIdentityError::load)?,
@@ -500,8 +506,11 @@ pub async fn client_identity_for(
 
 async fn client_identity_in(
     home: &Path,
-    paths: &gents_desktop_core::client::DesktopPaths,
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    paths: &gents_store::client_journal::paths::DesktopPaths,
+) -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     let key_present = tokio::fs::try_exists(paths.identity_key_path())
         .await
         .map_err(ClientIdentityError::load)?;
@@ -523,20 +532,25 @@ async fn client_identity_in(
 
 /// `init` creating a new Node's store: the Node it makes is owned by this
 /// identity, so creating one is part of setting the home up.
-pub async fn client_identity_for_new_node(
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+pub async fn client_identity_for_new_node() -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     let paths = cli_identity_paths().map_err(ClientIdentityError::load)?;
     load_or_create_client_identity(&paths).await
 }
 
 async fn load_or_create_client_identity(
-    paths: &gents_desktop_core::client::DesktopPaths,
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    paths: &gents_store::client_journal::paths::DesktopPaths,
+) -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     paths
         .ensure_root_dirs()
         .await
         .map_err(ClientIdentityError::load)?;
-    gents_desktop_core::client::PrincipalIdentity::load_or_create(paths)
+    gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(paths)
         .await
         .map_err(ClientIdentityError::load)
 }
@@ -609,21 +623,26 @@ mod tests {
     #[tokio::test]
     async fn cli_and_desktop_keep_distinct_stable_identities() {
         let home = tempfile::tempdir().unwrap();
-        let desktop = gents_desktop_core::client::DesktopPaths::from_root(home.path());
+        let desktop = gents_store::client_journal::paths::DesktopPaths::from_root(home.path());
         let cli = super::cli_identity_paths_under(&desktop);
         desktop.ensure_root_dirs().await.unwrap();
         cli.ensure_root_dirs().await.unwrap();
         let desktop_identity =
-            gents_desktop_core::client::PrincipalIdentity::load_or_create(&desktop)
-                .await
-                .unwrap();
-        let cli_identity = gents_desktop_core::client::PrincipalIdentity::load_or_create(&cli)
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &desktop,
+            )
+            .await
+            .unwrap();
+        let cli_identity =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &cli,
+            )
             .await
             .unwrap();
         assert_ne!(desktop_identity.did(), cli_identity.did());
         assert_eq!(
             cli_identity.did(),
-            gents_desktop_core::client::PrincipalIdentity::load_existing(&cli)
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(&cli)
                 .unwrap()
                 .did()
         );
@@ -632,7 +651,8 @@ mod tests {
     #[tokio::test]
     async fn home_endpoint_requires_and_uses_the_cli_principal() {
         let home = tempfile::tempdir().unwrap();
-        let paths = gents_desktop_core::client::DesktopPaths::from_root(home.path().join("cli"));
+        let paths =
+            gents_store::client_journal::paths::DesktopPaths::from_root(home.path().join("cli"));
         let url = "http://127.0.0.1:9191/api/v0/graphql";
         std::fs::write(
             super::init_config_path(home.path()),
@@ -649,7 +669,10 @@ mod tests {
                 .is_err()
         );
         paths.ensure_root_dirs().await.unwrap();
-        let identity = gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths)
+        let identity =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &paths,
+            )
             .await
             .unwrap();
         let endpoint = super::home_graphql_endpoint_with_paths(home.path(), url, &paths)

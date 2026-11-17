@@ -26,10 +26,10 @@ use std::sync::Arc;
 use crate::client_runtime::ClientRuntime;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use crate::error::BridgeError;
 use crate::snapshot::build_client_snapshot_with_grants;
 use crate::state::{snapshot_grants, DesktopAppState};
 use crate::types::{ClientUpdateEvent, DesktopClientSnapshot};
+use gents_store::client_error::BridgeError;
 
 pub(crate) async fn emit_config_update_and_snapshot<R>(
     app: &AppHandle<R>,

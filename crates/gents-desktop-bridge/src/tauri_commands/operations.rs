@@ -1,4 +1,4 @@
-use crate::error::BridgeError;
+use gents_store::client_error::BridgeError;
 
 use anyhow::Context;
 use std::sync::Arc;

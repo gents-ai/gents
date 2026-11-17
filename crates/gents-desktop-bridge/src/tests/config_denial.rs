@@ -1,8 +1,9 @@
 use crate::client_runtime::ClientRuntime;
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::TaskDeleteRequest;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 struct DenyingRuntime {
     core: std::sync::Arc<ClientRuntime>,

@@ -1,9 +1,10 @@
 use super::authority::EffectiveManagedAuthority;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::ManagedServerToolCeiling;
 use gents_desktop_core::preference::{read_home_identity, HomeIdentity};
 use gents_desktop_core::preference::{StoredManagedServer, MANAGED_SERVER_CONFIG};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 pub(super) async fn read_initialized_name(node_home: &std::path::Path) -> Option<String> {
     tokio::fs::read(node_home.join("init.json"))

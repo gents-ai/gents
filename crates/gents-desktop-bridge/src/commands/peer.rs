@@ -1,10 +1,9 @@
 use super::util::require_trimmed;
-use crate::{
-    client_runtime::ClientRuntime,
-    error::BridgeError,
-    types::{ClientAccessRequestView, RuntimeAccessConnectRequest},
-};
+use crate::client_runtime::ClientRuntime;
+use crate::types::ClientAccessRequestView;
+use crate::types::RuntimeAccessConnectRequest;
 use gents_protocol::runtime_connection::RuntimeConnection;
+use gents_store::client_error::BridgeError;
 
 pub async fn forget_runtime(core: &ClientRuntime, node_did: String) -> anyhow::Result<bool> {
     core.forget_runtime(require_trimmed("node_did", node_did)?.as_str())

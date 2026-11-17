@@ -240,7 +240,7 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
 
 #[tokio::test]
 async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapshot_cursor() {
-    use gents_desktop_core::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
     let home = tempfile::tempdir().unwrap();
     let core = ClientRuntime::start_with_paths_and_options(
         DesktopPaths::from_root(home.path()),
@@ -426,8 +426,11 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     )
     .await
     .unwrap_err();
-    let denied = crate::error::BridgeError::classify_transport_error(error);
-    assert_eq!(denied.code, crate::error::BridgeErrorCode::PermissionDenied);
+    let denied = gents_store::client_error::BridgeError::classify_transport_error(error);
+    assert_eq!(
+        denied.code,
+        gents_store::client_error::BridgeErrorCode::PermissionDenied
+    );
     assert!(!denied.message.contains("private metadata"));
     server.verify().await;
     server.reset().await;

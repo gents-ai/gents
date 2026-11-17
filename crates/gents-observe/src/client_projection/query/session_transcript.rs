@@ -997,7 +997,7 @@ async fn load_session_transcript_window_with_access(
         },
     };
     tracing::debug!(
-        target: "gents_desktop_core::query",
+        target: "gents_observe::client_projection::query",
         session_id,
         ?window,
         requested_limit = limit,
@@ -1058,7 +1058,7 @@ pub async fn load_session_context_store_on(
         .map(|row| row.into_canonical())
         .collect::<Vec<_>>();
     tracing::debug!(
-        target: "gents_desktop_core::query",
+        target: "gents_observe::client_projection::query",
         session_id,
         message_rows = messages.len(),
         compaction_rows = compaction_entries.len(),
@@ -1125,7 +1125,7 @@ pub async fn load_session_diagnostics_store_on(
         .map(|row| row.into_canonical())
         .collect::<Vec<_>>();
     tracing::debug!(
-        target: "gents_desktop_core::query",
+        target: "gents_observe::client_projection::query",
         session_id,
         message_rows = messages.len(),
         tool_call_rows = tool_calls.len(),

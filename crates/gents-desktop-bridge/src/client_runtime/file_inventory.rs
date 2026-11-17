@@ -39,14 +39,14 @@ impl ClientRuntime {
             .send()
             .await
             .map_err(|error| {
-                gents_desktop_core::error::BridgeError::runtime_http_error(
+                gents_store::client_error::BridgeError::runtime_http_error(
                     error,
                     "Runtime file inventory is unavailable".to_owned(),
                 )
             })?
             .error_for_status()
             .map_err(|error| {
-                gents_desktop_core::error::BridgeError::runtime_http_error(
+                gents_store::client_error::BridgeError::runtime_http_error(
                     error,
                     "Runtime file inventory was rejected".to_owned(),
                 )

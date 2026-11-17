@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use gents_desktop_core::error::{BridgeError, BridgeErrorCode};
 use gents_protocol::file_changes::ToolFileChanges;
 use gents_session::tool_call::query::result::{
     load_tool_file_change_observation, ToolFileChangeRead,
 };
+use gents_store::client_error::{BridgeError, BridgeErrorCode};
 use gents_store::config_client::ConfigAccess;
 
 pub mod scope;

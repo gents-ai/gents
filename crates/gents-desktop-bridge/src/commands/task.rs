@@ -58,7 +58,7 @@ async fn load_agent_request_by_request_id(
         },
     )
     .await
-    .map_err(gents_desktop_core::error::request_operation_failure)
+    .map_err(gents_store::client_error::request_operation_failure)
 }
 
 pub async fn save_task_config(core: &ClientRuntime, request: TaskSaveRequest) -> Result<()> {

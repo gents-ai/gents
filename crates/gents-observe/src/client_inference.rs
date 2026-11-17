@@ -527,7 +527,7 @@ pub async fn read_inference_setup_state_from(
         .send()
         .await
         .map_err(|error| {
-            gents_desktop_core::error::BridgeError::runtime_http_error(
+            gents_store::client_error::BridgeError::runtime_http_error(
                 error,
                 "reading runtime model settings".to_owned(),
             )
@@ -546,7 +546,7 @@ pub async fn read_inference_setup_state_from(
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|error| {
         let message = error.to_string();
-        gents_desktop_core::error::BridgeError::runtime_http_error(error, message)
+        gents_store::client_error::BridgeError::runtime_http_error(error, message)
     })? {
         anyhow::ensure!(
             bytes.len().saturating_add(chunk.len()) <= INFERENCE_SETTINGS_MAX_BYTES,
@@ -571,7 +571,8 @@ pub async fn read_inference_setup_state_from(
 mod tests {
     use super::*;
     use crate::client_projection::store::ClientStore;
-    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
 
     use gents_store::identity::NodeIdentity as _;
     use serde_json::json;

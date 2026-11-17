@@ -1,6 +1,6 @@
 use super::*;
 
-fn unfinished_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::DesktopPaths) {
+fn unfinished_home(temp: &Path) -> (PathBuf, gents_store::client_journal::paths::DesktopPaths) {
     let home = temp.join("agent");
     write(
         &home.join("init.json"),
@@ -11,7 +11,7 @@ fn unfinished_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::Desktop
         &home.join(gents_store::local::home::BOOTSTRAP_CONSUMED_FILE_NAME),
         "",
     );
-    let desktop = gents_desktop_core::client::DesktopPaths::from_root(temp.join("desktop"));
+    let desktop = gents_store::client_journal::paths::DesktopPaths::from_root(temp.join("desktop"));
     write(desktop.runtime_directory_path(), r#"{"connections": []}"#);
     (home, desktop)
 }
@@ -155,7 +155,7 @@ async fn backing_up_drops_the_pairing_with_the_node_it_retired() {
 
     let dropped = retire_desktop_pairing(&state, &home).await;
     assert_eq!(dropped, 1);
-    let left = gents_desktop_core::client::runtime_directory::load_runtime_connections(
+    let left = gents_store::client_journal::runtime_directory::load_runtime_connections(
         desktop.runtime_directory_path(),
     )
     .await

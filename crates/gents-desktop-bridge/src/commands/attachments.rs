@@ -1,7 +1,7 @@
 use crate::client_runtime::ClientRuntime;
 use gents_protocol::request_input::RequestAttachment;
 
-use crate::error::BridgeError;
+use gents_store::client_error::BridgeError;
 
 /// Attachment names are display metadata. Reads use the authorized retained
 /// message or request, never a host filesystem path supplied by a client.
@@ -86,7 +86,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let core = std::sync::Arc::new(
             ClientRuntime::start_with_paths_and_options(
-                gents_desktop_core::client::DesktopPaths::from_root(home.path()),
+                gents_store::client_journal::paths::DesktopPaths::from_root(home.path()),
                 crate::client_test_support::file_journal_options(),
             )
             .await

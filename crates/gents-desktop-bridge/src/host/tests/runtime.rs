@@ -22,14 +22,17 @@ async fn runtime_location_rejects_an_unknown_node() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    assert_eq!(
+        error.code,
+        gents_store::client_error::BridgeErrorCode::InvalidArgument
+    );
     core.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn runtime_location_accepts_a_saved_runtime_without_connecting() {
     use crate::client_runtime::ClientRuntime;
-    use gents_desktop_core::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
 
     let directory = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(directory.path());
@@ -74,7 +77,7 @@ async fn runtime_location_accepts_a_saved_runtime_without_connecting() {
 #[tokio::test]
 async fn paired_model_settings_use_the_authenticated_client_endpoint() {
     use crate::client_runtime::ClientRuntime;
-    use gents_desktop_core::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
 
     // Model settings are read as the User over the paired runtime's
     // authenticated GraphQL; the served runtime refuses any other actor.

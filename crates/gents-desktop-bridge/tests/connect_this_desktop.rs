@@ -7,14 +7,21 @@ use std::time::Duration;
 
 use clap::Parser as _;
 use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+use gents_desktop_bridge::resolve_policy;
 use gents_desktop_bridge::state::{current_core, DesktopAppState};
 use gents_desktop_bridge::tauri_commands::{lifecycle, managed_server};
-use gents_desktop_bridge::{
-    resolve_policy, BootstrapPolicy, BridgeConfig, BridgeError, BridgeErrorCode, HomePolicy,
-    ManagedServerPolicy, NodeHomePolicy, SnapshotGrants, StoreKeyCustodyChoice,
-};
-use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+use gents_desktop_bridge::BootstrapPolicy;
+use gents_desktop_bridge::BridgeConfig;
+use gents_desktop_bridge::HomePolicy;
+use gents_desktop_bridge::ManagedServerPolicy;
+use gents_desktop_bridge::NodeHomePolicy;
+use gents_desktop_bridge::SnapshotGrants;
+use gents_desktop_bridge::StoreKeyCustodyChoice;
 use gents_lean_vocab::families::connect_this_desktop_local_node as family;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 use tauri::test::MockRuntime;
 use tauri::Manager as _;
 
@@ -200,7 +207,7 @@ fn desktop_did(desktop: &Path) -> Option<String> {
 
 fn route_saved(desktop: &Path, node_did: &str) -> bool {
     run(
-        gents_desktop_core::client::runtime_directory::load_runtime_connections(
+        gents_store::client_journal::runtime_directory::load_runtime_connections(
             DesktopPaths::from_root(desktop).runtime_directory_path(),
         ),
     )
@@ -339,7 +346,7 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
     std::env::set_var("HOME", path("user"));
     std::env::set_var("GENTS_HOME", path("default-home"));
     std::env::set_var(
-        gents_desktop_core::client::DESKTOP_HOME_ENV,
+        gents_store::client_journal::paths::DESKTOP_HOME_ENV,
         path("desktop"),
     );
     std::env::set_var("XDG_DATA_HOME", path("user/.local/share"));

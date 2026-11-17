@@ -1,6 +1,6 @@
 use super::ClientRuntime;
 use anyhow::Result;
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

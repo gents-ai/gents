@@ -2670,11 +2670,12 @@ mod tests {
         let stored = read_init_config(&home).unwrap().unwrap();
         let identity =
             gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
-        let client = gents_desktop_core::client::PrincipalIdentity::load_or_create(
-            &gents_service::home_state::cli_identity_paths().unwrap(),
-        )
-        .await
-        .unwrap();
+        let client =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &gents_service::home_state::cli_identity_paths().unwrap(),
+            )
+            .await
+            .unwrap();
         let agent = identity::Did::new(initial["default_agent_did"].as_str().unwrap()).unwrap();
         let client_did = identity::Did::new(client.did()).unwrap();
         let data = default_data_dir(&home);

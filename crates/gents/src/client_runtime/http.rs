@@ -41,11 +41,11 @@ where
         } else {
             format!("sending GET request to {url}")
         };
-        gents_desktop_core::error::BridgeError::runtime_http_error(error, message)
+        gents_store::client_error::BridgeError::runtime_http_error(error, message)
     })?;
     let status = response.status();
     let body = response.bytes().await.map_err(|error| {
-        gents_desktop_core::error::BridgeError::runtime_http_error(
+        gents_store::client_error::BridgeError::runtime_http_error(
             error,
             format!("reading GET response body from {url}"),
         )

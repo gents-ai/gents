@@ -321,7 +321,10 @@ async fn provider_usage_read_rejects_an_unconfigured_runtime() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    assert_eq!(
+        error.code,
+        gents_store::client_error::BridgeErrorCode::InvalidArgument
+    );
     core.shutdown().await.unwrap();
 }
 
@@ -357,7 +360,10 @@ async fn inference_setup_state_rejects_an_unconfigured_runtime() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    assert_eq!(
+        error.code,
+        gents_store::client_error::BridgeErrorCode::InvalidArgument
+    );
     core.shutdown().await.unwrap();
 }
 
@@ -426,7 +432,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let server = wiremock::MockServer::start().await;
     let graphql = format!("{}/api/v0/graphql", server.uri());
     let directory = tempfile::tempdir().unwrap();
-    let paths = gents_desktop_core::client::DesktopPaths::from_root(directory.path());
+    let paths = gents_store::client_journal::paths::DesktopPaths::from_root(directory.path());
     let options = crate::client_runtime::ClientRuntimeOptions {
         ..crate::client_test_support::file_journal_options()
     };
@@ -765,8 +771,8 @@ fn generated_storage_failures_keep_their_code_in_host_errors() {
         .context("preparing a request");
         let error = super::backend_error(error);
         let full = match error.code {
-            crate::BridgeErrorCode::StorageFull => true,
-            crate::BridgeErrorCode::Backend => false,
+            gents_store::client_error::BridgeErrorCode::StorageFull => true,
+            gents_store::client_error::BridgeErrorCode::Backend => false,
             other => panic!("{i:?} became {other:?}"),
         };
         if full {
@@ -779,11 +785,12 @@ fn generated_storage_failures_keep_their_code_in_host_errors() {
 #[test]
 fn file_review_availability_keeps_its_typed_code_through_host_context() {
     for code in [
-        crate::BridgeErrorCode::ProjectionPending,
-        crate::BridgeErrorCode::EndpointUnreachable,
-        crate::BridgeErrorCode::Unsupported,
+        gents_store::client_error::BridgeErrorCode::ProjectionPending,
+        gents_store::client_error::BridgeErrorCode::EndpointUnreachable,
+        gents_store::client_error::BridgeErrorCode::Unsupported,
     ] {
-        let expected = crate::BridgeError::new(code, "File review is unavailable.");
+        let expected =
+            gents_store::client_error::BridgeError::new(code, "File review is unavailable.");
         let error = anyhow::Error::new(expected.clone()).context("loading recorded versions");
         let encoded = serde_json::to_value(super::backend_error(error)).unwrap();
         assert_eq!(encoded["code"], code.as_str());

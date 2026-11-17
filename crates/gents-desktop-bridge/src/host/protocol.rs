@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
 
-use crate::error::BridgeError;
 use crate::types::{
     ChatSendRequest, DesktopInterruptRequest, PendingMessageSteerRequest, PendingQueueEditRequest,
     RuntimeAccessConnectRequest, SessionRenameRequest,
 };
+use gents_store::client_error::BridgeError;
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.

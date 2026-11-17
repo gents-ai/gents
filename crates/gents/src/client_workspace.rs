@@ -24,7 +24,7 @@ fn selection_failure(error: AgentWorkspaceRootError) -> anyhow::Error {
         error @ AgentWorkspaceRootError::Retarget { .. } => {
             let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
             let mut classified =
-                gents_desktop_core::error::BridgeError::classify_transport_error(error.into());
+                gents_store::client_error::BridgeError::classify_transport_error(error.into());
             classified.message = message;
             classified.into()
         }
@@ -66,15 +66,15 @@ mod tests {
     fn a_failed_retarget_keeps_the_published_folder_message_and_permission_code() {
         let error = selection_failure(AgentWorkspaceRootError::Retarget {
             root_path: "/work/four".into(),
-            source: Box::new(gents_desktop_core::error::BridgeError::new(
-                gents_desktop_core::error::BridgeErrorCode::PermissionDenied,
+            source: Box::new(gents_store::client_error::BridgeError::new(
+                gents_store::client_error::BridgeErrorCode::PermissionDenied,
                 "access denied",
             )),
         });
-        let classified = gents_desktop_core::error::BridgeError::classify_transport_error(error);
+        let classified = gents_store::client_error::BridgeError::classify_transport_error(error);
         assert_eq!(
             classified.code,
-            gents_desktop_core::error::BridgeErrorCode::PermissionDenied
+            gents_store::client_error::BridgeErrorCode::PermissionDenied
         );
         assert!(classified.message.starts_with("/work/four was published, but the agent still uses its previous folder. Choose the same folder again to finish."));
         assert!(classified.message.ends_with("access denied"));

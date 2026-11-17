@@ -240,7 +240,7 @@ impl BridgeError {
     }
 
     pub fn classify_transport_error(error: anyhow::Error) -> Self {
-        if gents_store::graphql::is_storage_full(error.as_ref()) {
+        if crate::graphql::is_storage_full(error.as_ref()) {
             return Self::storage_full();
         }
         if let Some(classified) = error
@@ -249,21 +249,20 @@ impl BridgeError {
         {
             return classified.clone();
         }
-        if gents_store::config_client::TransactionFailure::permission_denied(&error) {
+        if crate::config_client::TransactionFailure::permission_denied(&error) {
             return Self::new(
                 BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
             );
         }
-        if let Some(repeatable) = gents_store::config_client::classified_conflict_repeatable(&error)
-        {
+        if let Some(repeatable) = crate::config_client::classified_conflict_repeatable(&error) {
             return Self::transaction_conflict(
                 repeatable,
                 gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string(),
             );
         }
-        let transport = gents_store::config_client::TransactionFailure::config_client_error(&error)
-            .and_then(gents_store::config_client::ConfigClientError::transport_error)
+        let transport = crate::config_client::TransactionFailure::config_client_error(&error)
+            .and_then(crate::config_client::ConfigClientError::transport_error)
             .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
         let message = gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string();
         let Some(transport) = transport else {
@@ -512,12 +511,12 @@ mod tests {
                 {"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}
             ]),
         );
-        let error = gents_store::config_client::ConfigClientError::Database(denial);
+        let error = crate::config_client::ConfigClientError::Database(denial);
         let bridge = BridgeError::classify_transport_error(anyhow::Error::new(error));
         assert_eq!(bridge.code, BridgeErrorCode::PermissionDenied);
         assert!(!bridge.retryable);
         assert!(!bridge.message.contains("opaque"));
-        let hidden = gents_store::config_client::ConfigClientError::Database(
+        let hidden = crate::config_client::ConfigClientError::Database(
             gents_protocol::database_error::GraphqlFailure::new(
                 "read",
                 serde_json::json!([
@@ -579,7 +578,7 @@ mod tests {
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
         let access =
-            gents_store::config_client::ConfigAccess::graphql(format!("{endpoint}/api/v0/graphql"));
+            crate::config_client::ConfigAccess::graphql(format!("{endpoint}/api/v0/graphql"));
         let error = access
             .transact_readonly("test.desktop_transport", |_txn| {
                 Box::pin(async { Ok::<_, anyhow::Error>(()) })
@@ -593,10 +592,9 @@ mod tests {
 
     #[tokio::test]
     async fn classify_config_query_transport_uses_typed_protocol_source() {
-        let endpoint = gents_store::config_client::GraphqlEndpoint::anonymous(
-            "http://127.0.0.1:0/api/v0/graphql",
-        );
-        let result = gents_store::config_client::query_graphql_with_options(
+        let endpoint =
+            crate::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1:0/api/v0/graphql");
+        let result = crate::config_client::query_graphql_with_options(
             &endpoint,
             "{__typename}",
             gents_protocol::graphql::GraphqlRequestOptions {
@@ -667,12 +665,9 @@ mod transaction_conflict_tests {
     fn passed_through_conflicts_are_typed_and_retryable_only_when_aborted() {
         use gents_protocol::operations::request::RequestOperationError;
         for (conflict, repeatable) in [
+            (crate::config_client::classified_conflict_for_test(), true),
             (
-                gents_store::config_client::classified_conflict_for_test(),
-                true,
-            ),
-            (
-                gents_store::config_client::unconfirmed_commit_conflict_for_test(),
+                crate::config_client::unconfirmed_commit_conflict_for_test(),
                 false,
             ),
         ] {
@@ -686,7 +681,7 @@ mod transaction_conflict_tests {
     }
 
     fn passed(
-        conflict: gents_store::config_client::ConfigClientError,
+        conflict: crate::config_client::ConfigClientError,
     ) -> gents_protocol::error_chain::PassedThrough {
         gents_protocol::error_chain::PassedThrough::new(anyhow::Error::new(conflict))
     }
@@ -699,11 +694,11 @@ mod transaction_conflict_tests {
         use gents_protocol::operations::mailbox::MailboxOperationError;
         for error in [
             mailbox_operation_failure(MailboxOperationError::Passthrough(passed(
-                gents_store::config_client::classified_conflict_for_test(),
+                crate::config_client::classified_conflict_for_test(),
             ))),
             agent_operation_failure(
                 AgentOperationError::Passthrough(passed(
-                    gents_store::config_client::classified_conflict_for_test(),
+                    crate::config_client::classified_conflict_for_test(),
                 )),
                 gents_protocol::operations::NextCall::ResourceHelp { resource: "agent" },
             ),
@@ -719,11 +714,11 @@ mod transaction_conflict_tests {
     /// finds it, and its `passthrough()` accessor yields the store error.
     #[test]
     fn every_operation_passthrough_keeps_the_store_conflict_classifiable() {
-        use gents_protocol::operations::{agent, document, mailbox};
-        use gents_store::config_client::{
+        use crate::config_client::{
             classified_conflict_for_test, classified_conflict_repeatable,
             unconfirmed_commit_conflict_for_test, ConfigClientError,
         };
+        use gents_protocol::operations::{agent, document, mailbox};
         let mailbox =
             mailbox::MailboxOperationError::Passthrough(passed(classified_conflict_for_test()));
         let agent =
@@ -751,7 +746,7 @@ mod transaction_conflict_tests {
 
     #[test]
     fn a_conflict_under_application_context_keeps_its_type() {
-        let error = anyhow::Error::new(gents_store::config_client::classified_conflict_for_test())
+        let error = anyhow::Error::new(crate::config_client::classified_conflict_for_test())
             .context("interrupting the request");
         let error = BridgeError::classify_transport_error(error);
         assert_eq!(error.code, BridgeErrorCode::TransactionConflict);

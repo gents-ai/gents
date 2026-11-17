@@ -320,8 +320,13 @@ async fn unavailable_file_review_scope_is_retryable_not_missing_versions() {
     )
     .await
     .unwrap_err();
-    let classified = error.downcast_ref::<crate::BridgeError>().unwrap();
-    assert_eq!(classified.code, crate::BridgeErrorCode::ProjectionPending);
+    let classified = error
+        .downcast_ref::<gents_store::client_error::BridgeError>()
+        .unwrap();
+    assert_eq!(
+        classified.code,
+        gents_store::client_error::BridgeErrorCode::ProjectionPending
+    );
     assert!(classified.retryable);
     core.shutdown().await.unwrap();
 }

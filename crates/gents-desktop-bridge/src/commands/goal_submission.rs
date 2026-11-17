@@ -2,11 +2,11 @@ use crate::client_runtime::{ClientRuntime, RetainedGoalSubmission};
 use anyhow::{Context, Result};
 use gents_protocol::goal_control::GoalControlOutcome;
 
-use crate::error::BridgeError;
 use crate::types::{
     GoalControlRequest, GoalControlResult, GoalSubmissionOutcome, GoalSubmissionQuery,
     GoalSubmissionReceipt, GoalSubmissionRecovery,
 };
+use gents_store::client_error::BridgeError;
 
 fn check_client(core: &ClientRuntime, client_did: &str) -> Result<()> {
     anyhow::ensure!(

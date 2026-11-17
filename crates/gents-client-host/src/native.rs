@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
 use gents_desktop_bridge::host::{local, ClientHost};
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
@@ -166,8 +166,8 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
                 let message = "The application serving this history does not support automatic updates. Close the application serving this history, or close all its clients and allow up to three minutes for its shared process to stop, then reconnect. Your history is unchanged.";
                 if let Some(bootstrap) = &mut bootstrap {
                     crate::editor_store::send(bootstrap, &crate::editor_store::Message::Error {
-                        error: gents_desktop_bridge::BridgeError::new(
-                            gents_desktop_bridge::BridgeErrorCode::Unsupported, message),
+                        error: gents_store::client_error::BridgeError::new(
+                            gents_store::client_error::BridgeErrorCode::Unsupported, message),
                     }).await?;
                     bootstrap_finished = true;
                 }
@@ -243,8 +243,8 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
             if !bootstrap_finished {
                 if let Some(bootstrap) = &mut bootstrap {
                     let _ = crate::editor_store::send(bootstrap, &crate::editor_store::Message::Error {
-                        error: gents_desktop_bridge::BridgeError::new(
-                            gents_desktop_bridge::BridgeErrorCode::ClientStartFailed,
+                        error: gents_store::client_error::BridgeError::new(
+                            gents_store::client_error::BridgeErrorCode::ClientStartFailed,
                             "The shared history process could not be initialized. Reconnect. If this repeats, close the application serving this history, wait up to three minutes, then reconnect. Your chats are unchanged.",
                         ),
                     }).await;

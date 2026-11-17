@@ -8,8 +8,9 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::approvals_watch::{watch_queue, PromptSubscriptions, HEARTBEAT_INTERVAL};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::plugin_access::{PluginApprovalView, PluginApprovalsView};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 #[derive(Default)]
 struct Subscriptions {

@@ -10,7 +10,7 @@ use tokio::time::Instant;
 
 use crate::client_projection::query::load_node_snapshot_on;
 use crate::client_projection::store::ClientStore;
-use gents_desktop_core::client::runtime_directory::RuntimeDirectory;
+use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 
 mod delivery;
 mod projection_store;

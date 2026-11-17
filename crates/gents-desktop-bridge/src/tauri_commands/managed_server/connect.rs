@@ -9,9 +9,10 @@ use super::port::{
     PortReadiness,
 };
 use super::start::reconnect_started_runtime;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{DesktopInitRequest, ManagedServerStatus};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 const CONNECT_AGAIN: &str = "then choose Connect this desktop again";
 
@@ -108,7 +109,7 @@ async fn route_saved(state: &DesktopAppState, node_did: Option<&str>) -> bool {
     let Some(node_did) = node_did else {
         return false;
     };
-    gents_desktop_core::client::runtime_directory::load_runtime_connections(
+    gents_store::client_journal::runtime_directory::load_runtime_connections(
         state.policy.desktop_paths.runtime_directory_path(),
     )
     .await

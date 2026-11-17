@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod client_observation_tests;
+
 #[cfg(any(test, feature = "test-fixtures"))]
 extern crate self as gents;
 

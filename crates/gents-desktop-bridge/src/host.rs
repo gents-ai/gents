@@ -21,8 +21,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{AppMeta, BootstrapPolicy, ManagedServerPolicy, ResolvedBridgePolicy};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::projection::SnapshotGrants;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use protocol::ClientCommand;
 
 /// Transport attachments share the existing core and never own its shutdown.

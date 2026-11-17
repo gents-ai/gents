@@ -1,7 +1,8 @@
 use crate::client_runtime::ClientRuntime;
-use crate::error::{BridgeError, BridgeErrorCode};
 use gents_protocol::job::{JobReadError, JobView};
 use gents_protocol::operations::job::{JobListInput, JobQueryError, JobViewInput};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use std::sync::Arc;
 
 pub async fn jobs_list(

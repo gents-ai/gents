@@ -26,7 +26,7 @@ async fn archive(host: &ClientHost, node: &str, archived: bool, revision: &str) 
 #[tokio::test]
 async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     use crate::client_runtime::ClientRuntime;
-    use gents_desktop_core::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
     for case in gents_lean_vocab::families::contracts_archive_receipts::cases() {
         // The session lives on the served runtime; the desktop holds no replica,
         // so a reopened client reads the archive state back from its runtime.

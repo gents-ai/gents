@@ -1,6 +1,6 @@
 use super::*;
-use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
+use gents_store::client_journal::paths::DesktopPaths;
 use serde_json::json;
 
 fn sample_summary() -> DesktopInitSummary {

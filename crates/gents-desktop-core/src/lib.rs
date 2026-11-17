@@ -1,6 +1,5 @@
 pub mod ansi;
 pub mod client;
-pub mod error;
 pub mod home_reset;
 pub mod preference;
 

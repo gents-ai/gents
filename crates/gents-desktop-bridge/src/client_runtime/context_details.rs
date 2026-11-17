@@ -81,7 +81,7 @@ impl ClientRuntime {
 mod tests {
     use super::*;
 
-    use gents_desktop_core::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
 
     use serde_json::json;
     use wiremock::{

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::client_runtime::ClientRuntime;
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::watch;
@@ -19,7 +19,7 @@ pub use crate::config::ResolvedBridgePolicy;
 pub enum ClientStartProgress {
     Pending,
     Ready,
-    Failed(crate::error::BridgeError),
+    Failed(gents_store::client_error::BridgeError),
 }
 
 pub struct DesktopAppState {
@@ -314,10 +314,10 @@ pub fn resolve_policy(
 
 pub fn require_node_home(
     state: &State<'_, DesktopAppState>,
-) -> Result<PathBuf, crate::error::BridgeError> {
+) -> Result<PathBuf, gents_store::client_error::BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {
-        crate::error::BridgeError::new(
-            crate::error::BridgeErrorCode::Unsupported,
+        gents_store::client_error::BridgeError::new(
+            gents_store::client_error::BridgeErrorCode::Unsupported,
             "local node home is not available under PairedRemoteOnly bootstrap policy",
         )
     })

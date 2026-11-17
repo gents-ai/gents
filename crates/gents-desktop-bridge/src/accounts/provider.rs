@@ -1,10 +1,11 @@
 //! Provider account sign-in and observation served by the Tauri commands.
 
 use super::{CredentialSave, IssuedOAuthCredential, PendingOAuthCredentials};
-use crate::error::{BridgeError, BridgeErrorCode};
 use gents_inference::auth::credential::{
     list_stored_accounts, OAuthCredential, SignIn, SignInResult, StoredAccount,
 };
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use serde::Serialize;
 
 const LOG_TARGET: &str = "crate::inference_setup";

@@ -414,7 +414,7 @@ struct McpFixture {
     desktop_home: std::path::PathBuf,
     _store_claim: gents_store::local::home::StoreLock,
     _runtime: gents_store::identity::KeyIdentity,
-    _client: gents_desktop_core::client::PrincipalIdentity,
+    _client: gents_store::client_journal::principal_identity::PrincipalIdentity,
 }
 
 impl McpFixture {
@@ -446,9 +446,12 @@ impl McpFixture {
         .await??;
         let node_did = node_did_from_init(&init)?;
         let runtime = identity_from_init(&init)?;
-        let client = gents_desktop_core::client::PrincipalIdentity::load_existing(
-            &gents_desktop_core::client::DesktopPaths::from_root(desktop_home.join("cli")),
-        )?;
+        let client =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+                &gents_store::client_journal::paths::DesktopPaths::from_root(
+                    desktop_home.join("cli"),
+                ),
+            )?;
         let data = gents_store::local::home::default_data_dir(&home);
         let claim = gents_store::local::home::lock_store(&home, &data)?;
         let store_key = gents_store::local::store_key::open_home_store_key(&home, &data).await?;

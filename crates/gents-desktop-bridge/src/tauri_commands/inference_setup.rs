@@ -25,7 +25,6 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 
 #[cfg(test)]
 use crate::accounts::{CredentialSave, PendingOAuthCredentials};
-use crate::error::{BridgeError, BridgeErrorCode};
 pub use crate::inference_setup::{
     discover_inference_models_for_core, inference_backend_recommendation,
     inference_model_recommendation, InferenceBackendRecommendationRequest,
@@ -34,6 +33,8 @@ pub use crate::inference_setup::{
 };
 use crate::state::{current_core, DesktopAppState};
 use crate::types::ClientUpdateEvent;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
@@ -1053,7 +1054,7 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn an_added_accounts_backend_is_in_the_client_snapshot_after_sign_in() {
-        use gents_desktop_core::client::DesktopPaths;
+        use gents_store::client_journal::paths::DesktopPaths;
 
         let temp = tempfile::TempDir::new().expect("tmpdir");
         let core = ClientRuntime::start_with_paths_and_options(

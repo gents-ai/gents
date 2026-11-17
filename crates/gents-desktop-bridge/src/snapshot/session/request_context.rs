@@ -413,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn context_details_reject_foreign_physical_requests_before_reading_capture() {
-        use gents_desktop_core::client::DesktopPaths;
+        use gents_store::client_journal::paths::DesktopPaths;
         use gents_store::test_support::wire_database::WireDatabase;
         let directory = tempfile::tempdir().unwrap();
         let core = std::sync::Arc::new(

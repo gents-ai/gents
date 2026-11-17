@@ -1,5 +1,5 @@
-use crate::client::DesktopPaths;
 use anyhow::{Context, Result};
+use gents_store::client_journal::paths::DesktopPaths;
 
 pub(super) async fn open_or_create_client_store_key(
     paths: &DesktopPaths,

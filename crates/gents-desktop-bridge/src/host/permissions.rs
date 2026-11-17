@@ -3,7 +3,8 @@ use gents_tools::plugin::approval::workspace::{self, Mode, Support, WorkspaceKey
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

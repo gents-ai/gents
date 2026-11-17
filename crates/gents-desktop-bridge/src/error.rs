@@ -1,4 +1,4 @@
-pub use gents_desktop_core::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::{BridgeError, BridgeErrorCode};
 
 pub fn control_send_error(
     error: gents_toolcalls::call::control::client::send::ControlSendError,

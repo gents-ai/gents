@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::identity::NodeIdentity;
 use gents_store::test_support::bounded_process::BoundedProcess;
 use serde_json::{json, Value};
@@ -836,7 +836,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     // administrator, whose `session_read` covers the client's sessions and
     // requests; the Node key holds no relation on them.
     let operator =
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())?;
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+            &homes.cli_identity(),
+        )?;
     let access = gents_store::config_client::ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(graphql, operator.did())
             .with_client_signing_capability(operator.client_signing_capability()?)?,
@@ -2665,7 +2667,8 @@ async fn read_session(
             match result {
                 Ok(projection) => return Ok(projection),
                 Err(error)
-                    if error.code == gents_desktop_bridge::BridgeErrorCode::ProjectionPending =>
+                    if error.code
+                        == gents_store::client_error::BridgeErrorCode::ProjectionPending =>
                 {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }

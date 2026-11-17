@@ -1,11 +1,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents_desktop_core::client::{
-    journal::keys::{client_store_from_other_version, client_store_key_missing},
-    runtime_directory::{load_runtime_connections, RuntimeDirectory},
-    DesktopPaths,
-};
+use gents_desktop_core::client::journal::keys::client_store_from_other_version;
+use gents_desktop_core::client::journal::keys::client_store_key_missing;
 use gents_desktop_core::home_reset::{plan_home_reset, ClientBinding, HomeResetDisposition};
 use gents_desktop_core::preference::{
     read_home_identity, StoredManagedServer, MANAGED_SERVER_CONFIG,
@@ -14,6 +11,9 @@ use gents_protocol::operations::install_repair::{
     Blocker, ClientObservation, Finding, IncompatibleStore, IncompatibleStoreKind,
     RepairClientInput, RepairClientReceipt, RepairClientScope,
 };
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::runtime_directory::load_runtime_connections;
+use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 
 use super::ClientExclusion;
 

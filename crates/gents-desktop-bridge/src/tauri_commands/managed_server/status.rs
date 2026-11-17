@@ -9,7 +9,6 @@ use super::port::{
 use super::preference::load_bound_preference;
 use super::readiness::{managed_selection_outdated_message, refused_runtime_store};
 use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerState, ManagedServerStatus};
 use gents_desktop_core::preference::StoredManagedServer;
@@ -18,6 +17,8 @@ use gents_protocol::serve_lifecycle::outdated_runtime_message;
 use gents_service::repair::crash_loop;
 use gents_service::repair::crash_loop::JobSample;
 use gents_service::repair::reason::{blocker_for_exit, read_last_error};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// A store refusal the launch-time repair does not own: a missing store key

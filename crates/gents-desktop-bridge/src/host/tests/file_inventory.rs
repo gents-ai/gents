@@ -5,12 +5,12 @@ use crate::client_runtime::ClientRuntime;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_inventory::{
     DirectFileInventoryRequest, FileInventoryAdmission, FileInventoryObservation,
     FileInventoryReadAction, FILE_INVENTORY_OPERATOR_PATH,
 };
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::identity::NodeIdentity;
 use identity::Identity;
 use serde_json::{json, Value};

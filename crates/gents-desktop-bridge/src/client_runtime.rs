@@ -12,16 +12,16 @@ mod inference_setup;
 mod writes;
 
 use anyhow::{Context, Result};
-use gents_desktop_core::client::{
-    journal::{ClientJournal, ClientStoreKeyProvider},
-    runtime_directory::RuntimeDirectory,
-    DesktopPaths, PrincipalIdentity,
-};
+use gents_desktop_core::client::journal::ClientJournal;
+use gents_desktop_core::client::journal::ClientStoreKeyProvider;
 use gents_observe::client_projection::{
     observe::{ObservedStores, ObserverHandle},
     query::load_node_scoped_snapshot_with_connections,
 };
 use gents_protocol::runtime_connection::RuntimeConnection;
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
+use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 use rapidhash::RapidHashMap;
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{watch, Mutex};

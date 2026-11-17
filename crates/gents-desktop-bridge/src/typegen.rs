@@ -8,7 +8,6 @@ use gents::client_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
 use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest, UsageWindowView};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::inference_setup::{
     ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
@@ -22,6 +21,8 @@ use crate::tauri_commands::inference_setup::{
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
 use crate::types::*;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 #[cfg(test)]
 fn bindings_dir() -> PathBuf {

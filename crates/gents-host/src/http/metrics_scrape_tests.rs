@@ -212,11 +212,13 @@ fn runtime_state(graphql: &str, node_did: &str) -> crate::http::router::RuntimeH
 #[tokio::test]
 async fn bound_listener_serves_only_the_exposition_without_operator_identity() {
     let home = tempfile::tempdir().unwrap();
-    let paths = gents_desktop_core::client::DesktopPaths::from_root(home.path().join("node"));
+    let paths =
+        gents_store::client_journal::paths::DesktopPaths::from_root(home.path().join("node"));
     paths.ensure_root_dirs().await.unwrap();
-    let node = gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths)
-        .await
-        .unwrap();
+    let node =
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(&paths)
+            .await
+            .unwrap();
     let graphql = serve(|_| {
         Router::new().route(
             "/api/v0/graphql",

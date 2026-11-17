@@ -4,7 +4,6 @@ use super::pairing::drain_managed_runtime_pairing;
 use super::port::{matching_external_server, user_status_signer};
 use super::status::emit_status;
 use crate::config::ManagedServerPolicy;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::tauri_commands::service_executable::resolve_service_executable;
 use crate::types::{HomeResetDisposition, ManagedServerResetResult};
@@ -12,6 +11,8 @@ use gents_desktop_core::home_reset::*;
 use gents_service::args::ServiceAction;
 use gents_service::repair::crash_loop::CrashLoopWatch;
 use gents_service::repair::port::read_initialized_did;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -27,7 +28,7 @@ pub(super) async fn unfinished_local_setup(
     };
     // Peers that cannot be read are not evidence that none exist, so an
     // unreadable directory never offers to start over.
-    let Ok(peers) = gents_desktop_core::client::runtime_directory::load_runtime_connections(
+    let Ok(peers) = gents_store::client_journal::runtime_directory::load_runtime_connections(
         state.policy.desktop_paths.runtime_directory_path(),
     )
     .await
@@ -239,7 +240,7 @@ where
 /// already completed and is not undone for it.
 pub(super) async fn retire_desktop_pairing(state: &DesktopAppState, node_home: &Path) -> u32 {
     let result = async {
-        let directory = gents_desktop_core::client::runtime_directory::RuntimeDirectory::open(
+        let directory = gents_store::client_journal::runtime_directory::RuntimeDirectory::open(
             state.policy.desktop_paths.runtime_directory_path(),
         )
         .await?;

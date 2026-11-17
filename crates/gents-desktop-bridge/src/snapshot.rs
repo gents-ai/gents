@@ -9,9 +9,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::client_runtime::ClientRuntime;
-use gents_desktop_core::client::{runtime_directory::load_runtime_connections, DesktopPaths};
 use gents_observe::client_projection::sync_health::{project_sync_health, SyncHealth};
 use gents_protocol::runtime_connection::RuntimeConnection;
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::runtime_directory::load_runtime_connections;
 
 use super::config::ResolvedBridgePolicy;
 use super::types::{

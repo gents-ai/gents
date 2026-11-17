@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use crate::client_runtime::ClientRuntime;
-use gents_desktop_core::error::BridgeErrorCode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState};
 use gents_protocol::process_control::{
     ToolControlIntent, ToolControlReceipt, ToolControlReceiptOutcome,
 };
+use gents_store::client_error::BridgeErrorCode;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 
@@ -31,7 +31,9 @@ pub(super) async fn control_runtime() -> ControlRuntime {
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
         ClientRuntime::start_with_paths_and_options(
-            gents_desktop_core::client::DesktopPaths::from_root(directory.path().join("desktop")),
+            gents_store::client_journal::paths::DesktopPaths::from_root(
+                directory.path().join("desktop"),
+            ),
             crate::client_test_support::file_journal_options(),
         )
         .await

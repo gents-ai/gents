@@ -1,13 +1,13 @@
 use super::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub struct DocumentPatch {
     pub store: ClientStore,
     pub observed_documents: usize,
     pub missing_doc_ids: Option<Vec<String>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn fetch_doc_patch(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,

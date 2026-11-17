@@ -2,13 +2,14 @@ use crate::client_runtime::ClientRuntime;
 use anyhow::{ensure, Context, Result};
 use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{
     GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView, SessionGoalState,
     SessionGoalView,
 };
 use gents_automation::goal::SessionGoalObservationState;
 use gents_protocol::goal_control::SessionGoalObservation;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 pub async fn session_goal(
     core: &ClientRuntime,

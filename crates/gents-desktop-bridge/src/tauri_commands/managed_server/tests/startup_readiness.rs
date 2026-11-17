@@ -132,7 +132,7 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
 
 #[tokio::test]
 async fn generated_fresh_startup_preserves_enrollment_authority() {
-    use gents_desktop_core::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
 
     for case in gents_lean_vocab::families::enrollment_pending_requests_startup::cases() {
         let (temp, state) = orchestration_state();
@@ -173,8 +173,9 @@ async fn generated_fresh_startup_preserves_enrollment_authority() {
 
 #[tokio::test]
 async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
-    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::runtime_connection::RuntimeConnection;
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
     use gents_store::identity::NodeIdentity as _;
     use identity::Identity as _;
     use wiremock::matchers::{method, path};

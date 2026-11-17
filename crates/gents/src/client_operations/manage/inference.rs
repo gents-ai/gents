@@ -12,7 +12,7 @@ pub(super) fn refusal(
     verb: &'static str,
 ) -> anyhow::Error {
     let next = error.recovery(document, verb);
-    gents_desktop_core::error::inference_operation_failure(error, next)
+    gents_store::client_error::inference_operation_failure(error, next)
 }
 
 pub(super) fn operation_failure(

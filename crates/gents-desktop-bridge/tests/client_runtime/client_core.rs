@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use gents_desktop_bridge::client_runtime::ClientRuntime;
 use gents_desktop_bridge::client_test_support::file_journal_options;
-use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::runtime_connection::RuntimeConnection;
+use gents_store::client_journal::paths::DesktopPaths;
 
 #[tokio::test]
 async fn runtime_directory_and_client_identity_survive_reopen_without_a_peer() -> Result<()> {

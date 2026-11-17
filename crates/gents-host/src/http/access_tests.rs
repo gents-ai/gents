@@ -1,6 +1,7 @@
 use super::*;
 use axum::{body::Body, http::Uri};
-use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 use serde::Deserialize;
 use serde_json::Value;
 

@@ -1,9 +1,9 @@
 use anyhow::Result;
 use gents_desktop_bridge::client_runtime::ClientRuntime;
-use gents_desktop_core::client::DesktopPaths;
 use gents_documents::{
     Agent, InferenceBackend, InferenceProfile, Node, Schedule, SkillDocument, Task, Tools, Trigger,
 };
+use gents_store::client_journal::paths::DesktopPaths;
 use serde_json::json;
 use std::sync::Arc;
 

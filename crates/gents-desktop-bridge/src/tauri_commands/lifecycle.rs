@@ -12,10 +12,11 @@ use self::single_flight::{
     wait_for_start_inflight,
 };
 use crate::config::BootstrapPolicy;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::build_client_snapshot_with_grants;
 use crate::state::{current_core, snapshot_grants, DesktopAppState};
 use crate::types::{ClientUpdateEvent, DesktopClientSnapshot, DesktopInitRequest};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 mod core_start;
 pub(super) mod exclusion;

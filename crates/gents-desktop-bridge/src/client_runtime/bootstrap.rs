@@ -1,11 +1,10 @@
 use super::{ClientRuntime, ClientRuntimeOptions};
 use anyhow::Result;
-use gents_desktop_core::client::{
-    journal::{ClientJournal, JournalOptions},
-    runtime_directory::RuntimeDirectory,
-    DesktopPaths,
-};
+use gents_desktop_core::client::journal::ClientJournal;
+use gents_desktop_core::client::journal::JournalOptions;
 use gents_observe::client_projection::observe::{spawn_observer, ObservedStores};
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 use std::sync::Arc;
 use tokio::sync::watch;
 

@@ -20,7 +20,7 @@ use crate::http::prometheus::MetricsRuntimeRow;
 
 fn desktop_endpoint(
     url: impl Into<String>,
-    identity: &gents_desktop_core::client::PrincipalIdentity,
+    identity: &gents_store::client_journal::principal_identity::PrincipalIdentity,
 ) -> GraphqlEndpoint {
     GraphqlEndpoint::as_principal(url, identity.did())
         .with_client_signing_capability(
@@ -121,11 +121,12 @@ async fn backend_discovery_requires_authenticated_identity() {
 
 #[tokio::test]
 async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_observed_build() {
-    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::serve_lifecycle::control::{
         RuntimeControlCommand, RuntimeControlDisposition, RuntimeControlReceipt, RuntimeOperation,
         RUNTIME_CONTROL_PATH, RUNTIME_CONTROL_VERSION,
     };
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
     let temp = tempfile::tempdir().unwrap();
     // Runtime control admits only the Node's own signer; the enrolled User
     // configures the Agent the runtime starts over its fresh backend admission.
@@ -490,11 +491,12 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
 
 #[tokio::test]
 async fn operator_inventory_authenticates_and_reads_native_metadata() {
-    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::file_inventory::{
         DirectFileInventoryRequest, FileInventoryObservation, FileInventoryReadAction,
         FILE_INVENTORY_OPERATOR_PATH,
     };
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
 
     let temp = tempfile::tempdir().unwrap();
     // The enrolled User holds the operator grants and configures the Node
@@ -668,8 +670,9 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
 
 #[tokio::test]
 async fn inference_settings_authenticates_the_client_before_reading_configuration() {
-    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_observe::client_inference::INFERENCE_SETTINGS_PATH;
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
     let temp = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(temp.path());
     paths.ensure_root_dirs().await.unwrap();

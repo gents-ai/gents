@@ -9,7 +9,7 @@ use gents::client_runtime::{
     dangerously_overwrite_desktop_home, default_node_home, init_standard_local_runtime,
     render_human_summary, reset_desktop_runtime_state, DesktopInitOptions,
 };
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[derive(Debug, Parser)]

@@ -297,7 +297,7 @@ async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
 async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().expect("tempdir");
-    let paths = gents_desktop_core::client::DesktopPaths::from_root(temp.path());
+    let paths = gents_store::client_journal::paths::DesktopPaths::from_root(temp.path());
     gents_store::identity::load_or_create_file_identity(paths.identity_key_path()).unwrap();
     std::fs::set_permissions(
         paths.identity_key_path(),

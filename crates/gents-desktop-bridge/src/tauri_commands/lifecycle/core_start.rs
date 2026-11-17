@@ -5,7 +5,8 @@ use gents_desktop_core::client::journal::CLIENT_START_STALL_TIMEOUT;
 use tokio::sync::watch;
 
 use super::ClientLifecycleGuard;
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 const CLIENT_START_STACK_SIZE: usize = 16 * 1024 * 1024;
 pub(super) const NO_STAGE_COMPLETED: &str = "none";
@@ -40,7 +41,7 @@ pub(super) type ClientStartFailure = (
     reason = "dedicated large-stack OS thread outside the runtime workers; the caller awaits a oneshot"
 )]
 pub(super) async fn start_client_core_async(
-    paths: gents_desktop_core::client::DesktopPaths,
+    paths: gents_store::client_journal::paths::DesktopPaths,
     store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
     lifecycle: ClientLifecycleGuard,
 ) -> Result<(ClientRuntime, ClientLifecycleGuard), ClientStartFailure> {

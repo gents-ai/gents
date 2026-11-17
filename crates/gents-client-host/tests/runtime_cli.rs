@@ -44,7 +44,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     use std::time::Duration;
 
     use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
-    use gents_desktop_core::client::DesktopPaths;
+    use gents_store::client_journal::paths::DesktopPaths;
     use serde_json::json;
 
     let root = tempfile::tempdir().unwrap();
@@ -390,8 +390,10 @@ async fn publish_workspace_root(
     let config: serde_json::Value =
         serde_json::from_slice(&std::fs::read(home.join("init.json")).unwrap()).unwrap();
     let node_did = config["node_did"].as_str().unwrap();
-    let user = gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())
-        .unwrap();
+    let user = gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+        &homes.cli_identity(),
+    )
+    .unwrap();
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         user.private_key_bytes(),
     )

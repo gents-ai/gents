@@ -13,7 +13,7 @@ use gents_p2p::p2p_reconcile::{
     PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
 
-use gents_desktop_core::client::PrincipalIdentity;
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 
 /// Remote administration must report an unresponsive endpoint rather than
 /// block route reconciliation indefinitely.
@@ -351,7 +351,8 @@ async fn check_status(resp: reqwest::Response) -> RemoteP2pAdminResult<reqwest::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
 
     use wiremock::matchers::{body_bytes, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

@@ -2,7 +2,6 @@ use super::native::native_service;
 use super::pairing::drain_managed_runtime_pairing;
 use super::port::capitalize;
 use crate::config::ManagedServerPolicy;
-use crate::error::BridgeError;
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerRepairOutcome, ManagedServerRepairResult};
 use gents_desktop_core::client::journal::keys::client_store_from_other_version;
@@ -15,6 +14,7 @@ use gents_protocol::operations::install_repair::{
     RepairReceipt, RepairStep, ServiceMove,
 };
 use gents_service::repair::{execute, Progress, ServiceProgram};
+use gents_store::client_error::BridgeError;
 use std::future::Future;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager as _, Runtime};
@@ -156,7 +156,7 @@ where
     let late = async {
         let client = repair_client_state(state, &mut repaired, RepairClientScope::All).await?;
         local_node_lost |= client.local_node_lost;
-        gents_desktop_core::client::runtime_directory::load_runtime_connections(peers_path)
+        gents_store::client_journal::runtime_directory::load_runtime_connections(peers_path)
             .await
             .map_err(|error| BridgeError::untyped(error.to_string()))
     }
@@ -166,7 +166,7 @@ where
         Err(error) => {
             outcome = ManagedServerRepairOutcome::Blocked;
             blocker = Some(capitalize(format!("{error:#}")));
-            gents_desktop_core::client::runtime_directory::load_runtime_connections(peers_path)
+            gents_store::client_journal::runtime_directory::load_runtime_connections(peers_path)
                 .await
                 .map(|peers| crate::snapshot::saved_runtime_views(&peers))
                 .unwrap_or_default()

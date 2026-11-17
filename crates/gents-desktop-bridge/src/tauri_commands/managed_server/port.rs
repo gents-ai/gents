@@ -1,5 +1,4 @@
 use super::authority::suggested_tool_root;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerState, ManagedServerStatus};
 use gents::client_runtime::HostedRuntimeStatusError;
@@ -9,6 +8,8 @@ use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 use gents_service::repair::port::{
     observe_port, read_initialized_did, served_identity, PortObservation, ServedIdentity,
 };
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use gents_store::config_client::ClientSigningCapability;
 use std::path::Path;
 

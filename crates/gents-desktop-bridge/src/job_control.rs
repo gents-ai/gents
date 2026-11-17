@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::client_runtime::ClientRuntime;
-use crate::error::BridgeError;
 use gents_protocol::job::JobControlOutcome;
+use gents_store::client_error::BridgeError;
 
 use crate::types::DesktopJobControlRequest;
 

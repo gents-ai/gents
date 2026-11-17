@@ -1,12 +1,13 @@
 use tauri::State;
 
 use super::managed_server::co_hosted_runtime;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{
     JoinHistoryView, JoinMemberView, JoinRequestDecideRequest, JoinRequestDecisionView,
     JoinRequestView,
 };
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 /// Join requests are decided with the operator identity of the runtime this
 /// desktop co-hosts; another node's requests are decided on that node.
