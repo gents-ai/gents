@@ -563,6 +563,6 @@ fn recreate_slot(matches: bool, parked: bool) -> bool {
 #[test]
 fn parked_slot_recovery_replays_the_lean_owner() {
     gents_lean_vocab::families::runtime_reconcile_surface_publication_recreate_slot::replay(|i| {
-        recreate_slot(i.matches, i.parked)
+        recreate_slot(i.configuration_matches, i.parked)
     });
 }

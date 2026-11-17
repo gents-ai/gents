@@ -43,9 +43,9 @@ theorem plugin_free_never_waits : needsPublicationFence false = false := by deci
 
 /-- A parked slot is not a runnable reusable executor, even when its
 configuration fingerprints match a recovered proposal exactly. -/
-def recreateSlot (matches parked : Bool) : Bool := !matches || parked
+def recreateSlot (configurationMatches parked : Bool) : Bool := !configurationMatches || parked
 
-theorem parked_is_recreated (matches : Bool) : recreateSlot matches true = true := by
+theorem parked_is_recreated (configurationMatches : Bool) : recreateSlot configurationMatches true = true := by
   simp [recreateSlot]
 
 end RuntimeReconcile.SurfacePublication
