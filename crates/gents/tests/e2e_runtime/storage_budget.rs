@@ -44,35 +44,25 @@ async fn per_request_store_growth_follows_new_content_not_history() {
     for session in 0..SESSIONS {
         for turn in 0..TURNS {
             let marker = turn_marker(session, turn);
-            let request_id = format!("req-{marker}");
-            submit_request(
+            complete_request(
                 &actors,
-                &request_id,
+                &format!("req-{marker}"),
                 &session_id(session),
-                "interactive",
                 &prompt(&marker),
+                started,
             )
             .await;
-            assert_eq!(
-                wait_for_request_terminal(&actors.agent_access, &request_id, STALL_CEILING).await,
-                "completed",
-            );
         }
     }
     for (marker, _) in output_only_streams() {
-        let request_id = format!("req-{marker}");
-        submit_request(
+        complete_request(
             &actors,
-            &request_id,
+            &format!("req-{marker}"),
             &format!("session-{marker}"),
-            "interactive",
             &format!("{marker}: answer without tools."),
+            started,
         )
         .await;
-        assert_eq!(
-            wait_for_request_terminal(&actors.agent_access, &request_id, STALL_CEILING).await,
-            "completed",
-        );
     }
     agent.shutdown().await;
     let fixture = into_fixture(actors);
@@ -101,6 +91,26 @@ async fn per_request_store_growth_follows_new_content_not_history() {
         "{disk} flushed bytes exceed {} for {requests} requests",
         DISK_BYTES_PER_REQUEST * requests,
     );
+}
+
+async fn complete_request(
+    actors: &RequestActors,
+    request_id: &str,
+    session: &str,
+    prompt: &str,
+    test_started: Instant,
+) {
+    let submitted = Instant::now();
+    submit_request(actors, request_id, session, "interactive", prompt).await;
+    let state = wait_for_request_terminal(&actors.agent_access, request_id, STALL_CEILING).await;
+    tracing::info!(
+        request_id,
+        state,
+        request_elapsed = ?submitted.elapsed(),
+        test_elapsed = ?test_started.elapsed(),
+        "storage budget request terminal"
+    );
+    assert_eq!(state, "completed", "{request_id}");
 }
 
 fn turn_marker(session: usize, turn: usize) -> String {
