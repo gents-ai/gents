@@ -1050,6 +1050,17 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
 #[tokio::test]
 async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
     use gents_store::identity::NodeIdentity as _;
+    // This in-process runtime has no binary startup to record its build.
+    // Give both sides the same explicit fixture identity; keep the normal
+    // handshake's verifiable-build requirement intact.
+    crate::http::pack_install::set_runtime_build(
+        gents_protocol::build_info::BuildInfo::from_parts(
+            "hosted-install-test",
+            Some("hosted-install-fixture"),
+            None,
+            Vec::new(),
+        ),
+    );
     let home = crate::test_support::ClientHome::new().await;
     let owner = home.node_did().to_owned();
     let binding = home.agent("hosted-pin-update").await;
