@@ -925,28 +925,21 @@ async fn agent_apply_in_txn(
                 )?)?),
                 None => None,
             };
-            if operation == "clone" {
-                if let Some(tools) = tools.as_mut() {
-                    if let Some(dropped) = tools.self_config.take() {
-                        let value = json!({"tools_id": format!("{id}:tools"), "node_did": owner, "self_config": dropped});
-                        let payload = serde_json::to_string(&value)?;
-                        let quoted = format!("'{}'", payload.replace('\'', "'\\''"));
-                        let home_arg = home
-                            .map(|h| format!("'{}'", h.to_string_lossy().replace('\'', "'\\''")))
-                            .unwrap_or_else(|| "<HOME>".to_owned());
-                        not_copied.push(AgentOmittedCapability {
-                            capability: "tools.self_config (all settings in this group)".to_owned(),
-                            grant_command: format!("printf '%s' {quoted} > ./clone-self-config.json && gents config tools set --home {home_arg} --file ./clone-self-config.json"),
-                        });
-                        if context
-                            .system_prompt
-                            .as_deref()
-                            .is_some_and(|p| p.to_lowercase().contains("config"))
-                        {
-                            prompt_warning = Some("The cloned prompt mentions config, but the clone lacks self_config.".to_owned());
-                        }
-                    }
-                }
+            let dropped_self_config = if operation == "clone" {
+                tools.as_mut().and_then(|tools| tools.self_config.take())
+            } else {
+                None
+            };
+            if dropped_self_config.is_some()
+                && context
+                    .system_prompt
+                    .as_deref()
+                    .is_some_and(|prompt| prompt.to_lowercase().contains("config"))
+            {
+                prompt_warning = Some(
+                    "The cloned prompt mentions config, but the clone lacks self_config."
+                        .to_owned(),
+                );
             }
             if let Some(preset) = args.preset.value() {
                 admit(
@@ -1016,6 +1009,19 @@ async fn agent_apply_in_txn(
                     stored_root.as_deref(),
                 )?;
                 apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
+                if let Some(dropped) = dropped_self_config {
+                    let patch = json!({"tools_id": tools.tools_id, "node_did": owner, "self_config": dropped});
+                    let payload = serde_json::to_string(&patch)?;
+                    let quoted = format!("'{}'", payload.replace('\'', "'\\''"));
+                    let home_arg = home
+                        .map(|h| format!("'{}'", h.to_string_lossy().replace('\'', "'\\''")))
+                        .unwrap_or_else(|| "<HOME>".to_owned());
+                    not_copied.push(AgentOmittedCapability {
+                        capability: "tools.self_config (all settings in this group)".to_owned(),
+                        grant_command: format!("printf '%s' {quoted} > ./clone-self-config.json && gents config tools set --home {home_arg} --file ./clone-self-config.json"),
+                    });
+                }
+
                 // A new Agent DID holds no WorkspaceRoot relationship yet.
                 let published =
                     match crate::surface::tools_root_reader_in_txn(txn, owner, &policy, &tools)

@@ -181,6 +181,20 @@ async fn submit_create(
     if let Some(Value::String(command)) = receipt.pointer_mut("/host_root_access/user_command") {
         *command = with_target(command, home, graphql);
     }
+    if let Some(entries) = receipt.get_mut("not_copied").and_then(Value::as_array_mut) {
+        for entry in entries {
+            if let Some(command) = entry
+                .get_mut("grant_command")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+            {
+                let home = home
+                    .map(|h| format!("'{}'", h.to_string_lossy().replace('\'', "'\\''")))
+                    .unwrap_or_else(|| "<HOME>".to_owned());
+                entry["grant_command"] = Value::String(command.replace("<HOME>", &home));
+            }
+        }
+    }
     print_json(&receipt)
 }
 
