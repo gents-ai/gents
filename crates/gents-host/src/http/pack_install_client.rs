@@ -180,6 +180,12 @@ impl PackInstallSession {
             ServerMessage::Failed { error, outcome } => {
                 bail!("remote pack install failed ({outcome}): {error}")
             }
+            ServerMessage::ApproveGraph { mutation, .. } => {
+                bail!(
+                    "runtime pack graph differs from the client's installation plan: {}",
+                    describe_mutation_disagreement(expected, &mutation)
+                )
+            }
             _ => bail!("runtime pack graph differs from the client's installation plan"),
         };
         let evidence =
@@ -202,6 +208,10 @@ impl PackInstallSession {
             ServerMessage::Failed { error, outcome } => {
                 bail!("remote pack install failed ({outcome}): {error}")
             }
+            ServerMessage::ApproveRelationship { relationship, .. } => bail!(
+                "runtime pack relationship differs from the client's installation plan: {}",
+                describe_relationship_disagreement(expected, &relationship)?
+            ),
             _ => bail!("runtime pack relationship differs from the client's installation plan"),
         };
         let evidence = prepare_pack_relationship(&self.actor, &self.scope, expected).await?;
@@ -631,4 +641,50 @@ mod tests {
         server.await??;
         Ok(())
     }
+}
+
+/// What the client's plan and the runtime's proposal disagree about, stated so
+/// an operator can see the cause instead of only that the graphs differ. The
+/// first difference leads, because a plan that diverges early makes every later
+/// field differ too.
+fn describe_mutation_disagreement(
+    constructed: &gents_store::config_client::PackMutation,
+    proposed: &gents_store::config_client::PackMutation,
+) -> String {
+    use gents_store::config_client::PackMutationDiff as _;
+    let differences = constructed.differences(proposed);
+    let total = differences.len();
+    // The operation, collection and document lead, so a reader knows which
+    // mutation of the plan diverged before reading the field path.
+    let target = format!(
+        "{} {}",
+        constructed.collection(),
+        constructed.doc_id().unwrap_or("<new document>")
+    );
+    match differences.first() {
+        Some(first) if total == 1 => format!("{target}: {}", first.describe()),
+        Some(first) => format!(
+            "{target}: {} (and {} more difference{})",
+            first.describe(),
+            total - 1,
+            if total == 2 { "" } else { "s" }
+        ),
+        None => {
+            format!("{target}: the plans agree field by field, so the difference is outside them")
+        }
+    }
+}
+
+/// The relationship counterpart. Relationships compare as JSON, so the first
+/// differing path is found the same way, over the serialized form.
+fn describe_relationship_disagreement(
+    constructed: &gents_store::config_client::PackRelationship,
+    proposed: &gents_store::config_client::PackRelationship,
+) -> Result<String> {
+    let constructed = serde_json::to_value(constructed)?;
+    let proposed = serde_json::to_value(proposed)?;
+    Ok(gents_store::config_client::describe_json_disagreement(
+        &constructed,
+        &proposed,
+    ))
 }
