@@ -133,12 +133,18 @@ fn operation_dir(home: &Path, id: uuid::Uuid) -> PathBuf {
 }
 
 async fn emit(value: &impl Serialize) -> Result<()> {
+    emit_to(value, &mut tokio::io::stdout()).await
+}
+
+async fn emit_to<W: tokio::io::AsyncWrite + Unpin>(
+    value: &impl Serialize,
+    writer: &mut W,
+) -> Result<()> {
     use tokio::io::AsyncWriteExt as _;
     let mut bytes = serde_json::to_vec(value)?;
     bytes.push(b'\n');
-    let mut stdout = tokio::io::stdout();
-    stdout.write_all(&bytes).await?;
-    stdout.flush().await?;
+    writer.write_all(&bytes).await?;
+    writer.flush().await?;
     Ok(())
 }
 
@@ -312,11 +318,24 @@ pub fn executable_digest(path: &Path) -> Result<String> {
 }
 
 pub async fn check(home: Option<PathBuf>) -> Result<()> {
-    match check_metadata(home).await {
-        Ok(metadata) => emit(&metadata).await,
+    check_to(home, preflight::check_store_key, &mut tokio::io::stdout()).await
+}
+
+async fn check_to<W: tokio::io::AsyncWrite + Unpin>(
+    home: Option<PathBuf>,
+    reader: impl FnOnce(
+            &Path,
+            Option<&gents_store::local::store_key::StoreEncryption>,
+        ) -> std::result::Result<bool, preflight::PreflightError>
+        + Send
+        + 'static,
+    stdout: &mut W,
+) -> Result<()> {
+    match check_metadata_with_reader(home, reader).await {
+        Ok(metadata) => emit_to(&metadata, stdout).await,
         Err(error) => {
             if let Some(failure) = preflight::failure_metadata(&error) {
-                emit(&failure).await?;
+                emit_to(&failure, stdout).await?;
             }
             Err(error)
         }
