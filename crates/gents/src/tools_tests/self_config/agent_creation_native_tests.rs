@@ -536,17 +536,21 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .delete_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
         .await?;
-    assert!(tool
-        .call(
-            json!({
-                "argv":["agent","create"],
-                "options":{"display-name":"Child", "system-prompt":"Work", "profile":"profile"}
-            })
-            .to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient()
-        )
-        .await
-        .is_err());
+    // Document ACP withdraws the runtime's read of its Node; the hosting node
+    // key still reads the Node past document ACP (gents#3747), so creation no
+    // longer depends on `runtime_reader`.
+    assert!(
+        !gents_store::test_support::document_acp_reads(&node, runtime.did(), "Node", &node_doc)
+            .await
+    );
+    let runtime_view =
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime_actor.clone())
+            .execute("{ Node { _docID } }")
+            .await?;
+    assert_eq!(
+        runtime_view["data"]["Node"].as_array().map(Vec::len),
+        Some(1)
+    );
     user_access
         .add_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
         .await?;

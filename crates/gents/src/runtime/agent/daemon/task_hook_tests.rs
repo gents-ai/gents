@@ -597,10 +597,27 @@ async fn passing_hooks_leave_a_manual_task_run_completed() {
     );
     let selected = harness.agent_access.execute(&fire_query).await.unwrap();
     assert_eq!(selected["data"]["TriggerFire"][0]["task_id"], TASK_ID);
+    // Document ACP gives the Node no read of the Agent's fire; the hosting
+    // node key observes it past document ACP (gents#3747).
+    assert!(
+        !gents_store::test_support::document_acp_reads(
+            &harness.node,
+            harness.node.node_identity_did().unwrap(),
+            "TriggerFire",
+            selected["data"]["TriggerFire"][0]["_docID"]
+                .as_str()
+                .unwrap()
+        )
+        .await
+    );
     let node_view = ConfigAccess::local(harness.node.clone())
         .execute(&fire_query)
-        .await;
-    assert!(node_view.is_err() || node_view.unwrap()["data"]["TriggerFire"] == json!([]));
+        .await
+        .unwrap();
+    assert_eq!(
+        node_view["data"]["TriggerFire"].as_array().map(Vec::len),
+        Some(1)
+    );
     let row = harness.run(request, false).await;
     assert_eq!(harness.calls(), 1, "{row}");
     assert_eq!(row["lifecycle_state"], "completed", "{row}");

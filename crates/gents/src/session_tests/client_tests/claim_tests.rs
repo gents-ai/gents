@@ -132,30 +132,65 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     .await
     .unwrap();
     assert_eq!(hook.session_id().await.as_deref(), Some("first-session"));
-    for actor in [runtime.did(), second.agent_did.as_str()] {
-        assert!(
-            gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
-                node.clone(),
-                "first-session",
-                runtime.did(),
-                Some(user.did()),
-                actor.parse().unwrap(),
-                gents_toolcalls::call::hook::FailurePolicy::default(),
-            )
-            .await
-            .is_err(),
-            "an unrelated actor cannot resume a private session"
-        );
-    }
-    let root_rows = admin
-        .execute("{ AgentRequest { request_id } }")
+    assert!(
+        gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
+            node.clone(),
+            "first-session",
+            runtime.did(),
+            Some(user.did()),
+            second.agent_did.parse().unwrap(),
+            gents_toolcalls::call::hook::FailurePolicy::default(),
+        )
+        .await
+        .is_err(),
+        "an unrelated Agent cannot resume a private session"
+    );
+    // Document ACP gives the runtime identity no read of the private session
+    // or its requests; the hosting node key reads both past document ACP
+    // (gents#3747), so it resumes the session as a reader and lists the rows.
+    let session_doc = ConfigAccess::local_as(node.clone(), first.agent_did.parse().unwrap())
+        .execute(r#"{ AgentSession(filter: {session_id: {_eq: "first-session"}}) { _docID } }"#)
         .await
         .unwrap();
-    assert_eq!(
-        root_rows["data"]["AgentRequest"],
-        serde_json::json!([]),
-        "runtime identity does not inherit private requests"
+    assert!(
+        !gents_store::test_support::document_acp_reads(
+            &node,
+            runtime.did(),
+            "AgentSession",
+            session_doc["data"]["AgentSession"][0]["_docID"]
+                .as_str()
+                .unwrap()
+        )
+        .await
     );
+    gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
+        node.clone(),
+        "first-session",
+        runtime.did(),
+        Some(user.did()),
+        runtime.did().parse().unwrap(),
+        gents_toolcalls::call::hook::FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+    let root_rows = admin
+        .execute("{ AgentRequest { _docID request_id } }")
+        .await
+        .unwrap();
+    let root_rows = root_rows["data"]["AgentRequest"].as_array().unwrap();
+    assert!(!root_rows.is_empty());
+    for row in root_rows {
+        assert!(
+            !gents_store::test_support::document_acp_reads(
+                &node,
+                runtime.did(),
+                "AgentRequest",
+                row["_docID"].as_str().unwrap()
+            )
+            .await,
+            "document ACP gives the runtime identity no private request"
+        );
+    }
     let first_rows = ConfigAccess::local_as(node.clone(), first.agent_did.parse().unwrap())
         .execute("{ AgentRequest { request_id } }")
         .await
