@@ -116,3 +116,37 @@ fn acquisition_decisions_replay_the_lean_owner() {
     let expected: Vec<Decision> = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn pinned_reader_refuses_a_replaced_store_and_does_not_recreate_a_removed_home() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    drop(bootstrap_store(&home).unwrap());
+    let pin = StoreReadIdentity::capture(&home).unwrap();
+    std::fs::rename(home.join("plugins"), home.join("retired-plugins")).unwrap();
+    std::fs::create_dir(home.join("plugins")).unwrap();
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Replaced))
+    ));
+    assert_eq!(std::fs::read_dir(home.join("plugins")).unwrap().count(), 0);
+    let pin = StoreReadPin::capture(&home);
+    std::fs::remove_dir_all(&home).unwrap();
+    let error = pin.try_shared().err().unwrap();
+    assert!(PublishedPluginReadError::error_chain_is_absent(&error));
+    assert!(!home.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_shared_lock_needs_no_write_permission() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    drop(bootstrap_store(home.path()).unwrap());
+    let lock = lock_path(home.path());
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let pin = StoreReadIdentity::capture(home.path()).unwrap();
+    assert!(pin.try_shared().is_ok());
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
