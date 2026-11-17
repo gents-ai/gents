@@ -230,7 +230,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     let seed = Arc::new(
         ClientRuntime::start_with_paths_and_options(
             paths.clone(),
-            ClientRuntimeOptions::local_only(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
         )
         .await?,
     );

@@ -29,7 +29,6 @@ function deployment(
     runtimeConnection: "connected",
     chatSafe: true,
     chatRefusal: null,
-    lastError: null,
     nodeConfig: null,
     agentConfigs: [],
     runtime: null,
@@ -83,10 +82,8 @@ function deployment(
 function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
-    lastError: null,
     runtimeCount: 1,
     connectedRuntimeCount: 1,
-    activationErrorCount: 0,
     cause: null,
     nextAction: null,
     ...overrides,
@@ -94,16 +91,15 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
 }
 
 describe("deployment operational state", () => {
-  it("keeps P2P recovery separate from a connected runtime", () => {
+  it("shows a connected runtime as ready", () => {
     const state = projectDeploymentOperationalState(deployment({}));
 
     expect(state.admissionBlocker).toBeNull();
     expect(state.summary.kind).toBe("ready");
-    expect(state.transport).toMatchObject({
-      layer: "p2p",
-      kind: "waiting",
-      shortLabel: "Not connected",
-      action: null,
+    expect(state.connection).toMatchObject({
+      layer: "runtime",
+      kind: "ready",
+      reason: "connected",
     });
   });
 
@@ -206,12 +202,12 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("blocks a disconnected runtime despite retained Ready state", () => {
+  it("retains offline input while showing the disconnected runtime", () => {
     const state = projectDeploymentOperationalState(
       deployment({ local: true, runtimeConnection: "disconnected" }),
     );
     expect(state.agent.kind).toBe("ready");
-    expect(state.admissionBlocker).toBe(state.connection);
+    expect(state.admissionBlocker).toBeNull();
     expect(state.summary).toBe(state.connection);
     expect(state.summary).toMatchObject({
       reason: "disconnected",

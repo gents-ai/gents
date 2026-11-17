@@ -10,7 +10,7 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
             .await
             .unwrap(),
     );
-    crate::client::schema::ensure_runtime_schemas(&node)
+    gents_store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
     ConfigAccess::write_local(&node, "test.live_request", r#"mutation {

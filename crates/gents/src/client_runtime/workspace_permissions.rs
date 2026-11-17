@@ -75,15 +75,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_replication_address_is_not_an_http_capability_endpoint() {
-        let record = RuntimeConnection::new("Remote", "iroh://peer", "did:key:remote");
-        assert!(workspace_permission_support(&record)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
     async fn permission_capabilities_are_read_from_the_saved_peer_without_credentials() {
         use wiremock::{
             matchers::{method, path},
@@ -100,8 +91,15 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let mut record = RuntimeConnection::new("Remote", server.uri(), "did:key:remote");
-        record.graphql = Some(format!("{}/api/v0/graphql", server.uri()));
+        let mut record = gents_protocol::runtime_connection::RuntimeConnection {
+            label: ("Remote").to_string(),
+            node_did: ("did:key:remote").to_string(),
+            graphql: String::new(),
+            local_node_home: None,
+            access_request: None,
+            access_state: None,
+        };
+        record.graphql = format!("{}/api/v0/graphql", server.uri());
         assert!(
             !workspace_permission_support(&record)
                 .await

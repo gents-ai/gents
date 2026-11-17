@@ -10,7 +10,9 @@ use gents_store::client_journal::outbox;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() -> Result<()> {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("gents_desktop_bridge::client_runtime::authored_delivery=debug")
+        .with_env_filter(
+            "warn,gents_desktop_bridge::client_runtime=debug,gents_observe::client_projection=debug",
+        )
         .with_test_writer()
         .try_init();
     let directory = tempfile::tempdir()?;
@@ -93,24 +95,98 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
     let core = Arc::new(
         ClientRuntime::start_with_paths_and_options(paths.clone(), options.clone()).await?,
     );
-    let mut updates = core.store_updates();
-    core.start_authored_delivery();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            if outbox::pending(
-                &core.node_arc(),
-                core.node_identity().did(),
-                runtime.node_did(),
-            )
-            .await?
-            .is_empty()
+    let mut updates = gents_store::subscription_source::subscribe_collections(
+        core.node(),
+        ["ClientAuthoredSubmission"],
+    )?;
+    let mut controls = gents_store::subscription_source::subscribe_collections(
+        runtime.node(),
+        ["AgentSessionGoalControl"],
+    )?;
+    let endpoint = runtime.user_endpoint();
+    let node_did = runtime.node_did().to_owned();
+    let agent_did = agent.agent_did.clone();
+    let goal_answer = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        let document = loop {
+            let batch = controls
+                .recv()
+                .await
+                .context("Goal command stream closed")?;
+            if let Some(change) = batch
+                .changes
+                .into_iter()
+                .find(|change| !change.doc_id.is_empty())
             {
-                return Ok::<_, anyhow::Error>(());
+                break change.doc_id;
             }
-            updates.changed().await?;
-        }
+        };
+        let mut url = reqwest::Url::parse(endpoint.url())?;
+        url.set_path(gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH);
+        let response = endpoint
+            .authorize(reqwest::Client::new().post(url))
+            .await?
+            .json(&gents_protocol::goal_control::ApplyGoalControl {
+                node_did,
+                command_doc_id: document,
+                agent_did,
+            })
+            .send()
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        anyhow::ensure!(
+            status.is_success(),
+            "runtime Goal application failed: {status}: {body}"
+        );
+        Ok::<_, anyhow::Error>(())
+    }));
+    core.start_authored_delivery();
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let delivered = async {
+            loop {
+                if outbox::pending(
+                    &core.node_arc(),
+                    core.node_identity().did(),
+                    runtime.node_did(),
+                )
+                .await?
+                .is_empty()
+                {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                updates
+                    .recv()
+                    .await
+                    .context("client journal stream closed")?;
+            }
+        };
+        let answered = async move {
+            goal_answer.await??;
+            Ok::<_, anyhow::Error>(())
+        };
+        tokio::try_join!(delivered, answered)?;
+        Ok::<_, anyhow::Error>(())
     })
-    .await??;
+    .await;
+    if let Err(error) = settled {
+        let pending = outbox::pending(
+            &core.node_arc(),
+            core.node_identity().did(),
+            runtime.node_did(),
+        )
+        .await?;
+        let states = pending
+            .iter()
+            .map(|record| (&record.submission_id, record.prepared.is_some()))
+            .collect::<Vec<_>>();
+        return Err(error).with_context(|| {
+            format!(
+                "retained delivery did not settle; connection={:?}; pending={states:?}",
+                core.stores().runtime_connection(runtime.node_did())
+            )
+        });
+    }
+    settled??;
     let receipt = core
         .recover_goal_submission(runtime.node_did(), "offline-goal-command")
         .await?

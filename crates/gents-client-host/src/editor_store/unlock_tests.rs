@@ -19,7 +19,6 @@ async fn open(
     let options = ClientRuntimeOptions {
         store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::Keychain,
         store_key_provider: Some(provider),
-        ..ClientRuntimeOptions::local_only()
     };
     let exchange = async {
         let mut editor = frames(editor);

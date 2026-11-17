@@ -297,7 +297,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         ClientRuntime::start_with_paths_and_options(
             paths.clone(),
             ClientRuntimeOptions {
-                ..ClientRuntimeOptions::local_only()
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
             },
         )
         .await

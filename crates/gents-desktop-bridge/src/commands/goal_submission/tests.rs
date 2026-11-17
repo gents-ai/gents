@@ -112,7 +112,7 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         node_did: (runtime.node_did()).to_string(),
         label: ("Goal fixture").to_string(),
         graphql: (proxy.url()).to_string(),
-        local_node_home: Some((&runtime.home_path().display().to_string()).to_string()),
+        local_node_home: Some(runtime.home_path().display().to_string()),
         access_request: None,
         access_state: None,
     })

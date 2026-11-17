@@ -50,6 +50,7 @@ uuid.workspace = true
 tempfile = "3"
 
 [dev-dependencies]
+wiremock = "0.6"
 gents = { path = "../gents", features = ["test-fixtures"] }
 gents-workspace-hack = { workspace = true }
 gents-observe = { path = ".", features = ["test-fixtures", "typescript"] }

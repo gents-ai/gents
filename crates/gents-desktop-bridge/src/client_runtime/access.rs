@@ -95,6 +95,7 @@ impl ClientRuntime {
         if connection.access_state != Some(receipt.state) {
             connection.access_state = Some(receipt.state);
             self.directory.upsert(connection).await?;
+            self.stores.ensure(node_did).request_resync();
         }
         Ok(receipt)
     }
@@ -126,6 +127,7 @@ impl ClientRuntime {
                 decision,
             })
             .await?;
+        self.stores.ensure(node_did).request_resync();
         self.request_runtime_reconnect(Some(node_did)).await;
         Ok(receipt)
     }
@@ -147,3 +149,6 @@ impl ClientRuntime {
         Ok(self.directory.remove(node_did).await?)
     }
 }
+
+#[cfg(test)]
+mod native;

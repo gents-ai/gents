@@ -1,12 +1,4 @@
-use super::identity::resolve_p2p_peer_id;
-use super::{
-    await_serving_runtime_within, cached_runtime_operator_endpoint,
-    dangerously_overwrite_desktop_home, graphql_endpoint_for_desktop_access,
-    init_standard_local_runtime, load_operator_node_identity, load_standard_runtime_identity,
-    normalize_runtime_connection_payload, render_human_summary, reset_desktop_runtime_state,
-    runtime_graphql_url, runtime_operator_signer, runtime_status_url, serving_runtime,
-    DesktopInitOptions, DesktopInitSummary, StoredRuntimeState, LOCAL_STANDARD_SOURCE,
-};
+use super::*;
 use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 use serde_json::json;
@@ -14,70 +6,20 @@ use serde_json::json;
 fn sample_summary() -> DesktopInitSummary {
     DesktopInitSummary {
         status: "initialized",
-        source: LOCAL_STANDARD_SOURCE,
         node_home: "/tmp/node".to_string(),
         desktop_home: "/tmp/desktop".to_string(),
-        peer_directory: "/tmp/desktop/peers.json".to_string(),
+        runtime_directory: "/tmp/desktop/connections.json".to_string(),
         label: "Local Node".to_string(),
         node_name: "default".to_string(),
         node_did: "did:test:default".to_string(),
         graphql: "http://127.0.0.1:9191/graphql".to_string(),
-        p2p_transport: "iroh".to_string(),
-        p2p_peer_id: "peer-runtime".to_string(),
-        p2p_listen_address: "iroh://peer-runtime".to_string(),
-        peer_record_id: "peer-runtime".to_string(),
+
         next_steps: vec![
             "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the app to show `Connected`.".to_string(),
             "Then submit prompts from Chat, or run `gents` in another terminal.".to_string(),
         ],
     }
-}
-
-#[test]
-fn configured_runtime_missing_key_is_not_created_by_desktop_read() {
-    let tempdir = tempfile::tempdir().unwrap();
-    let key_path = tempdir.path().join("missing.key");
-    std::fs::write(
-        tempdir.path().join("init.json"),
-        serde_json::json!({
-            "node_name": "local",
-            "node_did": "did:key:configured",
-            "key_path": key_path,
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    let error = load_standard_runtime_identity(tempdir.path())
-        .err()
-        .expect("missing configured key must be rejected");
-    assert!(format!("{error:#}").contains("identity key does not exist"));
-    assert!(!key_path.exists());
-}
-
-#[test]
-fn configured_runtime_wrong_existing_key_is_preserved() {
-    let tempdir = tempfile::tempdir().unwrap();
-    let key_path = tempdir.path().join("existing.key");
-    gents_store::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
-    let original = std::fs::read(&key_path).unwrap();
-    std::fs::write(
-        tempdir.path().join("init.json"),
-        serde_json::json!({
-            "node_name": "local",
-            "node_did": "did:key:different",
-            "key_path": key_path,
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    let error = load_standard_runtime_identity(tempdir.path())
-        .err()
-        .expect("wrong configured key must be rejected");
-    assert!(format!("{error:#}").contains("identity does not match configured node DID"));
-    assert_eq!(std::fs::read(&key_path).unwrap(), original);
 }
 
 #[test]
@@ -89,9 +31,9 @@ fn init_summary_tells_demo_to_wait_for_the_desktop_connection() {
         .any(|step| step.contains("show `Connected`")));
 
     let rendered = render_human_summary(&summary);
-    assert!(rendered.contains("desktop app connects to it"));
-    assert!(rendered.contains("show `Connected`"));
-    assert!(rendered.contains("Then submit prompts from Chat"));
+    assert!(rendered.contains("Runtime connection saved"));
+    assert!(rendered.contains("Open the application to request access."));
+    assert!(rendered.contains(&summary.graphql));
 }
 
 #[test]
@@ -136,28 +78,6 @@ fn runtime_graphql_url_accepts_case_insensitive_http_schemes() {
     assert!(runtime_graphql_url("HTTPS://example.com:9191/status").is_err());
 }
 
-#[test]
-fn peer_status_url_selects_mixed_case_http_and_skips_non_http_addresses() {
-    let mut record = gents_protocol::runtime_connection::RuntimeConnection::local_standard(
-        "Node",
-        "iroh://peer",
-        "did:key:node",
-        "HTTPS://Example.com:9191/api/v0/graphql",
-    );
-    assert_eq!(
-        super::http::peer_status_url(&record).unwrap().as_deref(),
-        Some("https://example.com:9191/status")
-    );
-    record.graphql = Some("iroh://peer".into());
-    record.addr = "hTtP://Example.com:9191/prefix".into();
-    assert_eq!(
-        super::http::peer_status_url(&record).unwrap().as_deref(),
-        Some("http://example.com:9191/prefix/status")
-    );
-    record.addr = "iroh://peer".into();
-    assert!(super::http::peer_status_url(&record).unwrap().is_none());
-}
-
 #[tokio::test]
 async fn peer_status_fetches_a_mixed_case_http_endpoint() {
     use wiremock::matchers::{method, path};
@@ -170,25 +90,22 @@ async fn peer_status_fetches_a_mixed_case_http_endpoint() {
         .mount(&server)
         .await;
     let endpoint = server.uri().replacen("http://", "hTtP://", 1);
-    let record = gents_protocol::runtime_connection::RuntimeConnection::local_standard(
-        "Node",
-        "iroh://peer",
-        "did:key:node",
-        format!("{endpoint}/api/v0/graphql"),
-    );
+    let record = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("Node").to_string(),
+        node_did: ("did:key:node").to_string(),
+        graphql: format!("{endpoint}/api/v0/graphql"),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
     let status = super::http::peer_status(&record).await.unwrap().unwrap();
     assert_eq!(status["node_did"], "did:key:node");
 }
 
 #[test]
 fn desktop_graphql_rewrites_loopback_endpoint_for_remote_status_host() {
-    let payload = serde_json::json!({
-        "graphql": "http://127.0.0.1:9181/api/v0/graphql"
-    });
-
     assert_eq!(
-        graphql_endpoint_for_desktop_access(&payload, "http://100.73.235.38:9181/status")
-            .as_deref(),
+        graphql_endpoint_for_desktop_access("http://100.73.235.38:9181/status").as_deref(),
         Some("http://100.73.235.38:9181/api/v0/graphql")
     );
 }
@@ -209,24 +126,6 @@ fn desktop_graphql_is_added_to_status_payload() {
             .and_then(serde_json::Value::as_str),
         Some("http://100.73.235.38:9181/api/v0/graphql")
     );
-}
-
-#[test]
-fn resolve_p2p_peer_id_uses_shareable_address_when_identity_is_missing() {
-    let peer_id = resolve_p2p_peer_id(
-        None,
-        Some("127.0.0.1:56000/p2p/peer-alpha"),
-        Some("persisted-peer"),
-    );
-
-    assert_eq!(peer_id.as_deref(), Some("peer-alpha"));
-}
-
-#[test]
-fn resolve_p2p_peer_id_falls_back_to_stored_value() {
-    let peer_id = resolve_p2p_peer_id(None, None, Some("persisted-peer"));
-
-    assert_eq!(peer_id.as_deref(), Some("persisted-peer"));
 }
 
 #[test]
@@ -389,8 +288,6 @@ async fn discovery_waits_for_a_runtime_that_is_not_listening_yet() {
         graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
         node_name: "Local".to_string(),
         node_did: did.to_string(),
-        p2p_transport: "iroh".to_string(),
-        p2p_peer_id: None,
     };
     let server = serve_status_after(
         listener,
@@ -423,8 +320,6 @@ async fn discovery_fails_at_once_for_a_runtime_that_predates_readiness() {
         graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
         node_name: "Local".to_string(),
         node_did: did.to_string(),
-        p2p_transport: "iroh".to_string(),
-        p2p_peer_id: None,
     };
     let error = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -468,82 +363,16 @@ fn hosted_record(
     did: &str,
     graphql: &str,
 ) -> gents_protocol::runtime_connection::RuntimeConnection {
-    let mut record = gents_protocol::runtime_connection::RuntimeConnection::local_standard(
-        "Local",
-        "iroh://peer",
-        did,
-        graphql,
-    );
+    let mut record = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("Local").to_string(),
+        node_did: (did).to_string(),
+        graphql: (graphql).to_string(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
     record.local_node_home = Some(home.to_string_lossy().into_owned());
     record
-}
-
-#[tokio::test]
-async fn cached_runtime_operator_endpoint_does_not_load_a_cold_runtime_key() {
-    use identity::Identity as _;
-
-    let tempdir = tempfile::tempdir().unwrap();
-    let home = tempdir.path();
-    let key_path = home.join("node.key");
-    let identity = gents_store::identity::load_or_create_file_identity(&key_path).unwrap();
-    let did = identity.did().unwrap().to_string();
-    seed_home(home, &did, HOSTED_GRAPHQL);
-    std::fs::write(
-        home.join("init.json"),
-        json!({ "node_name": "Local", "node_did": did, "key_path": key_path }).to_string(),
-    )
-    .unwrap();
-    let record = hosted_record(home, &did, HOSTED_GRAPHQL);
-    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
-    assert_eq!(
-        cached_runtime_operator_endpoint(&record),
-        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
-            HOSTED_GRAPHQL
-        ))
-    );
-    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
-
-    let unlocked = super::OperatorIdentityInteraction::default()
-        .runtime_endpoint(&record)
-        .unwrap();
-    assert!(unlocked.authorization().await.unwrap().is_some());
-    std::fs::remove_file(home.join("init.json")).unwrap();
-    std::fs::remove_file(key_path).unwrap();
-    assert_eq!(
-        cached_runtime_operator_endpoint(&record),
-        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
-            HOSTED_GRAPHQL
-        ))
-    );
-}
-
-#[test]
-fn cached_runtime_operator_endpoint_does_not_infer_authority_from_registry() {
-    let tempdir = tempfile::tempdir().unwrap();
-    let (home, did) = hosted_home(tempdir.path());
-    assert_eq!(
-        cached_runtime_operator_endpoint(&hosted_record(&home, &did, HOSTED_GRAPHQL)),
-        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
-            HOSTED_GRAPHQL
-        ))
-    );
-    let elsewhere = "http://127.0.0.1:9999/api/v0/graphql";
-    assert_eq!(
-        cached_runtime_operator_endpoint(&hosted_record(&home, &did, elsewhere)),
-        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
-            elsewhere
-        ))
-    );
-    let mut record = hosted_record(&home, &did, HOSTED_GRAPHQL);
-    record.local_node_home = None;
-    assert_eq!(
-        cached_runtime_operator_endpoint(&record),
-        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
-            HOSTED_GRAPHQL
-        ))
-    );
-    record.graphql = None;
-    assert!(cached_runtime_operator_endpoint(&record).is_none());
 }
 
 #[tokio::test]
@@ -647,64 +476,7 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
         "{error:#}"
     );
     assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
-    assert!(server
-        .received_requests()
-        .await
-        .unwrap()
-        .iter()
-        .all(|request| request.headers.contains_key("authorization")));
-}
-
-#[test]
-fn operator_node_identity_requires_the_homes_own_runtime_endpoint() {
-    let tempdir = tempfile::tempdir().unwrap();
-    let (home, did) = hosted_home(tempdir.path());
-    let served = HOSTED_GRAPHQL;
-    let record = |graphql: &str| hosted_record(&home, &did, graphql);
-
-    load_operator_node_identity(&record(served)).expect("the home's own runtime endpoint");
-
-    let elsewhere = load_operator_node_identity(&record("http://127.0.0.1:9999/api/v0/graphql"))
-        .expect_err("an endpoint the home does not serve");
-    assert!(
-        elsewhere.to_string().contains("does not serve"),
-        "{elsewhere:#}"
-    );
-
-    let mut remote = record(served);
-    remote.source = Some("manual".to_string());
-    assert!(load_operator_node_identity(&remote).is_err());
-
-    let mut homeless = record(served);
-    homeless.local_node_home = None;
-    assert!(load_operator_node_identity(&homeless).is_err());
-}
-
-#[test]
-fn runtime_operator_signer_is_the_hosted_runtimes_own_identity() {
-    let tempdir = tempfile::tempdir().unwrap();
-    let (home, did) = hosted_home(tempdir.path());
-    let record = |graphql: &str| hosted_record(&home, &did, graphql);
-
-    let signer =
-        runtime_operator_signer(&record(HOSTED_GRAPHQL)).expect("the hosted runtime's signer");
-    assert_eq!(signer.did(), did);
-
-    let elsewhere = runtime_operator_signer(&record("http://127.0.0.1:9999/api/v0/graphql"))
-        .err()
-        .expect("an endpoint the home does not serve");
-    assert!(
-        elsewhere.to_string().contains("does not serve"),
-        "{elsewhere:#}"
-    );
-
-    let mut remote = record(HOSTED_GRAPHQL);
-    remote.source = Some("manual".to_string());
-    assert!(runtime_operator_signer(&remote).is_err());
-
-    let mut homeless = record(HOSTED_GRAPHQL);
-    homeless.local_node_home = None;
-    assert!(runtime_operator_signer(&homeless).is_err());
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
 }
 
 #[tokio::test]

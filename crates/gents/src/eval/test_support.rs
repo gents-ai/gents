@@ -9,11 +9,11 @@ use serde_json::json;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
 
-pub(crate) struct HeldEvalFixture {
-    pub(crate) access: ConfigAccess,
-    pub(crate) node_did: String,
-    pub(crate) user_did: String,
-    pub(crate) other_did: String,
+pub struct HeldEvalFixture {
+    pub access: ConfigAccess,
+    pub node_did: String,
+    pub user_did: String,
+    pub other_did: String,
     _node: Arc<crate::defra_node::Node>,
     _user: gents_store::identity::KeyIdentity,
     _other: gents_store::identity::KeyIdentity,
@@ -22,7 +22,7 @@ pub(crate) struct HeldEvalFixture {
 }
 
 impl HeldEvalFixture {
-    pub(crate) async fn new() -> anyhow::Result<Self> {
+    pub async fn new() -> anyhow::Result<Self> {
         let keys = tempfile::tempdir()?;
         let user =
             gents_store::identity::KeyIdentity::load_or_create(keys.path().join("user.key"), None)?;
@@ -79,7 +79,7 @@ impl HeldEvalFixture {
     }
 }
 
-pub(crate) fn origin(split: EvalSplit) -> RunOrigin {
+pub fn origin(split: EvalSplit) -> RunOrigin {
     RunOrigin {
         definition: DefinitionRef {
             definition_id: "monitor-findings".into(),
@@ -112,7 +112,7 @@ pub(crate) fn origin(split: EvalSplit) -> RunOrigin {
     }
 }
 
-pub(crate) fn identity(run_id: &str, trial_id: &str) -> TrialIdentity {
+pub fn identity(run_id: &str, trial_id: &str) -> TrialIdentity {
     TrialIdentity {
         trial_id: trial_id.into(),
         run_id: run_id.into(),
@@ -127,7 +127,7 @@ pub(crate) fn identity(run_id: &str, trial_id: &str) -> TrialIdentity {
     }
 }
 
-pub(crate) fn completion() -> TrialCompletion {
+pub fn completion() -> TrialCompletion {
     TrialCompletion {
         ended_at: "2026-09-21T00:00:00Z".into(),
         stages: vec![StageCompletion {
@@ -150,7 +150,7 @@ pub(crate) fn completion() -> TrialCompletion {
     }
 }
 
-pub(crate) fn rival_completion() -> TrialCompletion {
+pub fn rival_completion() -> TrialCompletion {
     TrialCompletion {
         ended_at: "2026-09-22T11:22:33Z".into(),
         stages: vec![StageCompletion {
@@ -173,7 +173,7 @@ pub(crate) fn rival_completion() -> TrialCompletion {
     }
 }
 
-pub(crate) fn draft(
+pub fn draft(
     run_id: &str,
     trial_id: &str,
     verdict_id: &str,

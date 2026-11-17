@@ -133,7 +133,7 @@ async fn generated_request_closures_use_exact_database_dependencies() {
             .await
             .unwrap(),
     );
-    crate::client::schema::ensure_runtime_schemas(&node)
+    gents_store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
     let access = ConfigAccess::local_as(
@@ -225,7 +225,7 @@ async fn partial_twin_seed_keeps_the_full_projection_order() {
             .await
             .unwrap(),
     );
-    crate::client::schema::ensure_runtime_schemas(&node)
+    gents_store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
     let access = ConfigAccess::local_as(

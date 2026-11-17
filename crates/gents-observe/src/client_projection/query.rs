@@ -395,13 +395,6 @@ fn request_context_scopes(requests: &[AgentRequestRow]) -> Vec<(String, String)>
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    mod projection_and_patches;
-    mod query_edges;
-    mod transcript_pagination;
-}
-
 pub fn find_request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
@@ -419,4 +412,11 @@ pub fn find_request_in_scope(
         "request {request_id} is ambiguous across node scopes"
     );
     Ok(Some(row.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    mod projection_and_patches;
+    mod query_edges;
+    mod transcript_pagination;
 }

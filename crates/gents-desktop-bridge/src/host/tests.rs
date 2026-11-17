@@ -397,10 +397,10 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
     )
     .unwrap();
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
-        node_did: (&did).to_string(),
+        node_did: did.to_string(),
         label: ("Local").to_string(),
-        graphql: (&graphql).to_string(),
-        local_node_home: Some((&home.to_string_lossy()).to_string()),
+        graphql: graphql.to_string(),
+        local_node_home: Some(home.to_string_lossy().into_owned()),
         access_request: None,
         access_state: None,
     })
@@ -457,10 +457,10 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     )
     .unwrap();
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
-        node_did: (&did).to_string(),
+        node_did: did.to_string(),
         label: ("Local").to_string(),
-        graphql: (&graphql).to_string(),
-        local_node_home: Some((&home.to_string_lossy()).to_string()),
+        graphql: graphql.to_string(),
+        local_node_home: Some(home.to_string_lossy().into_owned()),
         access_request: None,
         access_state: None,
     })

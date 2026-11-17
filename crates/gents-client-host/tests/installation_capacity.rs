@@ -22,7 +22,10 @@ async fn a_full_listener_reports_a_retryable_initialization_failure_without_reti
     let core = Arc::new(
         ClientRuntime::start_with_paths_and_options(
             paths.clone(),
-            ClientRuntimeOptions::local_only(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
         )
         .await
         .unwrap(),

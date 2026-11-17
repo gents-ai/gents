@@ -16,6 +16,7 @@ pub(crate) const MANAGED_PAIRING_CANCELLED: &str = "managed runtime connection w
 pub(crate) enum PairingFailure {
     #[error("{MANAGED_PAIRING_CANCELLED}")]
     Cancelled,
+    #[cfg(feature = "tauri-host")]
     #[error("{0}")]
     Permanent(String),
     #[error("{0}")]

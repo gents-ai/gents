@@ -216,7 +216,7 @@ pub(super) async fn control_runtime() -> ControlRuntime {
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
         node_did: (owner.did()).to_string(),
         label: ("Served runtime").to_string(),
-        graphql: (&graphql).to_string(),
+        graphql: graphql.to_string(),
         local_node_home: Some((home.to_str().unwrap()).to_string()),
         access_request: None,
         access_state: None,

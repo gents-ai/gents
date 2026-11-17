@@ -263,9 +263,9 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     )
     .unwrap();
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
-        node_did: (&node_did).to_string(),
+        node_did: node_did.to_string(),
         label: ("Live test").to_string(),
-        graphql: (&graphql).to_string(),
+        graphql: graphql.to_string(),
         local_node_home: Some((runtime_home.to_str().unwrap()).to_string()),
         access_request: None,
         access_state: None,

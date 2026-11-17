@@ -6327,6 +6327,7 @@ dependencies = [
  "wasmtime 49.0.4",
  "wat",
  "windows-sys 0.61.2",
+ "wiremock",
  "zeroize",
 ]
 
@@ -7191,6 +7192,7 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

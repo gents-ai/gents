@@ -1,3 +1,5 @@
+mod client_access;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -417,8 +419,41 @@ async fn trial_http(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+    let status = served.clone();
+    let metadata = axum::Router::new().route(
+        "/status",
+        axum::routing::get(move || {
+            let served = status.clone();
+            async move {
+                use axum::response::IntoResponse;
+                let Some((node, runtime)) = served
+                    .get()
+                    .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                else {
+                    return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                };
+                match gents_store::config_client::client_authentication::runtime_authentication(
+                    &gents_store::config_client::ConfigAccess::local(node),
+                )
+                .await
+                {
+                    Ok(authentication) => axum::Json(serde_json::json!({
+                        "node_did": runtime.did(),
+                        (gents_protocol::client_authentication::STATUS_FIELD): authentication,
+                    }))
+                    .into_response(),
+                    Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                }
+            }
+        }),
+    );
     let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?
-        .with_authenticated_routes(agent_identity_routes(served).merge(owner_staged.router()));
+        .with_extra_routes(metadata)
+        .with_authenticated_routes(
+            agent_identity_routes(served.clone())
+                .merge(client_access::routes(served))
+                .merge(owner_staged.router()),
+        );
     Ok((config, endpoint, owner_staged))
 }
 

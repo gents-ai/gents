@@ -6,6 +6,12 @@ namespace Identity.NodeProvisioning
 not establish document authorization, and unbound collections do not acquire
 document protection from them. Extra operations require their own justification.
 
+The native collection selector and relationship publication paths require
+`get-collection` even when an Agent already holds document read/update and
+DAC relation permissions. Goal control exercises these paths as the executing
+Agent. This read-only metadata permission enables those operations without
+schema mutation, document access, or a different transaction identity.
+
 `delete-dac-relation` is the revoke of `add-dac-relation` (maintainer decision,
 2026-11-12, gents#3683): whoever can grant access on a document can revoke it,
 so an Agent that links or shares a document it manages can withdraw that
@@ -14,7 +20,7 @@ document ACP still admits a change only from the document's owner or a
 declared manager of that relation (`Household.mayManage`), and a removed tuple
 only narrows access (`Household.revocation_only_narrows`). -/
 def requiredPermissions : List String :=
-  ["read-document", "update-document", "add-dac-relation", "delete-dac-relation"]
+  ["get-collection", "read-document", "update-document", "add-dac-relation", "delete-dac-relation"]
 
 /-- An executing Agent carries its own signer. Native NAC decides whether that
 actor may create documents and manage the new document relationships; the

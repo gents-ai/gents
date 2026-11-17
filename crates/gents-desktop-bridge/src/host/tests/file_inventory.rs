@@ -90,7 +90,7 @@ async fn inventory_requests_go_to_the_runtime_as_the_desktop_client() -> Result<
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
         node_did: (runtime.did()).to_string(),
         label: ("Inventory runtime").to_string(),
-        graphql: (&endpoint).to_string(),
+        graphql: endpoint.to_string(),
         local_node_home: Some((root.path().to_str().unwrap()).to_string()),
         access_request: None,
         access_state: None,

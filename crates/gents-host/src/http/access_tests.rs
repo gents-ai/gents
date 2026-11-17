@@ -678,12 +678,14 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
         .to_string(),
     )
     .unwrap();
-    let mut record = gents_protocol::runtime_connection::RuntimeConnection::local_standard(
-        "Local",
-        "",
-        f.owner.did(),
-        &graphql,
-    );
+    let mut record = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("Local").to_string(),
+        node_did: (f.owner.did()).to_string(),
+        graphql: graphql.to_string(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
     record.local_node_home = Some(home.to_string_lossy().into_owned());
     let public =
         gents::client_runtime::fetch_runtime_connection_payload(&format!("{}/status", f.endpoint))
@@ -737,16 +739,21 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
 }
 
 #[tokio::test]
-async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollment() {
+async fn hosted_status_reader_uses_the_home_admin_independently_of_saved_access_state() {
     use gents::client_runtime::{fetch_hosted_runtime_status, hosted_status_signer};
     use gents_store::identity::NodeIdentity as _;
     let f = Fixture::start().await;
     let desktop = f.desktop();
     let node_did = f.owner.did().to_owned();
     let graphql = format!("{}/api/v0/graphql", f.endpoint);
-    let record = gents_protocol::runtime_connection::RuntimeConnection::local_standard(
-        "Local", "", &node_did, &graphql,
-    );
+    let record = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("Local").to_string(),
+        node_did: node_did.to_string(),
+        graphql: graphql.to_string(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
 
     // Fresh home: no desktop key yet, nothing enrolled.
     assert!(!desktop.identity_key_path().exists());
@@ -775,10 +782,7 @@ async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollm
     assert_eq!(private["tool_root"], "/private/operator/workspace");
 
     let mut enrolled = record.clone();
-    enrolled.source = Some("enrollment".into());
-    enrolled.pairing_network_id = Some("network".into());
-    enrolled.enrollment_request_digest = Some("digest".into());
-    enrolled.enrollment_authorization_sequence = Some(1);
+    enrolled.access_state = Some(gents_protocol::client_access::ClientAccessState::Approved);
     let other_node = hosted_status_signer(
         &desktop,
         Some("did:key:another-node"),

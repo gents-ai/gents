@@ -1,6 +1,6 @@
 use super::super::*;
-use crate::client::schema::ensure_runtime_schemas;
 use gents_protocol::schemas::AGENT_MESSAGE_NAME;
+use gents_store::schema::ensure_runtime_schemas;
 use std::sync::Arc;
 
 #[tokio::test]

@@ -205,6 +205,45 @@ pub fn fixture_logs(root: &Path, extra: &[&str]) -> String {
         .join("\n")
 }
 
+pub async fn retain_journal_input(core: &gents_desktop_bridge::client_runtime::ClientRuntime) {
+    gents_store::client_journal::outbox::reserve(
+        &core.node_arc(),
+        core.node_identity().did(),
+        &gents_protocol::authored_submission::AuthoredSubmission::Chat(Box::new(
+            gents_protocol::operations::request::MessageSendInput {
+                node_did: "did:key:retained-runtime".into(),
+                request_id: Some("retained-request".into()),
+                session_id: Some("retained-session".into()),
+                content: "Retain this authored input".into(),
+                ..Default::default()
+            },
+        )),
+    )
+    .await
+    .unwrap();
+}
+
+pub async fn assert_retained_journal_input(
+    core: &gents_desktop_bridge::client_runtime::ClientRuntime,
+) {
+    let rows = gents_store::client_journal::outbox::pending(
+        &core.node_arc(),
+        core.node_identity().did(),
+        "did:key:retained-runtime",
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].submission_id, "retained-request");
+    let gents_protocol::authored_submission::AuthoredSubmission::Chat(input) =
+        rows[0].authored().unwrap()
+    else {
+        panic!("retained submission changed kind");
+    };
+    assert_eq!(input.session_id.as_deref(), Some("retained-session"));
+    assert_eq!(input.content, "Retain this authored input");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

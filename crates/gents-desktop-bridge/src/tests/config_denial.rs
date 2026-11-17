@@ -35,9 +35,9 @@ impl DenyingRuntime {
         )
         .unwrap();
         core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
-            node_did: (&node_did).to_string(),
+            node_did: node_did.to_string(),
             label: ("Denying runtime").to_string(),
-            graphql: (&graphql).to_string(),
+            graphql: graphql.to_string(),
             local_node_home: Some((runtime_home.to_str().unwrap()).to_string()),
             access_request: None,
             access_state: None,

@@ -28,12 +28,15 @@ async fn check_shared_installation(home: &str) {
     let seed = Arc::new(
         ClientRuntime::start_with_paths_and_options(
             paths.clone(),
-            ClientRuntimeOptions::local_only(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
         )
         .await
         .unwrap(),
     );
-    let peer_id = seed.local_peer_id().to_owned();
+    assert!(seed.node().p2p().is_none());
     let seed_did = seed.node_identity().did().to_owned();
     seed.shutdown().await.unwrap();
     drop(seed);
@@ -71,7 +74,10 @@ async fn check_shared_installation(home: &str) {
     assert_eq!(second.snapshot(1).await["client"]["clientDid"], seed_did);
     let error = match ClientRuntime::start_with_paths_and_options(
         paths.clone(),
-        ClientRuntimeOptions::local_only(),
+        ClientRuntimeOptions {
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            ..Default::default()
+        },
     )
     .await
     {
@@ -111,11 +117,18 @@ async fn check_shared_installation(home: &str) {
         std::fs::read_to_string(dir.path().join("server.log")).unwrap()
     );
     let reopened = Arc::new(
-        ClientRuntime::start_with_paths_and_options(paths, ClientRuntimeOptions::local_only())
-            .await
-            .unwrap(),
+        ClientRuntime::start_with_paths_and_options(
+            paths,
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap(),
     );
-    assert_eq!(reopened.local_peer_id(), peer_id);
+    assert_eq!(reopened.node_identity().did(), seed_did);
+    assert!(reopened.node().p2p().is_none());
     reopened.shutdown().await.unwrap();
 }
 
@@ -133,25 +146,17 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     let core = Arc::new(
         ClientRuntime::start_with_paths_and_options(
             paths.clone(),
-            ClientRuntimeOptions::local_only(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
         )
         .await
         .unwrap(),
     );
-    let peer = core.local_peer_id().to_owned();
+    assert!(core.node().p2p().is_none());
     let client_did = core.node_identity().did().to_owned();
-    let did = gents_store::graphql::escape_graphql_string(&client_did);
-    gents_store::config_client::ConfigAccess::write_local(
-        &core.node_arc(),
-        "installation_upgrade.seed",
-        &format!(
-            r#"mutation {{ create_AgentSession(input: {{session_id: "retained-session",
-            node_did: "{did}", requester_did: "{did}", agent_did: "agent",
-            created_at: "2026-10-25T00:00:00Z"}}) {{ _docID }} }}"#
-        ),
-    )
-    .await
-    .unwrap();
+    support::retain_journal_input(&core).await;
     let listener = local::LocalListener::bind(&paths).await.unwrap();
     let mut previous_commands = protocol::ClientCommand::NAMES
         .iter()
@@ -254,20 +259,19 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     .await
     .unwrap();
     let reopened = Arc::new(
-        ClientRuntime::start_with_paths_and_options(paths, ClientRuntimeOptions::local_only())
-            .await
-            .unwrap(),
-    );
-    assert_eq!(reopened.local_peer_id(), peer);
-    assert_eq!(reopened.node_identity().did(), client_did);
-    let rows = gents_store::config_client::ConfigAccess::local(reopened.node_arc())
-        .execute("{ AgentSession { session_id } }")
+        ClientRuntime::start_with_paths_and_options(
+            paths,
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
+        )
         .await
-        .unwrap();
-    assert_eq!(
-        rows["data"]["AgentSession"][0]["session_id"],
-        "retained-session"
+        .unwrap(),
     );
+    assert!(reopened.node().p2p().is_none());
+    assert_eq!(reopened.node_identity().did(), client_did);
+    support::assert_retained_journal_input(&reopened).await;
     reopened.shutdown().await.unwrap();
 }
 
@@ -285,7 +289,10 @@ async fn different_build_with_compatible_inventory_is_reused_without_retirement(
     let core = Arc::new(
         ClientRuntime::start_with_paths_and_options(
             paths.clone(),
-            ClientRuntimeOptions::local_only(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
         )
         .await
         .unwrap(),

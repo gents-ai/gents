@@ -42,7 +42,7 @@ async fn build_bootstrap_summary_raw(
     desktop_paths: &DesktopPaths,
     node_home: Option<&Path>,
 ) -> Result<DesktopBootstrapSummary, String> {
-    let peer_records = load_runtime_connections(&desktop_paths.runtime_directory_path())
+    let connections = load_runtime_connections(desktop_paths.runtime_directory_path())
         .await
         .map_err(|error| error.to_string())?;
     let (init, init_config_status) = node_home
@@ -76,10 +76,10 @@ async fn build_bootstrap_summary_raw(
             gents_desktop_core::home_reset::local_setup_unfinished(
                 home,
                 init.as_ref().map(|config| config.node_did.as_str()),
-                peer_records.iter().map(|peer| peer.node_did.as_str()),
+                connections.iter().map(|peer| peer.node_did.as_str()),
             )
         }),
-        saved_runtimes: saved_runtime_views(&peer_records),
+        saved_runtimes: saved_runtime_views(&connections),
     })
 }
 

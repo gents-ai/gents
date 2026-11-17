@@ -2,12 +2,11 @@
 mod agent;
 #[path = "live_fixture/backend.rs"]
 mod backend;
-#[path = "live_fixture/replication.rs"]
-mod replication;
+#[path = "live_fixture/connection.rs"]
+mod connection;
 #[path = "live_fixture/workspace.rs"]
 mod workspace;
 
-use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -27,10 +26,7 @@ use self::agent::{spawn_live_node, RunningNode};
 use self::backend::LiveBackendConfig;
 pub(crate) use self::backend::LiveBackendOverride;
 pub(crate) use self::backend::LiveTargetBackendOverride;
-use self::replication::{
-    connect_runtime_peer, wait_for_connected_peer, wait_for_live_documents,
-    wait_for_ready_peer_status, wait_for_runtime_iroh_addr, write_peer_directory_records,
-};
+use self::connection::{wait_for_live_documents, wait_for_runtime_iroh_addr};
 use self::workspace::seed_runner_node_home;
 
 const DEFAULT_DEPLOYMENT_LABEL: &str = "Fleet E2E Agent";
@@ -59,7 +55,7 @@ pub(crate) struct LiveBridgeFixture {
 /// Reads every node that has a connection, each through its own connection
 /// into its own store.
 pub(crate) async fn refresh_every_node(core: &ClientRuntime) -> Result<()> {
-    for record in core.peer_records().await {
+    for record in core.runtime_connections() {
         if core
             .operator_observation_graphql(&record.node_did)
             .is_some()
@@ -117,16 +113,8 @@ impl LiveBridgeFixture {
             .node)
     }
 
-    pub(crate) fn runtime_identity(&self) -> Result<&Arc<dyn gents_store::identity::NodeIdentity>> {
-        Ok(&self
-            .runtime_home
-            .as_ref()
-            .context("live runtime unavailable")?
-            .identity)
-    }
-
     pub(crate) fn runtime_p2p(&self) -> Result<Arc<dyn defra_p2p_adapter::P2POperations>> {
-        gents_store::identity::node_p2p(self.runtime_node()?.as_ref())
+        gents_p2p::node_access::operations(self.runtime_node()?.as_ref())
             .context("live runtime P2P unavailable")
     }
 
@@ -230,12 +218,9 @@ impl LiveBridgeFixture {
             gents_desktop_core::client::PrincipalIdentity::load_or_create(&desktop_paths).await?;
         let node_home = tempdir.path().join("agent-home");
 
-        let p2p_options = live_core_options();
         let p2p = Arc::new(move |path: &Path| gents::defra_node::P2PConfig {
             port: Some(0),
-            bind_addr: p2p_options.bind_addr,
-            relay_mode: p2p_options.relay_mode.clone(),
-            discovery: p2p_options.discovery.clone(),
+            bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
             secret_key_path: Some(path.join("node.iroh.key")),
             ..Default::default()
         });
@@ -258,49 +243,28 @@ impl LiveBridgeFixture {
             agent_target_backend.as_ref(),
         )
         .await?;
-        let runtime_p2p = gents_store::identity::node_p2p(&runtime_home.node)
+        let runtime_p2p = gents_p2p::node_access::operations(&runtime_home.node)
             .context("runtime P2P unavailable")?;
         let remote_addr =
             wait_for_runtime_iroh_addr(&runtime_p2p, DEFAULT_DEPLOYMENT_LABEL).await?;
         let remote_peer_id = runtime_p2p.local_peer_id().await?;
-        let mut peer_record = PeerRecord::local_standard(
-            DEFAULT_DEPLOYMENT_LABEL,
-            &remote_addr,
-            &running_node.node_did,
-            &operator_graphql,
-        );
-        // Keep the durable route truthful while the normal supervisor is
-        // intentionally disabled for this manually managed topology.
-        peer_record.pairing_ready = true;
-        write_peer_directory_records(&desktop_paths, &[peer_record.clone()])?;
+        let connection = RuntimeConnection {
+            node_did: running_node.node_did.clone(),
+            label: DEFAULT_DEPLOYMENT_LABEL.to_owned(),
+            graphql: operator_graphql.clone(),
+            local_node_home: Some(node_home.display().to_string()),
+            access_request: None,
+            access_state: None,
+        };
 
         let desktop_core = Arc::new(
             ClientRuntime::start_with_paths_and_options(desktop_paths.clone(), live_core_options())
                 .await?,
         );
 
-        connect_runtime_peer(
-            desktop_core.as_ref(),
-            &runtime_p2p,
-            DEFAULT_DEPLOYMENT_LABEL,
-        )
-        .await?;
-        wait_for_connected_peer(desktop_core.as_ref(), &remote_peer_id, "desktop -> amy").await?;
-        desktop_core
-            .add_local_standard_peer_route_for_test(
-                &peer_record.label,
-                &peer_record.addr,
-                &peer_record.node_did,
-                peer_record.graphql.as_deref().unwrap_or_default(),
-                &node_home.display().to_string(),
-            )
-            .await?;
-        wait_for_ready_peer_status(
-            desktop_core.as_ref(),
-            &peer_record.peer_id,
-            "desktop -> amy",
-        )
-        .await?;
+        desktop_core.connect_runtime(connection.clone()).await?;
+        desktop_core.start_authored_delivery();
+        remote_core.start_authored_delivery();
         wait_for_live_documents(desktop_core.as_ref(), &running_node.node_did, &docs).await?;
 
         seed_runner_node_home(
@@ -315,29 +279,21 @@ impl LiveBridgeFixture {
 
         let init_summary = DesktopInitSummary {
             status: "initialized",
-            source: "bridge-runner",
             node_home: node_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
-            peer_directory: desktop_paths.runtime_directory_path().display().to_string(),
+            runtime_directory: desktop_paths.runtime_directory_path().display().to_string(),
             label: DEFAULT_DEPLOYMENT_LABEL.to_string(),
             node_name: DEFAULT_NODE_NAME.to_string(),
             node_did: running_node.node_did.clone(),
-            graphql: String::new(),
-            p2p_transport: "iroh".to_string(),
-            p2p_peer_id: remote_peer_id.clone(),
-            p2p_listen_address: remote_addr.clone(),
-            peer_record_id: peer_record.peer_id.clone(),
+            graphql: operator_graphql.clone(),
             next_steps: vec![],
         };
 
         let bootstrap_saved_runtimes = vec![SavedRuntimeView {
-            peer_id: peer_record.peer_id.clone(),
-            label: peer_record.label.clone(),
-            node_did: peer_record.node_did.clone(),
-            addr: peer_record.addr.clone(),
-            source: peer_record.source.clone(),
-            graphql: peer_record.graphql.clone(),
-            local: peer_record.local_node_home.is_some(),
+            label: connection.label,
+            node_did: connection.node_did,
+            graphql: Some(connection.graphql),
+            local: true,
         }];
 
         tracing::info!(
@@ -353,7 +309,7 @@ impl LiveBridgeFixture {
             let update_version = Arc::clone(&update_version);
             tokio::spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
-                let mut sync_updates = desktop_core.sync_state_updates();
+                let mut sync_updates = desktop_core.runtime_connection_updates();
                 let mut remote_store_updates = remote_core.store_updates();
                 loop {
                     tokio::select! {
@@ -416,26 +372,18 @@ impl LiveBridgeFixture {
             ClientRuntime::start_with_paths_and_options(desktop_paths.clone(), live_core_options())
                 .await?,
         );
-        let p2p_listen_address = desktop_core
-            .listen_addresses()
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        desktop_core.start_authored_delivery();
+        remote_core.start_authored_delivery();
 
         let init_summary = DesktopInitSummary {
             status: "initialized",
-            source: "bridge-runner-desktop-only",
             node_home: node_home.display().to_string(),
             desktop_home: desktop_paths.root().display().to_string(),
-            peer_directory: desktop_paths.runtime_directory_path().display().to_string(),
+            runtime_directory: desktop_paths.runtime_directory_path().display().to_string(),
             label: "Desktop Only".to_string(),
             node_name: String::new(),
             node_did: String::new(),
             graphql: String::new(),
-            p2p_transport: "iroh".to_string(),
-            p2p_peer_id: desktop_core.local_peer_id().to_string(),
-            p2p_listen_address,
-            peer_record_id: String::new(),
             next_steps: vec![],
         };
 
@@ -447,7 +395,7 @@ impl LiveBridgeFixture {
             let update_version = Arc::clone(&update_version);
             tokio::spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
-                let mut sync_updates = desktop_core.sync_state_updates();
+                let mut sync_updates = desktop_core.runtime_connection_updates();
                 loop {
                     tokio::select! {
                         changed = store_updates.changed() => {
@@ -549,13 +497,10 @@ where
 }
 
 fn live_core_options() -> ClientRuntimeOptions {
-    let mut options = ClientRuntimeOptions::local_only();
-    options.bind_addr = Some(IpAddr::V4(Ipv4Addr::LOCALHOST));
-    options.max_concurrent_push_tasks = 32;
-    options.rate_limit_burst = 5_000;
-    options.rate_limit_rate = 500.0;
-    options.install_replicators_on_bootstrap = false;
-    options
+    ClientRuntimeOptions {
+        store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+        ..Default::default()
+    }
 }
 
 fn init_live_runner_tracing() {

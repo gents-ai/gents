@@ -69,10 +69,13 @@ export function createBridgeHttpAdapter(
         agentDid,
         path,
       }),
-    listRuntimeAccess: unsupported("listRuntimeAccess"),
-    decideRuntimeAccess: unsupported("decideRuntimeAccess"),
-    removeRuntime: unsupported("removeRuntime"),
-    renameRuntime: unsupported("renameRuntime"),
+    listRuntimeAccess: (nodeDid) =>
+      client.postJson("/desktop/runtime/access/list", { nodeDid }),
+    decideRuntimeAccess: (request) =>
+      client.postJson("/desktop/runtime/access/decide", request),
+    removeRuntime: (nodeDid) => client.postJson("/desktop/runtime/remove", { nodeDid }),
+    renameRuntime: (nodeDid, label) =>
+      client.postJson("/desktop/runtime/rename", { nodeDid, label }),
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),
@@ -147,7 +150,7 @@ export function createBridgeHttpAdapter(
       await client.postJson("/desktop/selected-node", { nodeDid });
     },
     requestRuntimeAccess: async (serverAddress) =>
-      client.postJson("/desktop/peer/enroll-status", { serverAddress }),
+      client.postJson("/desktop/runtime/access/request", { serverAddress }),
     fetchSessionSnapshot: async (sessionId, nodeDid, requestId, timelinePage) =>
       client.postJson<DesktopSessionSnapshot | null>("/desktop/session/snapshot", {
         sessionId,

@@ -369,7 +369,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        crate::client::schema::ensure_runtime_schemas(&node)
+        gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
         for request in ["completed", "active"] {
@@ -507,7 +507,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        crate::client::schema::ensure_runtime_schemas(&node)
+        gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
         ConfigAccess::write_local(

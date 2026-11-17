@@ -207,7 +207,7 @@ impl ClientAccessOwner {
                     &json!({"input": input}), gents_protocol::schemas::CLIENT_RUNTIME_ACCESS_REQUEST,
                 ).await?;
                 let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "ClientRuntimeAccessRequest").map_err(|_| ClientAccessError::Record)?;
-                txn.add_resource_relationship("ClientRuntimeAccessRequest", &doc_id, "parent", "nodes", &node_doc_id).await?;
+                txn.add_resource_relationship("ClientRuntimeAccessRequest", &doc_id, "parent", "nodes", node_doc_id).await?;
                 Ok::<_, ClientAccessError>(())
             })
         }).await?;

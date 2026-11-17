@@ -668,10 +668,8 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
 
 #[tokio::test]
 async fn inference_settings_authenticates_the_client_before_reading_configuration() {
-    use gents_desktop_core::{
-        client::{DesktopPaths, PrincipalIdentity},
-        inference::INFERENCE_SETTINGS_PATH,
-    };
+    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+    use gents_observe::client_inference::INFERENCE_SETTINGS_PATH;
     let temp = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(temp.path());
     paths.ensure_root_dirs().await.unwrap();

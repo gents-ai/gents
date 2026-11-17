@@ -239,7 +239,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
         node_did: (NODE_DID).to_string(),
         label: ("Hosted Amy").to_string(),
-        graphql: (&format!("{}/api/v0/graphql", server.uri())).to_string(),
+        graphql: format!("{}/api/v0/graphql", server.uri()),
         local_node_home: Some(("/tmp/test-hosted-amy-home").to_string()),
         access_request: None,
         access_state: None,

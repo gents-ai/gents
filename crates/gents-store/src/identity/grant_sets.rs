@@ -41,6 +41,7 @@ impl GrantSet {
     pub fn permissions(self) -> &'static [NodePermission] {
         match self {
             Self::AgentBaseline => &[
+                NodePermission::CollectionGet,
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,

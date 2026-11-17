@@ -1,9 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
-use crate::client::peer_directory::{
-    gents_protocol::runtime_connection::RuntimeConnection, PeerDirectory,
-};
 use crate::client_projection::store::ClientStore;
 use gents_store::config_client::{GraphqlEndpoint, TransactionFailure};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
@@ -257,7 +254,7 @@ struct ObservedRuntime {
     runtime: Arc<defra_node::Node>,
     access: ConfigAccess,
     physical: String,
-    peers: PeerDirectory,
+    peers: RuntimeDirectory,
     proxy_commands: ProxyCommands,
     proxy_task: tokio::task::JoinHandle<()>,
 }
@@ -293,7 +290,7 @@ impl ObservedRuntime {
                 .await
                 .unwrap(),
         );
-        crate::client::schema::ensure_runtime_schemas(&runtime)
+        gents_store::schema::ensure_runtime_schemas(&runtime)
             .await
             .unwrap();
         let access = ConfigAccess::Graphql(
@@ -323,13 +320,16 @@ impl ObservedRuntime {
             )
             .await
             .unwrap();
-        let mut peer = gents_protocol::runtime_connection::RuntimeConnection::new(
-            "runtime",
-            "",
-            runtime_identity.did(),
-        );
-        peer.graphql = Some(proxy_url);
-        let mut peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
+        let mut peer = gents_protocol::runtime_connection::RuntimeConnection {
+            label: ("runtime").to_string(),
+            node_did: (runtime_identity.did()).to_string(),
+            graphql: String::new(),
+            local_node_home: None,
+            access_request: None,
+            access_state: None,
+        };
+        peer.graphql = proxy_url;
+        let peers = RuntimeDirectory::open(directory.path().join("connections.json"))
             .await
             .unwrap();
         peers.upsert(peer).await.unwrap();
@@ -428,10 +428,10 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
             .await
             .unwrap(),
     );
-    crate::client::schema::ensure_runtime_schemas(&runtime)
+    gents_store::schema::ensure_runtime_schemas(&runtime)
         .await
         .unwrap();
-    crate::client::schema::ensure_runtime_schemas(&desktop)
+    gents_store::schema::ensure_runtime_schemas(&desktop)
         .await
         .unwrap();
     let access = ConfigAccess::Graphql(
@@ -477,17 +477,20 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         .write("test.observer.stale", &mutation("stale replica"))
         .await
         .unwrap();
-    let mut peer = gents_protocol::runtime_connection::RuntimeConnection::new(
-        "runtime",
-        "",
-        runtime_identity.did(),
-    );
-    peer.graphql = Some(proxy_url);
-    let mut peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
+    let mut peer = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("runtime").to_string(),
+        node_did: (runtime_identity.did()).to_string(),
+        graphql: String::new(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
+    peer.graphql = proxy_url;
+    let peers = RuntimeDirectory::open(directory.path().join("connections.json"))
         .await
         .unwrap();
     peers.upsert(peer).await.unwrap();
-    let configured = RuntimeDirectory::new(Default::default(), peers, Vec::new());
+    let configured = peers;
     let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
@@ -626,7 +629,7 @@ async fn missing_endpoint_never_reads_runtime_data_from_desktop_store() {
             .await
             .unwrap(),
     );
-    crate::client::schema::ensure_runtime_schemas(&desktop)
+    gents_store::schema::ensure_runtime_schemas(&desktop)
         .await
         .unwrap();
     ConfigAccess::local(desktop.clone()).write("test.observer.local", "mutation { create_Node(input: {node_did: \"did:test:runtime\", display_name: \"stale\", enabled: true, created_at: \"now\", created_by: \"old\"}) {_docID} }").await.unwrap();
@@ -786,7 +789,7 @@ fn generated_runtime_connection_observations_drive_the_owner() {
 #[tokio::test]
 async fn retry_now_answers_a_connected_runtime_without_reconnecting() {
     let fixture = ObservedRuntime::start().await;
-    let configured = RuntimeDirectory::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let configured = fixture.peers.clone();
     let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
@@ -881,7 +884,7 @@ fn lean_event(name: &str) -> RuntimeConnectionEvent {
 #[tokio::test]
 async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() {
     let fixture = ObservedRuntime::start().await;
-    let configured = RuntimeDirectory::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let configured = fixture.peers.clone();
     let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
@@ -950,7 +953,7 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
 #[tokio::test]
 async fn refused_snapshot_read_reconnects_the_source() {
     let fixture = ObservedRuntime::start().await;
-    let configured = RuntimeDirectory::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let configured = fixture.peers.clone();
     let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
@@ -1014,7 +1017,7 @@ async fn refused_snapshot_read_reconnects_the_source() {
 #[tokio::test]
 async fn failed_snapshot_read_keeps_the_streams_armed() {
     let fixture = ObservedRuntime::start().await;
-    let configured = RuntimeDirectory::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let configured = fixture.peers.clone();
     let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
@@ -1081,15 +1084,18 @@ async fn failed_snapshot_read_keeps_the_streams_armed() {
 async fn stalled_runtime_snapshot_delays_neither_another_runtime_nor_shutdown() {
     let fixture = ObservedRuntime::start().await;
     let (stalled_url, mut stalled_queries, stalled_task) = stalled_runtime().await;
-    let mut peers = fixture.peers.clone();
-    let mut stalled = gents_protocol::runtime_connection::RuntimeConnection::new(
-        "stalled",
-        "",
-        "did:test:stalled",
-    );
-    stalled.graphql = Some(stalled_url);
+    let peers = fixture.peers.clone();
+    let mut stalled = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("stalled").to_string(),
+        node_did: ("did:test:stalled").to_string(),
+        graphql: String::new(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
+    stalled.graphql = stalled_url;
     peers.upsert(stalled).await.unwrap();
-    let configured = RuntimeDirectory::new(Default::default(), peers, Vec::new());
+    let configured = peers;
     let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
@@ -1309,10 +1315,16 @@ async fn reconcile_keeps_an_ended_source_until_its_notice_schedules_the_reconnec
     let metrics = Arc::new(ObserverMetrics::default());
     let mut sources = remote::Sources::default();
     let (notices, mut notice_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut peer =
-        gents_protocol::runtime_connection::RuntimeConnection::new("runtime", "", "did:test:ended");
+    let mut peer = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("runtime").to_string(),
+        node_did: ("did:test:ended").to_string(),
+        graphql: String::new(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
     // Nothing listens on the discard port, so the first handshake fails.
-    peer.graphql = Some("http://127.0.0.1:9/api/v0/graphql".into());
+    peer.graphql = "http://127.0.0.1:9/api/v0/graphql".into();
     let directory = tempfile::tempdir().unwrap();
     let client = tokio::task::spawn_blocking({
         let path = directory.path().join("client.key");
@@ -1363,14 +1375,20 @@ async fn served_observer(
     home: &gents::client_test_support::ServedRuntimeHome,
 ) -> (tempfile::TempDir, Arc<ObservedStores>, ObserverHandle) {
     let directory = tempfile::tempdir().unwrap();
-    let mut peer =
-        gents_protocol::runtime_connection::RuntimeConnection::new("runtime", "", home.node_did());
-    peer.graphql = Some(home.graphql().to_owned());
-    let mut peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
+    let mut peer = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("runtime").to_string(),
+        node_did: (home.node_did()).to_string(),
+        graphql: String::new(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
+    peer.graphql = home.graphql().to_owned();
+    let peers = RuntimeDirectory::open(directory.path().join("connections.json"))
         .await
         .unwrap();
     peers.upsert(peer).await.unwrap();
-    let configured = RuntimeDirectory::new(Default::default(), peers, Vec::new());
+    let configured = peers;
     let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
@@ -1455,80 +1473,6 @@ async fn planned_renewal_keeps_the_runtime_connected() {
     );
     handle.shutdown().await;
     home.shutdown().await;
-}
-
-#[tokio::test]
-async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
-    let directory = tempfile::tempdir().unwrap();
-    let key_path = directory.path().join("client.key");
-    let client =
-        tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(key_path, None).unwrap())
-            .await
-            .unwrap();
-    // An enrollment-only peer: discovery reached it, but it publishes no
-    // operator GraphQL endpoint.
-    let enrolled = gents_protocol::runtime_connection::RuntimeConnection::new(
-        "enrolled",
-        "",
-        "did:test:enrolled",
-    );
-    let peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
-        .await
-        .unwrap();
-    let configured = RuntimeDirectory::new(Default::default(), peers, Vec::new());
-    configured.upsert_for_test(enrolled.clone()).await.unwrap();
-    let store = ObservedStores::new();
-    let handle = spawn_observer(
-        store.clone(),
-        configured.clone(),
-        Arc::new(
-            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
-                client.client_signing_capability().unwrap(),
-            ),
-        ),
-    );
-    wait_for_connection(
-        &store,
-        "did:test:enrolled",
-        RuntimeConnectionStatus::NoEndpoint,
-    )
-    .await;
-
-    let (stalled_url, _queries, stalled_task) = stalled_runtime().await;
-    let mut reachable = enrolled.clone();
-    reachable.graphql = Some(stalled_url);
-    configured.upsert_for_test(reachable).await.unwrap();
-    wait_for_connection(
-        &store,
-        "did:test:enrolled",
-        RuntimeConnectionStatus::Connecting,
-    )
-    .await;
-
-    configured.upsert_for_test(enrolled.clone()).await.unwrap();
-    wait_for_connection(
-        &store,
-        "did:test:enrolled",
-        RuntimeConnectionStatus::NoEndpoint,
-    )
-    .await;
-
-    let current = configured
-        .records()
-        .into_iter()
-        .find(|record| record.node_did == "did:test:enrolled")
-        .unwrap();
-    configured.remove_for_test(&current).await.unwrap();
-    let mut notices = store.subscribe();
-    tokio::time::timeout(Duration::from_secs(15), async {
-        while store.runtime_connection("did:test:enrolled").is_some() {
-            notices.changed().await.unwrap();
-        }
-    })
-    .await
-    .expect("a removed peer has no connection status");
-    handle.shutdown().await;
-    stalled_task.abort();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1910,17 +1854,20 @@ async fn request_events_during_every_snapshot_load_still_publish() {
     let mut proxy =
         GatedRuntimeProxy::start(runtime.graphql(), GatedRuntimeProxy::node_snapshot).await;
     let directory = tempfile::tempdir().unwrap();
-    let mut peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
+    let peers = RuntimeDirectory::open(directory.path().join("connections.json"))
         .await
         .unwrap();
-    let mut peer = gents_protocol::runtime_connection::RuntimeConnection::new(
-        "runtime",
-        "",
-        runtime.node_did(),
-    );
-    peer.graphql = Some(proxy.url().to_owned());
+    let mut peer = gents_protocol::runtime_connection::RuntimeConnection {
+        label: ("runtime").to_string(),
+        node_did: (runtime.node_did()).to_string(),
+        graphql: String::new(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
+    peer.graphql = proxy.url().to_owned();
     peers.upsert(peer).await.unwrap();
-    let configured = RuntimeDirectory::new(Default::default(), peers, Vec::new());
+    let configured = peers;
     let store = ObservedStores::new();
     let mut resyncs = store.subscribe_resync_requests();
     let handle = spawn_observer(

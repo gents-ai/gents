@@ -44,7 +44,7 @@ mod tests {
         core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
             node_did: (node).to_string(),
             label: ("Served runtime").to_string(),
-            graphql: (&format!("{}/api/v0/graphql", server.uri())).to_string(),
+            graphql: format!("{}/api/v0/graphql", server.uri()),
             local_node_home: Some((temp.path().join("runtime").to_str().unwrap()).to_string()),
             access_request: None,
             access_state: None,

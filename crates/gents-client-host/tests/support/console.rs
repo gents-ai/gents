@@ -156,11 +156,14 @@ async fn console_interrupt_releases_the_native_installation() -> Result<()> {
     let seed = Arc::new(
         ClientRuntime::start_with_paths_and_options(
             paths.clone(),
-            ClientRuntimeOptions::local_only(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
         )
         .await?,
     );
-    let peer = seed.local_peer_id().to_owned();
+    anyhow::ensure!(seed.node().p2p().is_none());
     let seed_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
     drop(seed);
@@ -192,10 +195,16 @@ async fn console_interrupt_releases_the_native_installation() -> Result<()> {
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait()).await??;
     anyhow::ensure!(status.success(), "console fixture exited with {status}");
     let reopened = Arc::new(
-        ClientRuntime::start_with_paths_and_options(paths, ClientRuntimeOptions::local_only())
-            .await?,
+        ClientRuntime::start_with_paths_and_options(
+            paths,
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
+        )
+        .await?,
     );
-    anyhow::ensure!(reopened.local_peer_id() == peer);
+    anyhow::ensure!(reopened.node().p2p().is_none());
     reopened.shutdown().await?;
     Ok(())
 }

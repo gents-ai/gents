@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::client::schema::ensure_runtime_schemas;
+use gents_store::schema::ensure_runtime_schemas;
 use std::sync::Arc;
 
 fn fixture_view_access(node: &Arc<EmbeddedNode>) -> gents_store::config_client::ConfigAccess {
