@@ -20,6 +20,10 @@ enum ServerMessage {
     Ready {
         scope: PackApprovalScope,
         preparation: gents_pack::pack::HostedPackPreparation,
+        /// The runtime's build. An older runtime sends none, which is reported
+        /// as unknown rather than guessed.
+        #[serde(default)]
+        build: Option<gents_protocol::build_info::BuildInfo>,
     },
     ReadResult {
         id: u64,
@@ -59,6 +63,12 @@ pub struct PackInstallSession {
     preparation: gents_pack::pack::HostedPackPreparation,
     pending: Option<ServerMessage>,
     next_id: u64,
+    /// The runtime's build, from `Ready`; `None` when it did not say, so an
+    /// older runtime is reported as unknown rather than guessed at.
+    runtime_build: Option<gents_protocol::build_info::BuildInfo>,
+    /// This client's core packs, so a build difference is named with what each
+    /// side actually carries.
+    core_packs: Vec<gents_protocol::build_info::CorePackBuild>,
 }
 
 impl PackInstallSession {
@@ -104,8 +114,16 @@ impl PackInstallSession {
         start.insert("type".into(), "start".into());
         start.insert("request".into(), request);
         send(&mut socket, Value::Object(start)).await?;
+        let mut runtime_build = None;
         let (scope, preparation) = match receive(&mut socket).await? {
-            ServerMessage::Ready { scope, preparation } => (scope, preparation),
+            ServerMessage::Ready {
+                scope,
+                preparation,
+                build,
+            } => {
+                runtime_build = build;
+                (scope, preparation)
+            }
             ServerMessage::Failed { error, outcome } => {
                 bail!("remote pack install failed ({outcome}): {error}")
             }
@@ -124,6 +142,8 @@ impl PackInstallSession {
             preparation,
             pending: None,
             next_id: 1,
+            runtime_build,
+            core_packs: super::pack_install::local_core_packs(),
         })
     }
 
@@ -181,9 +201,13 @@ impl PackInstallSession {
                 bail!("remote pack install failed ({outcome}): {error}")
             }
             ServerMessage::ApproveGraph { mutation, .. } => {
+                // Name both builds: a differing build plans a different install
+                // before anything is read, so an operator can tell a stale
+                // `gents` on PATH from a real disagreement.
                 bail!(
-                    "runtime pack graph differs from the client's installation plan: {}",
-                    describe_mutation_disagreement(expected, &mutation)
+                    "runtime pack graph differs from the client's installation plan: {}{}",
+                    describe_mutation_disagreement(expected, &mutation),
+                    self.describe_build_skew()
                 )
             }
             _ => bail!("runtime pack graph differs from the client's installation plan"),
@@ -687,4 +711,26 @@ fn describe_relationship_disagreement(
         &constructed,
         &proposed,
     ))
+}
+
+impl PackInstallSession {
+    /// What the two builds are, when they are not the same one. Empty when the
+    /// runtime did not report a build or the builds agree, so a plain
+    /// disagreement is not buried under build detail.
+    fn describe_build_skew(&self) -> String {
+        let Some(runtime) = self.runtime_build.as_ref() else {
+            return String::new();
+        };
+        let client = gents_protocol::build_info::BuildInfo::current(self.core_packs.clone());
+        let differences = client.differences(runtime);
+        if differences.is_empty() {
+            return String::new();
+        }
+        format!(
+            " (this client is `{}` and the runtime is `{}`; {})",
+            client.summary(),
+            runtime.summary(),
+            differences.join("; ")
+        )
+    }
 }

@@ -330,8 +330,41 @@ pub fn run_cli() -> Result<()> {
     runtime.block_on(async_main(runtime.handle().clone()))
 }
 
+/// This build's identity: one line for a person, or the whole record as JSON
+/// (`--version --json`), which is what a script compares against a runtime.
+fn print_build_info(json: bool) -> Result<()> {
+    let core_packs = gents_core_packs::archives()
+        .iter()
+        .map(
+            |(coordinate, bytes)| gents_protocol::build_info::CorePackBuild {
+                coordinate: (*coordinate).to_owned(),
+                digest: format!(
+                    "sha256:{}",
+                    gents_pack::plugin::store::content_digest_hex(bytes)
+                ),
+            },
+        )
+        .collect();
+    let build = gents_protocol::build_info::BuildInfo::current(core_packs);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&build)?);
+    } else {
+        println!("{}", build.summary());
+        for pack in &build.core_packs {
+            println!("  {} {}", pack.coordinate, pack.digest);
+        }
+    }
+    Ok(())
+}
+
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
+    // `--version` answers before anything opens a node, so a stale build can be
+    // identified without one.
+    if cli.version {
+        print_build_info(cli.json)?;
+        return Ok(());
+    }
     let command = match cli.command {
         None => {
             return commands::start::run(

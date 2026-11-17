@@ -83,6 +83,11 @@ struct InstallRequest {
     grant_authority: bool,
     explicit: bool,
     wire: Vec<String>,
+    /// The client's build identity. A plan is prepared twice, so the runtime
+    /// can say which builds prepared the two halves when they disagree; an
+    /// older client sends none.
+    #[serde(default)]
+    client_build: Option<gents_protocol::build_info::BuildInfo>,
 }
 
 /// Repacks a verified archive from its declared files and confirms the
@@ -218,6 +223,11 @@ pub async fn encode_install_request(
             grant_authority,
             explicit,
             wire,
+            // The build preparing this half of the plan, so a disagreement can
+            // name both halves' builds instead of only that they differ.
+            client_build: Some(gents_protocol::build_info::BuildInfo::current(
+                local_core_packs(),
+            )),
         })?;
         Ok::<_, anyhow::Error>(serde_json::from_slice(&body)?)
     })
@@ -462,3 +472,20 @@ async fn install_owned(
 #[cfg(test)]
 #[path = "pack_install_tests.rs"]
 mod tests;
+
+/// The core packs this build carries, as a build report states them: the
+/// coordinate and the digest of the bytes compiled in.
+pub fn local_core_packs() -> Vec<gents_protocol::build_info::CorePackBuild> {
+    gents_core_packs::archives()
+        .iter()
+        .map(
+            |(coordinate, bytes)| gents_protocol::build_info::CorePackBuild {
+                coordinate: (*coordinate).to_owned(),
+                digest: format!(
+                    "sha256:{}",
+                    gents_pack::plugin::store::content_digest_hex(bytes)
+                ),
+            },
+        )
+        .collect()
+}
