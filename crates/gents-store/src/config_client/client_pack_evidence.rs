@@ -1315,4 +1315,32 @@ mod tests {
             "identical values say so"
         );
     }
+
+    /// The shape that refused every hosted `gents/web` install: one plan states
+    /// a variable as `null`, the other omits the key. Pinned as a fixture so
+    /// the diff keeps naming it, whatever fixes the plans upstream.
+    #[test]
+    fn an_absent_key_against_a_null_one_is_named() {
+        let constructed = create("PackInstallation", serde_json::json!({"variables": {}}));
+        let proposed = create(
+            "PackInstallation",
+            serde_json::json!({"variables": {"GENTS_PACK_BIND_AGENT_WEB_RESEARCHER": null}}),
+        );
+        let differences = constructed.differences(&proposed);
+        assert_eq!(
+            differences,
+            vec![PackMutationDifference::OnlyInOnePlan {
+                path: "/variables/GENTS_PACK_BIND_AGENT_WEB_RESEARCHER".to_owned(),
+                constructed: None,
+                proposed: Some(serde_json::Value::Null),
+            }],
+            "absent against null is named at its own path, not as a whole-object difference"
+        );
+        let described = differences[0].describe();
+        assert!(
+            described.contains("GENTS_PACK_BIND_AGENT_WEB_RESEARCHER"),
+            "{described}"
+        );
+        assert!(described.contains("runtime"), "{described}");
+    }
 }

@@ -4968,7 +4968,6 @@ dependencies = [
  "futures-util",
  "gents",
  "gents-automation",
- "gents-core-packs",
  "gents-desktop-core",
  "gents-documents",
  "gents-host",

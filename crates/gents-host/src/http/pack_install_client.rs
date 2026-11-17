@@ -20,10 +20,9 @@ enum ServerMessage {
     Ready {
         scope: PackApprovalScope,
         preparation: gents_pack::pack::HostedPackPreparation,
-        /// The runtime's build. An older runtime sends none, which is reported
-        /// as unknown rather than guessed.
-        #[serde(default)]
-        build: Option<gents_protocol::build_info::BuildInfo>,
+        /// The runtime's build. Required: a runtime without it is an older
+        /// build, refused by name rather than tolerated.
+        build: gents_protocol::build_info::BuildInfo,
     },
     ReadResult {
         id: u64,
@@ -63,9 +62,9 @@ pub struct PackInstallSession {
     preparation: gents_pack::pack::HostedPackPreparation,
     pending: Option<ServerMessage>,
     next_id: u64,
-    /// The runtime's build, from `Ready`; `None` when it did not say, so an
-    /// older runtime is reported as unknown rather than guessed at.
-    runtime_build: Option<gents_protocol::build_info::BuildInfo>,
+    /// The runtime's build, from `Ready`, which requires it: a runtime that
+    /// sends none is an older build and is refused at the handshake.
+    runtime_build: gents_protocol::build_info::BuildInfo,
     /// This client's core packs, so a build difference is named with what each
     /// side actually carries.
     core_packs: Vec<gents_protocol::build_info::CorePackBuild>,
@@ -77,6 +76,7 @@ impl PackInstallSession {
         request: Value,
         node_did: &str,
         pack_digests: &[String],
+        client_build: &gents_protocol::build_info::BuildInfo,
     ) -> Result<Self> {
         let actor = endpoint.held_client_signing_capability()?.clone();
         let mut url = reqwest::Url::parse(endpoint.url())?;
@@ -114,16 +114,21 @@ impl PackInstallSession {
         start.insert("type".into(), "start".into());
         start.insert("request".into(), request);
         send(&mut socket, Value::Object(start)).await?;
-        let mut runtime_build = None;
-        let (scope, preparation) = match receive(&mut socket).await? {
+        let ready = receive(&mut socket).await.map_err(|error| {
+            // The ready message is the runtime's first word. If it will not
+            // parse, the likeliest cause is a build predating these fields --
+            // say so, since "older runtime" is the useful answer.
+            anyhow::anyhow!(
+                "the runtime's install handshake was unreadable, which is what an older runtime                  looks like: this client is `{}`; upgrade the runtime, or install from a client                  of the runtime's build ({error:#})",
+                client_build.summary()
+            )
+        })?;
+        let (scope, preparation, runtime_build) = match ready {
             ServerMessage::Ready {
                 scope,
                 preparation,
                 build,
-            } => {
-                runtime_build = build;
-                (scope, preparation)
-            }
+            } => (scope, preparation, build),
             ServerMessage::Failed { error, outcome } => {
                 bail!("remote pack install failed ({outcome}): {error}")
             }
@@ -143,7 +148,7 @@ impl PackInstallSession {
             pending: None,
             next_id: 1,
             runtime_build,
-            core_packs: super::pack_install::local_core_packs(),
+            core_packs: client_build.core_packs.clone(),
         })
     }
 
@@ -459,16 +464,24 @@ pub async fn install_remote(
     dependencies: &[gents_pack::pack::resolved_pack::ResolvedPack],
     args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
     explicit: bool,
+    client_build: gents_protocol::build_info::BuildInfo,
 ) -> Result<Value> {
     ensure!(args.wire.is_empty(), "remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately on the owning node");
-    let request =
-        super::pack_install::encode_install_request(pack, dependencies, args, owner, explicit)
-            .await?;
+    let request = super::pack_install::encode_install_request(
+        pack,
+        dependencies,
+        args,
+        owner,
+        explicit,
+        client_build.clone(),
+    )
+    .await?;
     let digests = std::iter::once(pack)
         .chain(dependencies.iter())
         .map(|source| source.digest().to_owned())
         .collect::<Vec<_>>();
-    let mut session = PackInstallSession::start(endpoint, request, owner, &digests).await?;
+    let mut session =
+        PackInstallSession::start(endpoint, request, owner, &digests, &client_build).await?;
     let preparation = session.preparation().clone();
     let access = gents_store::config_client::ConfigAccess::Graphql(endpoint.clone());
     let requested = gents_pack::operations::pack::parse_inference_slots(&args.inference_slots)?;
@@ -540,137 +553,6 @@ pub async fn install_remote(
     replay.result().await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gents_store::identity::KeyIdentity;
-    use tokio::net::TcpListener;
-    use tokio_tungstenite::accept_async;
-
-    #[tokio::test]
-    async fn refuses_a_graph_that_differs_from_the_interpreter() -> Result<()> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await?;
-            let mut socket = accept_async(stream).await?;
-            let _ = socket.next().await.context("missing start")??;
-            socket.send(Message::Text(json!({
-                "type": "ready",
-                "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
-                "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}}
-            }).to_string().into())).await?;
-            socket.send(Message::Text(json!({
-                "type": "approve_graph", "id": 1,
-                "mutation": {"kind": "create", "collection": "Tools", "input": {"tools_id": "injected"}},
-                "history": null
-            }).to_string().into())).await?;
-            let next = socket.next().await;
-            anyhow::ensure!(
-                !matches!(next, Some(Ok(Message::Text(_)))),
-                "client sent evidence for a different graph"
-            );
-            Ok::<_, anyhow::Error>(())
-        });
-        let key_home = tempfile::tempdir()?;
-        let key = KeyIdentity::load_or_create(key_home.path().join("user.key"), None)?
-            .client_signing_capability()?;
-        let endpoint = GraphqlEndpoint::as_principal(
-            format!("http://{address}/api/v0/graphql"),
-            key.did().to_owned(),
-        )
-        .with_client_signing_capability(key)?;
-        let mut session = PackInstallSession::start(
-            &endpoint,
-            json!({}),
-            "did:key:node",
-            &["sha256:root".to_owned()],
-        )
-        .await?;
-        let expected = PackMutation::Create {
-            collection: "Tools".into(),
-            input: json!({"tools_id": "reviewed"}),
-        };
-        assert!(session.graph(&expected).await.is_err());
-        drop(session);
-        server.await??;
-        Ok(())
-    }
-    #[tokio::test]
-    async fn read_can_pass_a_waiting_runtime_proposal() -> Result<()> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await?;
-            let mut socket = accept_async(stream).await?;
-            let _ = socket.next().await.context("missing start")??;
-            socket.send(Message::Text(json!({
-                "type": "ready",
-                "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
-                "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}}
-            }).to_string().into())).await?;
-            socket
-                .send(Message::Text(
-                    json!({"type": "timestamp", "id": 42, "kind": "document"})
-                        .to_string()
-                        .into(),
-                ))
-                .await?;
-            let request = socket.next().await.context("missing read")??;
-            let Message::Text(request) = request else {
-                anyhow::bail!("expected read");
-            };
-            let request: Value = serde_json::from_str(&request)?;
-            anyhow::ensure!(request["type"] == "read", "expected read");
-            socket
-                .send(Message::Text(
-                    json!({"type": "read_result", "id": request["id"], "result": {"data": {}}})
-                        .to_string()
-                        .into(),
-                ))
-                .await?;
-            let response = socket.next().await.context("missing timestamp")??;
-            let Message::Text(response) = response else {
-                anyhow::bail!("expected timestamp response");
-            };
-            let response: Value = serde_json::from_str(&response)?;
-            anyhow::ensure!(
-                response["type"] == "timestamp_value"
-                    && response["id"] == 42
-                    && response["value"].is_string(),
-                "invalid timestamp response"
-            );
-            Ok::<_, anyhow::Error>(())
-        });
-        let key_home = tempfile::tempdir()?;
-        let key = KeyIdentity::load_or_create(key_home.path().join("user.key"), None)?
-            .client_signing_capability()?;
-        let endpoint = GraphqlEndpoint::as_principal(
-            format!("http://{address}/api/v0/graphql"),
-            key.did().to_owned(),
-        )
-        .with_client_signing_capability(key)?;
-        let mut session = PackInstallSession::start(
-            &endpoint,
-            json!({}),
-            "did:key:node",
-            &["sha256:root".to_owned()],
-        )
-        .await?;
-        assert_eq!(
-            session.read("{ Node { _docID } }", &json!({})).await?,
-            json!({"data": {}})
-        );
-        let _ = session.timestamp("document").await?;
-        server.await??;
-        Ok(())
-    }
-}
-
-/// What the client's plan and the runtime's proposal disagree about, stated so
-/// an operator can see the cause instead of only that the graphs differ. The
-/// first difference leads, because a plan that diverges early makes every later
-/// field differ too.
 fn describe_mutation_disagreement(
     constructed: &gents_store::config_client::PackMutation,
     proposed: &gents_store::config_client::PackMutation,
@@ -718,9 +600,7 @@ impl PackInstallSession {
     /// runtime did not report a build or the builds agree, so a plain
     /// disagreement is not buried under build detail.
     fn describe_build_skew(&self) -> String {
-        let Some(runtime) = self.runtime_build.as_ref() else {
-            return String::new();
-        };
+        let runtime = &self.runtime_build;
         let client = gents_protocol::build_info::BuildInfo::current(self.core_packs.clone());
         let differences = client.differences(runtime);
         if differences.is_empty() {
@@ -732,5 +612,138 @@ impl PackInstallSession {
             runtime.summary(),
             differences.join("; ")
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents_store::identity::KeyIdentity;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+
+    #[tokio::test]
+    async fn refuses_a_graph_that_differs_from_the_interpreter() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let mut socket = accept_async(stream).await?;
+            let _ = socket.next().await.context("missing start")??;
+            socket.send(Message::Text(json!({
+                "type": "ready",
+                "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
+                "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}},
+                // Required: a runtime without it is an older build, refused.
+                "build": {"version": "1.0.0-rc2", "commit": "aaaaaaa", "core_packs": []}
+            }).to_string().into())).await?;
+            socket.send(Message::Text(json!({
+                "type": "approve_graph", "id": 1,
+                "mutation": {"kind": "create", "collection": "Tools", "input": {"tools_id": "injected"}},
+                "history": null
+            }).to_string().into())).await?;
+            let next = socket.next().await;
+            anyhow::ensure!(
+                !matches!(next, Some(Ok(Message::Text(_)))),
+                "client sent evidence for a different graph"
+            );
+            Ok::<_, anyhow::Error>(())
+        });
+        let key_home = tempfile::tempdir()?;
+        let key = KeyIdentity::load_or_create(key_home.path().join("user.key"), None)?
+            .client_signing_capability()?;
+        let endpoint = GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            key.did().to_owned(),
+        )
+        .with_client_signing_capability(key)?;
+        let mut session = PackInstallSession::start(
+            &endpoint,
+            json!({}),
+            "did:key:node",
+            &["sha256:root".to_owned()],
+            &gents_protocol::build_info::BuildInfo::current(Vec::new()),
+        )
+        .await?;
+        let expected = PackMutation::Create {
+            collection: "Tools".into(),
+            input: json!({"tools_id": "reviewed"}),
+        };
+        assert!(session.graph(&expected).await.is_err());
+        drop(session);
+        server.await??;
+        Ok(())
+    }
+    #[tokio::test]
+    async fn read_can_pass_a_waiting_runtime_proposal() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let mut socket = accept_async(stream).await?;
+            let _ = socket.next().await.context("missing start")??;
+            socket.send(Message::Text(json!({
+                "type": "ready",
+                "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
+                "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}},
+                // Required: a runtime without it is an older build, refused.
+                "build": {"version": "1.0.0-rc2", "commit": "aaaaaaa", "core_packs": []}
+            }).to_string().into())).await?;
+            socket
+                .send(Message::Text(
+                    json!({"type": "timestamp", "id": 42, "kind": "document"})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+            let request = socket.next().await.context("missing read")??;
+            let Message::Text(request) = request else {
+                anyhow::bail!("expected read");
+            };
+            let request: Value = serde_json::from_str(&request)?;
+            anyhow::ensure!(request["type"] == "read", "expected read");
+            socket
+                .send(Message::Text(
+                    json!({"type": "read_result", "id": request["id"], "result": {"data": {}}})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+            let response = socket.next().await.context("missing timestamp")??;
+            let Message::Text(response) = response else {
+                anyhow::bail!("expected timestamp response");
+            };
+            let response: Value = serde_json::from_str(&response)?;
+            anyhow::ensure!(
+                response["type"] == "timestamp_value"
+                    && response["id"] == 42
+                    && response["value"].is_string(),
+                "invalid timestamp response"
+            );
+            Ok::<_, anyhow::Error>(())
+        });
+        let key_home = tempfile::tempdir()?;
+        let key = KeyIdentity::load_or_create(key_home.path().join("user.key"), None)?
+            .client_signing_capability()?;
+        let endpoint = GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            key.did().to_owned(),
+        )
+        .with_client_signing_capability(key)?;
+        let mut session = PackInstallSession::start(
+            &endpoint,
+            json!({}),
+            "did:key:node",
+            &["sha256:root".to_owned()],
+            &gents_protocol::build_info::BuildInfo::current(Vec::new()),
+        )
+        .await?;
+        assert_eq!(
+            session.read("{ Node { _docID } }", &json!({})).await?,
+            json!({"data": {}})
+        );
+        let _ = session.timestamp("document").await?;
+        server.await??;
+        Ok(())
     }
 }

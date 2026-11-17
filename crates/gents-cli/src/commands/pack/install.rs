@@ -118,6 +118,7 @@ async fn install_documents_pack_inner(
                 &dependencies,
                 &request,
                 explicit,
+                crate::current_build(),
             )
             .await
             .map_err(Into::into);
@@ -130,6 +131,7 @@ async fn install_documents_pack_inner(
                 &dependencies,
                 &request,
                 explicit,
+                crate::current_build(),
             )
             .await
             .map_err(Into::into);
@@ -443,6 +445,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                     &dependencies,
                     &install_request(&args),
                     true,
+                    crate::current_build(),
                 )
                 .await?;
                 return Ok(crate::print_json(&result)?);

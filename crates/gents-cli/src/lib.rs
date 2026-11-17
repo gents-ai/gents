@@ -330,9 +330,10 @@ pub fn run_cli() -> Result<()> {
     runtime.block_on(async_main(runtime.handle().clone()))
 }
 
-/// This build's identity: one line for a person, or the whole record as JSON
-/// (`--version --json`), which is what a script compares against a runtime.
-fn print_build_info(json: bool) -> Result<()> {
+/// This binary's build identity. The core pack archives are compiled into this
+/// crate, so the list is assembled here and passed to whoever needs it (the
+/// install handshake), rather than every crate taking a dependency on them.
+pub fn current_build() -> gents_protocol::build_info::BuildInfo {
     let core_packs = gents_core_packs::archives()
         .iter()
         .map(
@@ -345,7 +346,13 @@ fn print_build_info(json: bool) -> Result<()> {
             },
         )
         .collect();
-    let build = gents_protocol::build_info::BuildInfo::current(core_packs);
+    gents_protocol::build_info::BuildInfo::current(core_packs)
+}
+
+/// This build's identity: one line for a person, or the whole record as JSON
+/// (`--version --json`), which is what a script compares against a runtime.
+fn print_build_info(json: bool) -> Result<()> {
+    let build = current_build();
     if json {
         println!("{}", serde_json::to_string_pretty(&build)?);
     } else {
@@ -431,6 +438,11 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(&command),
         std::env::var("GENTS_SYSTEM_LOG").ok().as_deref(),
     );
+    if starts_foreground_runtime(Some(&command)) {
+        // The process serving installs is this one, so its build is the one an
+        // install handshake reports. Recorded before any request is served.
+        gents_host::http::pack_install::set_runtime_build(current_build());
+    }
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {

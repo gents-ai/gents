@@ -69,6 +69,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             &dependencies,
             &pack_args,
             true,
+            crate::current_build(),
         )
         .await?;
         return crate::print_json(&result);

@@ -98,3 +98,98 @@ fn describe_packs(packs: &[CorePackBuild]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pack(coordinate: &str, digest: &str) -> CorePackBuild {
+        CorePackBuild {
+            coordinate: coordinate.to_owned(),
+            digest: digest.to_owned(),
+        }
+    }
+
+    /// A refusal from a deliberately mismatched build names both builds. A
+    /// stale `gents` on `PATH` is otherwise indistinguishable from a real plan
+    /// difference, which is what made the install refusal so hard to read.
+    #[test]
+    fn a_mismatched_build_names_both_builds_and_what_differs() {
+        let client = BuildInfo {
+            version: "1.0.0-rc2".to_owned(),
+            commit: Some("aaaaaaa".to_owned()),
+            core_packs: vec![pack("gents/web", "sha256:1111")],
+        };
+        let runtime = BuildInfo {
+            version: "1.0.0-rc2".to_owned(),
+            commit: Some("bbbbbbb".to_owned()),
+            core_packs: vec![pack("gents/web", "sha256:2222")],
+        };
+        let differences = client.differences(&runtime);
+        assert_eq!(differences.len(), 2, "{differences:?}");
+        assert!(
+            differences[0].contains("aaaaaaa") && differences[0].contains("bbbbbbb"),
+            "the commit difference names both: {}",
+            differences[0]
+        );
+        assert!(
+            differences[1].contains("sha256:1111") && differences[1].contains("sha256:2222"),
+            "the pack difference names both digests: {}",
+            differences[1]
+        );
+        // Both summaries are available for the message.
+        assert!(
+            client.summary().contains("1.0.0-rc2"),
+            "{}",
+            client.summary()
+        );
+        assert!(runtime.summary().contains("1.0.0-rc2"));
+        // And they do not plan the same installs.
+        assert!(!client.plans_the_same_installs(&runtime));
+    }
+
+    /// The same build says nothing, so a plain plan difference is not buried
+    /// under build detail.
+    #[test]
+    fn the_same_build_reports_no_difference() {
+        let build = BuildInfo {
+            version: "1.0.0-rc2".to_owned(),
+            commit: Some("aaaaaaa".to_owned()),
+            core_packs: vec![pack("gents/web", "sha256:1111")],
+        };
+        assert!(build.differences(&build.clone()).is_empty());
+        assert!(build.plans_the_same_installs(&build.clone()));
+    }
+
+    /// A build that recorded no commit says so rather than guessing, and a
+    /// difference from it is still named.
+    #[test]
+    fn an_unknown_commit_is_said_not_guessed() {
+        let unknown = BuildInfo {
+            version: "1.0.0-rc2".to_owned(),
+            commit: None,
+            core_packs: Vec::new(),
+        };
+        assert!(
+            unknown.summary().contains("unknown commit"),
+            "{}",
+            unknown.summary()
+        );
+        // A build that recorded a commit differs from it by that commit, named
+        // on both sides including the unknown one.
+        let recorded = BuildInfo {
+            version: "1.0.0-rc2".to_owned(),
+            commit: Some("aaaaaaa".to_owned()),
+            core_packs: Vec::new(),
+        };
+        let differences = unknown.differences(&recorded);
+        assert!(
+            differences
+                .iter()
+                .any(|difference| difference.contains("commit")
+                    && difference.contains("unknown")
+                    && difference.contains("aaaaaaa")),
+            "a commit difference from a build that recorded none is still named: {differences:?}"
+        );
+    }
+}
