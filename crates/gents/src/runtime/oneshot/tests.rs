@@ -80,8 +80,13 @@ async fn capture_scripted_request(
     Ok(body)
 }
 
+/// Streams one text chunk, then empty chunks until `eof` is cancelled, then
+/// ends without a terminal response.
 #[derive(Clone)]
-struct PartialThenEmptyProvider(Arc<AtomicUsize>);
+struct PartialThenEmptyProvider {
+    observations: Arc<AtomicUsize>,
+    eof: tokio_util::sync::CancellationToken,
+}
 
 #[allow(refining_impl_trait)]
 impl CompletionModel for PartialThenEmptyProvider {
@@ -90,7 +95,10 @@ impl CompletionModel for PartialThenEmptyProvider {
     type Client = ();
 
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self(Arc::new(AtomicUsize::new(0)))
+        Self {
+            observations: Arc::new(AtomicUsize::new(0)),
+            eof: tokio_util::sync::CancellationToken::new(),
+        }
     }
 
     async fn completion(
@@ -106,16 +114,19 @@ impl CompletionModel for PartialThenEmptyProvider {
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
         capture_scripted_request(request).await?;
 
-        let observations = self.0.clone();
+        let observations = self.observations.clone();
+        let eof = self.eof.clone();
         let inner: rig::streaming::StreamingResult<()> =
             Box::pin(futures::stream::unfold(false, move |started| {
                 let observations = observations.clone();
+                let eof = eof.clone();
                 async move {
                     let text = if started {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        if observations.fetch_add(1, Ordering::SeqCst) >= 300 {
-                            return None;
+                        tokio::select! {
+                            () = eof.cancelled() => return None,
+                            () = tokio::time::sleep(Duration::from_millis(10)) => {}
                         }
+                        observations.fetch_add(1, Ordering::SeqCst);
                         String::new()
                     } else {
                         "durable one-shot partial".to_string()
@@ -135,7 +146,10 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         .with_identity_binding_for_test(binding)
         .build_with_identity_arc_for_test(db.node_identity.clone());
     Arc::make_mut(&mut behavior.agent).model_name = "scripted".to_owned();
-    Arc::make_mut(&mut behavior.agent).stream_liveness_timeout = Duration::from_secs(1);
+    // Renewal comes due with half the lease left; that half is the margin for a
+    // loaded host's poll delay and renewal commit, which a 1 s lease does not
+    // cover (`tla/LeaseRenewalStarvation`, `MarginSpent`).
+    Arc::make_mut(&mut behavior.agent).stream_liveness_timeout = Duration::from_secs(8);
     Arc::make_mut(&mut behavior.agent).deadline_duration = Duration::from_secs(60);
     let prompt = LayeredPromptBuilder::for_agent(
         &behavior.agent.system_prompt,
@@ -151,10 +165,18 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         gents_inference::rendered_request::CaptureScopeKind::OneShot,
     );
     let observations = Arc::new(AtomicUsize::new(0));
+    let eof = tokio_util::sync::CancellationToken::new();
+    let returned = tokio_util::sync::CancellationToken::new();
     let observe_renewal = async {
-        let mut initial = None;
+        let mut silent_lease = None;
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::select! {
+                () = returned.cancelled() => return false,
+                () = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
+            if observations.load(Ordering::SeqCst) == 0 {
+                continue;
+            }
             let snapshot = agent_access.execute("{ AgentRequest { lifecycle_state execution_generation execution_lease_expires_at } }").await.unwrap();
             let rows = snapshot["data"]["AgentRequest"].as_array().unwrap();
             let Some(row) = rows.first() else { continue };
@@ -166,38 +188,45 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
                 row["execution_lease_expires_at"].as_str().unwrap(),
             )
             .unwrap();
-            let (first_generation, first_expiry) =
-                initial.get_or_insert_with(|| (generation.to_owned(), expiry));
-            if chrono::Utc::now() <= *first_expiry {
-                continue;
+            let (silent_generation, silent_expiry) =
+                silent_lease.get_or_insert_with(|| (generation.to_owned(), expiry));
+            assert_eq!(
+                generation, silent_generation,
+                "renewal keeps the owning generation"
+            );
+            if expiry > *silent_expiry {
+                eof.cancel();
+                return true;
             }
-            assert_eq!(generation, first_generation);
-            assert!(expiry > *first_expiry && expiry > chrono::Utc::now());
-            break;
         }
     };
-    let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let (result, ()) = tokio::join!(
-            run_oneshot_owned(
-                node.clone(),
-                &behavior.agent,
-                &behavior.tools,
-                None,
-                &prompt,
-                PartialThenEmptyProvider(observations.clone()),
-                "exercise explicit renewal during silence",
-                Arc::new(Vec::new()),
-                config,
-                &[],
-                BackgroundToolRegistry::default(),
-                gents_tools::native::lsp::LspPool::new(),
-            ),
-            observe_renewal
-        );
+    let run = async {
+        let result = run_oneshot_owned(
+            node.clone(),
+            &behavior.agent,
+            &behavior.tools,
+            None,
+            &prompt,
+            PartialThenEmptyProvider {
+                observations: observations.clone(),
+                eof: eof.clone(),
+            },
+            "exercise explicit renewal during silence",
+            Arc::new(Vec::new()),
+            config,
+            &[],
+            BackgroundToolRegistry::default(),
+            gents_tools::native::lsp::LspPool::new(),
+        )
+        .await;
+        returned.cancel();
         result
-    })
-    .await
-    .expect("one-shot must renew its short lease and converge after provider EOF");
+    };
+    let (result, renewed) = tokio::join!(run, observe_renewal);
+    assert!(
+        renewed,
+        "one-shot must renew its lease while the provider is silent; it returned {result:?}"
+    );
     assert!(
         result.is_err(),
         "a stream ending without an explicit terminal response cannot succeed"
