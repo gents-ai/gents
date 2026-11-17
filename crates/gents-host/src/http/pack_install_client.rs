@@ -1477,4 +1477,117 @@ mod tests {
         server.await??;
         Ok(())
     }
+
+    /// A first-message decode failure and a closed socket have distinct typed
+    /// causes, with no decoded peer values exposed in the handshake remedy.
+    #[tokio::test]
+    async fn first_reply_distinguishes_decode_failure_from_connection_loss() -> Result<()> {
+        for unreadable in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await?;
+                let mut socket = accept_async(stream).await?;
+                let _ = socket.next().await.context("missing start")??;
+                if unreadable {
+                    socket
+                        .send(Message::Text("not json sk-live-private".into()))
+                        .await?;
+                } else {
+                    socket.close(None).await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            });
+            let home = tempfile::tempdir()?;
+            let key = KeyIdentity::load_or_create(home.path().join("user.key"), None)?
+                .client_signing_capability()?;
+            let endpoint = GraphqlEndpoint::as_principal(
+                format!("http://{address}/api/v0/graphql"),
+                key.did().to_owned(),
+            )
+            .with_client_signing_capability(key)?;
+            let (mut socket, _) = open_session(&endpoint, json!({})).await?;
+            let Err(error) = first_reply(&mut socket, &build("aaaaaaa", false)).await else {
+                panic!("invalid first message unexpectedly accepted");
+            };
+            if unreadable {
+                assert!(matches!(
+                    error,
+                    PackInstallHandshakeError::UnreadableHandshake { .. }
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    PackInstallHandshakeError::ConnectionLost { .. }
+                ));
+            }
+            assert!(!error.to_string().contains("sk-live-private"));
+            server.await??;
+        }
+        Ok(())
+    }
+
+    /// The structured runtime class wins even if its text resembles a legacy
+    /// peer's unknown-field refusal. Unknown classes remain safely unclassified.
+    #[tokio::test]
+    async fn first_reply_prefers_runtime_class_over_legacy_looking_text() -> Result<()> {
+        use crate::http::pack_install::failure::PackSessionFailureClass;
+        let client = build("aaaaaaa", false);
+        for class in PackSessionFailureClass::ALL
+            .into_iter()
+            .map(Some)
+            .chain(std::iter::once(None))
+        {
+            let mut reply = json!({"type":"failed", "outcome":"unconfirmed",
+                "error":"unknown field `client_build` sk-live-private"});
+            if let Some(class) = class {
+                reply["class"] = serde_json::to_value(class)?;
+            }
+            let (endpoint, server, _home) = scripted_runtime(vec![reply]).await?;
+            let (mut socket, _) = open_session(&endpoint, json!({})).await?;
+            let Err(error) = first_reply(&mut socket, &client).await else {
+                panic!("refusal accepted");
+            };
+            match class {
+                Some(class) => {
+                    let PackInstallHandshakeError::RuntimeFailed {
+                        outcome,
+                        class: code,
+                        reason,
+                    } = error
+                    else {
+                        panic!("structured runtime failure was misclassified");
+                    };
+                    assert_eq!(outcome, "unconfirmed");
+                    assert_eq!(PackSessionFailureClass::from_wire(&code), Some(class));
+                    if !class.shows_runtime_text() {
+                        assert!(!reason.contains("sk-live-private"));
+                    }
+                }
+                None => {
+                    assert!(matches!(
+                        error,
+                        PackInstallHandshakeError::OlderRuntime { .. }
+                    ));
+                    assert!(!error.to_string().contains("sk-live-private"));
+                }
+            }
+            drop(socket);
+            server.await??;
+        }
+        // A later peer's unknown class must not be mistaken for an older one.
+        let (endpoint, server, _home) = scripted_runtime(vec![json!({"type":"failed",
+            "outcome":"not_installed", "class":"future_class", "error":"unknown field `client_build` sk-live-private"})]).await?;
+        let (mut socket, _) = open_session(&endpoint, json!({})).await?;
+        let Err(error) = first_reply(&mut socket, &client).await else {
+            panic!("refusal accepted");
+        };
+        assert!(
+            matches!(&error, PackInstallHandshakeError::RuntimeFailed { class, .. } if class == "unclassified")
+        );
+        assert!(!error.to_string().contains("sk-live-private"));
+        drop(socket);
+        server.await??;
+        Ok(())
+    }
 }

@@ -201,6 +201,28 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         .as_str()
         .context("created Agent DID")?
         .to_owned();
+    // Root admission precedes plugin construction; grant the clone reader on
+    // its inherited root so the plugin failure is the one diagnosed.
+    let published_root = created
+        .pointer("/host_root_access/published_root")
+        .and_then(Value::as_str)
+        .context("clone receipt's published root")?;
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "workspace-root",
+            "grant-reader",
+            "--path",
+            published_root,
+            "--agent-did",
+            &broken_agent,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
+    let after_grant_generation =
+        wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
     let selection = graphql_query(
         &graphql,
         &format!(
@@ -248,8 +270,35 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             &graphql,
         ],
     )?;
-    wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
-    let diagnosed = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
+    wait_for_runtime_quiescence(
+        &graphql,
+        &owner,
+        after_grant_generation + 1,
+        Duration::from_millis(200),
+    )
+    .await?;
+    // A stable earlier generation may still precede the Tools edit. Observe
+    // this agent's demotion rather than assuming quiescence means it reloaded.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let diagnosed = loop {
+        let snapshot = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
+        let demoted = snapshot
+            .pointer("/checks/runtime_node_readiness/unavailable_agents")
+            .and_then(Value::as_array)
+            .is_some_and(|agents| {
+                agents
+                    .iter()
+                    .any(|agent| agent["agent_did"] == broken_agent.as_str())
+            });
+        if demoted {
+            break snapshot;
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "edited Tools never demoted the agent; last diagnose: {snapshot}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     let unavailable = diagnosed
         .pointer("/checks/runtime_node_readiness/unavailable_agents")
         .and_then(Value::as_array)

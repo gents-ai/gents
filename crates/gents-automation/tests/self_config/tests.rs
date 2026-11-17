@@ -617,6 +617,10 @@ async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
         format!("gents config workspace-root grant-reader --path {root} --agent-did {created}"),
         "{hosted}"
     );
+    assert_eq!(
+        access["target_guidance"],
+        "Add --home with this node's home when running against a node other than your default one."
+    );
     assert!(
         !access["how_to_proceed"]
             .as_str()
