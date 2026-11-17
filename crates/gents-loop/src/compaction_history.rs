@@ -56,7 +56,7 @@ pub fn strip_tool_results_sourced(
 
 /// Internal receipts from actual replacements, never from inspecting stub-shaped
 /// text. Source position and result key bind receipts to retained history rows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StubReplacement {
     pub source_index: usize,
     pub result_key: String,
@@ -172,7 +172,7 @@ fn record_tool_calls(
 /// What stripping measures for one tool result: the UTF-8 bytes of its
 /// payload (non-text blocks by their JSON encoding) and of the stub that
 /// would replace it. The Lean model's `Compaction.StubSizes`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StubSizes {
     pub original_bytes: usize,
     pub stub_bytes: usize,
@@ -724,16 +724,26 @@ fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
     })
 }
 
+pub fn receipt_eligible(replaced: bool, stub_shaped: bool) -> bool {
+    replaced && !stub_shaped
+}
+
 fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &RapidHashMap<String, ToolCallInfo>,
 ) -> (ToolResult, Option<StubSizes>) {
+    // A parseable stub is never trusted as real output for accounting, even if
+    // the unchanged legacy policy rebuilds a shorter canonical projection.
+    let stub_shaped = parse_stub(&tool_result).is_some();
     let (sizes, stub) = measure_tool_result(&tool_result, tool_calls);
     if !sizes.stub_saves_bytes() {
         return (tool_result, None);
     }
     tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
-    (tool_result, Some(sizes))
+    (
+        tool_result,
+        receipt_eligible(true, stub_shaped).then_some(sizes),
+    )
 }
 
 /// The stub that would replace `tool_result`. A result that already is a

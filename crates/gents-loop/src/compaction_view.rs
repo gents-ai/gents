@@ -47,13 +47,28 @@ pub fn association_view_with_sources_accounted(
     let (stripped, activity, replacements) =
         history::strip_tool_results_sourced_accounted(history::source_messages(messages));
     let paired = pair_sourced(stripped);
-    let replacements = replacements.into_iter().filter(|receipt| paired.iter().any(|row| {
-        row.source_index == receipt.source_index && match &row.message {
-            Message::User { content } => content.iter().any(|part| matches!(part,
-                gents_protocol::message::UserContent::ToolResult(result) if history::tool_result_key(result) == receipt.result_key)),
-            _ => false,
-        }
-    })).collect();
+    let retained: std::collections::HashSet<_> = paired
+        .iter()
+        .flat_map(|row| {
+            let keys: Vec<_> = match &row.message {
+                Message::User { content } => content
+                    .iter()
+                    .filter_map(|part| match part {
+                        gents_protocol::message::UserContent::ToolResult(result) => {
+                            Some((row.source_index, history::tool_result_key(result)))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            keys
+        })
+        .collect();
+    let replacements = replacements
+        .into_iter()
+        .filter(|receipt| retained.contains(&(receipt.source_index, receipt.result_key.clone())))
+        .collect();
     (paired, activity, replacements)
 }
 

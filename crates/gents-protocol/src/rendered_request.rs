@@ -15,7 +15,7 @@ pub const ASSEMBLY_TRACE_VERSION: u32 = 4;
 
 /// Version of the request-bound context accounting payload; the exact values
 /// the runtime used for its dispatch decision, not a provider tokenizer claim.
-pub const CONTEXT_ACCOUNTING_VERSION: u32 = 4;
+pub const CONTEXT_ACCOUNTING_VERSION: u32 = 3;
 
 /// Request paths whose body is a completion request. The capturing transport
 /// only claims a pending capture for one of these.
@@ -419,10 +419,8 @@ impl HistoryStubbing {
 /// Request-bound context accounting persisted with the exact rendered request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextAccounting {
-    /// None on pre-v4 rows means unknown, not zero. Current producers always
-    /// supply Some, including the measured empty set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub history_stubbing: Option<HistoryStubbing>,
+    /// Required numeric figures for this dispatch; no pre-1.0 upgrade path.
+    pub history_stubbing: HistoryStubbing,
     pub accounting_version: u32,
     #[serde(default)]
     pub turn_index: usize,
@@ -760,7 +758,7 @@ mod calibrated_components_tests {
 
     fn accounting(components: ContextInputComponents, estimated: usize) -> ContextAccounting {
         ContextAccounting {
-            history_stubbing: None,
+            history_stubbing: Default::default(),
             accounting_version: 3,
             turn_index: 0,
             attempt: 0,

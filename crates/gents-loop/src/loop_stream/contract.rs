@@ -16,14 +16,23 @@ pub struct TaggedMessage {
 }
 
 impl TaggedMessage {
-    pub fn unassociated(message: Message) -> Self {
+    pub fn new(
+        message: Message,
+        source: Option<ReplayTag>,
+        physical_header: Option<String>,
+        block_indices: Vec<usize>,
+    ) -> Self {
         Self {
             message,
-            source: None,
-            physical_header: None,
-            block_indices: Vec::new(),
+            source,
+            physical_header,
+            block_indices,
             history_stubs: Vec::new(),
         }
+    }
+
+    pub fn unassociated(message: Message) -> Self {
+        Self::new(message, None, None, Vec::new())
     }
 }
 

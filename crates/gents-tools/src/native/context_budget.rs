@@ -30,7 +30,7 @@ pub struct ContextBudgetSnapshot {
     pub recent_session_compactions: Vec<ContextReductionEvidence>,
     pub recent_request_reductions: Vec<ContextReductionEvidence>,
     pub last_request: Option<LastRequestContextSnapshot>,
-    /// Latest persisted dispatch's stub set; null means old/unmeasured accounting.
+    /// Latest persisted dispatch's stub set; null means no dispatch exists.
     pub history_tool_outputs_stubbed_this_dispatch: Option<HistoryStubbingSnapshot>,
 }
 
@@ -245,7 +245,7 @@ impl Tool for ContextBudgetTool {
                 exact counts and up to five recent evidence records of each kind. History tool \
                 outputs stubbed are reported separately as count and bytes removed for this \
                 dispatch's retained stub set, never as cumulative compactions/reductions; null \
-                means unmeasured older accounting."
+                means no dispatch exists."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -504,7 +504,7 @@ fn build_snapshot(
 
     let history_tool_outputs_stubbed_this_dispatch = last_request
         .as_ref()
-        .and_then(|request| request.accounting.history_stubbing.as_ref())
+        .map(|request| &request.accounting.history_stubbing)
         .map(|figures| HistoryStubbingSnapshot {
             count: figures.stubbed_results,
             bytes_removed: figures.bytes_removed(),
@@ -741,7 +741,7 @@ mod tests {
         }
 
         let accounting = gents_protocol::rendered_request::ContextAccounting {
-            history_stubbing: None,
+            history_stubbing: Default::default(),
             accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
             turn_index: 2,
             attempt: 0,
@@ -866,7 +866,7 @@ mod tests {
             )
             .await;
             let accounting = gents_protocol::rendered_request::ContextAccounting {
-                history_stubbing: None,
+                history_stubbing: Default::default(),
                 accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
                 turn_index: 0,
                 attempt: 0,
@@ -1035,13 +1035,12 @@ mod tests {
         };
         let loaded = load_context_budget_snapshot(&node, &scope).await.unwrap();
         let mut last = loaded.last_request.unwrap();
-        let old = serde_json::to_value(&last.accounting).unwrap();
-        assert!(old.get("history_stubbing").is_none());
-        assert_eq!(
-            serde_json::from_value::<gents_protocol::rendered_request::ContextAccounting>(old)
-                .unwrap()
-                .history_stubbing,
-            None
+        let mut missing = serde_json::to_value(&last.accounting).unwrap();
+        missing.as_object_mut().unwrap().remove("history_stubbing");
+        assert!(
+            serde_json::from_value::<gents_protocol::rendered_request::ContextAccounting>(missing)
+                .is_err(),
+            "stubbing figures are required, no legacy upgrade path"
         );
         use gents_protocol::message::{Message, ToolResult, ToolResultContent, UserContent};
         let (_, _, receipts) = gents_loop::compaction::history::strip_tool_results_accounted(vec![
@@ -1063,7 +1062,7 @@ mod tests {
         let figures = gents_loop::compaction::history::replacement_figures(&receipts);
         assert_eq!(figures.stubbed_results, 2);
         assert!(figures.bytes_removed() > 0);
-        last.accounting.history_stubbing = Some(figures.clone());
+        last.accounting.history_stubbing = figures.clone();
         let encoded = escape_graphql_string(&serde_json::to_string(&last.accounting).unwrap());
         seed_as(&node, &scope.agent_did, &format!(r#"mutation {{ update_InferenceCall(filter: {{call_id: {{_eq: "context-call"}}}}, input: {{context_accounting_json: "{encoded}"}}) {{_docID}} }}"#)).await;
         let snapshot = load_context_budget_snapshot(&node, &scope).await.unwrap();
@@ -1097,11 +1096,7 @@ mod tests {
             repeated.history_tool_outputs_stubbed_this_dispatch,
             snapshot.history_tool_outputs_stubbed_this_dispatch
         );
-        last.accounting.history_stubbing = None;
-        let old = build_snapshot(scope, Some(1_000), Vec::new(), Vec::new(), Some(last));
-        assert_eq!(
-            old.history_tool_outputs_stubbed_this_dispatch, None,
-            "old/unmeasured is not zero"
-        );
+        let no_dispatch = build_snapshot(scope, Some(1_000), Vec::new(), Vec::new(), None);
+        assert_eq!(no_dispatch.history_tool_outputs_stubbed_this_dispatch, None);
     }
 }

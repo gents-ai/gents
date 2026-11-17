@@ -1118,6 +1118,47 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         "reducing a closed tool pair must not advance the session-prefix cursor"
     );
 
+    // Actual stub-only runtime -> persisted InferenceCall -> context_budget tool.
+    // No synthetic figure or reduction entry is seeded by this assertion.
+    let budget_tool = gents_tools::native::context_budget::build_context_budget_tool(
+        fixture.node.clone(),
+        fixture.node_did.clone(),
+    );
+    let budget_json = gents_tools::runtime_context::scope_tool_request_identity(
+        None,
+        Some(fixture.node_did.clone()),
+        Some(fixture.agent_did.clone()),
+        Some("req-capture-compaction".into()),
+        gents_tools::runtime_context::scope_request_tool_execution_with_session(
+            None,
+            Default::default(),
+            None,
+            None,
+            Some("session-capture-compaction".into()),
+            budget_tool.call("{}".into()),
+        ),
+    )
+    .await
+    .unwrap();
+    let budget: Value = serde_json::from_str(&budget_json).unwrap();
+    let last_accounting = parse_json(&rows.last().unwrap()["provenance_json"])["assembly_trace"]
+        ["context_accounting"]
+        .clone();
+    let measured = &last_accounting["history_stubbing"];
+    assert_eq!(
+        budget["history_tool_outputs_stubbed_this_dispatch"]["count"],
+        measured["stubbed_results"]
+    );
+    assert_eq!(
+        budget["history_tool_outputs_stubbed_this_dispatch"]["bytes_removed"].as_u64(),
+        Some(
+            measured["original_bytes"].as_u64().unwrap() - measured["stub_bytes"].as_u64().unwrap()
+        )
+    );
+    assert_eq!(budget["compaction_count"], 0);
+    assert_eq!(budget["session_compaction_count"], 0);
+    assert_eq!(budget["request_reduction_count"], 0);
+
     fixture.runtime.shutdown().await;
 }
 

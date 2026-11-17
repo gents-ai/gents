@@ -106,7 +106,7 @@ pub(in crate::loop_stream) fn context_accounting_for_request(
     let request = dispatch.request();
     let projection = dispatch.projection();
     ContextAccounting {
-        history_stubbing: Some(history_stubbing),
+        history_stubbing,
         accounting_version: CONTEXT_ACCOUNTING_VERSION,
         turn_index,
         attempt,
