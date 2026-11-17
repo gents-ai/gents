@@ -89,6 +89,10 @@ pub struct ClientRuntime {
 }
 
 impl ClientRuntime {
+    pub fn store_release(&self) -> gents_store::local::home::StoreRelease {
+        self.journal.store_release()
+    }
+
     pub fn paths(&self) -> &DesktopPaths {
         &self.paths
     }

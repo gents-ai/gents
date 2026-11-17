@@ -56,6 +56,7 @@ pub struct ClientJournal {
     identity: PrincipalIdentity,
     node: Arc<defra_node::Node>,
     access: Mutex<Option<ConfigAccess>>,
+    store_release: gents_store::local::home::StoreRelease,
 }
 
 impl ClientJournal {
@@ -90,6 +91,7 @@ impl ClientJournal {
         }
         .await;
         let (lease, identity, builder) = prepared.map_err(JournalError::Prepare)?;
+        let store_release = lease.release_notice();
         let node = Arc::new(builder.build().await?);
         if node.node_identity_did() != Some(identity.did()) {
             let stopped = node.shutdown().await;
@@ -112,6 +114,7 @@ impl ClientJournal {
                 identity,
                 node,
                 access: Mutex::new(Some(access)),
+                store_release,
             })),
             Err(error) => {
                 if let Err(stopped) = node.shutdown().await {
@@ -133,17 +136,21 @@ impl ClientJournal {
         &self.node
     }
 
+    pub fn store_release(&self) -> gents_store::local::home::StoreRelease {
+        self.store_release.clone()
+    }
+
     pub async fn shutdown(&self) -> std::result::Result<(), JournalError> {
-        let release = self
-            .access
-            .lock()
-            .await
-            .as_ref()
-            .and_then(ConfigAccess::begin_store_release);
+        drop(
+            self.access
+                .lock()
+                .await
+                .as_ref()
+                .and_then(ConfigAccess::begin_store_release),
+        );
         let stopped = self.node.shutdown().await;
-        self.access.lock().await.take();
-        if let Some(release) = release {
-            release.released().await;
+        if let Some(access) = self.access.lock().await.take() {
+            access.release_store();
         }
         stopped?;
         Ok(())

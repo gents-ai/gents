@@ -61,20 +61,28 @@ impl ClientHost {
     /// Private client attachments present the current identity's mailbox,
     /// including decision questions. Embedding webview grants remain
     /// independent; no runtime document authorization is conferred here.
-    /// Answers an accepted retirement once the installation has closed its
-    /// core: the attachment that asked starts the successor as soon as it
-    /// reads this answer (Lean `ClientInstallation.acknowledgement_requires_closed_store`).
-    /// `closed` is the core's shutdown, which returns only after the store
-    /// lock is released; a failed shutdown is answered as a failed retirement.
-    pub async fn acknowledge_retirement(&self, closed: &anyhow::Result<()>) {
+    /// Closes the installation's core and answers an accepted retirement once
+    /// its store is released: the attachment that asked starts the successor
+    /// as soon as it reads this answer (Lean
+    /// `ClientInstallation.acknowledgement_requires_closed_store`,
+    /// `tla/StoreHandoff.tla` `AckFollowsRelease`). The store is released only
+    /// once the core's node is gone, so this host, the last owner of the core
+    /// once its attachments have been joined, lets go of it before it awaits
+    /// the release. A failed shutdown is answered as a failed retirement.
+    pub async fn close_and_acknowledge_retirement(self: Arc<Self>) -> anyhow::Result<()> {
+        let released = self.core.store_release();
+        let closed = self.core.shutdown().await;
         let pending = self
             .retirement
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
+        drop(self);
+        released.released().await;
         if let Some(pending) = pending {
-            pending.acknowledge(closed).await;
+            pending.acknowledge(&closed).await;
         }
+        closed
     }
 
     fn hold_retirement(&self, pending: connection::PendingRetirement) {

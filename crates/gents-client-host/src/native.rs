@@ -101,15 +101,13 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
             interrupt.cancel();
         }
     });
-    let host = Arc::new(ClientHost::for_installation(core.clone(), build));
+    let host = Arc::new(ClientHost::for_installation(core, build));
     let result = listener.serve_until_idle(host.clone(), stop).await;
     signal.abort();
     let _ = signal.await;
-    // The core's shutdown returns once its store lock is released, and only a
-    // closed installation answers the retirement that stopped it (Lean
-    // `ClientInstallation` `close`, then `acknowledge`).
-    let closed = core.shutdown().await;
-    host.acknowledge_retirement(&closed).await;
+    // Only an installation whose store is released answers the retirement
+    // that stopped it (Lean `ClientInstallation` `close`, then `acknowledge`).
+    let closed = host.close_and_acknowledge_retirement().await;
     result.and(closed)
 }
 

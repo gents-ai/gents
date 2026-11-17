@@ -629,6 +629,13 @@ impl ConfigAccess {
         }
     }
 
+    /// See [`LocalConfigAccess::release_store`].
+    pub fn release_store(&self) {
+        if let Self::Local(local) = self {
+            local.release_store();
+        }
+    }
+
     pub fn claimed_local(node: Arc<Node>, claim: crate::local::home::StoreLock) -> Result<Self> {
         Ok(Self::Local(Box::new(LocalConfigAccess::claimed(
             node, claim,

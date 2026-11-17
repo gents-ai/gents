@@ -736,16 +736,17 @@ async fn retirement_is_acknowledged_only_after_the_installation_closes_its_store
     );
 
     let paths = core.paths().clone();
-    let closed = core.shutdown().await;
-    let reopened = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())
-        .expect("a closed installation has released its store");
-    drop(reopened);
-    host.acknowledge_retirement(&closed).await;
+    drop(core);
+    let closing = tokio::spawn(host.close_and_acknowledge_retirement());
     let mut acknowledged = false;
     while let Some(frame) = client.next().await {
         let response: Value = serde_json::from_slice(&frame.unwrap()).unwrap();
         if response["kind"] == "response" && response["id"] == 1 {
             assert!(response["error"].is_null(), "{response}");
+            drop(
+                gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())
+                    .expect("the store is free when the retirement is acknowledged"),
+            );
             acknowledged = true;
         }
     }
@@ -753,6 +754,7 @@ async fn retirement_is_acknowledged_only_after_the_installation_closes_its_store
         acknowledged,
         "retirement closed without its acknowledgement"
     );
+    closing.await.unwrap().unwrap();
 }
 #[test]
 fn generated_storage_failures_keep_their_code_in_host_errors() {

@@ -164,7 +164,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
         .collect::<Vec<_>>();
     previous_commands.retain(|name| name != protocol::ClientCommand::NAMES[0]);
     let host = Arc::new(ClientHost::for_installation_with_command_inventory(
-        Arc::clone(&core),
+        core,
         "previous-build".into(),
         previous_commands,
     ));
@@ -173,10 +173,8 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
             .serve(Arc::clone(&host), CancellationToken::new())
             .await
             .unwrap();
-        // As `native::serve`: the retirement is answered once the store is closed.
-        let closed = core.shutdown().await;
-        host.acknowledge_retirement(&closed).await;
-        closed.unwrap();
+        // As `native::serve`: the retirement is answered once the store is released.
+        host.close_and_acknowledge_retirement().await.unwrap();
     });
     let mut previous = LengthDelimitedCodec::builder()
         .max_frame_length(protocol::MAX_FRAME_BYTES)
