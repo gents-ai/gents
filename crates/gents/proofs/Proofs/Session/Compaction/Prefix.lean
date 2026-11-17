@@ -7,6 +7,9 @@ open PromptAssembly (sanitizeGlobal dropOrphanedFrom filterCallsBy resolvedIn ca
                      sanitizeTurn filterCallsByTurn resolvedInTurn
                      UniqueCallIds ProviderValid ActiveBlockValid ActiveBlockValidFrom)
 
+section
+variable {sizes : ResultSizes}
+
 def pendingAfter (pending : Finset ToolExecution.ToolCallId) :
     List MessageRow → Finset ToolExecution.ToolCallId
   | [] => pending
@@ -41,7 +44,7 @@ theorem pendingAfter_cons_ordinary (row : MessageRow) (rest : List MessageRow)
   simp only [pendingAfter, h]
 
 theorem pendingAfter_strip (l : List MessageRow) :
-    ∀ pending, pendingAfter pending (strip l) = pendingAfter pending l := by
+    ∀ pending, pendingAfter pending (strip sizes l) = pendingAfter pending l := by
   induction l with
   | nil => intro _; rfl
   | cons row rest ih =>
@@ -49,18 +52,18 @@ theorem pendingAfter_strip (l : List MessageRow) :
       rw [strip_cons]
       cases hk : row.kind with
       | toolResult callId key =>
-          rw [pendingAfter_cons_result (stripRow row) (strip rest) pending callId (stubKey key)
+          rw [pendingAfter_cons_result (stripRow sizes row) (strip sizes rest) pending callId (stripKey sizes key)
               (strip_kind_result row callId key hk),
             pendingAfter_cons_result row rest pending callId key hk]
           by_cases hmem : callId ∈ pending
           · rw [if_pos hmem, if_pos hmem, ih (pending.erase callId)]
           · rw [if_neg hmem, if_neg hmem, ih pending]
       | assistantToolCalls callIds =>
-          rw [pendingAfter_cons_assistant (stripRow row) (strip rest) pending callIds
+          rw [pendingAfter_cons_assistant (stripRow sizes row) (strip sizes rest) pending callIds
               (strip_kind_assistant row callIds hk),
             pendingAfter_cons_assistant row rest pending callIds hk, ih callIds]
       | ordinary =>
-          rw [pendingAfter_cons_ordinary (stripRow row) (strip rest) pending
+          rw [pendingAfter_cons_ordinary (stripRow sizes row) (strip sizes rest) pending
               (strip_kind_ordinary row hk),
             pendingAfter_cons_ordinary row rest pending hk, ih ∅]
 
@@ -280,18 +283,18 @@ theorem uniqueCallIds_append_disjoint :
           exact ih ((PromptAssembly.uniqueCallIds_cons_ordinary row (rest ++ b) hk).mp h)
 
 theorem providerViewGlobal_append (a b : List MessageRow)
-    (hclean : Disjoint (resolvedIn (dropOrphanedFrom (pendingAfter ∅ (strip a)) (strip b)))
+    (hclean : Disjoint (resolvedIn (dropOrphanedFrom (pendingAfter ∅ (strip sizes a)) (strip sizes b)))
       (callsIn a)) :
-    ∃ tail, providerViewGlobal (a ++ b) = providerViewGlobal a ++ tail := by
-  have hDA : callsIn (dropOrphanedFrom ∅ (strip a)) = callsIn a := by
+    ∃ tail, providerViewGlobal sizes (a ++ b) = providerViewGlobal sizes a ++ tail := by
+  have hDA : callsIn (dropOrphanedFrom ∅ (strip sizes a)) = callsIn a := by
     rw [PromptAssembly.callsIn_dropOrphanedFrom, callsIn_strip]
-  have hdisj : Disjoint (resolvedIn (dropOrphanedFrom (pendingAfter ∅ (strip a)) (strip b)))
-      (callsIn (dropOrphanedFrom ∅ (strip a))) := by
+  have hdisj : Disjoint (resolvedIn (dropOrphanedFrom (pendingAfter ∅ (strip sizes a)) (strip sizes b)))
+      (callsIn (dropOrphanedFrom ∅ (strip sizes a))) := by
     rw [hDA]; exact hclean
   refine ⟨filterCallsBy
-      (resolvedIn (dropOrphanedFrom (pendingAfter ∅ (strip a)) (strip b)) ∪
-        resolvedIn (dropOrphanedFrom ∅ (strip a)))
-      (dropOrphanedFrom (pendingAfter ∅ (strip a)) (strip b)), ?_⟩
+      (resolvedIn (dropOrphanedFrom (pendingAfter ∅ (strip sizes a)) (strip sizes b)) ∪
+        resolvedIn (dropOrphanedFrom ∅ (strip sizes a)))
+      (dropOrphanedFrom (pendingAfter ∅ (strip sizes a)) (strip sizes b)), ?_⟩
   unfold providerViewGlobal PromptAssembly.sanitizeGlobal PromptAssembly.dropUnpairedCalls
     PromptAssembly.dropOrphanedResults
   rw [strip_append, dropOrphanedFrom_append, resolvedIn_append, filterCallsBy_append,
@@ -303,26 +306,26 @@ theorem resolvedIn_dropOrphaned_subset (l : List MessageRow) :
 
 theorem providerViewGlobal_append_of_turn_boundary (a b : List MessageRow)
     (huniq : UniqueCallIds (a ++ b)) (hb : pendingAfter ∅ a = ∅) :
-    ∃ tail, providerViewGlobal (a ++ b) = providerViewGlobal a ++ tail := by
+    ∃ tail, providerViewGlobal sizes (a ++ b) = providerViewGlobal sizes a ++ tail := by
   refine providerViewGlobal_append a b ?_
   rw [pendingAfter_strip, hb]
-  have hsub : resolvedIn (dropOrphanedFrom ∅ (strip b)) ⊆ callsIn b := by
+  have hsub : resolvedIn (dropOrphanedFrom ∅ (strip sizes b)) ⊆ callsIn b := by
     rw [← callsIn_strip b]
-    exact resolvedIn_dropOrphaned_subset (strip b)
+    exact resolvedIn_dropOrphaned_subset (strip sizes b)
   exact ((uniqueCallIds_append_disjoint huniq).symm).mono_left hsub
 
 theorem providerViewGlobal_append_of_ordinary_start (a : List MessageRow) (row : MessageRow)
     (rest : List MessageRow) (huniq : UniqueCallIds (a ++ row :: rest))
     (hrow : row.kind = .ordinary) :
-    ∃ tail, providerViewGlobal (a ++ row :: rest) = providerViewGlobal a ++ tail := by
+    ∃ tail, providerViewGlobal sizes (a ++ row :: rest) = providerViewGlobal sizes a ++ tail := by
   refine providerViewGlobal_append a (row :: rest) ?_
   rw [strip_cons,
-    PromptAssembly.dropOrphanedFrom_cons_ordinary (stripRow row) (strip rest) _
+    PromptAssembly.dropOrphanedFrom_cons_ordinary (stripRow sizes row) (strip sizes rest) _
       (strip_kind_ordinary row hrow),
-    PromptAssembly.resolvedIn_cons_ordinary (stripRow row) _ (strip_kind_ordinary row hrow)]
-  have hsub : resolvedIn (dropOrphanedFrom ∅ (strip rest)) ⊆ callsIn (row :: rest) := by
+    PromptAssembly.resolvedIn_cons_ordinary (stripRow sizes row) _ (strip_kind_ordinary row hrow)]
+  have hsub : resolvedIn (dropOrphanedFrom ∅ (strip sizes rest)) ⊆ callsIn (row :: rest) := by
     rw [PromptAssembly.callsIn_cons_ordinary row rest hrow, ← callsIn_strip rest]
-    exact resolvedIn_dropOrphaned_subset (strip rest)
+    exact resolvedIn_dropOrphaned_subset (strip sizes rest)
   exact ((uniqueCallIds_append_disjoint huniq).symm).mono_left hsub
 
 theorem activeBlockValidFrom_append (a : List MessageRow) :
@@ -387,8 +390,8 @@ theorem nonemptyAnnouncements_drop (n : Nat) :
 
 theorem sanitizeGlobal_drop_noop {msgs : List MessageRow} {n : Nat}
     (huniq : UniqueCallIds msgs)
-    (hboundary : pendingAfter ∅ ((providerViewGlobal msgs).take n) = ∅) :
-    sanitizeGlobal ((providerViewGlobal msgs).drop n) = (providerViewGlobal msgs).drop n :=
+    (hboundary : pendingAfter ∅ ((providerViewGlobal sizes msgs).take n) = ∅) :
+    sanitizeGlobal ((providerViewGlobal sizes msgs).drop n) = (providerViewGlobal sizes msgs).drop n :=
   PromptAssembly.sanitizeGlobal_fixpoint
     (drop_preserves_providerValid _ n (providerViewGlobal_sound huniq) hboundary)
     (nonemptyAnnouncements_drop n _ (providerViewGlobal_nonempty_announcements msgs))
@@ -396,29 +399,35 @@ theorem sanitizeGlobal_drop_noop {msgs : List MessageRow} {n : Nat}
 theorem reused_call_id_breaks_prefix_stability :
     ∃ a b : List MessageRow,
       pendingAfter ∅ a = ∅ ∧
-        (providerViewGlobal (a ++ b)).take (providerViewGlobal a).length ≠ providerViewGlobal a := by
+        (providerViewGlobal sizes (a ++ b)).take (providerViewGlobal sizes a).length ≠ providerViewGlobal sizes a := by
   refine ⟨[⟨0, 0, 0, .assistant, .assistantToolCalls {1}⟩, ⟨1, 0, 1, .user, .ordinary⟩],
           [⟨2, 0, 2, .assistant, .assistantToolCalls {1}⟩,
            ⟨3, 0, 3, .user, .toolResult 1 ⟨0, 0, 0⟩⟩], ?_, ?_⟩
   · decide
-  · decide
+  · have h0 : stripKey sizes ⟨0, 0, 0⟩ = ⟨0, 0, 0⟩ := stripKey_of_stub_identity sizes rfl
+    simp only [providerViewGlobal, providerViewTurn, strip, List.map, stripRow, stripKind, h0,
+      List.cons_append, List.nil_append]
+    decide
 
 theorem reused_call_id_is_prefix_stable_per_turn :
     ∃ a b : List MessageRow,
       pendingAfter ∅ a = ∅ ∧
-        (providerViewTurn (a ++ b)).take (providerViewTurn a).length =
-          providerViewTurn a := by
+        (providerViewTurn sizes (a ++ b)).take (providerViewTurn sizes a).length =
+          providerViewTurn sizes a := by
   refine ⟨[⟨0, 0, 0, .assistant, .assistantToolCalls {1}⟩, ⟨1, 0, 1, .user, .ordinary⟩],
           [⟨2, 0, 2, .assistant, .assistantToolCalls {1}⟩,
            ⟨3, 0, 3, .user, .toolResult 1 ⟨0, 0, 0⟩⟩], ?_, ?_⟩
   · decide
-  · decide
+  · have h0 : stripKey sizes ⟨0, 0, 0⟩ = ⟨0, 0, 0⟩ := stripKey_of_stub_identity sizes rfl
+    simp only [providerViewGlobal, providerViewTurn, strip, List.map, stripRow, stripKind, h0,
+      List.cons_append, List.nil_append]
+    decide
 
 theorem compacted_prefix_correspondence
     {H new dropped old recent tail : List MessageRow}
-    (hstable : providerViewGlobal (H ++ new) = providerViewGlobal H ++ tail)
-    (hsplit : providerViewGlobal H = dropped ++ old ++ recent) :
-    (providerViewGlobal (H ++ new)).drop (dropped.length + old.length) = recent ++ tail := by
+    (hstable : providerViewGlobal sizes (H ++ new) = providerViewGlobal sizes H ++ tail)
+    (hsplit : providerViewGlobal sizes H = dropped ++ old ++ recent) :
+    (providerViewGlobal sizes (H ++ new)).drop (dropped.length + old.length) = recent ++ tail := by
   rw [hstable, hsplit]
   have hregroup : dropped ++ old ++ recent ++ tail = (dropped ++ old) ++ (recent ++ tail) := by
     simp [List.append_assoc]
@@ -429,15 +438,15 @@ theorem compacted_prefix_correspondence
 raw rows on either side separately produces exactly the prefix/suffix split of
 the complete provider view.  Production establishes this at compaction time
 and stores the last canonical sequence in the `CompactionEntry`. -/
-def CursorDenotes (msgs : List MessageRow) (cursor compacted : Nat) : Prop :=
-  providerViewGlobal msgs =
-      providerViewGlobal (msgs.take cursor) ++ providerViewGlobal (msgs.drop cursor) ∧
-    (providerViewGlobal (msgs.take cursor)).length = compacted
+def CursorDenotes (sizes : ResultSizes) (msgs : List MessageRow) (cursor compacted : Nat) : Prop :=
+  providerViewGlobal sizes msgs =
+      providerViewGlobal sizes (msgs.take cursor) ++ providerViewGlobal sizes (msgs.drop cursor) ∧
+    (providerViewGlobal sizes (msgs.take cursor)).length = compacted
 
 theorem cursor_projects_active_suffix
     {msgs : List MessageRow} {cursor compacted : Nat}
-    (hcursor : CursorDenotes msgs cursor compacted) :
-    providerViewGlobal (msgs.drop cursor) = (providerViewGlobal msgs).drop compacted := by
+    (hcursor : CursorDenotes sizes msgs cursor compacted) :
+    providerViewGlobal sizes (msgs.drop cursor) = (providerViewGlobal sizes msgs).drop compacted := by
   rcases hcursor with ⟨hsplit, hlength⟩
   rw [hsplit, ← hlength]
   simp
@@ -474,10 +483,12 @@ theorem afterSequence_eq_drop_of_boundary
 theorem sequence_cursor_projects_active_suffix
     {msgs : List MessageRow} {rawCursor compacted : Nat}
     {cursor : Transcript.Sequence}
-    (hcursor : CursorDenotes msgs rawCursor compacted)
+    (hcursor : CursorDenotes sizes msgs rawCursor compacted)
     (hboundary : SequenceCursorBoundary msgs rawCursor cursor) :
-    providerViewGlobal (afterSequence cursor msgs) = (providerViewGlobal msgs).drop compacted := by
+    providerViewGlobal sizes (afterSequence cursor msgs) = (providerViewGlobal sizes msgs).drop compacted := by
   rw [afterSequence_eq_drop_of_boundary hboundary]
   exact cursor_projects_active_suffix hcursor
+
+end
 
 end Compaction

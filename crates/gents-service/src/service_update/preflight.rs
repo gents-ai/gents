@@ -45,8 +45,14 @@ struct FailureEnvelope {
     store_key_failure_v1: String,
 }
 
+pub(super) fn preflight_refusal<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a PreflightError> {
+    gents_protocol::error_chain::find_source::<PreflightError>(error)
+}
+
 pub(super) fn failure_metadata(error: &anyhow::Error) -> Option<serde_json::Value> {
-    match error.downcast_ref::<PreflightError>()? {
+    match preflight_refusal(error.as_ref())? {
         PreflightError::StoreKey { source, .. } => Some(serde_json::json!(FailureEnvelope {
             store_key_failure_v1: gents_protocol::failure_text::bounded_text(&source.to_string()),
         })),
