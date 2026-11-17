@@ -687,16 +687,31 @@ class HostGroups(unittest.TestCase):
         for entry in portable:
             self.assertEqual(entry["runs_on"], [*ROLES["portable"]["labels"], entry["runs_on"][-1]])
 
-    def test_slices_alternate_and_the_cached_slice_keeps_to_its_store(self):
+    def test_slices_alternate_between_the_host_groups(self):
         selection = sharded(4, everything=True)
         self.assertEqual([entry["runs_on"][-1] for entry in selection["shards"]],
                          [self.GROUPS[index % len(self.GROUPS)] for index in range(4)])
+
+    def test_a_cached_build_may_plan_on_either_host_group(self):
+        # Each host keeps its own test-result store (TestCache.lean
+        # `skip_sound_on_any_host`), so the cached build names no group and
+        # a runner of every group matches it.
+        saved = os.environ.get("GATE_EVENT")
         os.environ["GATE_TEST_CACHE"] = "on"
         try:
-            cached = sharded(1, everything=True)
+            for event, mode in (("pull_request", "on"), ("push", "full")):
+                os.environ["GATE_EVENT"] = event
+                [archive] = sharded(1, everything=True)["archives"]
+                with self.subTest(event=event):
+                    self.assertEqual(archive["test_cache"], mode)
+                    self.assertEqual(archive["runs_on"], ROLES["portable"]["labels"])
+                    for group in self.GROUPS:
+                        self.assertLessEqual(set(archive["runs_on"]), {*ROLES["portable"]["labels"], group})
         finally:
             del os.environ["GATE_TEST_CACHE"]
-        self.assertEqual(cached["archives"][0]["runs_on"][-1], self.GROUPS[0])
+            os.environ.pop("GATE_EVENT", None)
+            if saved is not None:
+                os.environ["GATE_EVENT"] = saved
 
     def test_a_runner_takes_its_roles_compile_and_test_parallelism(self):
         jobs = ROLES["portable"]["jobs"]
