@@ -1,17 +1,10 @@
+use super::collection_roots::{root, Root};
 use super::*;
-use gents_documents::views::agents::AgentList;
-use gents_documents::views::config::{
-    AgentContextList, AgentTargetList, CompactionConfigList, DatastoreToolSurfaceList,
-    DefaultAgentSelectionList, NodeList, SkillList, ToolsList,
-};
-use gents_documents::views::tasks::{EventSourceList, ScheduleList, TaskList, TriggerList};
-use gents_inference::views::backends::{BackendList, ObservationList};
-use gents_inference::views::profiles::ProfileList;
-use gents_inference::views::settings::{ExecutionList, SamplingList};
+use gents_documents::views::config::NodeList;
+use gents_documents::views::tasks::TriggerList;
 use gents_session::views::requests::{RequestOrder, RequestRows};
 use gents_session::views::transcript::Scope;
 use gents_store::config_client::ConfigAccess;
-use gents_store::views::runtime::{NodeReadinessList, NodeRuntimeList};
 use rapidhash::{HashSetExt, RapidHashSet};
 
 /// A session head request's doc id, node DID, session id, requester DID and
@@ -221,13 +214,13 @@ pub async fn load_node_snapshot_on(
     ) = access
         .read_views(&(
             NodeList::new(node_did),
-            DefaultAgentSelectionList::new(node_did),
-            AgentList::new(node_did),
-            NodeRuntimeList::new(node_did),
-            NodeReadinessList::new(node_did),
+            root::DefaultAgentSelections::view(node_did),
+            root::Agents::view(node_did),
+            root::Runtimes::view(node_did),
+            root::NodeReadiness::view(node_did),
             RequestRows::new(Scope::Node(node_did.to_owned())).nonterminal(),
-            gents_automation::views::MailboxRows::new(node_did).open(),
-            gents_automation::views::GoalRows::new(node_did),
+            root::MailboxItems::view(node_did),
+            root::Goals::view(node_did),
             gents_session::views::SessionList {
                 input: gents_protocol::operations::session::SessionListInput {
                     node_did: Some(node_did.to_owned()),
@@ -235,132 +228,68 @@ pub async fn load_node_snapshot_on(
                     ..Default::default()
                 },
             },
-            ToolsList::new(node_did),
-            AgentContextList::new(node_did),
-            CompactionConfigList::new(node_did),
+            root::Tools::view(node_did),
+            root::Contexts::view(node_did),
+            root::Compactions::view(node_did),
             TriggerList::new(node_did),
-            TaskList::new(node_did),
-            ScheduleList::new(node_did),
-            SkillList::new(node_did),
-            BackendList::new(node_did),
-            ObservationList::new(node_did),
-            ProfileList::new(node_did),
-            SamplingList::new(node_did),
-            ExecutionList::new(node_did),
-            gents_tools::mcp::views::Services {
-                node_did,
-                service_id: None,
-                enabled_only: false,
-            },
-            EventSourceList::new(node_did),
-            AgentTargetList::new(node_did),
-            DatastoreToolSurfaceList::new(node_did),
+            root::Tasks::view(node_did),
+            root::Schedules::view(node_did),
+            root::Skills::view(node_did),
+            root::InferenceBackends::view(node_did),
+            root::BackendObservations::view(node_did),
+            root::InferenceProfiles::view(node_did),
+            root::InferenceSampling::view(node_did),
+            root::InferenceExecution::view(node_did),
+            root::ToolServiceRegistries::view(node_did),
+            root::EventSources::view(node_did),
+            root::AgentTargets::view(node_did),
+            root::DatastoreToolSurfaces::view(node_did),
         ))
         .await
         .map_err(anyhow::Error::from)?;
     selected_node_root(!nodes.is_empty())?;
-    let mut triggers = Vec::with_capacity(trigger_rows.len());
-    let mut trigger_observations = Vec::with_capacity(trigger_rows.len());
-    let mut schedule_observations = Vec::with_capacity(trigger_rows.len());
-    for row in trigger_rows {
-        let (trigger, observation, schedule) = row.into_parts();
-        triggers.push(trigger);
-        trigger_observations.push(observation);
-        schedule_observations.push(schedule);
-    }
-    let sessions = sessions
-        .into_iter()
-        .map(|row| row.session)
-        .collect::<Vec<_>>();
-    let requests =
-        complete_access_snapshot_requests(access, node_did, &sessions, &triggers, requests).await?;
-    let inference_backends = backends
-        .into_iter()
-        .map(|row| row.metadata.into_backend().map_err(anyhow::Error::from))
-        .collect::<Result<Vec<_>>>()?;
-    let backend_observations = observations
-        .into_iter()
-        .map(|row| row.observation)
-        .collect::<Vec<_>>();
-    let tasks = tasks.into_iter().map(|row| row.task).collect::<Vec<_>>();
-    let schedules = schedules
-        .into_iter()
-        .map(|row| row.schedule)
-        .collect::<Vec<_>>();
-    let skills = skills
-        .into_iter()
-        .map(|row| row.document)
-        .collect::<Vec<_>>();
-    let tools = tools
-        .into_iter()
-        .map(|row| row.document)
-        .collect::<Vec<_>>();
-    let contexts = contexts
-        .into_iter()
-        .map(|row| row.document)
-        .collect::<Vec<_>>();
-    let compactions = compactions
-        .into_iter()
-        .map(|row| row.document)
-        .collect::<Vec<_>>();
-    let inference_profiles = inference_profiles
-        .into_iter()
-        .map(|row| row.profile)
-        .collect::<Vec<_>>();
-    let inference_sampling = inference_sampling
-        .into_iter()
-        .map(|row| row.settings)
-        .collect::<Vec<_>>();
-    let inference_execution = inference_execution
-        .into_iter()
-        .map(|row| row.settings)
-        .collect::<Vec<_>>();
-    let event_sources = event_sources
-        .into_iter()
-        .map(|row| row.event_source)
-        .collect::<Vec<_>>();
-    let agent_targets = agent_targets
-        .into_iter()
-        .map(|row| row.document)
-        .collect::<Vec<_>>();
-    let datastore_tool_surfaces = datastore_tool_surfaces
-        .into_iter()
-        .map(|row| row.document)
-        .collect::<Vec<_>>();
-    Ok(ClientStore::from_rows(ClientStoreRows {
+    let mut rows = ClientStoreRows {
         nodes: nodes.into_iter().map(|row| row.document).collect(),
-        default_agent_selections: default_agent_selections
-            .into_iter()
-            .map(|row| row.document)
-            .collect(),
-        agents: agents.into_iter().map(|row| row.agent).collect(),
-        runtimes,
-        node_readiness,
-        requests,
-        mailbox_items,
-        goals,
-        sessions,
-        tasks,
-        schedules,
-        schedule_observations,
-        triggers,
-        trigger_observations,
-        skills,
-        tools,
-        contexts,
-        compactions,
-        inference_backends,
-        backend_observations,
-        inference_profiles,
-        inference_sampling,
-        inference_execution,
-        tool_service_registries,
-        event_sources,
-        agent_targets,
-        datastore_tool_surfaces,
+        sessions: sessions.into_iter().map(|row| row.session).collect(),
         operator_config_authoritative_node_dids: [node_did.to_owned()].into_iter().collect(),
         ..Default::default()
-    }))
+    };
+    root::DefaultAgentSelections::store(default_agent_selections, &mut rows)?;
+    root::Agents::store(agents, &mut rows)?;
+    root::Runtimes::store(runtimes, &mut rows)?;
+    root::NodeReadiness::store(node_readiness, &mut rows)?;
+    root::MailboxItems::store(mailbox_items, &mut rows)?;
+    root::Goals::store(goals, &mut rows)?;
+    root::Tools::store(tools, &mut rows)?;
+    root::Contexts::store(contexts, &mut rows)?;
+    root::Compactions::store(compactions, &mut rows)?;
+    root::Tasks::store(tasks, &mut rows)?;
+    root::Schedules::store(schedules, &mut rows)?;
+    root::Skills::store(skills, &mut rows)?;
+    root::InferenceBackends::store(backends, &mut rows)?;
+    root::BackendObservations::store(observations, &mut rows)?;
+    root::InferenceProfiles::store(inference_profiles, &mut rows)?;
+    root::InferenceSampling::store(inference_sampling, &mut rows)?;
+    root::InferenceExecution::store(inference_execution, &mut rows)?;
+    root::ToolServiceRegistries::store(tool_service_registries, &mut rows)?;
+    root::EventSources::store(event_sources, &mut rows)?;
+    root::AgentTargets::store(agent_targets, &mut rows)?;
+    root::DatastoreToolSurfaces::store(datastore_tool_surfaces, &mut rows)?;
+    for row in trigger_rows {
+        let (trigger, observation, schedule) = row.into_parts();
+        rows.triggers.push(trigger);
+        rows.trigger_observations.push(observation);
+        rows.schedule_observations.push(schedule);
+    }
+    rows.requests = complete_access_snapshot_requests(
+        access,
+        node_did,
+        &rows.sessions,
+        &rows.triggers,
+        requests,
+    )
+    .await?;
+    Ok(ClientStore::from_rows(rows))
 }
 
 pub async fn load_inference_configuration(
@@ -370,30 +299,24 @@ pub async fn load_inference_configuration(
     let (nodes, selections, agents, backends, observations, profiles) = access
         .read_views(&(
             NodeList::new(node_did),
-            DefaultAgentSelectionList::new(node_did),
-            AgentList::new(node_did),
-            BackendList::new(node_did),
-            ObservationList::new(node_did),
-            ProfileList::new(node_did),
+            root::DefaultAgentSelections::view(node_did),
+            root::Agents::view(node_did),
+            root::InferenceBackends::view(node_did),
+            root::BackendObservations::view(node_did),
+            root::InferenceProfiles::view(node_did),
         ))
         .await?;
-    let backend_observations = observations
-        .into_iter()
-        .map(|row| row.observation)
-        .collect::<Vec<_>>();
-    Ok(ClientStore::from_rows(ClientStoreRows {
+    let mut rows = ClientStoreRows {
         nodes: nodes.into_iter().map(|row| row.document).collect(),
-        default_agent_selections: selections.into_iter().map(|row| row.document).collect(),
-        agents: agents.into_iter().map(|row| row.agent).collect(),
-        inference_backends: backends
-            .into_iter()
-            .map(|row| row.metadata.into_backend().map_err(anyhow::Error::from))
-            .collect::<Result<_>>()?,
-        inference_profiles: profiles.into_iter().map(|row| row.profile).collect(),
-        backend_observations,
         operator_config_authoritative_node_dids: [node_did.to_owned()].into_iter().collect(),
         ..Default::default()
-    }))
+    };
+    root::DefaultAgentSelections::store(selections, &mut rows)?;
+    root::Agents::store(agents, &mut rows)?;
+    root::InferenceBackends::store(backends, &mut rows)?;
+    root::BackendObservations::store(observations, &mut rows)?;
+    root::InferenceProfiles::store(profiles, &mut rows)?;
+    Ok(ClientStore::from_rows(rows))
 }
 
 pub async fn load_node_scoped_snapshot_with_connections(
@@ -413,7 +336,7 @@ pub async fn load_node_scoped_snapshot_with_connections(
     .await
 }
 
-fn selected_node_root(visible: bool) -> std::result::Result<(), SnapshotReadError> {
+pub(super) fn selected_node_root(visible: bool) -> std::result::Result<(), SnapshotReadError> {
     if visible {
         Ok(())
     } else {

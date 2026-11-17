@@ -8,7 +8,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
-use crate::client_projection::query::load_node_snapshot_on;
+use crate::client_projection::query::{
+    load_collection_roots_on, load_node_snapshot_on, CollectionRoot, SnapshotReadError,
+};
 use crate::client_projection::store::ClientStore;
 use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 
@@ -50,11 +52,22 @@ impl Settlement {
     }
 }
 
-/// The loop's per-node `ObserverResync.Slot` fields other than `loading`
-/// (`Loads`) and `status` (the store's runtime connection).
+/// `ObserverResync.CollectionSettlement` of a finished collection reload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollectionSettlement {
+    Published,
+    Superseded,
+    Failed,
+}
+
+/// The loop's per-node `ObserverResync.Slot` fields other than `loading` and
+/// `reloadingCollections` (`Loads`) and `status` (the store's runtime
+/// connection).
 #[derive(Default)]
 struct Queue {
     pending: BTreeSet<String>,
+    /// `collections`: the roots queued for a collection reload, per node.
+    collections: BTreeMap<String, BTreeSet<CollectionRoot>>,
     retry_at: BTreeMap<String, Instant>,
     failures: BTreeMap<String, u32>,
     /// The source generation whose every root is armed, per node. A replaced
@@ -161,12 +174,65 @@ impl Queue {
         }
     }
 
-    /// `ObserverResync.startable` for `node`'s source at `generation`.
-    fn startable(&self, node: &str, generation: u64, loading: bool) -> bool {
+    /// The nodes and collections the stores asked to read again.
+    fn take_requests(&mut self, stores: &ObservedStores) {
+        self.pending.extend(stores.take_resync_requests());
+        for (node, roots) in stores.take_collection_requests() {
+            self.collections.entry(node).or_default().extend(roots);
+        }
+    }
+
+    /// `ObserverResync.startable` for `node`'s source at `generation`;
+    /// `reading` is a load or collection reload of the node in flight.
+    fn startable(&self, node: &str, generation: u64, reading: bool) -> bool {
         self.pending.contains(node)
             && !self.retry_at.contains_key(node)
-            && !loading
+            && !reading
             && self.armed.get(node) == Some(&generation)
+    }
+
+    /// `ObserverResync.start`: the load takes the queued collections.
+    fn start(&mut self, node: &str) {
+        self.pending.remove(node);
+        self.collections.remove(node);
+    }
+
+    /// `ObserverResync.collectionStartable` for `node`'s source at
+    /// `generation`.
+    fn collections_startable(&self, node: &str, generation: u64, reading: bool) -> bool {
+        self.collections
+            .get(node)
+            .is_some_and(|roots| !roots.is_empty())
+            && !self.pending.contains(node)
+            && !self.retry_at.contains_key(node)
+            && !reading
+            && self.armed.get(node) == Some(&generation)
+    }
+
+    /// `ObserverResync.startCollections`: every queued collection.
+    fn start_collections(&mut self, node: &str) -> BTreeSet<CollectionRoot> {
+        self.collections.remove(node).unwrap_or_default()
+    }
+
+    /// `ObserverResync.settleCollections` of a reload of `roots`.
+    fn settle_collections(
+        &mut self,
+        node: &str,
+        settlement: CollectionSettlement,
+        roots: BTreeSet<CollectionRoot>,
+    ) {
+        match settlement {
+            CollectionSettlement::Published => {}
+            CollectionSettlement::Superseded => {
+                self.collections
+                    .entry(node.to_owned())
+                    .or_default()
+                    .extend(roots);
+            }
+            CollectionSettlement::Failed => {
+                self.pending.insert(node.to_owned());
+            }
+        }
     }
 
     fn settle(&mut self, node: &str, settlement: Settlement, now: Instant) {
@@ -189,6 +255,7 @@ impl Queue {
             Settlement::Refused => {
                 self.failures.remove(node);
                 self.pending.remove(node);
+                self.collections.remove(node);
                 self.retry_at.remove(node);
                 self.armed.remove(node);
             }
@@ -205,6 +272,7 @@ impl Queue {
     /// A node no longer configured.
     fn forget(&mut self, node: &str) {
         self.pending.remove(node);
+        self.collections.remove(node);
         self.retry_at.remove(node);
         self.failures.remove(node);
         self.armed.remove(node);
@@ -307,24 +375,36 @@ impl ObserverHandle {
     }
 }
 
+/// What a finished read of a node fetched.
+enum Fetched {
+    Node(Result<ClientStore, SnapshotReadError>),
+    Collections(
+        BTreeSet<CollectionRoot>,
+        Result<ClientStore, SnapshotReadError>,
+    ),
+}
+
 struct Load {
     node: String,
     id: u64,
     store: Arc<ObservedStore>,
     captured: projection_store::StoreReadFence,
-    result: Result<ClientStore, crate::client_projection::query::SnapshotReadError>,
+    fetched: Fetched,
 }
 
 struct InFlight {
     id: u64,
     source_generation: u64,
     abort: AbortHandle,
+    /// A collection reload rather than a full load.
+    collections: bool,
 }
 
-/// Each runtime's snapshot runs as its own task so one stalled runtime delays
-/// neither another runtime nor shutdown. At most one load per node is in
-/// flight; a load whose source was replaced, removed or ended is aborted and
-/// its result, if it already finished, is dropped by id.
+/// Each runtime's read runs as its own task so one stalled runtime delays
+/// neither another runtime nor shutdown. At most one read per node, a full
+/// load or a collection reload, is in flight; a read whose source was
+/// replaced, removed or ended is aborted and its result, if it already
+/// finished, is dropped by id.
 #[derive(Default)]
 struct Loads {
     tasks: JoinSet<Load>,
@@ -334,19 +414,46 @@ struct Loads {
 
 impl Loads {
     fn start(&mut self, node: String, source: &remote::Source, store: Arc<ObservedStore>) {
+        self.spawn(node, source, store, None);
+    }
+
+    fn start_collections(
+        &mut self,
+        node: String,
+        source: &remote::Source,
+        store: Arc<ObservedStore>,
+        roots: BTreeSet<CollectionRoot>,
+    ) {
+        self.spawn(node, source, store, Some(roots));
+    }
+
+    fn spawn(
+        &mut self,
+        node: String,
+        source: &remote::Source,
+        store: Arc<ObservedStore>,
+        roots: Option<BTreeSet<CollectionRoot>>,
+    ) {
         self.next_id += 1;
         let id = self.next_id;
         let access = ConfigAccess::Graphql(source.endpoint.clone());
         let captured = store.capture_read();
         let task_node = node.clone();
+        let collections = roots.is_some();
         let abort = self.tasks.spawn(async move {
-            let result = load_node_snapshot_on(&access, &task_node).await;
+            let fetched = match roots {
+                None => Fetched::Node(load_node_snapshot_on(&access, &task_node).await),
+                Some(roots) => {
+                    let result = load_collection_roots_on(&access, &task_node, &roots).await;
+                    Fetched::Collections(roots, result)
+                }
+            };
             Load {
                 node: task_node,
                 id,
                 store,
                 captured,
-                result,
+                fetched,
             }
         });
         self.in_flight.insert(
@@ -355,6 +462,7 @@ impl Loads {
                 id,
                 source_generation: source.generation,
                 abort,
+                collections,
             },
         );
     }
@@ -395,14 +503,45 @@ impl Loads {
         }
     }
 
-    fn forget(&mut self, task: tokio::task::Id) -> Option<String> {
+    /// The node of a read task that failed to join, and whether it was a
+    /// collection reload.
+    fn forget(&mut self, task: tokio::task::Id) -> Option<(String, bool)> {
         let node = self
             .in_flight
             .iter()
             .find(|(_, load)| load.abort.id() == task)
             .map(|(node, _)| node.clone())?;
-        self.in_flight.remove(&node);
-        Some(node)
+        let load = self.in_flight.remove(&node)?;
+        Some((node, load.collections))
+    }
+}
+
+/// Publishes a finished collection reload through the reload fence
+/// (`ObserverResync.collectionSettlement`).
+fn settle_collection_reload(
+    store: &ObservedStore,
+    captured: &projection_store::StoreReadFence,
+    roots: BTreeSet<CollectionRoot>,
+    result: Result<ClientStore, SnapshotReadError>,
+    metrics: &ObserverMetrics,
+) -> CollectionSettlement {
+    match result {
+        Ok(rows) => {
+            let fetched = rows.row_count();
+            if store.replace_collections_at_read(captured, roots, rows) {
+                metrics
+                    .docs_fetched
+                    .fetch_add(fetched as u64, Ordering::Relaxed);
+                CollectionSettlement::Published
+            } else {
+                CollectionSettlement::Superseded
+            }
+        }
+        Err(error) => {
+            tracing::warn!(node_did = %store.node_did(), error = %error, "runtime collection reload failed");
+            metrics.fetch_failures.fetch_add(1, Ordering::Relaxed);
+            CollectionSettlement::Failed
+        }
     }
 }
 
@@ -503,16 +642,23 @@ pub fn spawn_observer(
                 }
                 changed = resync_requests.changed() => {
                     if changed.is_err() { break; }
-                    queue.pending.extend(stores.take_resync_requests());
+                    queue.take_requests(&stores);
                 }
                 Some(joined) = loads.tasks.join_next(), if !loads.tasks.is_empty() => {
                     let load = match joined {
                         Ok(load) => load,
                         Err(error) => {
-                            if let Some(node) = loads.forget(error.id()) {
-                                tracing::warn!(node_did = %node, error = %error, "runtime snapshot task failed");
-                                queue.settle(&node, Settlement::TransportFailed, Instant::now());
-                                waiters.settle(&node, &stores);
+                            match loads.forget(error.id()) {
+                                Some((node, true)) => {
+                                    tracing::warn!(node_did = %node, error = %error, "runtime collection reload task failed");
+                                    queue.settle_collections(&node, CollectionSettlement::Failed, BTreeSet::new());
+                                }
+                                Some((node, false)) => {
+                                    tracing::warn!(node_did = %node, error = %error, "runtime snapshot task failed");
+                                    queue.settle(&node, Settlement::TransportFailed, Instant::now());
+                                    waiters.settle(&node, &stores);
+                                }
+                                None => {}
                             }
                             continue;
                         }
@@ -520,7 +666,15 @@ pub fn spawn_observer(
                     if !loads.accept(&load) {
                         continue;
                     }
-                    let Load { node, store, captured, result, .. } = load;
+                    let Load { node, store, captured, fetched, .. } = load;
+                    let result = match fetched {
+                        Fetched::Node(result) => result,
+                        Fetched::Collections(roots, result) => {
+                            let settlement = settle_collection_reload(&store, &captured, roots.clone(), result, &metrics_for_task);
+                            queue.settle_collections(&node, settlement, roots);
+                            continue;
+                        }
+                    };
                     let settlement = match result {
                         Ok(snapshot) => {
                             let rows = snapshot.row_count();
@@ -586,10 +740,31 @@ pub fn spawn_observer(
                 .cloned()
                 .collect();
             for node in runnable {
-                queue.pending.remove(&node);
+                queue.start(&node);
                 if let Some(source) = sources.entries.get(&node) {
                     let store = stores.ensure(&node);
                     loads.start(node, source, store);
+                }
+            }
+            let collection_runnable: Vec<_> = queue
+                .collections
+                .keys()
+                .filter(|node| {
+                    sources.entries.get(*node).is_some_and(|source| {
+                        queue.collections_startable(
+                            node,
+                            source.generation,
+                            loads.in_flight.contains_key(*node),
+                        )
+                    })
+                })
+                .cloned()
+                .collect();
+            for node in collection_runnable {
+                let roots = queue.start_collections(&node);
+                if let Some(source) = sources.entries.get(&node) {
+                    let store = stores.ensure(&node);
+                    loads.start_collections(node, source, store, roots);
                 }
             }
         }

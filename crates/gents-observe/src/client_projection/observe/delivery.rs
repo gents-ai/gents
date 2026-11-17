@@ -3,14 +3,57 @@ use std::sync::atomic::Ordering;
 use anyhow::{Context, Result};
 
 use super::{ObservedStore, ObserverMetrics};
-use crate::client_projection::query::is_transcript_content_collection;
+use crate::client_projection::query::{is_transcript_content_collection, CollectionRoot};
+
+/// `ObserverResync.Change`: what a delivered change is, by its collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Change {
+    ToolControl,
+    Transcript,
+    ToolCall,
+    Collection,
+    Node,
+}
+
+impl Change {
+    fn of(collection: &str, root: Option<CollectionRoot>) -> Self {
+        match collection {
+            "AgentToolControl" | "AgentToolControlClaim" => Self::ToolControl,
+            gents_protocol::schemas::AGENT_TOOL_CALL_NAME => Self::ToolCall,
+            _ if is_transcript_content_collection(collection) => Self::Transcript,
+            _ if root.is_some() => Self::Collection,
+            _ => Self::Node,
+        }
+    }
+}
+
+/// `ObserverResync.Delivery`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Delivery {
+    InvalidateTranscript,
+    InvalidateProvenance,
+    ReloadCollection,
+    Resync,
+}
+
+/// `ObserverResync.deliver`.
+pub(super) fn route(change: Change) -> Delivery {
+    match change {
+        Change::ToolControl | Change::Transcript => Delivery::InvalidateTranscript,
+        Change::ToolCall => Delivery::InvalidateProvenance,
+        Change::Collection => Delivery::ReloadCollection,
+        Change::Node => Delivery::Resync,
+    }
+}
 
 /// Applies one subscription envelope from the runtime of `store`'s node. A
 /// document change is a request event of that node's store
 /// (`ClientDataPublication.requestEvent`): it rejects the store's patches read
-/// before it and queues a fresh snapshot of the node, but leaves every
-/// snapshot reload in flight to publish, so a steady event stream cannot keep
-/// rows from catching up.
+/// before it and queues a fresh read of its collection or of the node, but
+/// leaves every reload in flight to publish, so a steady event stream cannot
+/// keep rows from catching up.
 pub(super) fn deliver(
     store: &ObservedStore,
     metrics: &ObserverMetrics,
@@ -32,16 +75,41 @@ pub(super) fn deliver(
     metrics
         .events_received
         .fetch_add(rows.len() as u64, Ordering::Relaxed);
-    if matches!(collection, "AgentToolControl" | "AgentToolControlClaim") {
-        store.invalidate_projection(false);
-    } else if is_transcript_content_collection(collection) {
-        store.invalidate_projection(collection == gents_protocol::schemas::AGENT_TOOL_CALL_NAME);
-        metrics
-            .transcript_invalidations
-            .fetch_add(1, Ordering::Relaxed);
-    } else {
-        store.observe_request_event();
-        store.request_resync();
+    let root = CollectionRoot::of(collection);
+    let change = Change::of(collection, root);
+    match route(change) {
+        Delivery::InvalidateTranscript => {
+            store.invalidate_projection(false);
+            if change == Change::Transcript {
+                metrics
+                    .transcript_invalidations
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Delivery::InvalidateProvenance => {
+            store.invalidate_projection(true);
+            metrics
+                .transcript_invalidations
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        Delivery::ReloadCollection => {
+            store.observe_request_event();
+            store.request_collection_reload(
+                root.context("a collection change names its snapshot root")?,
+            );
+        }
+        Delivery::Resync => {
+            store.observe_request_event();
+            store.request_resync();
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod conformance {
+    #[test]
+    fn deliver_matches_lean() {
+        gents_lean_vocab::families::observer_resync_deliver::replay(|i| super::route(i.change));
+    }
 }

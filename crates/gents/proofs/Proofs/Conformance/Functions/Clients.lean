@@ -36,6 +36,14 @@ attribute [conformance_function] armedEvent armedAfter snapshotEvent selectedRoo
 
 end RuntimeConnectionObservation
 
+namespace ObserverResync
+
+deriving instance Lean.ToJson for Change, Delivery
+
+attribute [conformance_function] deliver
+
+end ObserverResync
+
 namespace ServiceLifecycle
 
 deriving instance Lean.ToJson for Action, Decision, StartDisposition
