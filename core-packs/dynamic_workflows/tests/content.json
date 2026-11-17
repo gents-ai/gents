@@ -18,8 +18,8 @@
       "expr": "tool(\"wf-read-only-tools\") | .host.bash.mode == \"ReadOnly\" and .host.bash.network_mode == \"disabled\" and .host.files.mode == \"ReadOnly\" and .built_ins.enable_session_history_tool == false"
     },
     {
-      "name": "the TOOL.md example asks text only of completed children (the host refuses child_output for a failed slot)",
-      "expr": ".assets[\"plugins/workflow/TOOL.md\"] | contains(\"const ok = slots.filter(completed);\") and contains(\"read(ok)\") and (contains(\"read(slots)\") | not)"
+      "name": "workflow instructions state the bounded job contract",
+      "expr": ".assets[\"plugins/workflow/TOOL.md\"] | (length <= 3000) and contains(\"{effects:\") and contains(\"{job_calls:\") and contains(\"{result:\") and contains(\"{suspend:\") and contains(\"{fail:\") and contains(\"input.job_results.<id>.result.slots[slot].text\") and contains(\"Never request failed or\") and contains(\"not another read request\") and contains(\"plugin_job_stalled\") and contains(\"gents automation job promote\") and contains(\"child_output: {slots\") and contains(\"result: {row_doc_id\") and contains(\"plugin_job_step_failed\") and contains(\"agent_budget\")"
     }
   ]
 }
