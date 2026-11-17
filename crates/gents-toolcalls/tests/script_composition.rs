@@ -196,6 +196,14 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
         entry["can_interrupt"], true,
         "list denied starter after message: {entry}"
     );
+    let interrupted = control(
+        &fixture,
+        "interrupt-worker",
+        "agent_interrupt",
+        json!({"session_id": target_session}),
+    )
+    .await;
+    assert_eq!(interrupted["ok"], true, "interrupt rejected: {interrupted}");
     let stop = control(
         &fixture,
         "stop-worker",

@@ -1183,11 +1183,16 @@ async fn verified_agent_new_creation_matching(
         )
         .await
         {
-            Ok(Some(text)) => agent_receipt_text_matches(
-                &text,
-                &request,
-                &receipt.opening_request_doc_id,
-                call_id,
+            Ok(Some(text)) => effect_creation_evidence(
+                true,
+                true,
+                agent_receipt_text_matches(
+                    &text,
+                    &request,
+                    &receipt.opening_request_doc_id,
+                    call_id,
+                ),
+                true,
             ),
             _ => false,
         }
@@ -1198,6 +1203,17 @@ async fn verified_agent_new_creation_matching(
         true,
         direct_match || effect_match,
     ))
+}
+
+// Terminal presentation is not creation authority; only authenticated effect
+// ancestry, its immutable receipt and exact binding contribute.
+fn effect_creation_evidence(
+    accepted_ancestry: bool,
+    signed_receipt: bool,
+    exact_binding: bool,
+    _terminal: bool,
+) -> bool {
+    accepted_ancestry && signed_receipt && exact_binding
 }
 
 fn verified_agent_creation_receipt<'a>(
@@ -1530,6 +1546,18 @@ where
 #[cfg(test)]
 mod conformance {
     use super::*;
+
+    #[test]
+    fn effect_creation_evidence_matches_lean() {
+        gents_lean_vocab::families::durable_lineage_effect_creation_evidence::replay(|i| {
+            effect_creation_evidence(
+                i.accepted_ancestry,
+                i.signed_receipt,
+                i.exact_binding,
+                i._terminal,
+            )
+        });
+    }
 
     #[test]
     fn deferred_creation_allowed_matches_lean() {
