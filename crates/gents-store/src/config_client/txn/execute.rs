@@ -665,8 +665,31 @@ impl ConfigApplyTxn<'_> {
         let doc_ids = doc_ids.to_vec();
         execute_owned_native(
             async move {
-                node.observe_document_access_in_txn(&handle, &collection, &doc_ids, subject, mode)
-                    .await
+                if doc_ids.is_empty() {
+                    return node
+                        .observe_document_access_in_txn(
+                            &handle,
+                            &collection,
+                            &doc_ids,
+                            subject,
+                            mode,
+                        )
+                        .await;
+                }
+                let mut decisions = Vec::with_capacity(doc_ids.len());
+                for batch in doc_ids.chunks(query::owners::MAX_OWNER_OBSERVATIONS) {
+                    decisions.extend(
+                        node.observe_document_access_in_txn(
+                            &handle,
+                            &collection,
+                            batch,
+                            subject.clone(),
+                            mode.clone(),
+                        )
+                        .await?,
+                    );
+                }
+                Ok(decisions)
             },
             Arc::clone(native_operations),
             self.operation,

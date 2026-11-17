@@ -1725,9 +1725,12 @@ def json : Json := Json.mkObj
         [("authorized", toJson authorized), ("same_doc", toJson doc),
          ("same_connection", toJson connection), ("committed", toJson committed),
          ("published", toJson (Configuration.backendDiscoveryMayPublish authorized doc connection committed))])),
-   ("backend_probe_cases", toJson ([(true, true, true), (false, true, true), (true, false, true), (true, true, false)].map fun (doc, same, committed) =>
-      Json.mkObj [("same_doc", toJson doc), ("same_connection", toJson same), ("committed", toJson committed),
-        ("published", toJson (Configuration.backendProbeMayPublish doc same committed))])),
+   ("backend_probe_cases", toJson ([(true, true, true, true), (false, true, true, true),
+       (true, false, true, true), (true, true, false, true), (true, true, true, false)].map
+      fun (nativeRead, doc, same, committed) =>
+      Json.mkObj [("native_read", toJson nativeRead), ("same_doc", toJson doc),
+        ("same_connection", toJson same), ("committed", toJson committed),
+        ("published", toJson (Configuration.backendProbeMayPublish nativeRead doc same committed))])),
    ("backend_removal_cases", toJson ([(true, true, true), (false, true, true),
        (true, false, true), (true, true, false)].map fun (authorized, matching, committed) =>
       let (metadata, observation, credential) := Configuration.removeBackendRecords authorized matching committed

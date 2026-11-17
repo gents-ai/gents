@@ -86,23 +86,19 @@ impl ConfigApplyTxn<'_> {
                     .ok_or(ConfigClientError::InvalidOwnerObservation)
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut decisions = Vec::with_capacity(doc_ids.len());
-        for batch in doc_ids.chunks(query::owners::MAX_OWNER_OBSERVATIONS) {
-            let observed = self
-                .observe_document_access(
-                    &runtime,
-                    collection,
-                    batch,
-                    defra_node::DocumentAccessMode::Document {
-                        permission: defra_node::DocumentPermission::Read,
-                        node_permission: acp::NodePermission::DocumentRead,
-                    },
-                )
-                .await?;
-            if observed.len() != batch.len() {
-                return Err(ConfigClientError::InvalidOwnerObservation);
-            }
-            decisions.extend(observed);
+        let decisions = self
+            .observe_document_access(
+                &runtime,
+                collection,
+                &doc_ids,
+                defra_node::DocumentAccessMode::Document {
+                    permission: defra_node::DocumentPermission::Read,
+                    node_permission: acp::NodePermission::DocumentRead,
+                },
+            )
+            .await?;
+        if decisions.len() != doc_ids.len() {
+            return Err(ConfigClientError::InvalidOwnerObservation);
         }
         let mut decisions = decisions.into_iter();
         rows.retain(|_| decisions.next() == Some(defra_node::DocumentAccessDecision::Allowed));

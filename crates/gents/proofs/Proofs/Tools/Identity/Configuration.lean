@@ -1673,9 +1673,15 @@ the same selected backend, connection and native actor update authority in its w
 def backendDiscoveryMayPublish (actorAuthorized sameDocument sameConnection committed : Bool) : Bool :=
   actorAuthorized && sameDocument && sameConnection && committed
 
-/-- A completed probe cannot publish to a replacement document or connection. -/
-def backendProbeMayPublish (sameDocument sameConnection committed : Bool) : Bool :=
-  sameDocument && sameConnection && committed
+/-- A runtime probe needs the backend's native document-read grant in its
+publication transaction; native administrator query bypass does not replace
+that grant. A completed probe cannot publish to a replacement connection. -/
+def backendProbeMayPublish (nativeRead sameDocument sameConnection committed : Bool) : Bool :=
+  nativeRead && sameDocument && sameConnection && committed
+
+theorem backend_probe_requires_native_read (sameDocument sameConnection committed : Bool) :
+    backendProbeMayPublish false sameDocument sameConnection committed = false := by
+  simp [backendProbeMayPublish]
 
 theorem plugin_backend_requires_both_actor_reads :
     [pluginBackendMayUse pluginBackendFixture (some "agent"),

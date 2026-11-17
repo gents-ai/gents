@@ -278,7 +278,8 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         .backend_probe_cases
         .iter()
         .find(|case| {
-            case["same_doc"] == true
+            case["native_read"] == true
+                && case["same_doc"] == true
                 && case["same_connection"] == false
                 && case["committed"] == true
         })
@@ -584,7 +585,8 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         .backend_probe_cases
         .iter()
         .find(|case| {
-            case["same_doc"] == false
+            case["native_read"] == true
+                && case["same_doc"] == false
                 && case["same_connection"] == true
                 && case["committed"] == true
         })

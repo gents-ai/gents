@@ -1,4 +1,5 @@
 mod catalog_freshness;
+mod runtime_read;
 pub use catalog_freshness::decode_backend_observation;
 
 use crate::backends::provider::BackendProviderKind;
@@ -201,12 +202,23 @@ pub(crate) async fn list_enabled_backends_for_runtime(
 ) -> Result<Vec<InferenceBackend>> {
     let access = crate::auth::credential::runtime_credential_access(node, node_did)?;
     let filter = enabled_backend_filter(node_did);
-    let response = access
-        .execute(&format!(
-            "query {{ InferenceBackendMetadata({filter}) {{ _docID {BACKEND_CONFIG_FIELDS} }} }}"
-        ))
-        .await?;
-    unique_backends(decode_backend_records(response.get("data"), true)?)
+    access
+        .transact_readonly("backend_registry.runtime_configuration", |txn| {
+            let filter = &filter;
+            Box::pin(async move {
+                let response = txn
+                    .execute(&format!(
+                        "query {{ InferenceBackendMetadata({filter}) {{ _docID {BACKEND_CONFIG_FIELDS} }} }}"
+                    ))
+                    .await?;
+                let mut records = decode_backend_records(response.get("data"), true)?;
+                let doc_ids = records.iter().map(|(doc_id, _)| doc_id.clone()).collect::<Vec<_>>();
+                let readable = runtime_read::readable_documents(txn, node_did, &doc_ids).await?;
+                records.retain(|(doc_id, _)| readable.contains(doc_id));
+                unique_backends(records)
+            })
+        })
+        .await
 }
 
 pub(crate) async fn lookup_backend_observation_for_runtime(
@@ -347,6 +359,10 @@ async fn write_probe_observation(
                 .context("backend observation target does not exist")?;
                 let current = InferenceBackend::from_value(&value)?;
                 if let Some((expected, expected_doc)) = expected {
+                    anyhow::ensure!(
+                        !runtime_read::readable_documents(txn, node_did, std::slice::from_ref(&metadata_doc)).await?.is_empty(),
+                        "backend is unavailable"
+                    );
                     anyhow::ensure!(metadata_doc == expected_doc, "backend was replaced during probe");
                     anyhow::ensure!(current.enabled &&
                         crate::admission::backend_connection_fingerprint(&backend_fields(&current)) ==
@@ -405,6 +421,16 @@ pub(crate) async fn capture_backend_document(
                 )
                 .await?
                 .context("backend is unavailable")?;
+                anyhow::ensure!(
+                    !runtime_read::readable_documents(
+                        txn,
+                        &backend.node_did,
+                        std::slice::from_ref(&doc)
+                    )
+                    .await?
+                    .is_empty(),
+                    "backend is unavailable"
+                );
                 let current = InferenceBackend::from_value(&value)?;
                 anyhow::ensure!(
                     current.enabled
@@ -488,6 +514,16 @@ async fn record_model_catalog_for_document_in_txn(
     );
     let row = &rows[0];
     if let Some(doc) = expected_doc {
+        let current_doc = row["_docID"]
+            .as_str()
+            .context("backend metadata has no physical ID")?
+            .to_owned();
+        anyhow::ensure!(
+            !runtime_read::readable_documents(txn, &backend.node_did, &[current_doc])
+                .await?
+                .is_empty(),
+            "backend is unavailable"
+        );
         anyhow::ensure!(
             row["_docID"] == doc,
             "backend was replaced during discovery"

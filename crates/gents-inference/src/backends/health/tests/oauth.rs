@@ -82,15 +82,36 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     let doc = crate::backends::registry::capture_backend_document(&node, &configured)
         .await
         .unwrap();
-    crate::backends::registry::set_backend_probe_status_for_connection(
-        &node,
-        &configured,
-        &doc,
-        "healthy",
-        Utc::now(),
-    )
-    .await
-    .unwrap();
+    let modeled = gents_lean_vocab::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap();
+    let publication_allowed = |native_read: bool| {
+        modeled
+            .backend_probe_cases
+            .iter()
+            .find(|case| {
+                case["native_read"] == native_read
+                    && case["same_doc"] == true
+                    && case["same_connection"] == true
+                    && case["committed"] == true
+            })
+            .unwrap()["published"]
+            .as_bool()
+            .unwrap()
+    };
+    assert_eq!(
+        crate::backends::registry::set_backend_probe_status_for_connection(
+            &node,
+            &configured,
+            &doc,
+            "healthy",
+            Utc::now(),
+        )
+        .await
+        .is_ok(),
+        publication_allowed(true)
+    );
     let observation = user_access
         .transact_readonly("test.runtime_probe.observation", |txn| {
             Box::pin(async move {
@@ -163,7 +184,7 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             .await
             .is_err()
     );
-    assert!(
+    assert_eq!(
         crate::backends::registry::set_backend_probe_status_for_connection(
             &node,
             &configured,
@@ -172,7 +193,41 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             Utc::now(),
         )
         .await
+        .is_ok(),
+        publication_allowed(false)
+    );
+    assert!(
+        crate::backends::registry::record_model_catalog_for_document(
+            &node,
+            &configured,
+            &doc,
+            gents_documents::BackendModelCatalog {
+                node_did: configured.catalog_scope().map(str::to_owned),
+                observed_at: Utc::now().to_rfc3339(),
+                models: vec![],
+            },
+        )
+        .await
         .is_err()
+    );
+    assert_eq!(
+        user_access
+            .transact_readonly("test.runtime_probe.retained_observation", |txn| {
+                Box::pin(async move {
+                    crate::backends::registry::lookup_backend_observation_in_txn(
+                        txn,
+                        did,
+                        "runtime-probe",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .probe_status
+            .as_deref(),
+        Some("healthy")
     );
     models.shutdown().await;
 }
