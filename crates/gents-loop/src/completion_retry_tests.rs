@@ -214,8 +214,11 @@ fn usage_limit_fails_immediately_with_its_reset_time() {
             .ok()
             .map(|at| at.with_timezone(&Utc)),
         detail: "seat capped".into(),
+        window: None,
+        used: None,
+        cap: None,
     };
-    let error = InferenceError::UsageLimited(limit);
+    let error = InferenceError::UsageLimited(Box::new(limit));
     assert_eq!(class_of(&error, "seat capped"), FailureClass::Permanent);
     match state.on_pre_stream_failure(&classified(&error, "seat capped"), Utc::now(), None) {
         PreStreamDirective::Fail { reason } => assert_eq!(
@@ -330,8 +333,11 @@ fn account_limit_with_no_hops_fails_with_the_usage_limit_reason() {
     let limit = crate::provider_limit::UsageLimit {
         resets_at: None,
         detail: "cap".into(),
+        window: None,
+        used: None,
+        cap: None,
     };
-    let error = InferenceError::UsageLimited(limit.clone());
+    let error = InferenceError::UsageLimited(Box::new(limit.clone()));
     match state.on_pre_stream_failure(&account_limited(&error, "cap"), Utc::now(), None) {
         PreStreamDirective::Fail { reason } => assert_eq!(reason, limit.to_string()),
         other => panic!("expected Fail, got {other:?}"),

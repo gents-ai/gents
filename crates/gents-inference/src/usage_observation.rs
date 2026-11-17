@@ -178,6 +178,12 @@ pub struct UsageCache {
     endpoints: UsageEndpoints,
     entries: tokio::sync::Mutex<rapidhash::RapidHashMap<CacheKey, UsageObservation>>,
     claude_accounts: gents_claude::pool::AccountPool<String>,
+    /// The managed Agent signers this runtime holds. `InferenceCall` lives in the
+    /// `children` policy resource, whose read is granted per document to the
+    /// agent that works it, so a refusal can only be read back through one of
+    /// these; the runtime key alone sees nothing. Empty means the runtime holds
+    /// no agent yet, and then no refusal is evidenced — never a wrong one.
+    agent_signers: Vec<gents_store::identity::ManagedAgentSigner>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -197,6 +203,44 @@ impl UsageCache {
 
     pub fn endpoints(&self) -> &UsageEndpoints {
         &self.endpoints
+    }
+
+    /// The standing refusal for one backend.
+    ///
+    /// Deliberately **uncached**. A cache keyed by the evidence window's start
+    /// was a fresh key on every call (every caller passes a new `now`), so it
+    /// never hit and grew unbounded; and even keyed correctly it would answer
+    /// "not exhausted" for its lifetime after a new failed call, and "still
+    /// exhausted" after a clearing completion. Correctness beats the per-read
+    /// cost, which is bounded: pages × Agents × backends, on explicit usage
+    /// reads only, and each query bounded by `EVIDENCE_PAGE`/`EVIDENCE_MAX_PAGES`.
+    pub async fn refusal_for_backend(
+        &self,
+        node: &std::sync::Arc<defra_node::Node>,
+        backend: &InferenceBackend,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<(Option<UsageRefusalView>, bool)> {
+        crate::usage_refusal::refusal_for_backend_across_agents(
+            node,
+            &self.agent_signers,
+            backend,
+            now,
+        )
+        .await
+    }
+
+    /// Give the cache the Agent signers whose inference calls this runtime may
+    /// read, so a refusal can be derived from durable evidence.
+    pub fn with_agent_signers(
+        mut self,
+        agent_signers: Vec<gents_store::identity::ManagedAgentSigner>,
+    ) -> Self {
+        self.agent_signers = agent_signers;
+        self
+    }
+
+    pub fn agent_signers(&self) -> &[gents_store::identity::ManagedAgentSigner] {
+        &self.agent_signers
     }
 
     /// Rotation state of this runtime's Claude accounts, keyed by `credential_id`.
@@ -615,6 +659,126 @@ pub struct AccountUsageRead {
     pub backend_id: Option<String>,
     pub outcome: UsageRead,
     pub usage: Option<UsageView>,
+    /// The provider's own refusal, when one stands. Separate from `usage`
+    /// because a refusal establishes no percentage: an exhausted account with no
+    /// stated counter has no window to show at 100%.
+    #[serde(default)]
+    pub refusal: Option<UsageRefusalView>,
+    /// Whether the evidence search for `refusal` reached its page bound.
+    ///
+    /// Separate from `refusal.partial`, and present when `refusal` is `None`:
+    /// "no refusal in a truncated search" is not the same finding as "none",
+    /// and only this field can tell them apart.
+    #[serde(default)]
+    pub refusal_partial: bool,
+}
+
+/// A standing provider refusal, as the provider stated it.
+///
+/// Every field is optional past the timestamp, because a refusal establishes only
+/// what it says: plain "free usage exhausted" gives no cap, no counter and no
+/// reset, and each unknown is `None` rather than 0 or a guess. This is the view
+/// all three read paths render, so the agent, the inventory and the desktop
+/// cannot disagree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageRefusalView {
+    /// RFC 3339, when the refusal was observed.
+    pub at: String,
+    /// The window the provider named, e.g. "rolling 24-hour". `None` when it
+    /// named none — nothing else stands in for it. A node-chosen window is
+    /// reported as such by [`Self::window_basis`], never here as fact.
+    pub window: Option<String>,
+    /// The counter the provider reported, and the cap it named. Both `None`
+    /// together when the refusal stated no pair.
+    pub used: Option<u64>,
+    pub cap: Option<u64>,
+    /// RFC 3339, absolute only. A relative "refreshes in 24 hours" leaves this
+    /// `None`: a reset derived from the failure time is a guess.
+    pub resets_at: Option<String>,
+    /// The model the refusal is about. A provider refuses per model ("for model
+    /// grok-4.7"), so a refusal marks this model out, not the whole account.
+    pub model: Option<String>,
+    /// How much this node has itself observed in the window. Always an estimate:
+    /// [`Self::consumed_basis`] says so wherever it is shown.
+    pub consumed_by_node: Option<u64>,
+    /// Whose count [`Self::consumed_by_node`] is. It is this node's arithmetic
+    /// over its own calls, so it is `LocallyEstimated` and never the provider's.
+    pub consumed_basis: WindowBasis,
+    /// What [`Self::consumed_by_node`] counts: the refused model when the
+    /// refusal names one, the whole backend when it does not. Said out loud so
+    /// a backend-wide number beside a model-scoped refusal cannot be misread.
+    pub consumed_scope: String,
+    /// Whether the evidence read reached its page bound before the window ended.
+    /// When true, an older refusal beyond the horizon was not seen, so "no
+    /// refusal" is weaker: it means none within the rows that were read.
+    pub partial: bool,
+    /// A bounded excerpt of what the provider said. Operator-facing only: the
+    /// CLI and the desktop show it, and [`Self::for_model`] leaves it out.
+    pub detail: String,
+    /// Whose window [`Self::window`] is. Present so no reader has to infer it
+    /// from `window.is_some()`: a provider that stated one is reported, and
+    /// anything this node chose says so.
+    pub window_basis: WindowBasis,
+    /// How far back this node looked in its own recorded calls. Always this
+    /// node's choice, never the provider's statement.
+    pub evidence_window_hours: i64,
+}
+
+/// Whose window a refusal view reports, so "locally estimated" is stated rather
+/// than inferred and never reads as the provider's own window.
+///
+/// The same three states the Lean model carries as `Provenance`
+/// (`Proofs.Inference.InferenceCall.Usage`): the runtime reports a window under
+/// exactly the standing the model gives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowBasis {
+    /// The provider stated the window in its own words.
+    ProviderReported,
+    /// This node bounded its own reading of its recorded calls to this window,
+    /// and the view says so wherever it shows that bound.
+    LocallyEstimated,
+    /// The provider stated nothing and this node is not asserting a window
+    /// either. [`UsageRefusalView::window`] is then `None`.
+    Unknown,
+}
+
+impl UsageRefusalView {
+    /// The fields a model sees, named one by one.
+    ///
+    /// An **allowlist**, not a denylist: a field added to the view later cannot
+    /// reach a model by default. What a model gets is what the provider stated
+    /// (window, basis, used, cap, reset, the model it is about) plus this node's
+    /// own count *labelled as the node's*. The provider's bounded excerpt and
+    /// this node's look-back length stay with the operator, because a refusal
+    /// body can carry account details that are not this Agent's.
+    pub const MODEL_FIELDS: &'static [&'static str] = &[
+        "at",
+        "model",
+        "window",
+        "window_basis",
+        "used",
+        "cap",
+        "resets_at",
+        "consumed_by_node",
+        "consumed_basis",
+        "consumed_scope",
+        "partial",
+    ];
+
+    pub fn for_model(&self) -> serde_json::Value {
+        let full = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+        let Some(object) = full.as_object() else {
+            return serde_json::Value::Null;
+        };
+        let mut view = serde_json::Map::with_capacity(Self::MODEL_FIELDS.len());
+        for field in Self::MODEL_FIELDS {
+            if let Some(value) = object.get(*field) {
+                view.insert((*field).to_owned(), value.clone());
+            }
+        }
+        serde_json::Value::Object(view)
+    }
 }
 
 impl AccountUsageRead {
@@ -684,6 +848,8 @@ pub async fn read_node_usage(
                         backend_id: Some(backend.backend_id.clone()),
                         outcome: UsageRead::Disabled,
                         usage: None,
+                        refusal: None,
+                        refusal_partial: false,
                     };
                     (entry, true)
                 }
@@ -726,9 +892,19 @@ pub async fn read_node_usage(
                 .await
                 .ok()
                 .flatten();
+            // A standing refusal, from the durable evidence of this account's
+            // calls. Diagnostics only: it never changes the outcome or a route.
+            // The evidence is read as each Agent this runtime holds, because
+            // `InferenceCall` admits only the Agent that worked the call.
+            let (refusal, refusal_partial) = cache
+                .refusal_for_backend(&node, &backend, now)
+                .await
+                .unwrap_or((None, false));
             AccountUsageRead {
                 outcome,
                 usage: Some(usage_view(stored.as_ref(), backend.provider_kind, now)),
+                refusal,
+                refusal_partial,
                 ..entry
             }
         }
@@ -744,6 +920,8 @@ fn account_entry(account: &crate::auth::credential::AccountSummary) -> AccountUs
         backend_id: None,
         outcome: UsageRead::Disabled,
         usage: None,
+        refusal: None,
+        refusal_partial: false,
     }
 }
 
@@ -803,7 +981,7 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
     async fn definition(&self, _prompt: String) -> gents_loop::tool::ToolDefinition {
         gents_loop::tool::ToolDefinition {
             name: Self::NAME.into(),
-            description: "Read this node's provider limits, resets and freshness. Contacts usage endpoints when the last read is older than five minutes; selects no account.".into(),
+            description: "Read this node's provider limits, resets and freshness. Contacts usage endpoints when the last read is older than five minutes; selects no account. A provider's own refusal appears as `refusal` beside `limits`: it is evidence the account is out of quota, with the fields the provider stated and null where it stated none, so an unstated cap or reset stays unknown rather than becoming a percentage.".into(),
             parameters: serde_json::json!({"type":"object", "properties":{}, "additionalProperties":false}),
         }
     }
@@ -823,7 +1001,15 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
             .into_iter()
             .map(|read| {
                 serde_json::json!({
-                    "label": read.label, "provider": read.provider, "limits": read.usage, "read": read.outcome,
+                    "label": read.label, "provider": read.provider, "limits": read.usage,
+                    // The parsed fields only: the provider's own words are a
+                    // bounded excerpt for the operator's CLI and desktop, and
+                    // can name account details that are not this Agent's.
+                    "refusal": read.refusal.as_ref().map(UsageRefusalView::for_model),
+                    // Stated even when no refusal stands: a refusal found in a
+                    // truncated search and a refusal absent differ.
+                    "refusal_partial": read.refusal_partial,
+                    "read": read.outcome,
                 })
             })
             .collect();

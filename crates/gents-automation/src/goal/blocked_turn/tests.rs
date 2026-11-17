@@ -1,7 +1,9 @@
 use std::sync::OnceLock;
 
 use chrono::{Duration, TimeZone};
-use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
+use gents_loop::provider_limit::{
+    classify_provider_limit, persisted_failure_reason, ProviderLimit, ProviderLimitHeaders,
+};
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
@@ -294,6 +296,32 @@ fn limit_without_reset() {
     assert_eq!(turn.reason, BlockedReason::UsageLimit);
     assert_eq!(turn.resets_at, None);
     assert_eq!(turn.profile.as_deref(), Some("main"));
+}
+
+/// **Item 6.** A per-minute rate beside quota wording is a throttle, not a
+/// permanent usage limit: the goal must not be blocked as `UsageLimit` until a
+/// reset the provider never stated. This is the negative fixture the review
+/// asked for, driven through the goal's own path rather than the classifier.
+#[test]
+fn a_per_minute_rate_does_not_block_the_goal_as_a_usage_limit() {
+    let per_minute = recorded(
+        "ProviderError: status code 429, Free usage limit: 20 requests/minute. \
+         Try again in 30 seconds.",
+    );
+    let turn = limit_on(B, per_minute.clone());
+    assert!(
+        turn.as_ref()
+            .is_none_or(|turn| turn.reason != BlockedReason::UsageLimit),
+        "a per-minute rate is not a spent account: {turn:?}"
+    );
+    // And the classifier agrees, so the recorded text is not a usage limit at all.
+    assert!(
+        !matches!(
+            classify_provider_limit(&per_minute, now()),
+            Some(ProviderLimit::UsageExhausted(_))
+        ),
+        "the recorded row is a throttle: {per_minute}"
+    );
 }
 
 #[test]

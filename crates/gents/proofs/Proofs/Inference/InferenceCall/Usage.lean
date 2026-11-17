@@ -98,6 +98,74 @@ theorem storage_is_valid (usage : Observation) : valid (forStorage usage) = true
     simp only [bounded] at hi ho ht
     simp [valid, subset, bounded, hi, ho, ht]
 
+/-- Where a limit statement came from. A provider's own words are evidence; a
+local sum is an estimate; silence is explicitly unknown. Never inferred from
+the other. -/
+inductive Provenance where
+  | providerReported
+  | locallyEstimated
+  | unknown
+  deriving DecidableEq, Repr
+
+/-- A provider's refusal, as the fields it stated. Every field is optional
+because a refusal establishes only what it says: plain "free usage exhausted"
+establishes the refusal and the local consumption, and no cap, no remaining
+balance and no reset. -/
+structure Refusal where
+  /-- When the provider stated it. `at` is a Lean keyword, hence the longer name. -/
+  observedAt : Int
+  window : Option String := none
+  used : Option Nat := none
+  cap : Option Nat := none
+  /-- Absolute only. A relative "in 24 hours" leaves this none, rather than
+  becoming a time the provider never stated. -/
+  resetAt : Option Int := none
+  /-- The model the refusal is about, as the provider stated it ("for model
+  grok-4.7"). A refusal is model-scoped, so this is part of what it establishes:
+  a call on another model is evidence about that model, not this one. `none` is
+  its own scope and matches only calls whose model is likewise unknown. -/
+  model : Option String := none
+  deriving DecidableEq, Repr
+
+/-- What a refusal establishes, and nothing more. A cap below what was used is
+consistent with a provider whose counter and cap are on different scales, so it
+is not a contradiction. -/
+def Refusal.establishes (refusal : Refusal) : Bool :=
+  refusal.observedAt ≥ 0 &&
+    match refusal.used, refusal.cap with
+    | some used, some cap => used ≤ counterLimit && cap ≤ counterLimit && cap > 0
+    | _, _ => true
+
+/-- A refusal stands until its stated reset, or until a later successful call on
+the same account. A newer refusal replaces an older one; an older success does
+not clear a newer refusal. -/
+def Refusal.standsAt (refusal : Refusal) (now : Int) : Bool :=
+  match refusal.resetAt with
+  | some reset => now < reset
+  | none => true
+
+/-- An account's standing limit state: the latest refusal and how much the node
+has itself observed. Exhaustion is the refusal, never a percentage. -/
+structure LimitState where
+  refusal : Option Refusal := none
+  consumed : Option Nat := none
+  provenance : Provenance := .unknown
+  deriving DecidableEq, Repr
+
+/-- Exhausted exactly when a refusal stands. A locally estimated consumption may
+annotate it but cannot establish it: reaching 100% of a guessed cap is still a
+guess. -/
+def LimitState.exhausted (state : LimitState) (now : Int) : Bool :=
+  match state.refusal with
+  | some refusal => refusal.standsAt now
+  | none => false
+
+/-- A later successful call clears the refusal it follows, and only that one. -/
+def LimitState.clearedBySuccessAt (state : LimitState) (successAt : Int) : LimitState :=
+  match state.refusal with
+  | some refusal => if successAt > refusal.observedAt then { state with refusal := none } else state
+  | none => state
+
 structure Column where
   known : Nat := 0
   reported : Nat := 0
@@ -183,5 +251,142 @@ theorem provider_total_does_not_choose_the_charge (usage : Observation)
 theorem aggregation_preserves_missing_evidence (summary : Summary) :
     (summary.add {}).incompleteCalls = summary.incompleteCalls + 1 := by
   simp [Summary.add, completeness, hasCounters]
+
+/-- The three rules B8 rests on, stated so the Rust owner replays them. -/
+
+theorem a_standing_refusal_is_exhaustion (state : LimitState) (refusal : Refusal) (now : Int)
+    (standing : refusal.standsAt now = true) :
+    (LimitState.exhausted { state with refusal := some refusal } now) = true := by
+  simp [LimitState.exhausted, standing]
+
+theorem no_refusal_is_never_exhaustion (state : LimitState) (now : Int) :
+    LimitState.exhausted { state with refusal := none } now = false := rfl
+
+theorem a_local_estimate_alone_is_never_exhaustion (consumed : Option Nat) (now : Int) :
+    LimitState.exhausted { refusal := none, consumed, provenance := .locallyEstimated } now
+      = false := rfl
+
+theorem a_reset_clears_the_refusal (refusal : Refusal) (reset now : Int)
+    (stated : refusal.resetAt = some reset) (passed : now ≥ reset) :
+    refusal.standsAt now = false := by
+  simp [Refusal.standsAt, stated, passed]
+
+theorem a_later_success_clears_the_refusal (refusal : Refusal) (successAt : Int)
+    (later : successAt > refusal.observedAt) :
+    (LimitState.clearedBySuccessAt
+      { refusal := some refusal, consumed := none, provenance := .providerReported }
+      successAt).refusal = none := by
+  simp only [LimitState.clearedBySuccessAt]
+  rw [if_pos later]
+
+/-- An earlier success does not clear a refusal that came after it. -/
+theorem an_earlier_success_leaves_a_newer_refusal (refusal : Refusal) (successAt : Int)
+    (earlier : successAt ≤ refusal.observedAt) :
+    (LimitState.clearedBySuccessAt
+      { refusal := some refusal, consumed := none, provenance := .providerReported }
+      successAt).refusal = some refusal := by
+  simp only [LimitState.clearedBySuccessAt]
+  rw [if_neg (by omega : ¬ successAt > refusal.observedAt)]
+
+/-- A refusal establishing no reset stands indefinitely: only a later success
+clears it, which is why an unstated window is not replaced by a guessed one. -/
+theorem an_unstated_reset_stands (refusal : Refusal) (now : Int) (unstated : refusal.resetAt = none) :
+    refusal.standsAt now = true := by
+  simp [Refusal.standsAt, unstated]
+
+/-- One call's contribution to the refusal rules: when it happened, whether it
+completed, and the refusal it stated. A completion states none, so an earlier
+success cannot establish a refusal or clear one it followed. -/
+structure CallFact where
+  observedAt : Int
+  completed : Bool := false
+  /-- The model the call ran on. A provider's refusal is model-scoped: xAI says
+  "used all the included free usage for model grok-4.7", so evidence about one
+  model says nothing about a sibling model of the same account. `none` is its
+  own scope, never a wildcard over every model. -/
+  model : Option String := none
+  /-- The refusal this call stated, when it stated one. Its own `observedAt`
+  is this call's time. -/
+  refusal : Option Refusal := none
+  deriving DecidableEq, Repr
+
+/-- The newest stated refusal in the evidence: a newer refusal replaces an older
+one, and evidence stating none states none. Two refusals at the same moment
+are the same refusal restated, so the one later in the evidence is kept. -/
+def latestRefusal : List CallFact → Option Refusal
+  | [] => none
+  | call :: rest =>
+    match call.refusal, latestRefusal rest with
+    | none, newest => newest
+    | some refusal, none => some refusal
+    | some refusal, some newest =>
+        if refusal.observedAt > newest.observedAt then some refusal else some newest
+
+/-- A completion strictly after the refusal, **on the refusal's own model**,
+clears it. A completion at the refusal's own moment is the refusing call's
+neighbour, not evidence it passed; a completion on a sibling model is evidence
+about that model, not this one. -/
+def CallFact.clearsOn (call : CallFact) (refusal : Refusal) : Bool :=
+  call.completed && call.observedAt > refusal.observedAt && call.model = refusal.model
+
+
+
+/-- The refusals that still stand, one per scope, each decided on its own. -/
+def standingRefusals (calls : List CallFact) (now : Int) : List Refusal :=
+  (calls.filterMap (fun call => call.refusal)).filter
+    (fun refusal => refusal.standsAt now && !calls.any (fun call => call.clearsOn refusal))
+
+/-- The refusal the evidence establishes, if one still stands.
+
+Decided **per scope**, then the newest standing one. Taking only the newest
+refusal and testing it would hide an older refusal that still stands on another
+model: the newest can be cleared by a same-model success while the older one is
+untouched. `none` means no refusal stands, never that the account is whole. -/
+def standingRefusal (calls : List CallFact) (now : Int) : Option Refusal :=
+  match standingRefusals calls now with
+  | [] => none
+  | refusal :: rest =>
+      some (rest.foldl (fun best other =>
+        if other.observedAt > best.observedAt then other else best) refusal)
+
+theorem no_evidence_establishes_no_refusal (now : Int) : standingRefusal [] now = none := rfl
+
+/-- Evidence whose every refusal has closed establishes no refusal, whatever it
+otherwise contains. Stated over `standingRefusals` so it holds per scope rather
+than only for the newest one: when nothing stands on any scope, nothing stands. -/
+theorem closed_evidence_establishes_no_refusal (calls : List CallFact) (now : Int)
+    (closed : standingRefusals calls now = []) :
+    standingRefusal calls now = none := by
+  unfold standingRefusal
+  rw [closed]
+
+/-- The refusal the rules establish is the one the provider stated, field for
+field: a plain "free usage exhausted" keeps its unknowns unknown rather than
+becoming a cap, a counter or a reset. -/
+theorem witnesses_the_refusal_rules :
+    standingRefusal
+        [{ observedAt := 10, refusal := some
+            { observedAt := 10, window := some "rolling 24-hour"
+              used := some 691791, cap := some 600000 } }] 20
+      = some { observedAt := 10, window := some "rolling 24-hour"
+               used := some 691791, cap := some 600000 } ∧
+    standingRefusal [{ observedAt := 10, refusal := some { observedAt := 10 } }] 20
+      = some { observedAt := 10 } ∧
+    standingRefusal
+        [{ observedAt := 10, refusal := some { observedAt := 10 } },
+         { observedAt := 12, completed := true }] 20 = none ∧
+    standingRefusal
+        [{ observedAt := 8, completed := true },
+         { observedAt := 10, refusal := some { observedAt := 10 } }] 20
+      = some { observedAt := 10 } ∧
+    standingRefusal
+        [{ observedAt := 10, refusal := some { observedAt := 10 } },
+         { observedAt := 10, completed := true }] 20 = some { observedAt := 10 } ∧
+    standingRefusal
+        [{ observedAt := 10, refusal := some { observedAt := 10, resetAt := some 15 } }] 20 = none ∧
+    standingRefusal
+        [{ observedAt := 10, refusal := some { observedAt := 10, resetAt := some 25 } }] 20
+      = some { observedAt := 10, resetAt := some 25 } := by
+  native_decide
 
 end InferenceCall.Usage

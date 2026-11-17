@@ -72,6 +72,48 @@ pub(super) fn rows(reads: &[AccountUsageRead], now: DateTime<Utc>) -> Vec<MenuRo
             rows.push(row("   Disabled".to_string(), Tone::Label));
             continue;
         }
+        // The provider's own refusal goes above the bars, as the desktop banner
+        // does: an exhausted account can have no window to fill, so the
+        // percentages may say nothing at all.
+        if let Some(refusal) = &read.refusal {
+            let stated = refusal_statement(refusal);
+            let when = match &refusal.resets_at {
+                Some(at) => format!(" · resets {at}"),
+                None => String::new(),
+            };
+            let scope = refusal
+                .model
+                .as_deref()
+                .map(|model| format!(" · {model}"))
+                .unwrap_or_default();
+            rows.push(row(
+                format!("   Out of quota{scope}{when}{stated}"),
+                Tone::Warn,
+            ));
+            rows.push(row(format!("   {}", refusal.detail), Tone::Label));
+            if refusal.partial {
+                rows.push(row(
+                    "   partial: the evidence read reached its bound".to_owned(),
+                    Tone::Label,
+                ));
+            }
+            // This node's own count, labelled: it is this node's estimate over
+            // its own look-back, never the provider's counter and never a
+            // percentage.
+            if let Some(consumed) = refusal.consumed_by_node {
+                rows.push(row(
+                    format!(
+                        "   {consumed} counted on this node for {}, last {}h (locally estimated)",
+                        refusal
+                            .consumed_scope
+                            .strip_prefix("model:")
+                            .unwrap_or(refusal.consumed_scope.as_str()),
+                        refusal.evidence_window_hours
+                    ),
+                    Tone::Label,
+                ));
+            }
+        }
         let windows = read.usage.iter().flat_map(|usage| &usage.windows);
         let mut groups: Vec<(&str, Vec<&WindowView>)> = Vec::new();
         for window in windows {
@@ -102,6 +144,33 @@ pub(super) fn rows(reads: &[AccountUsageRead], now: DateTime<Utc>) -> Vec<MenuRo
         rows.extend(why.map(|why| row(format!("   {why}"), Tone::Label)));
     }
     rows
+}
+
+/// What the refusal stated, field by field: `691,791 of 600,000 · rolling 24-hour
+/// window`. A field the provider left unstated is left out, never filled in.
+fn refusal_statement(refusal: &gents_inference::usage_observation::UsageRefusalView) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    match (refusal.used, refusal.cap) {
+        (Some(used), Some(cap)) => parts.push(format!(" · {used} of {cap}")),
+        (None, Some(cap)) => parts.push(format!(" · cap {cap}")),
+        (Some(used), None) => parts.push(format!(" · {used} consumed")),
+        (None, None) => {}
+    }
+    // A window only when the provider named one. A node-chosen window says so,
+    // so the reading never borrows the provider's authority for it.
+    if let Some(window) = &refusal.window {
+        match refusal.window_basis {
+            gents_inference::usage_observation::WindowBasis::ProviderReported => {
+                parts.push(format!(" · {window} window"))
+            }
+            // Any window the provider did not state is this node's, said so.
+            gents_inference::usage_observation::WindowBasis::LocallyEstimated
+            | gents_inference::usage_observation::WindowBasis::Unknown => {
+                parts.push(format!(" · {window} window, locally estimated"))
+            }
+        }
+    }
+    parts.concat()
 }
 
 /// `WindowRow` (`ProviderUsage.tsx:136-155`): its name, how full it is and when it empties,
