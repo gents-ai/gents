@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 
 use gents::Gents;
+use gents_loop::completion_retry::{CompletionRetryPolicy, CompletionRetryProfileFields};
+use gents_loop::execution_origin::ExecutionOrigin;
 use gents_observe::{
     observe::run_timeline::build_run_timeline, observe::run_timeline::RunTimeline,
     observe::run_timeline::RunTimelineRows, observe::run_timeline::TimelineInferenceCallRow,
@@ -9,6 +11,7 @@ use gents_observe::{
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::{STALL_CEILING, UNREACHED_DEADLINE};
 use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
@@ -355,27 +358,44 @@ async fn deadline_tight_fails_cleanly() {
     agent.shutdown().await;
 }
 
+/// The interactive budget is the transport ladder `CompletionRetryPolicy::resolve`
+/// gives an interactive request (Lean `RuntimeCompletionConfig.resolve`), not
+/// wall time: the request deadline is unreached (`WallClockBound`), so the
+/// in-loop stop can only be the exhausted ladder, and the scheduled ladder
+/// would instead have recovered on the provider's next answer without parking.
 #[tokio::test]
 async fn interactive_budget_is_quick() {
+    let fields = CompletionRetryProfileFields::default();
+    let interactive = CompletionRetryPolicy::resolve(&fields, ExecutionOrigin::Interactive);
+    let scheduled = CompletionRetryPolicy::resolve(&fields, ExecutionOrigin::Scheduled);
+    let in_loop_attempts = interactive.transport_backoff.len() + 1;
+    assert!(
+        scheduled.transport_backoff.len() >= in_loop_attempts,
+        "the tape must distinguish the interactive ladder from the scheduled one: \
+         interactive={interactive:?} scheduled={scheduled:?}"
+    );
+
     let marker = "interactive-budget";
+    let mut responses = (0..in_loop_attempts)
+        .map(|index| {
+            StreamResponse::service_unavailable(format!(
+                "HTTP status 503 interactive failure {index}"
+            ))
+        })
+        .collect::<Vec<_>>();
+    responses.push(StreamResponse::completes(
+        marker,
+        ["answered after the outage"],
+    ));
     let backend = MockStreamingBackend::start_with_plans(
         RETRY_MODEL,
-        vec![StreamPlan::new(
-            marker,
-            vec![
-                StreamResponse::service_unavailable("HTTP status 503 first interactive failure"),
-                StreamResponse::service_unavailable("HTTP status 503 second interactive failure"),
-                StreamResponse::completes(marker, ["answered after the outage"]),
-            ],
-        )],
+        vec![StreamPlan::new(marker, responses)],
     )
     .unwrap();
     let db = test_db("completion-retry-interactive-budget").await;
-    let deadline_duration_secs = 30u64;
     let (actors, agent) =
-        boot_retry_agent(&db, backend.endpoint(), 1, deadline_duration_secs).await;
+        boot_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
 
-    let started = Instant::now();
     let request_id = "req-interactive-budget";
     let request_doc_id = submit_request(
         &actors,
@@ -386,37 +406,74 @@ async fn interactive_budget_is_quick() {
     )
     .await;
 
-    let terminal_state = wait_for_request_terminal_state(
-        &actors,
-        &request_doc_id,
-        Duration::from_secs(deadline_duration_secs) + REQUEST_TERMINAL_PUBLICATION_MARGIN,
-    )
-    .await;
+    let terminal_state =
+        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Completed,
         "an exhausted interactive retry parks the request for its backend, which then answers"
     );
+    assert_eq!(backend.observed_requests(marker), in_loop_attempts + 1);
+
+    let wait = fetch_backend_wait(&actors, &request_doc_id).await;
+    assert_eq!(wait.attempts, 1, "the request parks once: {wait:?}");
+    let parked_at = rfc3339(Some(&wait.wait_started_at));
+    let calls = fetch_inference_calls(&actors, request_id).await;
+    let (parked, resumed): (Vec<_>, Vec<_>) = calls
+        .iter()
+        .partition(|call| rfc3339(call.started_at.as_deref()) < parked_at);
+    assert_eq!(
+        call_states_of(&parked),
+        vec!["failed"; in_loop_attempts],
+        "the interactive ladder spends {} retry(ies) and then parks: {calls:?}",
+        interactive.transport_backoff.len()
+    );
     assert!(
-        started.elapsed() < Duration::from_secs(15),
-        "interactive default should spend one short retry before parking, not the scheduled ladder; elapsed={:?}",
-        started.elapsed()
+        parked
+            .iter()
+            .all(|call| rfc3339(call.ended_at.as_deref()) <= parked_at),
+        "every in-loop attempt ends before the request parks: {calls:?}; {wait:?}"
     );
     assert_eq!(
-        backend.observed_requests(marker),
-        3,
-        "interactive default allows exactly one retry before parking, then one resumed attempt"
+        call_states_of(&resumed),
+        vec!["completed"],
+        "the parked request resumes once and the backend answers: {calls:?}"
     );
 
-    let calls = fetch_inference_calls(&actors, request_id).await;
-    let mut states = call_states(&calls);
-    states.sort_unstable();
-    assert_eq!(states, vec!["completed", "failed", "failed"]);
-    let timeline = build_timeline(&actors, request_id).await;
-    assert_eq!(timeline.request.retry_summary.retry_count, 1);
-    assert!(timeline.request.retry_summary.recovered);
-
     agent.shutdown().await;
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BackendWaitRow {
+    attempts: i64,
+    wait_started_at: String,
+}
+
+async fn fetch_backend_wait(actors: &RequestActors, request_doc_id: &str) -> BackendWaitRow {
+    let request_doc_id = escape_graphql_string(request_doc_id);
+    let response = actors
+        .query(&format!(
+            r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{
+                attempts wait_started_at
+            }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "fetch backend wait failed: {:?}",
+        response.errors
+    );
+    first_row::<BackendWaitRow>(&response, "AgentRequestBackendWait")
+}
+
+fn rfc3339(value: Option<&str>) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(value.expect("recorded timestamp"))
+        .expect("recorded timestamps are RFC 3339")
+        .with_timezone(&chrono::Utc)
+}
+
+fn call_states_of<'a>(calls: &[&'a TimelineInferenceCallRow]) -> Vec<&'a str> {
+    calls.iter().map(|call| call.call_state.as_str()).collect()
 }
 
 async fn start_stall_tape(
