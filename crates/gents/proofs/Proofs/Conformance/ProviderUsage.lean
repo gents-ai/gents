@@ -201,30 +201,33 @@ structure RefusalWire where
   used : Option Nat
   cap : Option Nat
   resetAt : Option Int
+  /-- The model the refusal is about, which is part of what it establishes. -/
+  model : Option String
   deriving Lean.ToJson
 
 def RefusalWire.ofModel (r : Refusal) : RefusalWire :=
   { observedAt := r.observedAt, window := r.window, used := r.used, cap := r.cap
-    resetAt := r.resetAt }
+    resetAt := r.resetAt, model := r.model }
 
 def RefusalWire.toModel (r : RefusalWire) : Refusal :=
   { observedAt := r.observedAt, window := r.window, used := r.used, cap := r.cap
-    resetAt := r.resetAt }
+    resetAt := r.resetAt, model := r.model }
 
-/-- One call's evidence: when it happened, whether it completed, and the refusal
-it stated. -/
+/-- One call's evidence: when it happened, whether it completed, which model it
+ran on, and the refusal it stated. -/
 structure CallWire where
   observedAt : Int
   completed : Bool
+  model : Option String
   refusal : Option RefusalWire
   deriving Lean.ToJson
 
 def CallWire.ofModel (c : CallFact) : CallWire :=
-  { observedAt := c.observedAt, completed := c.completed
+  { observedAt := c.observedAt, completed := c.completed, model := c.model
     refusal := c.refusal.map RefusalWire.ofModel }
 
 def CallWire.toModel (c : CallWire) : CallFact :=
-  { observedAt := c.observedAt, completed := c.completed
+  { observedAt := c.observedAt, completed := c.completed, model := c.model
     refusal := c.refusal.map RefusalWire.toModel }
 
 structure RefusalInput where
@@ -245,12 +248,18 @@ structure RefusalCase where
   calls : List CallFact
   now : Int
 
+/-- The model xAI's own refusal names. -/
+def grokModel : Option String := some "grok-4.7"
+
+/-- A sibling model of the same account. -/
+def siblingModel : Option String := some "grok-4.7-mini"
+
 /-- The Grok-family refusal the item exists for: a stated window and counter,
 and a reset the provider never gave. -/
 def grokAt (moment : Int) : CallFact :=
-  { observedAt := moment, refusal := some
+  { observedAt := moment, model := grokModel, refusal := some
       { observedAt := moment, window := some "rolling 24-hour"
-        used := some 691791, cap := some 600000 } }
+        used := some 691791, cap := some 600000, model := grokModel } }
 
 /-- A refusal that stated nothing beyond itself: no window, no counter, no cap,
 no reset. Every unknown stays unknown. -/
@@ -259,7 +268,8 @@ def bareAt (moment : Int) : CallFact :=
 
 /-- A refusal that stated an absolute reset. -/
 def resettingAt (moment : Int) (reset : Option Int) : CallFact :=
-  { observedAt := moment, refusal := some { observedAt := moment, resetAt := reset } }
+  { observedAt := moment, model := grokModel,
+    refusal := some { observedAt := moment, resetAt := reset, model := grokModel } }
 
 def grok : CallFact := grokAt 100
 
@@ -267,8 +277,14 @@ def bare : CallFact := bareAt 100
 
 def resetting (reset : Option Int) : CallFact := resettingAt 100 reset
 
-/-- A call that completed at that moment. `at` is a Lean keyword. -/
-def success (moment : Int) : CallFact := { observedAt := moment, completed := true }
+/-- A call that completed at that moment, on the refusing model. `at` is a Lean
+keyword. -/
+def success (moment : Int) : CallFact :=
+  { observedAt := moment, completed := true, model := grokModel }
+
+/-- A call that completed on a sibling model of the same account. -/
+def successElsewhere (moment : Int) : CallFact :=
+  { observedAt := moment, completed := true, model := siblingModel }
 
 /-- A call that finished without stating a refusal. -/
 def quiet (moment : Int) : CallFact := { observedAt := moment }
@@ -295,7 +311,13 @@ def refusalCases : List RefusalCase :=
    ⟨"newest_refusal_is_the_one_with_a_reset", [bareAt 80, resettingAt 120 (some 150)], 200⟩,
    ⟨"superseded_refusal_reset_is_forgotten", [resettingAt 80 (some 150), bareAt 120], 200⟩,
    ⟨"malformed_pair_is_still_a_refusal", [bare, quiet 120], 200⟩,
-   ⟨"future_clock_keeps_a_stale_refusal", [grok], 50⟩]
+   ⟨"future_clock_keeps_a_stale_refusal", [grok], 50⟩,
+   -- Model scope: a provider's refusal is about one model, so a completion on a
+   -- sibling model is evidence about that model and not this one.
+   ⟨"sibling_model_success_does_not_clear", [grok, successElsewhere 150], 200⟩,
+   ⟨"same_model_success_still_clears", [grok, success 150], 200⟩,
+   ⟨"sibling_completion_before_the_refusal_is_irrelevant",
+     [successElsewhere 50, grok], 200⟩]
 
 @[conformance_family]
 def refusalStanding : Conformance.Family RefusalInput RefusalOutput where

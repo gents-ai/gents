@@ -120,6 +120,11 @@ structure Refusal where
   /-- Absolute only. A relative "in 24 hours" leaves this none, rather than
   becoming a time the provider never stated. -/
   resetAt : Option Int := none
+  /-- The model the refusal is about, as the provider stated it ("for model
+  grok-4.7"). A refusal is model-scoped, so this is part of what it establishes:
+  a call on another model is evidence about that model, not this one. `none` is
+  its own scope and matches only calls whose model is likewise unknown. -/
+  model : Option String := none
   deriving DecidableEq, Repr
 
 /-- What a refusal establishes, and nothing more. A cap below what was used is
@@ -295,6 +300,11 @@ success cannot establish a refusal or clear one it followed. -/
 structure CallFact where
   observedAt : Int
   completed : Bool := false
+  /-- The model the call ran on. A provider's refusal is model-scoped: xAI says
+  "used all the included free usage for model grok-4.7", so evidence about one
+  model says nothing about a sibling model of the same account. `none` is its
+  own scope, never a wildcard over every model. -/
+  model : Option String := none
   /-- The refusal this call stated, when it stated one. Its own `observedAt`
   is this call's time. -/
   refusal : Option Refusal := none
@@ -312,19 +322,29 @@ def latestRefusal : List CallFact → Option Refusal
     | some refusal, some newest =>
         if refusal.observedAt > newest.observedAt then some refusal else some newest
 
-/-- A completion strictly after the refusal clears it. A completion at the
-refusal's own moment is the refusing call's neighbour, not evidence it passed. -/
+/-- A completion strictly after the refusal, **on the refusal's own model**,
+clears it. A completion at the refusal's own moment is the refusing call's
+neighbour, not evidence it passed; a completion on a sibling model is evidence
+about that model, not this one. -/
+def CallFact.clearsOn (call : CallFact) (refusal : Refusal) : Bool :=
+  call.completed && call.observedAt > refusal.observedAt && call.model = refusal.model
+
+/-- A completion strictly after the refusal clears it, keeping the older
+model-blind reading for evidence recorded before calls carried a model. -/
 def CallFact.clears (call : CallFact) (refusal : Refusal) : Bool :=
   call.completed && call.observedAt > refusal.observedAt
 
 /-- The refusal the evidence establishes, if one still stands: the newest stated
-refusal, while its own reset has not passed and no call completed after it.
-`none` means no refusal stands, never that the account is whole. -/
+refusal, while its own reset has not passed and no call on **the same model**
+completed after it. `none` means no refusal stands, never that the account is
+whole. -/
 def standingRefusal (calls : List CallFact) (now : Int) : Option Refusal :=
   match latestRefusal calls with
   | none => none
   | some refusal =>
-      if refusal.standsAt now && !calls.any (fun call => call.clears refusal)
+      -- The refusal's own scope decides which completions count as evidence
+      -- that it passed, so no reader has to guess it from the call.
+      if refusal.standsAt now && !calls.any (fun call => call.clearsOn refusal)
       then some refusal else none
 
 theorem no_evidence_establishes_no_refusal (now : Int) : standingRefusal [] now = none := rfl

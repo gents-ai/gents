@@ -50,10 +50,10 @@ pub struct CallEvidence {
 }
 
 impl CallEvidence {
-    /// Whether this call ran on `model`. An unknown model on either side is its
-    /// own scope, never a wildcard over every model.
-    fn is_model(&self, model: &str) -> bool {
-        self.model_name.as_deref() == Some(model)
+    /// Whether this call ran in `model`'s scope. An unknown model on either side
+    /// is its own scope, never a wildcard over every model.
+    fn is_model(&self, model: Option<&str>) -> bool {
+        self.model_name.as_deref() == model
     }
 }
 
@@ -69,12 +69,19 @@ pub fn standing_refusal(
     consumed_by_node: Option<u64>,
     detail_limit: usize,
 ) -> Option<UsageRefusalView> {
-    let model = latest_refusal_model(calls)?;
-    standing_refusal_for_model(calls, &model, now, consumed_by_node, detail_limit)
+    // The scope is the newest refusal's own, exactly as the model states it. An
+    // unknown model is its own scope — it matches only calls whose model is
+    // likewise unknown — and is not a reason to drop the refusal.
+    let scope = latest_refusal_scope(calls)?;
+    standing_refusal_for_model(calls, scope.as_deref(), now, consumed_by_node, detail_limit)
 }
 
-/// The model of the newest stated refusal in the evidence, if any stated one.
-pub fn latest_refusal_model(calls: &[CallEvidence]) -> Option<String> {
+/// The model of the newest stated refusal in the evidence, if it stated one.
+///
+/// `Some(None)` means the newest refusal named no model; `None` means there is
+/// no stated refusal at all. The distinction matters: a model-less refusal is
+/// still a refusal.
+pub fn latest_refusal_scope(calls: &[CallEvidence]) -> Option<Option<String>> {
     calls
         .iter()
         .filter(|call| call.call_state == "failed")
@@ -88,7 +95,7 @@ pub fn latest_refusal_model(calls: &[CallEvidence]) -> Option<String> {
             }
         })
         .max_by_key(|(at, _)| *at)
-        .and_then(|(_, model)| model)
+        .map(|(_, model)| model)
 }
 
 /// Whether the evidence establishes a standing refusal **for one model**, and as
@@ -100,12 +107,15 @@ pub fn latest_refusal_model(calls: &[CallEvidence]) -> Option<String> {
 /// standing and a refusal on one model does not mark the rest of the account out.
 pub fn standing_refusal_for_model(
     calls: &[CallEvidence],
-    model: &str,
+    model: Option<&str>,
     now: DateTime<Utc>,
     consumed_by_node: Option<u64>,
     detail_limit: usize,
 ) -> Option<UsageRefusalView> {
-    let scoped: Vec<&CallEvidence> = calls.iter().filter(|call| call.is_model(model)).collect();
+    let scoped: Vec<&CallEvidence> = calls
+        .iter()
+        .filter(|call| call.is_model(model))
+        .collect();
     // The latest refusal on this model.
     let refusal = scoped
         .iter()
@@ -130,17 +140,18 @@ pub fn standing_refusal_for_model(
         }
     }
     // A later completion **on this model** clears it; on another model it does
-    // not, and a completion at the refusal's own moment does not either.
-    let cleared = scoped
-        .iter()
-        .any(|call| call.call_state == "completed" && call.at > observed_at);
+    // not, and a completion at the refusal's own moment does not either. The
+    // scope compared is the refusal's own, so it is the one the view reports.
+    let cleared = scoped.iter().any(|call| {
+        call.call_state == "completed" && call.at > observed_at && call.is_model(model)
+    });
     if cleared {
         return None;
     }
 
     Some(UsageRefusalView {
         at: observed_at.to_rfc3339(),
-        model: Some(model.to_owned()),
+        model: model.map(str::to_owned),
         // The provider's own words, or nothing: this node never puts a window
         // it chose into the field the provider's statement belongs in.
         window_basis: match usage.window {
@@ -468,9 +479,9 @@ mod tests {
     fn a_refusal_marks_only_the_model_it_names() {
         let now = at("2026-11-17T10:00:00Z");
         let evidence = [grok_refusal(30)];
-        assert!(standing_refusal_for_model(&evidence, GROK, now, None, 300).is_some());
+        assert!(standing_refusal_for_model(&evidence, Some(GROK), now, None, 300).is_some());
         assert!(
-            standing_refusal_for_model(&evidence, "grok-4.7-mini", now, None, 300).is_none(),
+            standing_refusal_for_model(&evidence, Some("grok-4.7-mini"), now, None, 300).is_none(),
             "a refusal about one model says nothing about another"
         );
     }
@@ -617,9 +628,9 @@ mod tests {
                 "failed"
             }
             .to_owned(),
-            // The family's cases are about the standing rules, not scope: every
-            // call is the same model, so standing_refusal's scope is a no-op here.
-            model_name: Some(GROK.to_owned()),
+            // The scope the family states on the call, so the replay exercises
+            // model scoping rather than assuming one model.
+            model_name: evidence.model.clone(),
             provider_total_tokens: None,
             failure_reason: evidence.refusal.as_ref().map(|refusal| {
                 rendered(
@@ -636,6 +647,7 @@ mod tests {
             let exhausted = established.is_some();
             wire::RefusalOutput {
                 standing: established.map(|view: UsageRefusalView| wire::RefusalWire {
+                    model: view.model,
                     observed_at: moment_of(
                         DateTime::parse_from_rfc3339(&view.at)
                             .expect("the view states an instant")
