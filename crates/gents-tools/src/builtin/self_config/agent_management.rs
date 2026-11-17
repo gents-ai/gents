@@ -925,6 +925,8 @@ async fn agent_apply_in_txn(
                 )?)?),
                 None => None,
             };
+            // Preserve the source before any clone-specific removal or override.
+            let source_tools = tools.clone();
             let dropped_self_config = if clone_omitted_self_config(
                 operation == "clone",
                 tools
@@ -967,7 +969,6 @@ async fn agent_apply_in_txn(
                     ..Default::default()
                 });
             }
-            let source_tools = tools.clone();
             if args.root.is_present() {
                 tools
                     .get_or_insert_with(Tools::default)
