@@ -6,6 +6,16 @@ dir = "target/nextest"
 [profile.default]
 retries = 0
 
+# nextest runs each test in its own process, so an in-process lock no longer
+# orders tests. These hold one, so they keep running one at a time.
+[test-groups]
+desktop-live-fixture = { max-threads = 1 }
+
+[[profile.default.overrides]]
+# live_fixture_test_lock: one live bridge fixture (node, mock model) at a time.
+filter = 'binary_id(=gents-desktop-tauri::bin/bridge_runner) & test(/^live_fixture::tests::/)'
+test-group = "desktop-live-fixture"
+
 [profile.ci]
 retries = 0
 fail-fast = false
