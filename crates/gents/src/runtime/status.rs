@@ -66,6 +66,7 @@ pub(crate) struct RuntimeStatusHandle {
     state: Arc<Mutex<RuntimeStatusRow>>,
     readiness: NodeReadinessPublisherHandle,
     storage_fault: StorageFaultObservation,
+    publication_recovery: watch::Sender<u64>,
 }
 
 #[async_trait::async_trait]
@@ -97,6 +98,7 @@ impl RuntimeStatusHandle {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
+                publication_recovery: watch::channel(0).0,
                 storage_fault,
             },
         )
@@ -121,6 +123,7 @@ impl RuntimeStatusHandle {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
+                publication_recovery: watch::channel(0).0,
                 storage_fault,
             },
         )
@@ -137,6 +140,7 @@ impl RuntimeStatusHandle {
             node,
             state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
             readiness,
+            publication_recovery: watch::channel(0).0,
             storage_fault: StorageFaultObservation::new(),
         }
     }
@@ -160,9 +164,21 @@ impl RuntimeStatusHandle {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
+                publication_recovery: watch::channel(0).0,
                 storage_fault: StorageFaultObservation::new(),
             },
         )
+    }
+
+    /// Sticky generation notification, sent only after the slot is actually
+    /// parked. Subscribers created later still observe the pending wake.
+    pub(crate) fn request_publication_recovery(&self) {
+        self.publication_recovery
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+
+    pub(crate) fn publication_recovery(&self) -> watch::Receiver<u64> {
+        self.publication_recovery.subscribe()
     }
 
     pub(crate) fn readiness(&self) -> &NodeReadinessPublisherHandle {

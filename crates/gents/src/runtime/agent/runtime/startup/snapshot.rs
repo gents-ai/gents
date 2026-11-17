@@ -31,21 +31,8 @@ pub(in crate::runtime::agent::runtime) fn preserve_generation_for_surface_error(
     gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
 }
 
-/// Permanent surface failures demote; transient publication failures refuse
-/// the proposal, keeping the active generation instead of publishing demotions.
-pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
-    tool_runtime: &ToolRuntimeContext,
-    snapshot: &mut ResolvedRuntimeSnapshot,
-) -> Result<()> {
-    demote_unbuildable_agents_until(
-        tool_runtime,
-        snapshot,
-        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
-        true,
-    )
-    .await
-}
-
+/// Admission shares the caller's bounded publication epoch; exhaustion
+/// demotes only the plugin surfaces still busy, never the whole node.
 pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents_until(
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
@@ -93,10 +80,26 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents_until(
     Ok(())
 }
 
+#[cfg(test)]
 pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
     agent: &Gents,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
+) -> Result<()> {
+    validate_startup_snapshot_until(
+        agent,
+        tool_runtime,
+        snapshot,
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+    )
+    .await
+}
+
+pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot_until(
+    agent: &Gents,
+    tool_runtime: &ToolRuntimeContext,
+    snapshot: &mut ResolvedRuntimeSnapshot,
+    deadline: tokio::time::Instant,
 ) -> Result<()> {
     snapshot.validate_node_readiness_source().with_context(|| {
         format!(
@@ -105,7 +108,7 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
         )
     })?;
 
-    demote_unbuildable_agents(tool_runtime, snapshot).await?;
+    demote_unbuildable_agents_until(tool_runtime, snapshot, deadline, false).await?;
 
     if snapshot.agents.is_empty() {
         let mut unavailable = snapshot

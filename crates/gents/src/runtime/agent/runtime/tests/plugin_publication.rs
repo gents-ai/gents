@@ -1177,3 +1177,273 @@ async fn plugin_free_startup_and_slots_remain_ready_while_store_is_exclusively_h
     );
     drop(guard);
 }
+
+#[tokio::test]
+async fn real_busy_park_wakes_idle_watcher_and_forces_unchanged_recovery() {
+    real_policy_publication_recovery(false, false).await;
+}
+
+#[tokio::test]
+async fn real_busy_park_recovers_after_holding_past_the_watcher_budget() {
+    real_policy_publication_recovery(false, true).await;
+}
+
+#[tokio::test]
+async fn mixed_startup_exhaustion_starts_plugin_free_agents_and_recovers_plugins() {
+    real_policy_publication_recovery(true, true).await;
+}
+
+async fn real_policy_publication_recovery(mixed_startup: bool, hold_past_budget: bool) {
+    use super::super::startup::slot_failure_policy::StartupSlotFailurePolicy;
+    use crate::runtime::agent::reconcile::GenerationSupervisor;
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let fixture = plugin_runtime_fixture(
+        "real-policy-publication",
+        "backend-real-policy-publication",
+        endpoint.endpoint(),
+    )
+    .await
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let agent = configured_publication_agent(&fixture, home.path()).await;
+    let plugin = agent.default_agent_did().to_owned();
+    let free = choose_spare_default(&fixture, &plugin).await;
+    let owner = fixture.runtime.did().to_owned();
+    let resolve = agent.document_runtime_context().cloned().unwrap();
+    let runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
+        fixture.node.clone(),
+        Default::default(),
+        Default::default(),
+        "localhost",
+        None,
+        &owner,
+        Some(resolve.identity.clone()),
+    )
+    .with_plugins(resolve.plugins.clone());
+    let status = RuntimeStatusHandle::new(fixture.node.clone(), &owner);
+    status.initialize_startup(&free).await.unwrap();
+    let guard = if mixed_startup {
+        Some(gents_pack::plugin::store::try_lock_store(home.path()).unwrap())
+    } else {
+        None
+    };
+    let (subscription, initial) = super::super::startup::resolve_startup_until(
+        &agent,
+        &runtime,
+        &status,
+        tokio::time::Instant::now() + Duration::from_millis(20),
+    )
+    .await
+    .expect("publication contention must not abort a mixed startup");
+    assert!(initial.agents.contains_key(&free));
+    if mixed_startup {
+        assert!(!initial.agents.contains_key(&plugin));
+        assert_eq!(initial.unavailable_agents[&plugin].public_cause,
+            Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy));
+    } else {
+        assert!(initial.agents.contains_key(&plugin));
+    }
+    let barrier = Arc::new(super::super::context::StartupBarrier::new(
+        &initial.agents.values().cloned().collect::<Vec<_>>(),
+    ));
+    let (fatal, mut fatal_rx) = mpsc::unbounded_channel();
+    let policy = Arc::new(StartupSlotFailurePolicy {
+        barrier: barrier.clone(),
+        runtime_status: status.clone(),
+        admission_gate: super::super::router::RuntimeAdmissionGate::closed(),
+        runtime_cancel: tokio_util::sync::CancellationToken::new(),
+        fatal_error: fatal,
+        observer: None,
+        budget: 1,
+    });
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposals_tx, mut proposals_rx) = mpsc::channel(8);
+    let (health_tx, health_rx) = mpsc::channel(1);
+    let watcher = tokio::spawn(run_control_watcher_with_timing(
+        ControlWatcherInputs {
+            node: fixture.node.clone(),
+            backend_admission: fixture.admission(),
+            subscription: subscription.unwrap(),
+            node_did: owner.clone(),
+            resolve_context: resolve.clone(),
+            tool_runtime: runtime.clone(),
+            proposals_tx,
+            runtime_status: status.clone(),
+            health_events_rx: health_rx,
+            shutdown: shutdown_rx.clone(),
+        },
+        ControlWatcherTiming {
+            publication_wait: Duration::from_millis(100),
+            debounce: Duration::from_millis(1),
+            local_debounce: Duration::from_millis(1),
+            settle_retry: Duration::from_millis(1),
+            settle_window: Duration::from_millis(1),
+            idle_sleep: Duration::from_secs(3600),
+        },
+    ));
+    if !mixed_startup {
+        // Prime the actual watcher's dedup cache, then take the store AFTER
+        // proposal resolution but BEFORE the slot can construct its surface.
+        health_tx.send(()).await.unwrap();
+        let primed = tokio::time::timeout(STALL_CEILING, proposals_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            primed.configuration_fingerprint(),
+            initial.configuration_fingerprint()
+        );
+    }
+    let guard =
+        guard.unwrap_or_else(|| gents_pack::plugin::store::try_lock_store(home.path()).unwrap());
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (start_tx, start_rx) = watch::channel(false);
+    let runner = {
+        let runtime = runtime.clone();
+        let resolve = resolve.clone();
+        let barrier = barrier.clone();
+        move |pair: gents_tools::surface::AgentWithTools,
+              surface: Arc<gents_tools::surface::ToolSurface>,
+              requests: Arc<
+            tokio::sync::Mutex<mpsc::Receiver<gents_protocol::row::AgentRequest>>,
+        >,
+              _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
+              generation: u64,
+              mut shutdown: watch::Receiver<bool>| {
+            let runtime = runtime.clone();
+            let resolve = resolve.clone();
+            let barrier = barrier.clone();
+            let started = started_tx.clone();
+            let mut permission = start_rx.clone();
+            async move {
+                if !*permission.borrow() {
+                    permission.changed().await.unwrap();
+                }
+                let did = pair.agent.agent_did.clone();
+                if surface.has_plugin_tools() {
+                    // Short injected duration, identical cancellable wait owner;
+                    // the real production failure policy is deliberately used.
+                    let _guard = gents_tools::surface::publication_guard_until(
+                        runtime.plugin_home(),
+                        tokio::time::Instant::now() + Duration::from_millis(5),
+                    )
+                    .await?;
+                }
+                let _prepared = super::super::context::build_slot_surface_fenced(
+                    &runtime,
+                    Some(&resolve),
+                    pair,
+                    surface,
+                )
+                .await?;
+                barrier.mark_agent_ready(&did, generation).await;
+                let _ = started.send((did, generation));
+                let mut requests = requests.lock().await;
+                loop {
+                    tokio::select! {_=shutdown.changed()=>break, request=requests.recv()=>if request.is_none(){break;}}
+                }
+                anyhow::Ok(())
+            }
+        }
+    };
+    let mut recovery = status.publication_recovery();
+    let supervisor = GenerationSupervisor::bootstrap(
+        initial,
+        gents_inference::admission::AdmissionRegistry::new(fixture.node.clone()),
+        crate::runtime::agent::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 2,
+        },
+        runner,
+        status.clone(),
+        shutdown_rx.clone(),
+        Some(policy),
+    )
+    .await
+    .unwrap();
+    status
+        .publish_startup_snapshot(supervisor.current_snapshot().as_ref())
+        .await
+        .unwrap();
+    start_tx.send(true).unwrap();
+    let unrelated = supervisor.current_snapshot().dispatchers[&free].clone();
+    let (active_tx, mut active_rx) = watch::channel(supervisor.current_snapshot());
+    let (forward_tx, forward_rx) = mpsc::channel(8);
+    let supervising = tokio::spawn(supervisor.run(active_tx, forward_rx, shutdown_rx));
+    let first = tokio::time::timeout(STALL_CEILING, started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first,
+        (free.clone(), 1),
+        "plugin-free startup must not wait for publication"
+    );
+    if !mixed_startup {
+        tokio::time::timeout(STALL_CEILING, recovery.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.readiness().observation().public_cause(&plugin),Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy));
+        // The wake is emitted after BuildStanding::Demoted, not just a failed
+        // build attempt or a synthetic proposal fed to the supervisor.
+    }
+    if hold_past_budget {
+        let demotion = tokio::time::timeout(STALL_CEILING, proposals_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(demotion.unavailable_agents.contains_key(&plugin));
+        forward_tx.send(demotion).await.unwrap();
+        tokio::time::timeout(STALL_CEILING, async {
+            loop {
+                active_rx.changed().await.unwrap();
+                let active = active_rx.borrow_and_update();
+                if !active.dispatchers.contains_key(&plugin) {
+                    assert!(active.dispatchers[&free].same_channel(&unrelated));
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+    drop(guard); // No config/health event is sent at or after release.
+    let recovered = tokio::time::timeout(STALL_CEILING, async {
+        loop {
+            let proposal = proposals_rx.recv().await.unwrap();
+            if proposal.agents.contains_key(&plugin) {
+                break proposal;
+            }
+        }
+    })
+    .await
+    .expect("busy-park wake was fingerprint-deduplicated or startup retry was lost");
+    forward_tx.send(recovered).await.unwrap();
+    tokio::time::timeout(STALL_CEILING, async {
+        loop {
+            let (did, generation) = started_rx.recv().await.unwrap();
+            if did == plugin {
+                assert!(generation > 1);
+                break;
+            }
+        }
+    })
+    .await
+    .expect("real-policy parked agent never restarted");
+    assert!(fatal_rx.try_recv().is_err());
+    assert!(active_rx.borrow().dispatchers[&free].same_channel(&unrelated));
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(STALL_CEILING, watcher)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(forward_tx);
+    tokio::time::timeout(STALL_CEILING, supervising)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}

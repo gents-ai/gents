@@ -79,6 +79,7 @@ pub(crate) trait SlotFailurePolicy: Send + Sync {
         generation: u64,
         error: &anyhow::Error,
     ) -> Result<bool>;
+    fn on_slot_parked(&self, _error: &anyhow::Error) {}
     async fn on_slot_retired(&self, agent_did: &str, generation: u64, recreated: bool);
 }
 
@@ -134,7 +135,7 @@ async fn handle_slot_failure(
         Verdict::Transitioned => {}
     }
     match policy.try_demote(agent_did, generation, error).await {
-        Ok(true) => {}
+        Ok(true) => policy.on_slot_parked(error),
         Ok(false) => tracing::warn!(
             agent_did,
             generation,

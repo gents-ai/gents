@@ -76,6 +76,20 @@ pub(super) async fn run_control_watcher_with_timing(
     inputs: ControlWatcherInputs,
     timing: ControlWatcherTiming,
 ) -> Result<()> {
+    run_control_watcher_inner(
+        inputs,
+        timing,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+async fn run_control_watcher_inner(
+    inputs: ControlWatcherInputs,
+    timing: ControlWatcherTiming,
+    #[cfg(test)] probe: Option<WatcherTestProbe>,
+) -> Result<()> {
     let ControlWatcherInputs {
         node,
         backend_admission,
@@ -97,7 +111,14 @@ pub(super) async fn run_control_watcher_with_timing(
     .await?;
     let sleep = tokio::time::sleep(timing.idle_sleep);
     tokio::pin!(sleep);
-    let mut dirty = false;
+    let mut recovery_events = runtime_status.publication_recovery();
+    let mut recovery_pending = *recovery_events.borrow_and_update() != 0;
+    let mut dirty = recovery_pending;
+    if dirty {
+        sleep
+            .as_mut()
+            .reset(tokio::time::Instant::now() + timing.debounce);
+    }
     let mut pending_visibility = false;
     let mut settle_deadline = None;
     let mut publication_deadline = None;
@@ -123,9 +144,11 @@ pub(super) async fn run_control_watcher_with_timing(
                 backend_admission.validate(&node).await?;
                 replicated_pending = false;
                 if resync_required || pending_visibility || settle_deadline.is_some() {
-                    match document_view::load_document_runtime_view_as(
-                        &node, &node_did, resolve_context.identity.did()
-                    ).await {
+                    let reload = async {
+                        #[cfg(test)] if let Some(probe) = &probe { probe.fail_once(WatcherFailure::Reload)?; }
+                        document_view::load_document_runtime_view_as(&node, &node_did, resolve_context.identity.did()).await
+                    }.await;
+                    match reload {
                         Ok(reloaded) => {
                             document_view = reloaded;
                             pending_visibility = document_view.has_unresolved_agent_references();
@@ -148,6 +171,7 @@ pub(super) async fn run_control_watcher_with_timing(
                                 dirty = false;
                                 settle_deadline = None;
                                 clear_publication_epoch(&mut publication_deadline);
+                                #[cfg(test)] if let Some(probe) = &probe { let _ = probe.events.send(WatcherTestEvent::FailedIdle(publication_deadline)); }
                                 sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
                             }
                             continue;
@@ -185,7 +209,10 @@ pub(super) async fn run_control_watcher_with_timing(
                 let mut resolve_failed = false;
                 let mut publication_busy = false;
                 let deadline = *publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
+                #[cfg(test)] if let Some(probe) = &probe { let _ = probe.events.send(WatcherTestEvent::Attempt(deadline, tokio::time::Instant::now())); }
+
                 let resolution = async {
+                    #[cfg(test)] if let Some(probe) = &probe { probe.fail_once(WatcherFailure::Resolve)?; }
                     let publication = match gents_tools::surface::publication_guard_until(tool_runtime.plugin_home(), deadline).await {
                         Ok(guard) => guard,
                         Err(error) if super::startup::snapshot::preserve_generation_for_surface_error(&error) => {
@@ -221,7 +248,7 @@ pub(super) async fn run_control_watcher_with_timing(
                 match resolved {
                     Ok(snapshot) => {
                         let fingerprint = snapshot.configuration_fingerprint();
-                        if phase_announced || last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+                        if phase_announced || send_recovered_proposal(last_proposed_fingerprint.as_deref() != Some(fingerprint.as_str()), recovery_pending) {
                             if !phase_announced {
                                 runtime_status
                                     .set_reconcile_phase(ReconcilePhase::Resolving)
@@ -232,6 +259,7 @@ pub(super) async fn run_control_watcher_with_timing(
                             }
                             last_proposed_fingerprint = Some(fingerprint);
                             proposed_update = true;
+                            if !publication_busy { recovery_pending = false; }
                         }
                     }
                     Err(error) => {
@@ -258,6 +286,7 @@ pub(super) async fn run_control_watcher_with_timing(
                         dirty = false;
                         settle_deadline = None;
                         clear_publication_epoch(&mut publication_deadline);
+                        #[cfg(test)] if let Some(probe) = &probe { let _ = probe.events.send(WatcherTestEvent::FailedIdle(publication_deadline)); }
                         sleep
                             .as_mut()
                             .reset(tokio::time::Instant::now() + timing.idle_sleep);
@@ -273,6 +302,14 @@ pub(super) async fn run_control_watcher_with_timing(
                 settle_deadline = None;
                 if !publication_busy { clear_publication_epoch(&mut publication_deadline); }
                 sleep.as_mut().reset(tokio::time::Instant::now() + if publication_busy { timing.settle_retry } else { timing.idle_sleep });
+            }
+            result = recovery_events.changed() => {
+                if result.is_err() { return Ok(()); }
+                recovery_events.borrow_and_update();
+                recovery_pending = true;
+                dirty = true;
+                publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
+                sleep.as_mut().reset(publication_debounce_at(publication_deadline, timing.debounce));
             }
             Some(()) = health_events_rx.recv() => {
                 tracing::info!(
@@ -512,4 +549,171 @@ async fn failed_reconcile_idle_clears_the_budget_before_the_next_event() {
         now + Duration::from_millis(250)
     );
     assert_eq!(next - now, Duration::from_secs(60));
+}
+
+fn send_recovered_proposal(changed: bool, recovery_pending: bool) -> bool {
+    changed || recovery_pending
+}
+
+#[cfg(test)]
+#[test]
+fn busy_park_wake_is_not_fingerprint_deduplicated() {
+    gents_lean_vocab::families::runtime_reconcile_surface_publication_send_recovered_proposal::replay(|i| send_recovered_proposal(i.changed, i.recovery_pending));
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WatcherFailure {
+    Reload,
+    Resolve,
+}
+#[cfg(test)]
+enum WatcherTestEvent {
+    FailedIdle(Option<tokio::time::Instant>),
+    Attempt(tokio::time::Instant, tokio::time::Instant),
+}
+#[cfg(test)]
+struct WatcherTestProbe {
+    failure: std::sync::Mutex<Option<WatcherFailure>>,
+    events: mpsc::UnboundedSender<WatcherTestEvent>,
+}
+#[cfg(test)]
+impl WatcherTestProbe {
+    fn fail_once(&self, stage: WatcherFailure) -> Result<()> {
+        let mut failure = self.failure.lock().unwrap();
+        if *failure == Some(stage) {
+            *failure = None;
+            anyhow::bail!("injected single watcher operation failure");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn failed_reload_and_resolve_call_sites_reset_the_next_event_epoch() {
+    use super::tests::support::*;
+    for stage in [WatcherFailure::Reload, WatcherFailure::Resolve] {
+        let endpoint = MockModelEndpoint::start("default").unwrap();
+        let fixture = plugin_runtime_fixture(
+            "failed-watcher-epoch",
+            "backend-failed-watcher-epoch",
+            endpoint.endpoint(),
+        )
+        .await
+        .unwrap();
+        let agent = crate::Gents::from_default_agent_documents(
+            fixture.node.clone(),
+            fixture.runtime.clone(),
+            crate::runtime::agent::DocumentRuntimeOptions {
+                backend_admission: Some(fixture.admission()),
+                tool_ceiling: gents_tools::surface::ToolCeiling::meta_only(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let context = agent.document_runtime_context().cloned().unwrap();
+        let owner = fixture.runtime.did().to_owned();
+        let status = RuntimeStatusHandle::new(fixture.node.clone(), &owner);
+        status
+            .initialize_startup(agent.default_agent_did())
+            .await
+            .unwrap();
+        let runtime = ToolRuntimeContext::new_with_node_did(
+            fixture.node.clone(),
+            Default::default(),
+            Default::default(),
+            "localhost",
+            None,
+            &owner,
+            Some(context.identity.clone()),
+        )
+        .with_plugins(context.plugins.clone());
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (health_tx, health_rx) = mpsc::channel(1);
+        let (proposals_tx, mut proposals_rx) = mpsc::channel(4);
+        let (events, mut observed) = mpsc::unbounded_channel();
+        let timing = ControlWatcherTiming {
+            publication_wait: Duration::from_millis(100),
+            debounce: Duration::from_millis(10),
+            local_debounce: Duration::from_millis(10),
+            settle_retry: Duration::from_millis(1),
+            settle_window: Duration::ZERO,
+            idle_sleep: Duration::from_secs(3600),
+        };
+        let watcher = tokio::spawn(run_control_watcher_inner(
+            ControlWatcherInputs {
+                node: fixture.node.clone(),
+                backend_admission: fixture.admission(),
+                subscription: subscribe_control_changes(&fixture.node).unwrap(),
+                node_did: owner.clone(),
+                resolve_context: context,
+                tool_runtime: runtime,
+                proposals_tx,
+                runtime_status: status,
+                health_events_rx: health_rx,
+                shutdown: shutdown_rx,
+            },
+            timing,
+            Some(WatcherTestProbe {
+                failure: std::sync::Mutex::new(Some(stage)),
+                events,
+            }),
+        ));
+        match stage {
+            WatcherFailure::Reload => merge_fixture_document(
+                &fixture.user_access,
+                "test.failed_epoch.reload",
+                gents_store::collection::Collection::AgentContext,
+                &owner,
+                &format!("{}:context", agent.default_agent_did()),
+                serde_json::json!({"system_prompt":"reload to exercise the failed-idle call site"}),
+            )
+            .await,
+            WatcherFailure::Resolve => health_tx.send(()).await.unwrap(),
+        }
+        tokio::time::timeout(crate::support::live_inference::STALL_CEILING, async {
+            loop {
+                if let WatcherTestEvent::FailedIdle(deadline) = observed.recv().await.unwrap() {
+                    assert!(
+                        deadline.is_none(),
+                        "the actual failed-idle branch kept its stale epoch"
+                    );
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let sent = tokio::time::Instant::now();
+        health_tx.send(()).await.unwrap();
+        let (deadline, attempt) =
+            tokio::time::timeout(crate::support::live_inference::STALL_CEILING, async {
+                loop {
+                    if let WatcherTestEvent::Attempt(deadline, attempt) =
+                        observed.recv().await.unwrap()
+                    {
+                        break (deadline, attempt);
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        assert!(
+            attempt >= sent + timing.debounce,
+            "the next event lost its debounce"
+        );
+        assert!(
+            deadline >= sent + timing.publication_wait,
+            "the next event inherited the expired wait budget"
+        );
+        assert!(proposals_rx.recv().await.is_some());
+        shutdown_tx.send(true).unwrap();
+        tokio::time::timeout(crate::support::live_inference::STALL_CEILING, watcher)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 }
