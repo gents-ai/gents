@@ -764,9 +764,9 @@ fn pack_wire_uses_the_packs_reviewed_block() -> Result<()> {
 }
 
 /// Real stored operator edits survive both preview and repeated pack wire. The
-/// refusal's show/edit/set remedy is exercised against this isolated file home.
+/// warning's optional show/edit/set remedy is exercised in an isolated home.
 #[test]
-fn pack_wire_preserves_operator_workflow_policy_or_refuses_without_writes() -> Result<()> {
+fn pack_wire_preserves_operator_workflow_policy_and_warns() -> Result<()> {
     let fixture = wire_fixture(true)?;
     fixture.wire(&[])?;
     let set_tools = |fixture: &WireFixture, tools: &serde_json::Value| -> Result<()> {
@@ -799,11 +799,34 @@ fn pack_wire_preserves_operator_workflow_policy_or_refuses_without_writes() -> R
         entry["job"]["policy"]["dynamic_targets"] = targets;
         tools
     };
+    // Exact historical bug: reviewed pack asks for check; operator chooses run.
+    let reviewed = with_policy(
+        fixture.tools("job-fixture-caller")?,
+        "check",
+        serde_json::json!(["wf-fixture"]),
+    );
+    set_tools(&fixture, &reviewed)?;
     let tools = with_policy(
         fixture.agent_tools()?,
         "run",
-        serde_json::json!(["wf-fixture"]),
+        serde_json::json!(["wf-fixture", "wf-content"]),
     );
+    // Both targets are already separately valid agents; keep this operator order.
+    let mut tools = tools;
+    tools["agents"]["target_ids"]
+        .as_array_mut()
+        .unwrap()
+        .push("wf-content".into());
+    let entry = tools["integrations"]["plugins"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["plugin"] == "fixture/job_fixture")
+        .unwrap();
+    entry["job"]["agent_targets"]
+        .as_array_mut()
+        .unwrap()
+        .push("wf-content".into());
     set_tools(&fixture, &tools)?;
     let operator = fixture.agent_tools()?;
     for args in [&["--preview"][..], &[][..], &[][..]] {
@@ -811,8 +834,12 @@ fn pack_wire_preserves_operator_workflow_policy_or_refuses_without_writes() -> R
         assert_eq!(report["report"]["job"]["policy"]["dynamic"], "run");
         assert_eq!(
             report["report"]["job"]["policy"]["dynamic_targets"],
-            serde_json::json!(["wf-fixture"])
+            serde_json::json!(["wf-fixture", "wf-content"])
         );
+        let warning = &report["report"]["policy_warnings"][0];
+        assert_eq!(warning["code"], "dynamic_mode_kept");
+        assert_eq!(warning["requested"]["dynamic"], "check");
+        assert_eq!(warning["kept"]["dynamic"], "run");
         assert_eq!(
             fixture.agent_tools()?,
             operator,
@@ -821,10 +848,14 @@ fn pack_wire_preserves_operator_workflow_policy_or_refuses_without_writes() -> R
     }
 
     for (mode, targets, reason) in [
-        ("off", serde_json::json!(["wf-fixture"]), "policy.dynamic"),
-        ("check", serde_json::json!([]), "policy.dynamic_targets"),
+        (
+            "off",
+            serde_json::json!(["wf-fixture"]),
+            "dynamic_mode_kept",
+        ),
+        ("check", serde_json::json!([]), "dynamic_targets_kept"),
     ] {
-        // Start each refusal from its own stored policy. Removing a previously
+        // Start each case from its own stored policy. Removing a previously
         // granted target is intentionally forbidden by the Tools save guard.
         let fixture = wire_fixture(true)?;
         fixture.wire(&[])?;
@@ -876,17 +907,30 @@ fn pack_wire_preserves_operator_workflow_policy_or_refuses_without_writes() -> R
             if preview {
                 args.push("--preview");
             }
-            let refusal = run_cli_failure_stderr(fixture.tempdir.path(), &args)?;
-            assert!(refusal.contains(reason), "{refusal}");
-            assert!(refusal.contains("config tools show"), "{refusal}");
-            assert!(
-                refusal.contains("config tools set --file tools.json"),
-                "{refusal}"
+            let receipt = run_cli_json(fixture.tempdir.path(), &args)?;
+            let warnings = receipt["report"]["policy_warnings"].as_array().unwrap();
+            let warning = warnings
+                .iter()
+                .find(|w| w["code"] == reason)
+                .expect("missing advisory");
+            assert_eq!(warning["requested"]["dynamic"], "check");
+            assert_eq!(warning["kept"]["dynamic"], mode);
+            assert!(warning["remedy"]
+                .as_str()
+                .unwrap()
+                .contains("config tools set --file tools.json"));
+            assert_eq!(
+                fixture.agent_tools()?,
+                before,
+                "wiring changed operator policy"
             );
-            assert_eq!(fixture.agent_tools()?, before, "refusal changed Tools");
-            assert_eq!(context()?, before_context, "refusal changed Context");
+            assert_eq!(
+                context()?,
+                before_context,
+                "wiring changed existing Context"
+            );
         }
-        // Execute the printed show/edit/set remedy, retaining the complete document.
+        // Optionally execute the printed show/edit/set remedy, retaining the complete document.
         let shown = fixture.tools(&format!("{}-tools", fixture.agent))?;
         set_tools(
             &fixture,
@@ -1563,6 +1607,175 @@ fn pack_install_wire_wires_the_agent() -> Result<()> {
         wired_plugin(&fixture.agent_tools()?).is_some(),
         "the agent's Tools does not list the plugin"
     );
+    Ok(())
+}
+
+#[test]
+fn pack_install_wire_receipt_warns_and_keeps_operator_run() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    fixture.wire(&[])?;
+    let mut tools = fixture.agent_tools()?;
+    let entry = tools["integrations"]["plugins"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["plugin"] == "fixture/job_fixture")
+        .unwrap();
+    entry["job"]["policy"]["dynamic"] = "run".into();
+    entry["job"]["policy"]["dynamic_targets"] = serde_json::json!(["wf-fixture"]);
+    tools.as_object_mut().unwrap().remove("_docID");
+    let path = fixture.tempdir.path().join("operator-tools.json");
+    write_json_file(&path, &tools)?;
+    run_cli_json(
+        fixture.tempdir.path(),
+        &[
+            "config",
+            "tools",
+            "set",
+            "--file",
+            dir_arg(&path),
+            "--home",
+            dir_arg(&fixture.home),
+        ],
+    )?;
+    let before = fixture.agent_tools()?;
+    let receipt = fixture.install_job_pack(&["--wire", &fixture.agent])?;
+    let warning = &receipt["wired"][0]["report"]["policy_warnings"][0];
+    assert_eq!(warning["code"], "dynamic_mode_kept");
+    assert_eq!(warning["requested"]["dynamic"], "off");
+    assert_eq!(warning["kept"]["dynamic"], "run");
+    assert_eq!(fixture.agent_tools()?, before);
+    Ok(())
+}
+
+#[test]
+fn pack_install_wire_preflights_second_agent_before_writing_first() -> Result<()> {
+    let fixture = wire_fixture(true)?;
+    let second_home = fixture.tempdir.path().join("second-identity-home");
+    let initialized = run_init_json(
+        fixture.tempdir.path(),
+        &[
+            "--node-name",
+            "second-fixture-identity",
+            "--home",
+            dir_arg(&second_home),
+        ],
+    )?;
+    let second = agent_did_from_init(&initialized)?;
+    let root = fixture.tempdir.path().join("batch-config");
+    run_cli_text(
+        fixture.tempdir.path(),
+        &[
+            "config",
+            "export",
+            "--root",
+            dir_arg(&root),
+            "--home",
+            dir_arg(&fixture.home),
+        ],
+    )?;
+    let path = root.join("pack_config.json");
+    let mut config = read_json_file(&path)?;
+    let mut second_agent = config["agents"]
+        .as_array()
+        .context("agents")?
+        .iter()
+        .find(|a| a["agent_did"] == fixture.agent)
+        .context("first agent")?
+        .clone();
+    let mut second_context = config["contexts"]
+        .as_array()
+        .context("contexts")?
+        .iter()
+        .find(|c| c["context_id"] == second_agent["context_id"])
+        .context("first context")?
+        .clone();
+    second_agent["agent_did"] = second.clone().into();
+    second_agent["display_name"] = "Broken wiring target".into();
+    second_agent["context_id"] = format!("{second}-context").into();
+    second_context["context_id"] = second_agent["context_id"].clone();
+    second_context.as_object_mut().unwrap().remove("tools_id");
+    config["agents"].as_array_mut().unwrap().push(second_agent);
+    config["contexts"]
+        .as_array_mut()
+        .unwrap()
+        .push(second_context);
+    write_json_file(&path, &config)?;
+    run_cli_json(
+        fixture.tempdir.path(),
+        &[
+            "config",
+            "apply",
+            "--root",
+            dir_arg(&root),
+            "--home",
+            dir_arg(&fixture.home),
+        ],
+    )?;
+    // Compare two canonical exports, not the input manifest whose cloned prompt
+    // still points at the original context's asset path before apply.
+    let before_root = fixture.tempdir.path().join("batch-before");
+    run_cli_text(
+        fixture.tempdir.path(),
+        &[
+            "config",
+            "export",
+            "--root",
+            dir_arg(&before_root),
+            "--home",
+            dir_arg(&fixture.home),
+        ],
+    )?;
+    let config = read_json_file(&before_root.join("pack_config.json"))?;
+    let first_before = fixture.agent_tools()?;
+    assert!(wired_plugin(&first_before).is_none());
+    let error = fixture.install_job_pack_failure(&["--wire", &fixture.agent, "--wire", &second])?;
+    assert!(error.contains("no Tools"), "{error}");
+    assert_eq!(
+        fixture.agent_tools()?,
+        first_before,
+        "first agent was wired before second was checked"
+    );
+    let after_root = fixture.tempdir.path().join("batch-after");
+    run_cli_text(
+        fixture.tempdir.path(),
+        &[
+            "config",
+            "export",
+            "--root",
+            dir_arg(&after_root),
+            "--home",
+            dir_arg(&fixture.home),
+        ],
+    )?;
+    let after = read_json_file(&after_root.join("pack_config.json"))?;
+    for agent in [&fixture.agent, &second] {
+        let context_id = config["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["agent_did"] == agent.as_str())
+            .unwrap()["context_id"]
+            .clone();
+        let before_context = config["contexts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["context_id"] == context_id);
+        let after_context = after["contexts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["context_id"] == context_id);
+        assert_eq!(after_context, before_context, "batch changed agent Context");
+        if let Some(prompt) = before_context.and_then(|c| c["system_prompt"].as_str()) {
+            assert_eq!(
+                std::fs::read(before_root.join(prompt))?,
+                std::fs::read(after_root.join(prompt))?,
+                "batch changed agent prompt content"
+            );
+        }
+    }
     Ok(())
 }
 

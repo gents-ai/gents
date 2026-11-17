@@ -22,6 +22,9 @@ enum Warning {
     DynamicCheck,
     AgentNewWidened,
     NotWired,
+    DynamicModeKept,
+    DynamicTargetsKept,
+    DynamicRunRepinned,
 }
 
 type Surface = family::Surface<DynamicMode>;
@@ -201,7 +204,17 @@ fn wiring_conforms_to_the_model() {
                 Some(family::Outcome {
                     surface: surface(&tools, &context),
                     job: report.job.as_ref().map(recode),
-                    warnings: report.warnings.iter().map(|text| warning(text)).collect(),
+                    warnings: report
+                        .warnings
+                        .iter()
+                        .map(|text| warning(text))
+                        .chain(report.policy_warnings.iter().map(|w| match w.code {
+                            "dynamic_mode_kept" => Warning::DynamicModeKept,
+                            "dynamic_targets_kept" => Warning::DynamicTargetsKept,
+                            "dynamic_run_repinned" => Warning::DynamicRunRepinned,
+                            other => panic!("unknown policy warning: {other}"),
+                        }))
+                        .collect(),
                     next_call: report.next_call.is_some(),
                 })
             })
@@ -301,7 +314,7 @@ fn rewire_preserves_exact_operator_policy_and_keeps_other_merge_rules() {
     let mut incoming = policy_block(DynamicMode::Check, &["a"]);
     incoming.max_spawns = 7;
     incoming.policy.trusted_packs = strs(&["pack/added"]);
-    let merged = merge_job_blocks(&existing, &incoming).unwrap();
+    let merged = merge_job_blocks(&existing, &incoming);
     assert_eq!(merged.policy.dynamic, existing.policy.dynamic);
     assert_eq!(
         merged.policy.dynamic_targets,
@@ -313,81 +326,86 @@ fn rewire_preserves_exact_operator_policy_and_keeps_other_merge_rules() {
     );
     assert_eq!(merged.max_live, 2);
     assert_eq!(merged.max_spawns, 7);
-    assert_eq!(merge_job_blocks(&merged, &incoming).unwrap(), merged);
+    assert_eq!(merge_job_blocks(&merged, &incoming), merged);
 }
 
 #[test]
-fn rewire_refuses_insufficient_mode_or_targets_with_explicit_edit_remedy() {
-    for (existing_mode, incoming_mode, existing_targets, incoming_targets, missing) in [
-        (
-            DynamicMode::Off,
-            DynamicMode::Check,
-            vec!["a"],
-            vec!["a"],
-            false,
-        ),
-        (
-            DynamicMode::Check,
-            DynamicMode::Run,
-            vec!["a"],
-            vec!["a"],
-            false,
-        ),
-        (
-            DynamicMode::Run,
-            DynamicMode::Run,
-            vec!["a"],
-            vec!["a", "b"],
-            true,
-        ),
-    ] {
-        let existing = policy_block(existing_mode, &existing_targets);
-        let incoming = policy_block(incoming_mode, &incoming_targets);
-        let (tools, context) = start(Some(false));
-        let (mut tools, context, _) = wire_plugin(
-            &tools,
-            &context,
-            &installed(true, None),
-            Some(&existing),
-            &[],
-            &[],
-        )
-        .unwrap();
-        tools.tools_id = "operator-tools".to_owned();
-        let before = (tools.clone(), context.clone());
-        let error = wire_plugin(
-            &tools,
-            &context,
-            &installed(true, None),
-            Some(&incoming),
-            &strs(&["new-skill"]),
-            &[],
-        )
-        .unwrap_err();
-        assert_eq!((tools, context), before);
-        assert!(
-            matches!(
-                merge_job_blocks(&existing, &incoming).err().as_ref(),
-                Some(DynamicPolicyConflict::Targets { .. })
-            ) == missing
-        );
-        let diagnostic = format!("{error:#}");
-        assert!(
-            diagnostic.contains("config tools show 'operator-tools'"),
-            "{diagnostic}"
-        );
-        assert!(
-            diagnostic.contains("config tools set --file tools.json"),
-            "{diagnostic}"
-        );
-        assert!(
-            diagnostic.contains("existing workflow policy is unchanged"),
-            "{diagnostic}"
-        );
-        assert!(
-            !diagnostic.contains("--enable-dynamic-jobs"),
-            "{diagnostic}"
-        );
-        assert!(!diagnostic.contains("--allow-drop"), "{diagnostic}");
+fn rewire_keeps_policy_and_reports_requested_and_kept_authority() {
+    for existing_mode in [DynamicMode::Off, DynamicMode::Check, DynamicMode::Run] {
+        for incoming_mode in [DynamicMode::Off, DynamicMode::Check, DynamicMode::Run] {
+            let existing = policy_block(existing_mode, &["b", "a"]);
+            let incoming = policy_block(incoming_mode, &["a", "c"]);
+            let (tools, context) = start(Some(false));
+            let (mut tools, context, _) = wire_plugin(
+                &tools,
+                &context,
+                &installed(true, None),
+                Some(&existing),
+                &[],
+                &[],
+            )
+            .unwrap();
+            tools.tools_id = "operator-tools".to_owned();
+            let (_, _, report) = wire_plugin(
+                &tools,
+                &context,
+                &installed(true, None),
+                Some(&incoming),
+                &[],
+                &[],
+            )
+            .unwrap();
+            let kept = report.job.unwrap();
+            assert_eq!(kept.policy.dynamic, existing_mode);
+            assert_eq!(kept.policy.dynamic_targets, strs(&["b", "a"]));
+            let codes: Vec<_> = report.policy_warnings.iter().map(|w| w.code).collect();
+            assert_eq!(
+                codes.contains(&"dynamic_mode_kept"),
+                existing_mode != incoming_mode
+            );
+            assert_eq!(
+                codes.contains(&"dynamic_targets_kept"),
+                incoming_mode != DynamicMode::Off
+            );
+            for advisory in report.policy_warnings {
+                assert_eq!(advisory.requested, Some(incoming.policy.clone()));
+                assert_eq!(advisory.kept, existing.policy);
+                assert!(advisory
+                    .remedy
+                    .contains("config tools show 'operator-tools'"));
+                assert!(advisory
+                    .remedy
+                    .contains("config tools set --file tools.json"));
+                let json = serde_json::to_value(advisory).unwrap();
+                assert!(matches!(
+                    json["kept"]["dynamic"].as_str(),
+                    Some("off" | "check" | "run")
+                ));
+            }
+        }
     }
+}
+
+#[test]
+fn rewire_run_across_digest_warns_once_but_same_digest_does_not() {
+    let (tools, context) = start(Some(false));
+    let existing = policy_block(DynamicMode::Run, &["b", "a"]);
+    let plugin = installed(true, None);
+    let (tools, context, _) =
+        wire_plugin(&tools, &context, &plugin, Some(&existing), &[], &[]).unwrap();
+    let mut updated = plugin.clone();
+    updated.digest = "new-digest".to_owned();
+    let (tools, context, report) =
+        wire_plugin(&tools, &context, &updated, Some(&existing), &[], &[]).unwrap();
+    assert_eq!(report.policy_warnings.len(), 1);
+    let warning = &report.policy_warnings[0];
+    assert_eq!(warning.code, "dynamic_run_repinned");
+    assert_eq!(
+        warning.previous_digest.as_deref(),
+        Some(plugin.digest.as_str())
+    );
+    assert_eq!(warning.installed_digest, "new-digest");
+    let (_, _, repeated) =
+        wire_plugin(&tools, &context, &updated, Some(&existing), &[], &[]).unwrap();
+    assert!(repeated.policy_warnings.is_empty());
 }

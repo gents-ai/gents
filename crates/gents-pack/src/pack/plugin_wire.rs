@@ -257,20 +257,29 @@ pub async fn wire_pack_plugins_consenting(
     held_user: LoadHeldUser,
 ) -> Result<Vec<Value>> {
     let namespace = &pack.manifest().metadata.namespace;
-    let mut wired = Vec::new();
+    let mut requests = Vec::new();
     for agent in agents {
         for plugin in &pack.manifest().metadata.plugins {
-            let request = WireRequest {
+            requests.push(WireRequest {
                 plugin: format!("{namespace}/{}", plugin.name),
                 agent: agent.clone(),
                 targets_from: Vec::new(),
                 remove: false,
-                preview: false,
+                preview: true,
                 dynamic_consent,
                 tool_calls_consent,
-            };
-            wired.push(wire_in(access, owner, home, &request, held_user).await?);
+            });
         }
+    }
+    // Preflight all pairs before writing. Apply rechecks in each transaction;
+    // concurrent mutation/storage failure is not covered by batch rollback.
+    for request in &requests {
+        wire_in(access, owner, home, request, held_user).await?;
+    }
+    let mut wired = Vec::new();
+    for mut request in requests {
+        request.preview = false;
+        wired.push(wire_in(access, owner, home, &request, held_user).await?);
     }
     Ok(wired)
 }
