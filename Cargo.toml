@@ -93,7 +93,7 @@ gents-eval = { path = "crates/gents-eval" }
 anyhow = "1"
 base64 = "0.22"
 bytes = "1"
-cursor = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
+cursor = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
@@ -106,11 +106,11 @@ clap = { version = "4", features = ["derive", "env"] }
 # Branch-head reclamation must commit and head queries must avoid reclaimed
 # tombstone history (defradb.rs#1858, #1861, #1876–#1878; gents#2103).
 # The Regolith range bound also prevents scans from walking beyond their prefix.
-acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345", default-features = false, features = ["native"] }
-document = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
+acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc", default-features = false, features = ["native"] }
+document = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-store = { path = "crates/gents-store" }
 gents-documents = { path = "crates/gents-documents" }
@@ -139,14 +139,14 @@ gents-lean-vocab = { path = "crates/gents-lean-vocab" }
 gents-workspace-hack = { path = "crates/gents-workspace-hack" }
 # Keep DefraDB defaults off: Gents selects Iroh P2P and Lens execution without
 # SourceHub ACP or the legacy libp2p transport (defradb.rs#1431-#1435).
-defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345", default-features = false }
-defra-http = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345", default-features = false }
+defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc", default-features = false }
+defra-http = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc", default-features = false }
 dirs = "5"
-events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
+events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
 hostname = "0.4"
-identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345", default-features = false }
+identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc", default-features = false }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
@@ -159,14 +159,14 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
+p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
 rapidhash = { version = "4.5.1", features = ["unsafe"] }
-schema = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-storage = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-vera = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-vera-delegation = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
-vera-embedded = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" }
+schema = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+storage = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+vera = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+vera-delegation = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
+vera-embedded = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" }
 # The revision DefraDB's vera-embedded builds the node from, for its start errors.
 vera-node = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
 vera-crypto = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }

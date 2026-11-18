@@ -14,7 +14,7 @@ third-party = [
     { name = "tauri-macros" },
     { name = "tauri-utils" },
     { name = "objc2-app-kit" },
-    { name = "defra-node", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" },
+    { name = "defra-node", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" },
 ]
 
 # The Vera crates behind the opt-in `vera` feature. Left in, their feature sets
@@ -22,7 +22,7 @@ third-party = [
 # Cargo.toml.
 [traversal-excludes]
 third-party = [
-    { name = "vera-embedded", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" },
-    { name = "vera", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "2cbcf1e34431da975083048e7219722e0d8bb345" },
+    { name = "vera-embedded", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" },
+    { name = "vera", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "e2657ed29bfb416732c157c40be18f8a8c5198fc" },
     { name = "vera-node", git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" },
 ]
