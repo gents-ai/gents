@@ -381,6 +381,24 @@ def privateReplicaFixture : State :=
       ⟨"enrollment_records", "remote", "foreign"⟩,
       ⟨"children", "application", "foreign"⟩], relations := [], enrolled := [] }
 
+/-- The receiving runtime does not own a foreign record and cannot grant itself
+its reader relation through document ACP without an explicit manager grant. -/
+theorem foreign_replica_requires_document_authority :
+    mayManage privateReplicaFixture "runtime"
+      ⟨"enrollment_records", "remote", "reader", .actor "runtime"⟩ = false := by
+  native_decide
+
+/-- An owner can delegate reader management without delegating the separate
+authority to attach a Node parent. The grant must come from that owner. -/
+theorem foreign_owner_delegates_only_reader_management :
+    let delegated := apply privateReplicaFixture (.grantAs "foreign"
+      ⟨"enrollment_records", "remote", "reader_manager", .actor "runtime"⟩)
+    (mayManage delegated "runtime"
+        ⟨"enrollment_records", "remote", "reader", .actor "user"⟩,
+     mayManage delegated "runtime"
+        ⟨"enrollment_records", "remote", "parent", .object "nodes" "local-node"⟩) =
+      (true, false) := by native_decide
+
 theorem native_local_replica_grant_is_narrow :
     let state := replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
       "local-node" "user" true true true true false

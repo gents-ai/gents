@@ -5,7 +5,6 @@ use identity::Did;
 async fn live_agent_session_and_delegation_access_match_the_model() -> anyhow::Result<()> {
     use crate::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
     use crate::support::{self, ManagedAgentFixture};
-    use gents_store::identity::NodeIdentity;
 
     let db = support::test_db("live-agent-access-conformance").await;
     let fixture = support::managed_agent_fixture(&db).await;
