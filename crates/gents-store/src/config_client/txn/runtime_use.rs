@@ -40,16 +40,37 @@ impl ConfigApplyTxn<'_> {
         Ok(usable)
     }
 
-    /// The hosting runtime this transaction reads as, if it does: the only
-    /// actor whose reads here pass document ACP for its own work
-    /// (`Identity.Household.readObserved`).
-    fn hosting_runtime_reader(&self) -> Option<&identity::Did> {
-        match &self.backend {
-            TxnBackend::Embedded { node, identity, .. } => identity
-                .as_ref()
-                .filter(|actor| node.node_identity_did() == Some(actor.as_str())),
-            TxnBackend::Http { .. } => None,
-        }
+    /// The hosting runtime this transaction reads as, if it reads past
+    /// document ACP: the node key, while node access control is enabled. NAC
+    /// grants `bypass-dac` only while it is on (`Identity.Household.readObserved`),
+    /// so with NAC off the node key's read is already document ACP's answer and
+    /// there is nothing to filter. A served runtime never runs with NAC off
+    /// (`Identity.NodeProvisioning.runtimeMayStart`).
+    async fn hosting_runtime_reader(&self) -> Result<Option<identity::Did>> {
+        let TxnBackend::Embedded {
+            node,
+            identity,
+            native_operations,
+            ..
+        } = &self.backend
+        else {
+            return Ok(None);
+        };
+        let Some(runtime) = identity
+            .as_ref()
+            .filter(|actor| node.node_identity_did() == Some(actor.as_str()))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let node = std::sync::Arc::clone(node);
+        let nac_enabled = super::native::execute_owned_native(
+            async move { node.nac_manager().is_enabled().await },
+            std::sync::Arc::clone(native_operations),
+            self.operation,
+        )
+        .await?;
+        Ok(nac_enabled.then_some(runtime))
     }
 
     /// Drops from `response`'s `collection` rows those `runtime` may not use
@@ -90,7 +111,7 @@ impl ConfigApplyTxn<'_> {
     /// otherwise every document it read, since any other actor's read is
     /// already document ACP's answer (`without_bypass_document_acp_decides`).
     pub async fn reader_may_use(&self, collection: &str, doc_ids: &[String]) -> Result<Vec<bool>> {
-        match self.hosting_runtime_reader().cloned() {
+        match self.hosting_runtime_reader().await? {
             Some(runtime) => self.runtime_may_use(&runtime, collection, doc_ids).await,
             None => Ok(vec![true; doc_ids.len()]),
         }
@@ -117,7 +138,7 @@ impl ConfigApplyTxn<'_> {
     }
 
     async fn retain_reader_usable(&self, mut response: Value, collection: &str) -> Result<Value> {
-        if let Some(runtime) = self.hosting_runtime_reader().cloned() {
+        if let Some(runtime) = self.hosting_runtime_reader().await? {
             self.retain_runtime_usable(&runtime, &mut response, collection)
                 .await?;
         }
