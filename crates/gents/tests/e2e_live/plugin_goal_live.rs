@@ -242,7 +242,7 @@ pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarne
     .await
     .unwrap();
     let plan = tokio::task::spawn_blocking(move || {
-        vec![
+        [
             PlanEntry {
                 when: json!({"step":0}),
                 output: effects(

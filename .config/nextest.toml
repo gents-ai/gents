@@ -19,8 +19,11 @@ test-group = "desktop-live-fixture"
 [profile.ci]
 retries = 0
 fail-fast = false
-# libtest under the gate reported a test after 60 s and killed it 600 s later.
-slow-timeout = { period = "60s", terminate-after = 10 }
+# A test is reported after 60 s and killed after 900 s. The kill must exceed
+# STALL_CEILING (600 s, crates/gents/tests/support/live_inference.rs): a wait
+# bounded by it fails with the rows it last read, and a kill at or below it
+# would replace that evidence with a bare TIMEOUT.
+slow-timeout = { period = "60s", terminate-after = 15 }
 # Shards print every result so a log shows what ran; failures repeat at the end.
 status-level = "pass"
 final-status-level = "fail"

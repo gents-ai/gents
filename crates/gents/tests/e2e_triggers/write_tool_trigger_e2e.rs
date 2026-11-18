@@ -330,7 +330,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
     let task_id = "task-b6-multifield";
     let trigger_id = "trigger-b6-multifield";
     let (handle, shutdown_tx) =
-        boot_agent_with_action_trigger(&db, &fixture, "b6-multifield", task_id, trigger_id).await;
+        boot_agent_with_action_trigger(&db, fixture, "b6-multifield", task_id, trigger_id).await;
 
     gents_store::config_client::create_authored_document(
         &fixture.access,
@@ -368,7 +368,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
     let task_id = "task-b6-tooldriven";
     let trigger_id = "trigger-b6-tooldriven";
     let (handle, shutdown_tx) =
-        boot_agent_with_action_trigger(&db, &fixture, "b6-tooldriven", task_id, trigger_id).await;
+        boot_agent_with_action_trigger(&db, fixture, "b6-tooldriven", task_id, trigger_id).await;
 
     let tool = BoundedWriteTool::new(
         gents_store::config_client::ConfigAccess::local_managed_agent(
