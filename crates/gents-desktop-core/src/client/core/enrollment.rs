@@ -224,11 +224,10 @@ impl ClientCore {
             self.node.node_identity_did() == Some(self.node_identity.did()),
             "desktop enrollment requires its configured local identity"
         );
+        let runtime = identity::Did::new(self.node_identity.did())?;
         let listing = gents_p2p::views::read_enrollment_listing(
-            &gents_store::config_client::ConfigAccess::local_as(
-                self.node.clone(),
-                identity::Did::new(self.node_identity.did())?,
-            ),
+            &gents_store::config_client::ConfigAccess::local_as(self.node.clone(), runtime.clone()),
+            &runtime,
         )
         .await?;
         let pins = listing.pins.into_iter().fold(

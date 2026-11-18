@@ -4,24 +4,10 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::views::ViewError;
 use serde::Deserialize;
 
+use crate::p2p_reconcile::enrollment_candidate::runtime_admin_pin_rows;
 use crate::p2p_reconcile::enrollment_rows::{
     EnrollmentDecisionRow, EnrollmentPinRow, EnrollmentRequestRow, EnrollmentRevisionRow,
 };
-
-pub struct EnrollmentPins;
-
-impl View for EnrollmentPins {
-    type Collection = fields::network_admin_pin::Doc;
-    type Row = EnrollmentPinRow;
-
-    fn query(&self, _reader_did: &str) -> Query<Self::Collection> {
-        Query::select(
-            Selection::new()
-                .field(fields::network_admin_pin::NETWORK_ID)
-                .field(fields::network_admin_pin::ADMIN_DID),
-        )
-    }
-}
 
 pub struct EnrollmentDecisions;
 
@@ -147,11 +133,20 @@ pub struct EnrollmentListing {
 
 pub async fn read_enrollment_listing(
     access: &ConfigAccess,
+    runtime: &identity::Did,
 ) -> Result<EnrollmentListing, ViewError> {
     access
         .transact_readonly("view.enrollment_listing", |txn| {
             Box::pin(async move {
-                let pins = txn.read_view(&EnrollmentPins).await?;
+                let pins = runtime_admin_pin_rows(txn, runtime, None)
+                    .await?
+                    .into_iter()
+                    .map(serde_json::from_value)
+                    .collect::<Result<_, _>>()
+                    .map_err(|source| ViewError::Decode {
+                        collection: "NetworkAdminPin",
+                        source,
+                    })?;
                 let requests = txn.read_view(&EnrollmentRequests::default()).await?;
                 let decisions = txn.read_view(&EnrollmentDecisions).await?;
                 let revisions = txn

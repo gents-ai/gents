@@ -8,6 +8,7 @@ use gents_store::identity::NodeIdentity as _;
 
 struct PinFixture {
     node: Arc<EmbeddedNode>,
+    runtime: identity::Did,
     runtime_access: ConfigAccess,
     user_access: ConfigAccess,
     parent: String,
@@ -47,6 +48,9 @@ impl PinFixture {
         for collection in [
             gents_protocol::schemas::NODE,
             gents_protocol::schemas::NETWORK_ADMIN_PIN,
+            gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST,
+            gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION,
+            gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION,
         ] {
             node.add_collection(collection).await?;
         }
@@ -82,6 +86,7 @@ impl PinFixture {
             .await?;
         Ok(Self {
             node,
+            runtime: runtime_did,
             runtime_access,
             user_access,
             parent,
@@ -168,5 +173,28 @@ async fn admin_pinned_follows_the_offer_request_model() -> anyhow::Result<()> {
         .write_pin(false, "malformed/1", "malformed/network", None)
         .await?;
     assert!(super::admin_pinned(&fixture.node, "malformed/network", "admin").await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn enrollment_listing_lists_only_the_runtime_admin_pins() -> anyhow::Result<()> {
+    let fixture = PinFixture::new().await?;
+    fixture
+        .write_pin(true, "listing/0", "listing", Some("admin"))
+        .await?;
+    fixture
+        .write_pin(false, "listing/1", "listing", Some("other"))
+        .await?;
+    fixture
+        .write_pin(false, "listing/2", "listing", None)
+        .await?;
+    let listing =
+        crate::views::read_enrollment_listing(&fixture.runtime_access, &fixture.runtime).await?;
+    let pins: Vec<_> = listing
+        .pins
+        .iter()
+        .map(|pin| (pin.network_id.as_str(), pin.admin_did.as_str()))
+        .collect();
+    assert_eq!(pins, [("listing", "admin")]);
     Ok(())
 }
