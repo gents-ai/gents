@@ -1312,7 +1312,7 @@ async fn create_request(
 }
 
 #[tokio::test]
-async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
+async fn group_marker_is_read_by_selected_held_agent_without_unrelated_reader_visibility() {
     use gents_store::identity::NodeIdentity;
     let (db, user, client_access, agent) = signed_materializer_agent("group-marker-agent").await;
     let binding = gents_store::identity::provision_agent_identity_authorized(
@@ -1413,26 +1413,15 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     .unwrap();
     let own = access.execute(&query).await.unwrap();
     assert_eq!(own["data"]["AgentRequest"].as_array().unwrap().len(), 1);
-    // Document ACP gives the Node no read of the Agent's group request; the
-    // hosting node key observes it past document ACP (gents#3747), and the
-    // marker is still read as the selected held Agent.
-    assert!(
-        !gents_store::test_support::document_acp_reads(
-            &db.node,
-            db.node_identity.did(),
-            "AgentRequest",
-            own["data"]["AgentRequest"][0]["_docID"].as_str().unwrap()
-        )
+    let node_view = gents_store::test_support::unrelated_document_reader(&db.node)
         .await
-    );
-    let node_view = gents_store::config_client::ConfigAccess::local(db.node.clone())
         .execute(&query)
         .await
         .unwrap();
-    assert_eq!(
-        node_view["data"]["AgentRequest"].as_array().map(Vec::len),
-        Some(1)
-    );
+    assert!(node_view["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert!(materializer
         .has_materialized_group_request(agent.node_did(), trigger_id, &key)
         .await

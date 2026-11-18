@@ -522,6 +522,10 @@ async fn serve_foreground(
     // A home whose identity can never own the node is refused from its
     // configuration alone, before any store is reserved or opened.
     gents_store::local::home::ensure_home_identity_can_serve(&home_dir)?;
+    let init_config = read_init_config(&home_dir)?;
+    if let Some(config) = init_config.as_ref() {
+        gents_store::local::document_acp::ensure_home_opens(config)?;
+    }
     let data_dir = args
         .data_dir
         .clone()
@@ -594,7 +598,6 @@ async fn serve_foreground(
     if let Some(url) = &advertised_graphql_url {
         gents_p2p::p2p_reconcile::endpoint::validate_advertised_graphql_url(url)?;
     }
-    let init_config = read_init_config(&home_dir)?;
     if let (Some(explicit), Some(config)) = (args.node_name.as_deref(), init_config.as_ref()) {
         if explicit != config.node_name {
             anyhow::bail!(
@@ -622,7 +625,14 @@ async fn serve_foreground(
     let _post_open_keychain_prompt_guard =
         gents_service::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
     let protected_backend = protected_backend
-        .preflight(&backend_store_key, Some(identity.did()))
+        .preflight(
+            &backend_store_key,
+            &identity,
+            init_config
+                .as_ref()
+                .map(|config| config.document_acp)
+                .unwrap_or_default(),
+        )
         .await?;
     let effective_tool_ceiling = args
         .tool_ceiling

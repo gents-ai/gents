@@ -30,7 +30,6 @@ impl PrivateSessionFixture {
             .unwrap();
         for did in [selected.did(), other.did()] {
             for permission in [
-                NodePermission::CollectionGet,
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,
@@ -136,31 +135,20 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
         fixture
             .create_session(name, bound, case.input.visible.is_some())
             .await;
-        let node_view = ConfigAccess::local_as(
-            fixture.db.node.clone(),
-            fixture.runtime.did().parse().unwrap(),
-        )
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(name)
-        ))
-        .await
-        .unwrap();
-        // The hosting node key observes the private session past document
-        // ACP (gents#3747); document ACP gives the runtime no read, so
-        // resolution cannot rest on the runtime's own grants.
-        let session = node_view["data"]["AgentSession"][0]["_docID"]
-            .as_str()
-            .expect("the hosting node key observes the private session");
+        let reader = gents_store::test_support::unrelated_document_reader(&fixture.db.node).await;
+        let node_view = reader
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(name)
+            ))
+            .await
+            .unwrap();
         assert!(
-            !gents_store::test_support::document_acp_reads(
-                &fixture.db.node,
-                fixture.runtime.did(),
-                "AgentSession",
-                session
-            )
-            .await,
-            "document ACP gives the runtime no read of a private session"
+            node_view["data"]["AgentSession"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "unrelated reader must not read private session"
         );
         let result = resolve_agent_for_request(&fixture.db.node, &fixture.request(name, requested))
             .await

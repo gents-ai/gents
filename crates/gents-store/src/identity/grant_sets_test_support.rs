@@ -1,13 +1,25 @@
 use std::sync::Arc;
 
-use super::GrantSet;
+use super::{GrantSet, Recipient};
 use crate::identity::NodeIdentity;
 
-pub fn set_named(name: &str) -> GrantSet {
-    GrantSet::ALL
+pub fn recipient_named(name: &str) -> Recipient {
+    Recipient::ALL
         .into_iter()
-        .find(|set| set.name() == name)
-        .unwrap_or_else(|| panic!("Lean grant set {name:?} has no Rust owner"))
+        .find(|recipient| recipient.name() == name)
+        .unwrap_or_else(|| panic!("Lean recipient {name:?} has no Rust owner"))
+}
+
+/// Every set the recipient named `name` holds once admitted and, for an
+/// Agent, published: its direct sets, then its projected ones.
+pub fn recipient_sets(name: &str) -> Vec<GrantSet> {
+    let grants = GrantSet::for_recipient(recipient_named(name));
+    grants
+        .direct
+        .iter()
+        .chain(grants.projected)
+        .copied()
+        .collect()
 }
 
 pub async fn nac_node() -> (

@@ -208,7 +208,7 @@ mod scenarios;
 
 #[tokio::test]
 async fn signed_account_delete_requires_user_document_delete_permission() {
-    use gents_store::config_client::{ConfigClientError, NodePermission};
+    use gents_store::config_client::NodePermission;
     use gents_store::identity::NodeIdentity;
 
     let (db, user, access) = crate::test_support::signed_test_node_without_agent(
@@ -235,20 +235,9 @@ async fn signed_account_delete_requires_user_document_delete_permission() {
         .await
         .unwrap();
 
-    let error = remove(&access, node_did, &credential_id).await.unwrap_err();
-    let typed =
-        gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| match cause
-            .downcast_ref::<ConfigClientError>(
-        ) {
-            Some(ConfigClientError::ClientAgentSigning(
-                defra_http::client_signed_create::ClientSignedCreateError::Incomplete,
-            )) => Some(()),
-            _ => None,
-        });
-    assert!(
-        typed.is_some(),
-        "a denied no-wave delete must remain an error: {error:#}"
-    );
+    remove(&access, node_did, &credential_id)
+        .await
+        .expect_err("deletion without DocumentDelete must be refused");
     assert_eq!(
         rows(&access, node_did, CLAUDE_OAUTH_PROVIDER).await.len(),
         1

@@ -51,11 +51,7 @@ impl DeliveryFixture {
             owner.node.clone(),
             owner.node_identity.did().parse().unwrap(),
         );
-        for permission in [
-            NodePermission::CollectionGet,
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-        ] {
+        for permission in [NodePermission::DocumentRead, NodePermission::DocumentUpdate] {
             admin
                 .grant_node_permission(&outsider.did().parse().unwrap(), permission)
                 .await
@@ -291,12 +287,15 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
         )
         .await
         .unwrap();
-    gents_store::identity::node_p2p(&fixture.peer.node)
-        .unwrap()
-        .sync_documents(
+    fixture
+        .peer
+        .node
+        .sync_documents_as(
+            &defra_core::RequestContext::default().with_identity(Some(
+                fixture.peer.node.node_identity_did().unwrap().to_owned(),
+            )),
             "PeerRegistry",
-            vec![public_doc.clone()],
-            Some(Duration::from_secs(5)),
+            std::slice::from_ref(&public_doc),
         )
         .await
         .unwrap();
@@ -328,7 +327,10 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
         r#"{{ _commits(docID: "{escaped_doc}", filter: {{ fieldName: {{ _eq: "_C" }} }}, order: {{ height: ASC }}, limit: 1) {{ cid }} }}"#,
     )).await.unwrap();
     let cid = commits["data"]["_commits"][0]["cid"].as_str().unwrap();
-    let pull = gents_store::identity::node_p2p(&fixture.peer.node)
+    let pull = fixture
+        .peer
+        .node
+        .p2p()
         .unwrap()
         .sync_documents("AgentRequest", vec![doc], Some(Duration::from_secs(5)))
         .await;

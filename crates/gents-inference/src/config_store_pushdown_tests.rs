@@ -137,10 +137,21 @@ async fn agent_transaction_uses_the_node_cap_only_while_the_runtime_may_use_its_
     // Document ACP withdraws the runtime's read of its Node; the hosting node
     // key still reads the cap past document ACP (gents#3747), but the runtime
     // may no longer use it, so the cap is unavailable (gents#3935).
-    assert!(
-        !gents_store::test_support::document_acp_reads(&db.node, runtime.did(), "Node", node_doc)
-            .await
-    );
+    let usable = {
+        let (runtime, doc) = (identity::Did::new(runtime.did())?, node_doc.to_owned());
+        admin
+            .transact_readonly("test.runtime_use.hop_cap_node", |txn| {
+                let (runtime, doc) = (&runtime, &doc);
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>(
+                        txn.runtime_may_use(runtime, "Node", std::slice::from_ref(doc))
+                            .await?,
+                    )
+                })
+            })
+            .await?
+    };
+    assert_eq!(usable, vec![false]);
     assert_eq!(
         admin.execute("{ Node { _docID } }").await?["data"]["Node"]
             .as_array()
@@ -347,19 +358,6 @@ async fn runtime_uses_follow_document_acp_as_the_lean_model_says() -> anyhow::Re
         }
     }
     Ok(())
-}
-
-fn recipient_sets(name: &str) -> Vec<GrantSet> {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .identity_grant_recipient_cases
-        .iter()
-        .find(|case| case.recipient == name)
-        .unwrap_or_else(|| panic!("Lean recipient {name:?}"));
-    case.direct
-        .iter()
-        .chain(&case.projected)
-        .map(|set| set_named(set))
-        .collect()
 }
 
 pub(crate) async fn agent_step(

@@ -618,14 +618,14 @@ jobs:
         if: runner.os == 'macOS' && runner.environment == 'self-hosted'
         run: .github/scripts/host-runtime-service.sh record
 
-      # A single slice runs its tests in this job, and the Lean-backed ones
-      # need the built contract: without it 12 waited out 600 s behind the
-      # proofs lock (dispatch 43780116459).
+      # A single slice and the Vera feature tests run in this job, and the
+      # Lean-backed ones need the built contract: without it 12 waited out
+      # 600 s behind the proofs lock (dispatch 43780116459).
       # The contract builds beside the Rust compile instead (gate.py run_build):
       # it took 2.5 to 10 minutes before the compile started (PR #3926's runs).
       - uses: ./.github/actions/rust-runner
         with:
-          lean: ${{ matrix.run && 'true' || 'false' }}
+          lean: ${{ (matrix.run || matrix.vera) && 'true' || 'false' }}
           lean-contract: deferred
           afterburner: ${{ matrix.run && matrix.go && 'true' || 'false' }}
 

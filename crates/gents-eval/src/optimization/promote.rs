@@ -1009,6 +1009,15 @@ mod tests {
     ) -> anyhow::Result<()> {
         use gents_store::identity::NodeIdentity;
 
+        harness
+            .grant_node_permissions(
+                outsider.did(),
+                &[
+                    gents_store::config_client::NodePermission::CollectionGet,
+                    gents_store::config_client::NodePermission::DocumentRead,
+                ],
+            )
+            .await?;
         let hidden = promote(foreign, harness.owner(), job_id, digest)
             .await
             .unwrap_err();

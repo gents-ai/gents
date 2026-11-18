@@ -112,35 +112,4 @@ def ordinaryVisible (present readable : Bool) : Bool := present && readable
 theorem hidden_and_absent_are_indistinguishable :
     ordinaryVisible true false = ordinaryVisible false false := by rfl
 
-def stateString : DurableState → String
-  | .absent => "absent" | .pending => "pending" | .admitted => "admitted"
-
-def witnessString : NativeWitness → String
-  | .absent => "absent" | .pending => "pending" | .admitted => "admitted" | .unavailable => "unavailable"
-
-def actionString : NextAction → String
-  | .hold => "hold" | .create => "create" | .retirePending => "retire_pending" | .advance => "advance"
-
-def cases : List Lean.Json :=
-  let inputs : List (String × DurableState × Bool × Bool × Bool × Bool × Bool × Bool × Bool × Bool) :=
-    [("absent", .absent, true, true, true, true, true, true, true, true),
-     ("admitted", .admitted, true, true, true, true, true, true, true, true),
-     ("pending_no_retirement", .pending, true, true, true, true, true, true, false, false),
-     ("pending_fenced_retirement", .pending, true, true, true, true, true, true, true, true),
-     ("untrusted_publisher", .admitted, true, true, true, true, false, true, true, true),
-     ("wrong_consumer", .admitted, true, false, true, true, true, true, true, true),
-     ("source_hidden", .admitted, true, true, false, true, true, true, true, true),
-     ("incomplete_index", .absent, true, true, true, false, true, true, true, true),
-     ("unfenced", .admitted, true, true, true, true, true, false, true, true),
-     ("foreign_actor", .admitted, false, true, true, true, true, true, true, true)]
-  inputs.map fun (name, state, actor, consumer, source, index, provenance, fence, owner, retireFence) =>
-    let witness := observe state actor consumer source index provenance fence
-    Lean.Json.mkObj [("name", Lean.toJson name), ("state", Lean.toJson (stateString state)),
-      ("actor_authorized", Lean.toJson actor), ("exact_consumer", Lean.toJson consumer),
-      ("source_visible", Lean.toJson source), ("complete_index", Lean.toJson index),
-      ("authenticated_provenance", Lean.toJson provenance), ("conflict_fenced", Lean.toJson fence),
-      ("owner_authorized", Lean.toJson owner), ("retire_fenced", Lean.toJson retireFence),
-      ("witness", Lean.toJson (witnessString witness)),
-      ("action", Lean.toJson (actionString (nextAction witness owner retireFence)))]
-
 end Identity.UnattendedReceipt

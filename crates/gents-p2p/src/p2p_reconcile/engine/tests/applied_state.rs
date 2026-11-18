@@ -207,7 +207,6 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     for actor in [&user, &agent, &sibling, &outsider] {
         for permission in [
-            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,

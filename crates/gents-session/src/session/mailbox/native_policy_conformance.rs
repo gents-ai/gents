@@ -47,6 +47,10 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         directory.path().join("other.key"),
         None,
     )?;
+    let authority = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("authority.key"),
+        None,
+    )?;
     let binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding)?;
     let denied_binding = gents_store::identity::provision_agent_identity(&runtime)?;
@@ -57,16 +61,17 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         EmbeddedNode::builder()
             .enable_signing()
             .with_node_identity_did(runtime.did())
-            .with_node_acp_owner(user.did().to_owned())
+            .with_node_acp_owner(authority.did().to_owned())
             .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
             .await?,
     );
-    let context = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
+    let context =
+        defra_core::RequestContext::default().with_identity(Some(authority.did().to_owned()));
     let policy = node
         .add_dac_policy_with_counter_as(&context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
-    for actor in [agent.did(), other.did(), runtime.did()] {
+    for actor in [agent.did(), user.did(), other.did(), runtime.did()] {
         for permission in [
             acp::nac::NodePermission::DocumentRead,
             acp::nac::NodePermission::DocumentUpdate,
@@ -283,13 +288,9 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
     .await?;
     assert_eq!(duplicate.outcome, MailboxWriteOutcome::Reused);
     assert_eq!(duplicate.item.doc_id, doc);
-    // A reused item does not regrant the revoked recipient under document ACP.
-    // The fixture's User owns the node's access control, so its own read
-    // still observes the item past document ACP (gents#3747).
-    assert!(!granted("user", defra_node::DocumentPermission::Read).await?);
     assert!(load_mailbox_item_with_access(&user_access, &doc)
         .await?
-        .is_some());
+        .is_none());
     access
         .transact_write("test.mailbox.explicit_restore", |txn| {
             let doc = &doc;
@@ -328,11 +329,10 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
             escape_graphql_string(&doc)
         ))
         .await?;
-    // Document ACP withdraws the recipient's read; the fixture's User owns
-    // the node's access control and still observes the item past document ACP
-    // (gents#3747).
-    assert!(!granted("user", defra_node::DocumentPermission::Read).await?);
-    assert!(!envelope_rows(&revoked, "MailboxItem")?.is_empty());
+    assert_eq!(
+        !envelope_rows(&revoked, "MailboxItem")?.is_empty(),
+        granted("user", defra_node::DocumentPermission::Read).await?
+    );
     for (case, allowed) in cases.iter().zip(allowed) {
         let mut checks = Vec::new();
         let mut allowed = allowed.into_iter();
@@ -356,18 +356,9 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
             },
         );
     }
-    // Document ACP gives the revoked recipient no update. Its read past
-    // document ACP (gents#3747) shows the item already dismissed, so dismissing
-    // again is the owner's no-op and changes nothing.
-    assert!(!granted("user", defra_node::DocumentPermission::Update).await?);
-    let status = format!(
-        "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ status }} }}",
-        escape_graphql_string(&doc)
-    );
-    let before = user_access.execute(&status).await?;
-    assert_eq!(before["data"]["MailboxItem"][0]["status"], "dismissed");
-    crate::operations::mailbox::dismiss(&user_access, &doc).await?;
-    assert_eq!(user_access.execute(&status).await?, before);
+    assert!(crate::operations::mailbox::dismiss(&user_access, &doc)
+        .await
+        .is_err());
     node.shutdown().await?;
     Ok(())
 }

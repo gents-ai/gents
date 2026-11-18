@@ -14,54 +14,45 @@ fn projection(surface: &ToolPolicySurface, pack: bool) -> Value {
 
 #[test]
 fn covered_tool_operations_follow_executable_identity_model() {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration contract");
-    for item in &case.tool_operation_cases {
-        let flag = |name: &str| item[name].as_bool().expect("modeled tool flag");
+    gents_lean_vocab::families::household_tool_operation_source_projection::replay(|case| {
         let mut surface = ToolPolicySurface::secure_minimal();
-        surface.schema_management = flag("schema");
-        surface.session_history = flag("history");
-        surface.goal_tools = flag("goal");
-        surface.goal_create = flag("create");
-        surface.self_config = flag("self_config");
-        if flag("query") {
+        surface.schema_management = case.schema;
+        surface.session_history = case.history;
+        surface.goal_tools = case.goal;
+        surface.goal_create = case.create;
+        surface.self_config = case.self_config;
+        if case.query {
             surface.query_tools = EndpointScope::only_map(std::collections::BTreeMap::from([(
                 ("tool".to_owned(), "collection".to_owned()),
                 Default::default(),
             )]));
         }
-        if flag("write") {
+        if case.write {
             surface.write_tools = EndpointScope::only_map(std::collections::BTreeMap::from([(
                 ("tool".to_owned(), "collection".to_owned()),
                 Default::default(),
             )]));
         }
-        let category = item["category"].as_str().expect("modeled category scope");
-        surface.self_config_categories = match category {
+        surface.self_config_categories = match case.category.as_str() {
             "all" => EndpointScope::all(),
             "none" => EndpointScope::none(),
             category => EndpointScope::<String, ()>::only_units([category.to_owned()]),
         };
-        assert_eq!(
-            projection(&surface, flag("pack")),
-            item["sources"],
-            "{}",
-            item["name"]
-        );
-
-        if category == "none" {
-            surface.self_config_categories =
+        let projected = projection(&surface, case.pack);
+        if case.category == "none" {
+            let mut empty = surface.clone();
+            empty.self_config_categories =
                 EndpointScope::<String, ()>::only_units(Vec::<String>::new());
             assert_eq!(
-                projection(&surface, flag("pack")),
-                item["sources"],
+                projection(&empty, case.pack),
+                projected,
                 "{} empty category scope",
-                item["name"]
+                case.name
             );
         }
-    }
+        serde_json::from_value::<Vec<gents_lean_vocab::families::household_tool_operation_source_projection::OperationSource>>(projected)
+            .expect("projected operation sources")
+    });
 }
 
 #[test]

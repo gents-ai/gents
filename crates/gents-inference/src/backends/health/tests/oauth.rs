@@ -156,7 +156,20 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     // hosting node key still reads the Node and its backends past document
     // ACP (gents#3747, `Identity.Household.readObserved`), but may no longer
     // list, capture or probe them (gents#3935, `Identity.Household.runtimeMayUse`).
-    assert!(!gents_store::test_support::document_acp_reads(&node, did, "Node", parent).await);
+    let runtime = identity::Did::new(did).unwrap();
+    let usable = gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone())
+        .transact_readonly("test.runtime_use.backend_node", |txn| {
+            let (runtime, parent) = (&runtime, parent.to_owned());
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    txn.runtime_may_use(runtime, "Node", std::slice::from_ref(&parent))
+                        .await?,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(usable, vec![false]);
     let hosting_read = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(did).unwrap(),

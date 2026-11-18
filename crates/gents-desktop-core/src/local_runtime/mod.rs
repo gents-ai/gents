@@ -670,24 +670,31 @@ pub(crate) async fn discover_standard_runtime(
     let client = runtime_http_client()
         .await
         .context("building local runtime HTTP client")?;
-    await_serving_runtime(client, &runtime).await?;
-    let api_base = p2p_api_base(&runtime.graphql)?;
-    let shareable_address: ShareableAddressResponse =
-        http_get_json(client, &format!("{api_base}/p2p/shareable-address")).await?;
-    let p2p_listen_address = normalize_optional_string(shareable_address.address.as_deref())
-        .context("local runtime is reachable but did not report a shareable P2P address")?;
-    let live_identity =
-        http_get_json::<NodeIdentityResponse>(client, &format!("{api_base}/node/identity"))
-            .await
-            .ok();
+    let status = await_serving_runtime(client, &runtime).await?;
+    // Discovery uses the public enrollment offer only for routing. Enrollment
+    // verifies its signature and authority before granting any access.
+    let token = status
+        .pointer("/enrollment/token")
+        .and_then(Value::as_str)
+        .context("local runtime did not advertise an enrollment offer")?;
+    let offer = gents_protocol::enrollment::decode_offer(token)?;
+    anyhow::ensure!(
+        offer.owner_node_did == runtime.node_did,
+        "local runtime enrollment offer names another node"
+    );
     let p2p_peer_id = resolve_p2p_peer_id(
-        live_identity
-            .as_ref()
-            .and_then(|identity| identity.peer_id.as_deref()),
-        Some(&p2p_listen_address),
+        Some(&offer.server_peer),
+        Some(&offer.server_ticket),
         runtime.p2p_peer_id.as_deref(),
     )
-    .context("local runtime is reachable but did not report a usable P2P peer id")?;
+    .context("local runtime enrollment offer has no usable P2P peer id")?;
+    let (ticket_peer, _) = p2p::iroh::parse_public_peer_addr(&offer.server_ticket)
+        .map_err(|error| anyhow::anyhow!("invalid local runtime enrollment address: {error}"))?;
+    anyhow::ensure!(
+        ticket_peer.to_string() == p2p_peer_id,
+        "local runtime enrollment address does not match its peer"
+    );
+    let p2p_listen_address = offer.server_ticket;
 
     Ok(StandardRuntimeDiscovery {
         node_name: runtime.node_name,
@@ -703,7 +710,7 @@ pub(crate) async fn discover_standard_runtime(
 async fn await_serving_runtime(
     client: &reqwest::Client,
     runtime: &StoredRuntimeState,
-) -> Result<()> {
+) -> Result<Value> {
     await_serving_runtime_within(client, runtime, SERVE_READY_TIMEOUT).await
 }
 
@@ -711,13 +718,13 @@ async fn await_serving_runtime_within(
     client: &reqwest::Client,
     runtime: &StoredRuntimeState,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<Value> {
     let status_url = runtime_status_url(&runtime.graphql)?;
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let waiting = match http_get_json::<Value>(client, &status_url).await {
             Ok(status) => match serving_runtime(&status, &runtime.node_did)? {
-                ObservedServeLifecycle::Ready => return Ok(()),
+                ObservedServeLifecycle::Ready => return Ok(status),
                 ObservedServeLifecycle::Outdated { version } => {
                     anyhow::bail!(
                         "{}",

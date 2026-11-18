@@ -859,28 +859,16 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
         "claim must capture the wake notification cutoff"
     );
     let request = lifecycle.request();
-    let runtime_access = ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(fixture.runtime.did()).unwrap(),
-    );
-    // Document ACP gives the runtime none of the User's session read
-    // authority; the hosting node key reads the request past document ACP
-    // (gents#3747). The wake input is still loaded as the selected Agent.
+    let reader = gents_store::test_support::unrelated_document_reader(&node).await;
+    let visible = reader.execute(&query).await.unwrap();
     assert!(
-        !gents_store::test_support::document_acp_reads(
-            &node,
-            fixture.runtime.did(),
-            "AgentRequest",
-            &request.doc_id
-        )
-        .await,
-        "document ACP gives the runtime none of the User's session read authority"
+        visible["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "an unrelated reader must not inherit the User's session read authority"
     );
-    let visible = runtime_access.execute(&query).await.unwrap();
-    assert_eq!(
-        visible["data"]["AgentRequest"].as_array().map(Vec::len),
-        Some(1)
-    );
+    assert!(load(&reader, request, cutoff).await.is_err());
     let actual = load(&agent_access, request, cutoff).await.unwrap();
     assert_eq!(actual.len(), 1);
     assert_eq!(

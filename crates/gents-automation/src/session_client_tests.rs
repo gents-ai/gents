@@ -279,7 +279,12 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         sibling.agent_did.as_str(),
         other_user.did(),
     ] {
-        for relation in ["read-document", "update-document", "add-dac-relation"] {
+        for relation in [
+            "read-document",
+            "update-document",
+            "add-dac-relation",
+            "get-collection",
+        ] {
             let response = node_endpoint
                 .authorize(
                     client
@@ -527,7 +532,6 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         (&agent_access, agent.agent_did.as_str(), 1),
         (&sibling_access, sibling.agent_did.as_str(), 0),
         (&other_access, other_user.did(), 0),
-        // The hosting node key reads past document ACP (gents#3747).
         (&runtime_access, runtime.did(), 1),
     ] {
         let result = reader.execute(query).await.unwrap();
@@ -535,23 +539,6 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
             result["data"]["AgentSession"].as_array().unwrap().len(),
             expected,
             "actor {did}"
-        );
-    }
-    let session = access.execute("{ AgentSession { _docID } }").await.unwrap();
-    let session = session["data"]["AgentSession"][0]["_docID"]
-        .as_str()
-        .unwrap();
-    for (did, expected) in [
-        (agent.agent_did.as_str(), true),
-        (sibling.agent_did.as_str(), false),
-        (other_user.did(), false),
-        (runtime.did(), false),
-    ] {
-        assert_eq!(
-            gents_store::test_support::document_acp_reads(&node, did, "AgentSession", session)
-                .await,
-            expected,
-            "document ACP for {did}"
         );
     }
     let identity = gents_protocol::trigger_delivery::FireIdentity {

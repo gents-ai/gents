@@ -1612,8 +1612,8 @@ async fn backend_park_releases_local_lease_only_after_durable_transition() {
 }
 
 #[tokio::test]
-async fn backend_wait_is_outside_the_node_identitys_document_acp() {
-    let (node, _db, identity, _agent, access, mut lifecycle) = parked_fixture().await;
+async fn backend_wait_is_invisible_to_an_unrelated_reader() {
+    let (node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
     let doc_id = lifecycle.request().doc_id.clone();
     assert!(lifecycle.park_for_backend().await.unwrap());
     let query = format!(
@@ -1628,32 +1628,14 @@ async fn backend_wait_is_outside_the_node_identitys_document_acp() {
             .len(),
         1
     );
-    let wait_doc = as_agent["data"]["AgentRequestBackendWait"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    // Document ACP gives the Node identity no read of the wait; the hosting
-    // node key still observes it past document ACP (gents#3747).
-    assert!(
-        !gents_store::test_support::document_acp_reads(
-            &node,
-            identity.did(),
-            "AgentRequestBackendWait",
-            &wait_doc
-        )
+    let as_node = gents_store::test_support::unrelated_document_reader(&node)
         .await
-    );
-    let as_node =
-        gents_store::config_client::ConfigAccess::local_as(node, identity.did().parse().unwrap())
-            .execute(&query)
-            .await
-            .unwrap();
-    assert_eq!(
-        as_node["data"]["AgentRequestBackendWait"]
-            .as_array()
-            .map(Vec::len),
-        Some(1)
-    );
+        .execute(&query)
+        .await
+        .unwrap();
+    assert!(as_node["data"]["AgentRequestBackendWait"]
+        .as_array()
+        .is_none_or(Vec::is_empty));
 }
 
 #[tokio::test]

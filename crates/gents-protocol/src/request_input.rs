@@ -324,6 +324,19 @@ pub enum QueueSource {
     Goal,
 }
 
+impl QueueSource {
+    /// The key that coalesces this source's queued requests in one session.
+    pub fn queue_key(self, session_id: &str) -> String {
+        let source = match self {
+            Self::User => "user",
+            Self::BackgroundCompletion => "background_completion",
+            Self::Steering => "steering",
+            Self::Goal => "goal",
+        };
+        format!("{source}:{session_id}")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueuePolicy {

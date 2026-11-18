@@ -234,7 +234,7 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
 }
 
 #[tokio::test]
-async fn managed_parent_receives_child_completion_when_node_cannot_read_request() {
+async fn managed_parent_receives_child_completion_without_unrelated_reader_access() {
     let PublishedSessionMessage {
         admission,
         caused_request_id,
@@ -259,24 +259,15 @@ async fn managed_parent_receives_child_completion_when_node_cannot_read_request(
             .unwrap()
             .expect("the selected Agent can read its parent request");
     assert_eq!(parent.agent_did, access.actor_did().unwrap());
-    // Document ACP gives the Node no read of the Agent's request; the hosting
-    // node key still observes it past document ACP (gents#3747), so the held
-    // Agent's authority, not the Node's read, carries the completion.
     assert!(
-        !gents_store::test_support::document_acp_reads(
-            node,
-            node.node_identity_did().unwrap(),
-            "AgentRequest",
-            &parent.doc_id
+        gents_session::request::binding::load_agent_request_with_access(
+            &gents_store::test_support::unrelated_document_reader(node).await,
+            &parent_id
         )
-        .await,
-        "document ACP gives the Node no read of the held Agent's request"
-    );
-    assert!(
-        gents_session::request::binding::load_agent_request(node, &parent_id)
-            .await
-            .unwrap()
-            .is_some()
+        .await
+        .unwrap()
+        .is_none(),
+        "an unrelated reader cannot substitute for the held Agent"
     );
     let runtime = Arc::new(
         gents_store::identity::KeyIdentity::load_existing(admission.path.join("node.key"), None)

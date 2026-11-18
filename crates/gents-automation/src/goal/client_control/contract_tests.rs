@@ -34,8 +34,8 @@ pub(super) async fn receipt(
 }
 
 /// Fixtures sharing a node slow down as it accumulates their documents, so
-/// each shard's cases run on a small pool of nodes, a few at a time.
-const CASES_PER_NODE: usize = 32;
+/// the cases run on a small pool of nodes, a few at a time.
+const CASES_PER_NODE: usize = 8;
 const NODES_AT_ONCE: usize = 4;
 
 /// The family replays as one test per shard, so each test stays far inside
@@ -147,8 +147,8 @@ async fn drive_signed_command(node: &FixtureNode, modeled_case: &ControlCase) {
             ::identity::Did::new(fixture.identity.did()).unwrap(),
         );
         for permission in [
-            gents_store::config_client::NodePermission::CollectionGet,
             gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::CollectionGet,
             gents_store::config_client::NodePermission::DocumentUpdate,
             gents_store::config_client::NodePermission::DacRelationAdd,
         ] {

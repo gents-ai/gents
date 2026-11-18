@@ -57,23 +57,18 @@ theorem duplicate_does_not_regrant_recipient :
 Invisible items are not inferred from the node or another Agent's access. -/
 def sweepVisible (held target : String) : Bool := held == target
 
+/-- The sweep fixture's hosting key is the native NAC owner. Its query bypasses
+ document ACP (`Household.readObserved`), while every other actor's query
+ follows the item's creator/recipient policy. This does not make that key a
+ held target for the sweep. -/
+def nativeSweepRead (hostingNode : Bool) (reader target : String) : Bool :=
+  Household.readObserved hostingNode (sweepVisible reader target)
+
+theorem hosting_node_read_does_not_establish_a_target :
+    nativeSweepRead true "node" "agent" = true ∧ sweepVisible "node" "agent" = false := by decide
+
 theorem runtime_node_is_not_mailbox_target :
     sweepVisible "node" "agent" = false ∧ sweepVisible "agent" "agent" = true := by decide
-
-/-- The hosting runtime's node key in the sweep fixtures. -/
-def hostingRuntime : String := "node"
-
-/-- What `actor`'s own read of an item targeted at `target` observes. Decision
-(gents#3747): the hosting runtime's node key holds `bypass-dac`
-(`Household.readObserved`), so it reads every item although it is never the
-sweep's target; the sweep still selects held targets only (`sweepVisible`).
-Every other actor reads what document ACP grants. -/
-def sweepRead (actor target : String) : Bool :=
-  Household.readObserved (actor == hostingRuntime) (sweepVisible actor target)
-
-theorem hosting_runtime_reads_items_it_does_not_target :
-    sweepRead hostingRuntime "agent" = true ∧ sweepVisible hostingRuntime "agent" = false ∧
-    sweepRead "other" "agent" = false ∧ sweepRead "agent" "agent" = true := by decide
 
 /-- Interactive recipient provenance is retained from the verified signed
 request when its native claim commits. Physical targets belong to that same

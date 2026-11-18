@@ -7,20 +7,27 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tokio::io::AsyncWriteExt;
 
-use super::{home::StoreLock, store_key::StoreKey};
+use super::{
+    document_acp::{self, DocumentAcp, DocumentAcpError},
+    home::StoreLock,
+    store_key::StoreKey,
+};
+use crate::identity::NodeIdentity;
 
 /// The store's lineage marker. Its version names the node grants and the
 /// Household policy a store was created under as well as its format: v2 began
 /// when the Agent baseline gained `get-collection` (gents#3747, Lean
-/// `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`) and
+/// `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`); v3 when
 /// `agent_manager` came to take only the Node administrators' userset under
-/// the same policy ID (gents#3794, `Identity.Household.catalog_restriction_keeps_policy_id`).
-/// A store without this version's marker is reported as made by an older
-/// version and is never opened, so nothing in it changes; there is no
-/// conversion.
-const MARKER: &str = ".gents-private-backend-v2";
-pub(crate) const PROVENANCE_MARKER: &str = MARKER;
-const DOMAIN: &[u8] = b"gents private backend fresh store v2\0";
+/// the same policy ID (gents#3794,
+/// `Identity.Household.catalog_restriction_keeps_policy_id`). The policy ID
+/// does not change, so only this marker tells a v2 store's earlier policy from
+/// this one before DefraDB refuses to register it. A store without this
+/// version's marker is reported as made by an older version and is never
+/// opened, so nothing in it changes; there is no conversion.
+const MARKER: &str = ".gents-private-backend-v3";
+pub const PROVENANCE_MARKER: &str = MARKER;
+const DOMAIN: &[u8] = b"gents private backend fresh store v3\0";
 type MarkerMac = Hmac<Sha256>;
 
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +72,8 @@ pub enum BackendProtectionError {
     Join(#[from] tokio::task::JoinError),
     #[error("the started node could not take its composition root's attachments")]
     Composition(#[from] crate::node_extension::ExtensionError),
+    #[error(transparent)]
+    DocumentAcp(#[from] DocumentAcpError),
 }
 
 impl BackendProtectionError {
@@ -83,25 +92,6 @@ impl BackendProtectionError {
 }
 
 type Result<T> = std::result::Result<T, BackendProtectionError>;
-
-pub(crate) fn checked_copy(
-    data: &Path,
-    verdict: std::result::Result<
-        Option<gents_protocol::operations::install_repair::IncompatibleStoreKind>,
-        super::store_compat::StoreCompatibilityError,
-    >,
-) -> Result<()> {
-    match verdict {
-        Ok(None) => Ok(()),
-        Ok(Some(kind)) => Err(BackendProtectionError::Incompatible(
-            gents_protocol::operations::install_repair::IncompatibleStore {
-                kind,
-                data_path: data.to_path_buf(),
-            },
-        )),
-        Err(error) => Err(BackendProtectionError::CopyCheck(Box::new(error))),
-    }
-}
 
 /// Refuses a store that carries an earlier lineage's marker and not this
 /// version's, by reading the directory's names only. It runs before the
@@ -124,6 +114,56 @@ pub fn refuse_earlier_lineage(data: &Path) -> Result<()> {
         return Err(BackendProtectionError::MissingProvenance);
     }
     Ok(())
+}
+
+fn node_did(node: &Arc<dyn NodeIdentity>) -> Result<String> {
+    let did = node.did();
+    if did.is_empty() {
+        return Err(BackendProtectionError::InvalidProvenance);
+    }
+    Ok(did.to_owned())
+}
+
+pub async fn build_configured(
+    builder: defra_node::NodeBuilder,
+    data: &Path,
+    document_acp: DocumentAcp,
+) -> Result<defra_node::Node> {
+    let node = start(builder).await?;
+    if let Err(refused) = document_acp::check_started(&node, data, document_acp) {
+        let _ = node.shutdown().await;
+        return Err(refused.into());
+    }
+    Ok(node)
+}
+
+async fn start(builder: defra_node::NodeBuilder) -> Result<defra_node::Node> {
+    builder
+        .build()
+        .await
+        .map_err(|error| match document_acp::refused(&error) {
+            Some(refused) => refused.into(),
+            None => error.into(),
+        })
+}
+
+pub(crate) fn checked_copy(
+    data: &Path,
+    verdict: std::result::Result<
+        Option<gents_protocol::operations::install_repair::IncompatibleStoreKind>,
+        super::store_compat::StoreCompatibilityError,
+    >,
+) -> Result<()> {
+    match verdict {
+        Ok(None) => Ok(()),
+        Ok(Some(kind)) => Err(BackendProtectionError::Incompatible(
+            gents_protocol::operations::install_repair::IncompatibleStore {
+                kind,
+                data_path: data.to_path_buf(),
+            },
+        )),
+        Err(error) => Err(BackendProtectionError::CopyCheck(Box::new(error))),
+    }
 }
 
 async fn check_lock(data: &Path, lock: &StoreLock) -> Result<PathBuf> {
@@ -161,27 +201,35 @@ impl<'a> FreshBackendStore<'a> {
 
     /// The temporary native Node has no HTTP or P2P transport. An interrupted
     /// initialization or partial marker is never promoted on a later open.
-    pub async fn initialize(self, key: &StoreKey, node_did: Option<&str>) -> Result<()> {
-        let did = node_did
-            .filter(|did| !did.is_empty())
-            .ok_or(BackendProtectionError::InvalidProvenance)?;
-        let mut builder = super::store_key::persistent_builder(&self.data, key)
-            .map_err(|error| BackendProtectionError::Schema(error.into()))?;
-        builder = builder
-            .with_node_identity_did(did.to_owned())
+    pub async fn initialize(
+        self,
+        key: &StoreKey,
+        node: &Arc<dyn NodeIdentity>,
+        document_acp: DocumentAcp,
+    ) -> Result<()> {
+        let did = node_did(node)?;
+        let builder = super::store_key::persistent_builder(&self.data, key)
+            .map_err(|error| BackendProtectionError::Schema(error.into()))?
+            .with_node_identity_did(did)
             .with_node_acp_enabled();
-        let node = builder.build().await?;
-        let result = async {
+        let builder = document_acp::configure_fresh(builder, &self.data, key, document_acp, node)?;
+        let node = start(builder).await?;
+        let result: Result<_> = async {
             crate::schema::ensure_runtime_schemas(&node)
                 .await
                 .map_err(BackendProtectionError::Schema)?;
-            validate_binding(&node).await
+            validate_binding(&node).await?;
+            Ok(document_acp::created(&node, document_acp)?)
         }
         .await;
         let shutdown = node.shutdown().await;
-        result?;
+        let deployment = result?;
         shutdown?;
         drop(node);
+        if let Some(deployment) = deployment {
+            let data = self.data.clone();
+            tokio::task::spawn_blocking(move || document_acp::record(&data, &deployment)).await??;
+        }
         let nonce = *uuid::Uuid::new_v4().as_bytes();
         let mut mac = key
             .with_secret(|secret| MarkerMac::new_from_slice(secret).expect("HMAC accepts any key"));
@@ -240,11 +288,10 @@ impl<'a> ProtectedBackendStore<'a> {
     pub async fn preflight(
         self,
         key: &StoreKey,
-        node_did: Option<&str>,
+        node: &Arc<dyn NodeIdentity>,
+        document_acp: DocumentAcp,
     ) -> Result<PreflightProtectedBackendStore<'a>> {
-        let did = node_did
-            .filter(|did| !did.is_empty())
-            .ok_or(BackendProtectionError::InvalidProvenance)?;
+        let did = node_did(node)?;
         let stamped = super::store_compat::stamped(&self.data);
         if !stamped {
             checked_copy(
@@ -252,12 +299,12 @@ impl<'a> ProtectedBackendStore<'a> {
                 super::store_compat::check_copy(&self.data, key).await,
             )?;
         }
-        let mut builder = super::store_key::persistent_builder(&self.data, key)
-            .map_err(|error| BackendProtectionError::Schema(error.into()))?;
-        builder = builder
-            .with_node_identity_did(did.to_owned())
+        let builder = super::store_key::persistent_builder(&self.data, key)
+            .map_err(|error| BackendProtectionError::Schema(error.into()))?
+            .with_node_identity_did(did.clone())
             .with_node_acp_enabled();
-        let node = builder.build().await?;
+        let builder = document_acp::configure(builder, &self.data, key, document_acp, node)?;
+        let node = build_configured(builder, &self.data, document_acp).await?;
         let checked = validate_binding(&node).await;
         let shutdown = node.shutdown().await;
         checked.map_err(|error| match error {
@@ -275,7 +322,8 @@ impl<'a> ProtectedBackendStore<'a> {
         }
         Ok(PreflightProtectedBackendStore {
             store: self,
-            node_did: did.to_owned(),
+            node_did: did,
+            document_acp,
         })
     }
 }
@@ -283,6 +331,7 @@ impl<'a> ProtectedBackendStore<'a> {
 pub struct PreflightProtectedBackendStore<'a> {
     store: ProtectedBackendStore<'a>,
     node_did: String,
+    document_acp: DocumentAcp,
 }
 
 impl PreflightProtectedBackendStore<'_> {
@@ -325,20 +374,23 @@ impl PreflightProtectedBackendStore<'_> {
         policy: Arc<dyn super::ToolSourcePolicy>,
         plugins: Vec<super::ProjectedPlugin>,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
-        let projection = super::document_projector_with_installed_plugins(runtime, policy, plugins)
-            .map_err(|error| BackendProtectionError::Schema(error.into()))?;
-        let mut builder = super::store_key::persistent_builder(&self.store.data, key)
+        let projection =
+            super::document_projector_with_installed_plugins(runtime.clone(), policy, plugins)
+                .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+        let builder = super::store_key::persistent_builder(&self.store.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?
             .with_document_projector(projection)
             .with_node_identity_did(self.node_did)
             .with_node_acp_enabled();
+        let mut builder =
+            document_acp::configure(builder, &self.store.data, key, self.document_acp, &runtime)?;
         if let Some(http) = http {
             builder = builder.with_http(http);
         }
         if let Some(p2p) = p2p {
             builder = builder.with_p2p(p2p);
         }
-        let node = Arc::new(builder.build().await?);
+        let node = Arc::new(build_configured(builder, &self.store.data, self.document_acp).await?);
         if let Err(error) = validate_binding(&node).await {
             let _ = node.shutdown().await;
             return Err(error);

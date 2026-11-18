@@ -1,14 +1,27 @@
 use super::*;
 use crate::goal::operator_resume::support::{Fixture, PARENT, SESSION};
+use gents_lean_vocab::families::goal_client_start_contracts_replacements::{
+    ReplacedWire, ReplacementInput, ReplacementOutput,
+};
 use gents_protocol::request_admission::RequestPurpose;
 use std::sync::Arc;
 
-pub(super) async fn run(case: &Value) {
-    let c = &case["replacement"];
-    let start = &c["start"];
-    let before = &c["before"]["current"];
-    let execution = &before["snapshot"]["execution"];
-    let fixture = Fixture::new_with_parent_state(execution, start["busy"] == false).await;
+#[tokio::test]
+async fn generated_goal_replacements_retain_prior_assignments() {
+    for modeled in gents_lean_vocab::families::goal_client_start_contracts_replacements::cases::<
+        String,
+        String,
+    >() {
+        let output = drive_replacement(&modeled.input).await;
+        modeled.check(output);
+    }
+}
+
+async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementOutput<String> {
+    let start = &c.start;
+    let before = &c.before.current;
+    let execution = serde_json::to_value(&before.snapshot.execution).unwrap();
+    let fixture = Fixture::new_with_parent_state(&execution, !start.busy).await;
     let node = &fixture.node;
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
     let access = fixture.user_access();
@@ -42,8 +55,8 @@ pub(super) async fn run(case: &Value) {
         assignment_root_request_doc_id: "{}"
     }}) {{_docID}}}}"#,
                 escape_graphql_string(&fixture.goal.doc_id),
-                before["active_seconds"],
-                before["usage_baseline"],
+                before.active_seconds,
+                before.usage_baseline,
                 escape_graphql_string(old_root)
             ),
         )
@@ -57,7 +70,7 @@ pub(super) async fn run(case: &Value) {
         queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:00Z", ended_at: "2026-01-01T00:00:01Z",
         priority: 0, queue_depth_at_enqueue: 0, controller_generation: 1, backend_config_fingerprint: "contract",
         prompt_tokens: {}, completion_tokens: 0
-    }}) {{_docID}}}}"#, escape_graphql_string(old_root), escape_graphql_string(fixture.agent.did()), c["session_usage"])).await.unwrap();
+    }}) {{_docID}}}}"#, escape_graphql_string(old_root), escape_graphql_string(fixture.agent.did()), c.session_usage)).await.unwrap();
     let old_claim = deterministic_goal_creation_key(identity.did(), SESSION);
     agent_access.write("test.replacement_original_claim", &format!(r#"mutation {{create_GoalCreationClaim(input: {{
         creation_key: "{}", goal_id: "{}", node_did: "{owner}", session_id: "{SESSION}",
@@ -67,7 +80,7 @@ pub(super) async fn run(case: &Value) {
         escape_graphql_string(&session.doc_id), escape_graphql_string(&session.session.agent_did))).await.unwrap();
     let original = fixture.current_goal().await;
     let mut historical_doc = None;
-    if !c["before"]["retained"].as_array().unwrap().is_empty() {
+    if !c.before.retained.is_empty() {
         let row = access
             .execute(&format!(
                 r#"{{Goal(docID: "{}") {{{GOAL_FIELDS}}}}}"#,
@@ -96,7 +109,7 @@ pub(super) async fn run(case: &Value) {
     }
     let command_id = "replacement-command";
     let fresh_identity = replacement_goal_identity(identity.did(), SESSION, command_id);
-    if !start["claim"].is_null() {
+    if start.claim.is_some() {
         agent_access
             .write(
                 "test.replacement_conflicting_claim",
@@ -127,7 +140,7 @@ pub(super) async fn run(case: &Value) {
         fixture.user.did(),
         &fixture.parent.agent_did,
         SESSION,
-        start["objective"].as_str().unwrap(),
+        &start.objective,
         "interactive",
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::client(fixture.user.did()),
@@ -143,14 +156,14 @@ pub(super) async fn run(case: &Value) {
     )
     .await
     .unwrap();
-    initial.input.goal_assignment = start["first_goal"].as_str().map(|goal| {
+    initial.input.goal_assignment = start.first_goal.as_deref().map(|goal| {
         gents_protocol::request_input::GoalAssignmentInput {
             goal_id: match goal {
                 "new-assignment" => fresh_identity.goal_id.clone(),
                 "old-assignment" => original.goal_id.clone(),
                 other => other.to_owned(),
             },
-            root_request_doc_id: start["first_root"].as_str().map(|root| {
+            root_request_doc_id: start.first_root.as_deref().map(|root| {
                 if root == "old-first-request" {
                     old_root.clone()
                 } else {
@@ -166,11 +179,14 @@ pub(super) async fn run(case: &Value) {
     )
     .await
     .unwrap();
-    if start["first_request_valid"] == false {
+    if !start.first_request_valid {
         initial.admission.signature[0] ^= 1;
     }
-    let wrong_session = if start["expected_session_document"] != "session-document" {
-        assert_eq!(start["expected_session_document"], "stale-session");
+    let wrong_session = if start.expected_session_document.as_deref() != Some("session-document") {
+        assert_eq!(
+            start.expected_session_document.as_deref(),
+            Some("stale-session")
+        );
         let alternate = access
             .transact_write("test.replacement.alternate_session", |txn| {
                 let identity = identity.as_ref();
@@ -236,33 +252,27 @@ pub(super) async fn run(case: &Value) {
         ),
         issued_at: (now - chrono::Duration::seconds(20)).to_rfc3339(),
         expires_at: (now
-            + chrono::Duration::seconds(
-                if start["now"].as_i64().unwrap() >= start["expires_at"].as_i64().unwrap() {
-                    -10
-                } else {
-                    300
-                },
-            ))
+            + chrono::Duration::seconds(if start.now >= start.expires_at {
+                -10
+            } else {
+                300
+            }))
         .to_rfc3339(),
         expected: Some(GoalRevision {
-            document: if c["expected_revision"]["document"]
-                == before["snapshot"]["revision"]["document"]
-            {
+            document: if c.expected_revision.document == before.snapshot.revision.document {
                 original.doc_id.clone()
             } else {
                 "foreign-document".into()
             },
-            composite: if c["expected_revision"]["composite"]
-                == before["snapshot"]["revision"]["composite"]
-            {
+            composite: if c.expected_revision.composite == before.snapshot.revision.composite {
                 current.cid
             } else {
                 "stale-revision".into()
             },
         }),
         operation: GoalOperation::Create {
-            objective: start["objective"].as_str().unwrap().into(),
-            token_budget: start["budget"].as_i64(),
+            objective: start.objective.clone(),
+            token_budget: start.budget,
         },
         initial_request: Some(Box::new(initial)),
         native_evidence: None,
@@ -291,14 +301,12 @@ pub(super) async fn run(case: &Value) {
         .sign(&command.signing_payload().unwrap())
         .await
         .unwrap();
-    if start["signature_valid"] == false {
+    if !start.signature_valid {
         command.signature[0] ^= 1;
     }
-    let accepted = !c["expected"].is_null();
     if let Some(alternate) = &wrong_session {
-        assert!(!accepted, "{}", case["name"]);
-        assert_eq!(start["signature_valid"], true);
-        assert_eq!(start["first_request_valid"], true);
+        assert!(start.signature_valid);
+        assert!(start.first_request_valid);
         let initial = command.initial_request.as_deref().unwrap();
         assert_eq!(
             initial.session_doc_id.as_deref(),
@@ -370,13 +378,9 @@ pub(super) async fn run(case: &Value) {
         assert!(
             receipt(&agent_access, &doc_id).await.is_none(),
             "{}",
-            case["name"]
+            c.name
         );
-        assert!(
-            receipt(&access, &doc_id).await.is_none(),
-            "{}",
-            case["name"]
-        );
+        assert!(receipt(&access, &doc_id).await.is_none(), "{}", c.name);
         assert_eq!(agent_access.execute("{ GoalCreationClaim { _docID creation_key goal_id } AgentRequest { _docID request_id } }").await.unwrap(), before_effects);
         assert_eq!(
             serde_json::to_value(fixture.current_goal().await).unwrap(),
@@ -398,20 +402,20 @@ pub(super) async fn run(case: &Value) {
         assert_eq!(after.doc_id, session.doc_id);
         assert_eq!(after.session, session.session);
         node.shutdown().await.expect("node shutdown");
-        return;
+        return ReplacementOutput { expected: None };
     }
     let doc_id = persist_command(&access, &command).await;
-    if start["commit"] == true {
+    let applied = if start.commit {
         process_command(node, &identity, &doc_id, fixture.agent.as_ref())
             .await
             .unwrap();
         let result = receipt(&access, &doc_id).await;
-        if start["first_request_valid"] == false || start["signature_valid"] == false {
-            assert!(!accepted, "{}", case["name"]);
-            assert!(result.is_none(), "{}", case["name"]);
+        if !start.first_request_valid || !start.signature_valid {
+            assert!(result.is_none(), "{}", c.name);
+            false
         } else {
-            let result = result
-                .unwrap_or_else(|| panic!("{}: expected signed control receipt", case["name"]));
+            let result =
+                result.unwrap_or_else(|| panic!("{}: expected signed control receipt", c.name));
             result.validate_for(&command).unwrap();
             assert!(identity
                 .verify(
@@ -421,13 +425,7 @@ pub(super) async fn run(case: &Value) {
                 )
                 .await
                 .unwrap());
-            assert_eq!(
-                matches!(result.outcome, GoalControlOutcome::Applied { .. }),
-                accepted,
-                "{}: {:?}",
-                case["name"],
-                result.outcome
-            );
+            matches!(result.outcome, GoalControlOutcome::Applied { .. })
         }
     } else {
         let txn = ConfigApplyTxn::begin_local_with_signer(
@@ -447,7 +445,8 @@ pub(super) async fn run(case: &Value) {
             .unwrap();
         txn.discard().await.unwrap();
         assert!(receipt(&access, &doc_id).await.is_none());
-    }
+        false
+    };
     let after = fixture.current_goal().await;
     let history_response = agent_access.execute(&format!(
         r#"{{ Goal(filter: {{node_did: {{_eq: "{}"}}, goal_id: {{_eq: "{}"}}}}, showDeleted: true, order: [{{created_at: ASC}}, {{goal_id: ASC}}]) {{{GOAL_FIELDS}}} }}"#,
@@ -472,7 +471,7 @@ pub(super) async fn run(case: &Value) {
             .unwrap();
         panic!(
             "{}: retained assignment {} is absent from its ID lookup: {diagnostic}",
-            case["name"], original.goal_id
+            c.name, original.goal_id
         );
     }
     let history = history.unwrap();
@@ -480,7 +479,7 @@ pub(super) async fn run(case: &Value) {
         serde_json::to_value(&history).unwrap(),
         serde_json::to_value(&original).unwrap(),
         "{} prior accounting/history",
-        case["name"]
+        c.name
     );
     let claims_after = access
         .execute("{GoalCreationClaim {_docID creation_key goal_id objective token_budget}}")
@@ -495,7 +494,7 @@ pub(super) async fn run(case: &Value) {
             .unwrap()
             .contains(original_claim));
     }
-    if accepted {
+    let expected = if applied {
         let deleted = access
             .execute(&format!(
                 r#"{{ Goal(docID: "{}", showDeleted: true) {{ _version {{ cid }} }} }}"#,
@@ -539,29 +538,8 @@ pub(super) async fn run(case: &Value) {
             db::block::verify::verified_signature_signer_did(&block, &signature).unwrap(),
             fixture.user.did()
         );
-        let expected = &c["expected"]["current"];
-        let fields = &expected["snapshot"]["execution"];
         assert_eq!(after.goal_id, fresh_identity.goal_id);
         assert_ne!(after.doc_id, original.doc_id);
-        assert_eq!(after.status, fields["status"].as_str().unwrap());
-        assert_eq!(
-            after.objective,
-            expected["snapshot"]["objective"].as_str().unwrap()
-        );
-        assert_eq!(after.tokens_used, fields["tokens_used"].as_i64());
-        assert_eq!(after.token_budget, fields["token_budget"].as_i64());
-        assert_eq!(
-            after.token_usage_baseline,
-            expected["usage_baseline"].as_i64()
-        );
-        assert_eq!(
-            after.active_time_seconds,
-            expected["active_seconds"].as_i64()
-        );
-        assert_eq!(
-            after.continuation_sequence(),
-            fields["sequence"].as_i64().unwrap()
-        );
         let requests = access
             .execute("{AgentRequest(filter: {request_id: {_eq: \"replacement-first\"}}) {_docID}}")
             .await
@@ -584,12 +562,26 @@ pub(super) async fn run(case: &Value) {
                 .len()
                 + 1
         );
+        let count = |value: Option<i64>| {
+            u64::try_from(value.expect("a replacement records its counters")).unwrap()
+        };
+        Some(ReplacedWire {
+            status: after.status.clone(),
+            objective: after.objective.clone(),
+            tokens_used: count(after.tokens_used),
+            token_budget: after
+                .token_budget
+                .map(|budget| u64::try_from(budget).unwrap()),
+            sequence: u64::try_from(after.continuation_sequence()).unwrap(),
+            usage_baseline: count(after.token_usage_baseline),
+            active_seconds: count(after.active_time_seconds),
+        })
     } else {
         assert_eq!(
-            serde_json::to_value(after).unwrap(),
+            serde_json::to_value(&after).unwrap(),
             serde_json::to_value(&original).unwrap(),
             "{} refusal/rollback",
-            case["name"]
+            c.name
         );
         assert_eq!(claims_after, claims_before);
         let requests = access
@@ -602,9 +594,10 @@ pub(super) async fn run(case: &Value) {
                 .unwrap()
                 .is_empty(),
             "{} must not publish a replacement request",
-            case["name"]
+            c.name
         );
-    }
+        None
+    };
     if let Some(id) = historical_doc {
         let rows = access
             .execute(&format!(
@@ -616,7 +609,7 @@ pub(super) async fn run(case: &Value) {
         assert_eq!(rows["data"]["Goal"][0]["status"], "complete");
         assert_eq!(
             rows["data"]["Goal"][0]["tokens_used"],
-            execution["tokens_used"]
+            before.snapshot.execution.tokens_used
         );
     }
     let session_after = access
@@ -635,6 +628,7 @@ pub(super) async fn run(case: &Value) {
         .unwrap();
     assert_eq!(session.session, session_after.session);
     node.shutdown().await.expect("node shutdown");
+    ReplacementOutput { expected }
 }
 
 #[test]
