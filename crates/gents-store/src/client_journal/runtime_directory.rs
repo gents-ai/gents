@@ -183,9 +183,9 @@ impl RuntimeDirectory {
             )?;
             file.as_file().sync_all()?;
             file.persist(&writer.path).map_err(|error| error.error)?;
+            current.send_replace(records);
             #[cfg(unix)]
             File::open(parent)?.sync_all()?;
-            current.send_replace(records);
             Ok::<_, DirectoryError>(true)
         })
         .await?

@@ -295,6 +295,11 @@ pub(crate) async fn init_home_with_core_packs(
         None
     };
 
+    let client_identity = if fresh_store {
+        gents_service::home_state::client_identity_for_new_node().await?
+    } else {
+        gents_service::home_state::client_identity_for(&home_dir).await?
+    };
     if fresh_store {
         reserve_fresh_bootstrap(&home_dir).await?;
     }
@@ -340,11 +345,6 @@ pub(crate) async fn init_home_with_core_packs(
         &mut stored,
     )
     .await?;
-    let client_identity = if fresh_store {
-        gents_service::home_state::client_identity_for_new_node().await?
-    } else {
-        gents_service::home_state::client_identity_for(&home_dir).await?
-    };
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
             .initialize(

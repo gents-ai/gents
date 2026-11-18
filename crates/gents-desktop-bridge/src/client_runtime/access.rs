@@ -152,6 +152,7 @@ impl ClientRuntime {
     }
 
     pub async fn rename_runtime(&self, node_did: &str, label: &str) -> Result<()> {
+        let _access = self.access_requests.lock().await;
         let mut connection = self
             .directory
             .records()
@@ -165,6 +166,7 @@ impl ClientRuntime {
     }
 
     pub async fn forget_runtime(&self, node_did: &str) -> Result<bool> {
+        let _access = self.access_requests.lock().await;
         Ok(self.directory.remove(node_did).await?)
     }
 }
