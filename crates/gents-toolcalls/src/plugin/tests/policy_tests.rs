@@ -80,7 +80,7 @@ impl PolicyFixture {
         crate::test_support::grant_modeled_direct_sets(
             &self.db.node,
             self.db.node_identity.did(),
-            "default-agent",
+            gents_store::identity::Recipient::DefaultAgent,
             &self.agent_did,
         )
         .await;
@@ -296,22 +296,22 @@ async fn engineer_grant_of_admin_class_permission_is_refused_even_when_held() {
 async fn engineer_revokes_held_permission_and_receipt_states_access_honestly() {
     let fixture = PolicyFixture::new("policy-revoke-held").await;
     let sibling = fixture.install_sibling("Reviewer").await;
-    // The policy delegate set holds get-collection.
-    fixture.grant_engineer_sets(&[]).await;
+    fixture
+        .grant_engineer_sets(&[NodePermission::DocumentDelete])
+        .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
-    run(tool, grant_node(&sibling, "get-collection"))
+    run(tool, grant_node(&sibling, "delete-document"))
         .await
         .expect("grant succeeds before the revoke");
 
-    let receipt = run(tool, revoke_node(&sibling, "get-collection"))
+    let receipt = run(tool, revoke_node(&sibling, "delete-document"))
         .await
         .expect("a held permission under delete-nac-relation is revoked");
     assert_eq!(
         receipt["answer"].as_str().unwrap(),
-        format!("Revoked node permission get-collection from {sibling}.")
+        format!("Revoked node permission delete-document from {sibling}.")
     );
-    // The sibling's baseline does not include get-collection, so no path remains.
     assert_eq!(
         receipt["effective_access"].as_str().unwrap(),
         "The subject no longer holds it through any path."
@@ -327,7 +327,7 @@ async fn engineer_revokes_held_permission_and_receipt_states_access_honestly() {
 
     let view = run(tool, policy_get(&sibling)).await.unwrap();
     assert!(
-        !permission_names(&view).contains(&"get-collection".to_owned()),
+        !permission_names(&view).contains(&"delete-document".to_owned()),
         "{view}"
     );
 }
@@ -391,14 +391,14 @@ async fn explain_reports_missing_add_nac_relation_when_permission_is_held() {
     let fixture = PolicyFixture::new("policy-explain-no-operation").await;
     let sibling = fixture.install_sibling("Reviewer").await;
     fixture
-        .grant_engineer(&[NodePermission::NacStatus, NodePermission::CollectionGet])
+        .grant_engineer(&[NodePermission::NacStatus, NodePermission::DocumentDelete])
         .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
 
     let explained = run(
         tool,
-        json!({"argv": ["policy", "explain", "--subject", sibling, "--permission", "get-collection"]}),
+        json!({"argv": ["policy", "explain", "--subject", sibling, "--permission", "delete-document"]}),
     )
     .await
     .unwrap();

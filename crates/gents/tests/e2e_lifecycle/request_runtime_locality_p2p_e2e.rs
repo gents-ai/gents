@@ -290,12 +290,12 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
     fixture
         .peer
         .node
-        .p2p()
-        .unwrap()
-        .sync_documents(
+        .sync_documents_as(
+            &defra_core::RequestContext::default().with_identity(Some(
+                fixture.peer.node.node_identity_did().unwrap().to_owned(),
+            )),
             "PeerRegistry",
-            vec![public_doc.clone()],
-            Some(Duration::from_secs(5)),
+            std::slice::from_ref(&public_doc),
         )
         .await
         .unwrap();

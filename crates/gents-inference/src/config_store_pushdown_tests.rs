@@ -134,21 +134,20 @@ async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed() -
             &identity::Did::new(runtime.did())?,
         )
         .await?;
+    assert_eq!(observe(runtime.did().to_owned()).await?, Some(Some(1)));
+    admin
+        .grant_node_permission(
+            &identity::Did::new(user.did())?,
+            NodePermission::DocumentDelete,
+        )
+        .await?;
+    user_access
+        .transact_write("test.runtime_hop_cap.remove_node", |txn| {
+            Box::pin(async move { txn.delete_configuration_document("Node", node_doc).await })
+        })
+        .await?;
     assert_eq!(observe(runtime.did().to_owned()).await?, None);
     Ok(())
-}
-
-fn recipient_sets(name: &str) -> Vec<GrantSet> {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .identity_grant_recipient_cases
-        .iter()
-        .find(|case| case.recipient == name)
-        .unwrap_or_else(|| panic!("Lean recipient {name:?}"));
-    case.direct
-        .iter()
-        .chain(&case.projected)
-        .map(|set| set_named(set))
-        .collect()
 }
 
 pub(crate) async fn agent_step(

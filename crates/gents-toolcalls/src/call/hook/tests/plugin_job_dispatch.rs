@@ -78,7 +78,6 @@ impl Default for Options {
 
 struct Step0 {
     db: gents_inference::test_support::TestDb,
-    user: gents_store::identity::KeyIdentity,
     owner: gents_store::config_client::ConfigAccess,
     caller: Arc<dyn NodeIdentity>,
     home: tempfile::TempDir,
@@ -370,7 +369,6 @@ async fn step0(output: Value, options: Options) -> Step0 {
         .await;
     Step0 {
         db,
-        user,
         owner,
         caller,
         home,
@@ -1642,24 +1640,24 @@ impl Step0 {
                     .unwrap();
             }
             NodeHopCap::Unreadable => {
+                let node = self.owner.execute("{ Node { _docID } }").await.unwrap();
+                let doc = node["data"]["Node"][0]["_docID"].as_str().unwrap();
                 gents_store::config_client::ConfigAccess::local_as(
                     self.node.clone(),
                     node_did.parse().unwrap(),
                 )
                 .grant_node_permission(
-                    &self.user.did().parse().unwrap(),
-                    gents_store::config_client::NodePermission::DacRelationDelete,
+                    &self.owner.actor_did().unwrap().parse().unwrap(),
+                    gents_store::config_client::NodePermission::DocumentDelete,
                 )
                 .await
                 .unwrap();
-                let node = self.owner.execute("{ Node { _docID } }").await.unwrap();
                 self.owner
-                    .delete_actor_relationship(
-                        "Node",
-                        node["data"]["Node"][0]["_docID"].as_str().unwrap(),
-                        "runtime_reader",
-                        &node_did.parse().unwrap(),
-                    )
+                    .transact_write("test.plugin_job_hop_cap.remove_node", |txn| {
+                        Box::pin(
+                            async move { txn.delete_configuration_document("Node", doc).await },
+                        )
+                    })
                     .await
                     .unwrap();
             }

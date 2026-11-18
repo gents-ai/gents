@@ -859,19 +859,16 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
         "claim must capture the wake notification cutoff"
     );
     let request = lifecycle.request();
-    let runtime_access = ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(fixture.runtime.did()).unwrap(),
-    );
-    let visible = runtime_access.execute(&query).await.unwrap();
+    let reader = gents_store::test_support::unrelated_document_reader(&node).await;
+    let visible = reader.execute(&query).await.unwrap();
     assert!(
         visible["data"]["AgentRequest"]
             .as_array()
             .unwrap()
             .is_empty(),
-        "the runtime must not inherit the User's session read authority"
+        "an unrelated reader must not inherit the User's session read authority"
     );
-    assert!(load(&runtime_access, request, cutoff).await.is_err());
+    assert!(load(&reader, request, cutoff).await.is_err());
     let actual = load(&agent_access, request, cutoff).await.unwrap();
     assert_eq!(actual.len(), 1);
     assert_eq!(

@@ -1312,7 +1312,7 @@ async fn create_request(
 }
 
 #[tokio::test]
-async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
+async fn group_marker_is_read_by_selected_held_agent_without_unrelated_reader_visibility() {
     use gents_store::identity::NodeIdentity;
     let (db, user, client_access, agent) = signed_materializer_agent("group-marker-agent").await;
     let binding = gents_store::identity::provision_agent_identity_authorized(
@@ -1413,7 +1413,8 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     .unwrap();
     let own = access.execute(&query).await.unwrap();
     assert_eq!(own["data"]["AgentRequest"].as_array().unwrap().len(), 1);
-    let node_view = gents_store::config_client::ConfigAccess::local(db.node.clone())
+    let node_view = gents_store::test_support::unrelated_document_reader(&db.node)
+        .await
         .execute(&query)
         .await
         .unwrap();

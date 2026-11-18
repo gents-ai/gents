@@ -42,7 +42,11 @@ def GrantSet.name : GrantSet → String
 turn reads its configuration and session documents, writes its requests,
 outputs and tool calls, and links the documents it creates and can withdraw
 those links (`agent_revokes_what_it_grants`), all as its own signer, so no tool
-selection can be the removable source of these.
+selection can be the removable source of these. It includes `get-collection`,
+which the pinned DefraDB requires before any document write (defradb.rs
+#2744), so removing the schema or datastore tools no longer withdraws
+`get-collection` from a live Agent (`get_collection_survives_tool_removal`);
+those tools still own every schema change permission.
 Session-history and goal tool sources therefore add nothing beyond the
 baseline: removing those tools withdraws the tool surface, and document ACP
 still decides each document. Goal creation adds only `delete-document`, so a
@@ -67,7 +71,10 @@ permission is not admin-class and confers no change authority.
 Decision: `policyDelegate` holds the read-only `get-collection` because native
 document relationship changes outside a transaction require it (external
 premise: the pinned DefraDB revision, defradb.rs #2770), and the Engineer's
-policy tool grants and revokes the document relations it manages. It is the
+policy tool grants and revokes the document relations it manages. Every Agent
+now holds it through the baseline as well; the delegate keeps its own so the
+Engineer may still hand it on, which the baseline does not allow
+(`baseline_agent_cannot_delegate`). It is the
 read half of `schemaPermissions` only and confers no schema change authority:
 the set holds none of `schemaChangePermissions`
 (`policy_delegate_holds_no_schema_change`), so the held-bounded rule refuses
@@ -95,10 +102,15 @@ human owner `gents init` creates, whose one client key desktop, CLI and shims
 share, or an evaluation trial's evaluator, which creates and owns its
 throwaway trial node. An enrolled User is admitted by verified enrollment. The
 default Agent is the Agent init publishes, or the subject Agent a trial selects
-as its node's default. -/
+as its node's default. The authoring operator is the operator's client an
+eval authoring scratch home admits so it can install and read back a drafted
+definition pack through the home's client-signed endpoint, as any User write
+does; it neither creates nor owns that home, so it is not an init User, and it
+is admitted by the authoring owner rather than by enrollment. -/
 inductive Recipient where
   | initUser
   | enrolledUser
+  | authoringOperator
   | defaultAgent
   | agent
   deriving BEq, DecidableEq, Repr
@@ -106,15 +118,18 @@ inductive Recipient where
 def Recipient.name : Recipient → String
   | .initUser => "init-user"
   | .enrolledUser => "enrolled-user"
+  | .authoringOperator => "authoring-operator"
   | .defaultAgent => "default-agent"
   | .agent => "agent"
 
 /-- Direct grants, issued once by the admission that creates the recipient:
 init (or trial installation) for the init User and the default Agent,
-enrollment for an enrolled User. They persist until an explicit revocation. -/
+enrollment for an enrolled User, eval authoring for its scratch home's
+operator. They persist until an explicit revocation. -/
 def directSets : Recipient → List GrantSet
   | .initUser => [.householdOwner]
   | .enrolledUser => [.operatorUser]
+  | .authoringOperator => [.operatorUser]
   | .defaultAgent => [.policyDelegate]
   | .agent => []
 
@@ -212,17 +227,25 @@ theorem missing_operation_admits_nothing (r : Holder) (c : Change)
 theorem recipients_receive_expected_sets :
     receives .initUser = [.householdOwner] ∧
     receives .enrolledUser = [.operatorUser] ∧
+    receives .authoringOperator = [.operatorUser] ∧
     receives .defaultAgent = [.policyDelegate, .agentBaseline] ∧
     receives .agent = [.agentBaseline] := by decide
 
 theorem only_init_user_is_admin :
-    [Recipient.initUser, .enrolledUser, .defaultAgent, .agent].map
-      (fun r => (holderOf (receives r)).admin) = [true, false, false, false] := by decide
+    [Recipient.initUser, .enrolledUser, .authoringOperator, .defaultAgent, .agent].map
+      (fun r => (holderOf (receives r)).admin) = [true, false, false, false, false] := by decide
+
+/-- The authoring operator holds exactly what an enrolled User holds, so the
+scratch home grants it no authority an enrolled operator would lack. -/
+theorem authoring_operator_holds_enrolled_user_authority :
+    holderOf (receives .authoringOperator) = holderOf (receives .enrolledUser) := by decide
 
 /-- The schema change permissions. `get-collection` is the read half of
 `schemaPermissions` and is deliberately not among them: it reads collection
-definitions and, natively, admits relationship changes outside a transaction,
-but changes no schema. -/
+definitions and, natively, admits document writes and relationship changes
+outside a transaction, but changes no schema. Every live Agent holds it
+through the baseline; none holds a schema change permission through it
+(`baseline_holds_no_schema_change`). -/
 def schemaChangePermissions : List String :=
   ["patch-collection", "truncate-collection", "set-migration", "add-view"]
 
@@ -321,6 +344,22 @@ theorem actorless_reconcile_cannot_mint :
     projectBaseline actorless ⟨true, true, true⟩ GrantSet.agentBaseline.permissions =
       some GrantSet.agentBaseline.permissions := by decide
 
+/-- The baseline as stores created before `get-collection` joined it hold it. -/
+def baselineBeforeGetCollection : List String :=
+  GrantSet.agentBaseline.permissions.filter (· != "get-collection")
+
+/-- A store created under the earlier baseline cannot be opened: the actorless
+startup reconcile finds a live Agent's `get-collection` missing and cannot add
+it (`actorless_reconcile_cannot_mint`).
+
+Decision (maintainer, 2026-11-13, gents#3747): such a store is not carried
+forward. Widening the baseline changes the store's lineage marker
+(`gents-store` `backend_protection::MARKER`), so a home created before it is
+reported as made by an older version and left untouched
+(`InstallRepair.StoreKind.unknownLineage`); it must be recreated. -/
+theorem widened_baseline_blocks_actorless_reconcile :
+    projectBaseline actorless ⟨true, true, true⟩ baselineBeforeGetCollection = none := by decide
+
 theorem enrolled_user_publishes_and_disables_agent :
     projectBaseline (holderOf (receives .enrolledUser)) ⟨true, true, true⟩ [] =
       some GrantSet.agentBaseline.permissions ∧
@@ -347,6 +386,20 @@ theorem tool_removal_removes_permission (o : AgentObservation) (tools direct : L
   unfold agentEffective
   rw [notDirect, notBaseline, removed]
   simp
+
+/-- What the baseline's `get-collection` weakens: before it, a live Agent held
+`get-collection` only through a schema or datastore tool source or a direct
+grant, so removing those tools withdrew it. Now it survives their removal. -/
+theorem get_collection_survives_tool_removal (o : AgentObservation) (tools direct : List String)
+    (live : o.live = true) :
+    agentEffective o (tools.filter (· != "get-collection")) direct "get-collection" = true := by
+  unfold agentEffective
+  rw [live]
+  simp [GrantSet.permissions, NodeProvisioning.requiredPermissions]
+
+theorem baseline_holds_no_schema_change :
+    schemaChangePermissions.all (fun p => !GrantSet.agentBaseline.permissions.contains p) = true := by
+  decide
 
 theorem baseline_survives_tool_removal (o : AgentObservation) (tools direct : List String)
     (p : String) (live : o.live = true) (base : GrantSet.agentBaseline.permissions.contains p = true) :

@@ -689,7 +689,8 @@ mod tests {
         let other_key = other.client_signing_capability()?;
         let mut public_only = defra_core::signing::get_identity(actor.did()).unwrap();
         public_only.private_key_bytes.clear();
-        defra_core::signing::store_identity(actor.did(), public_only);
+        defra_core::signing::store_identity(actor.did(), public_only)
+            .expect("the signing identity registers");
         assert!(!defra_core::signing::get_identity(actor.did())
             .unwrap()
             .has_local_private_key());

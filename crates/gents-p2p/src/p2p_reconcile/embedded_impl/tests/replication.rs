@@ -305,6 +305,10 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         http_sees
     };
     for receiver_case in &receiver_cases {
+        assert!(
+            receiver_case.input.receiver_hosts_node,
+            "the observed receiver is the receiving node's own key"
+        );
         let observed = match (
             receiver_case.input.sender_granted,
             receiver_case.input.delivered,
@@ -424,18 +428,22 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
         escape_graphql_string(&session)
     );
-    assert!(gents_protocol::graphql::graphql_rows_from_response(
-        &admin_local.execute(&session_query).await?,
-        "AgentSession"
-    )
-    .is_empty());
-    assert!(gents_protocol::graphql::graphql_rows_from_response(
-        &http(admin_address, &outsider)?
-            .execute(&session_query)
-            .await?,
-        "AgentSession"
-    )
-    .is_empty());
+    // The receiving node's own key holds no relation to the private session
+    // and reads it as the hosting key (Lean `Identity.Household.readObserved`).
+    for case in gents_lean_vocab::families::identity_native_read::cases() {
+        assert!(!case.input.document_acp);
+        let response = if case.input.bypass {
+            admin_local.execute(&session_query).await?
+        } else {
+            http(admin_address, &outsider)?
+                .execute(&session_query)
+                .await?
+        };
+        case.check(
+            !gents_protocol::graphql::graphql_rows_from_response(&response, "AgentSession")
+                .is_empty(),
+        );
+    }
 
     let public_mutation = format!(
         r#"mutation {{ create_PeerRegistry(input:{{peer_id:"{}",node_did:"{}",addresses:["{}"]}}) {{_docID}} }}"#,

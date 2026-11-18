@@ -215,7 +215,8 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         session_id: session,
     } = fixture;
     let node = db.node.clone();
-    let node_view = gents_store::config_client::ConfigAccess::local(node.clone())
+    let node_view = gents_store::test_support::unrelated_document_reader(&node)
+        .await
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
             gents_store::graphql::escape_graphql_string(&request_id),

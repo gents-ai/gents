@@ -114,6 +114,8 @@ pub enum IdentityError {
     NodePublicKeyMismatch { did: String },
     #[error("loading Ed25519 node signing identity")]
     LoadNodeSigning(#[source] identity::Error),
+    #[error("registering the signing identity")]
+    SigningIdentityConflict(#[from] defra_core::signing::IdentityConflict),
     #[error("parsing commit signer DID {did}")]
     ParseCommitSignerDid {
         did: String,

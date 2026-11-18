@@ -144,6 +144,15 @@ PACKAGE_FEATURES = {
     "gents-desktop-bridge": "notify/macos_kqueue",
 }
 
+# Tests behind a crate's `vera` feature: package -> libtest name filter for
+# its lib target. The feature brings in a Vera node and changes what other
+# crates see of gents-store, so these run in their own build beside the
+# package's or the archive's, never by enabling it there.
+VERA_TESTS = {
+    "gents-store": "local::document_acp::",
+    "gents-tools": "surface::source_policy::embedded_vera_tests::",
+}
+
 # Packages with no test of their own. The list only shrinks: a listed package
 # that runs a test fails the gate, as does an unlisted one that runs none.
 NO_TESTS = {
@@ -593,13 +602,22 @@ def portable_shards():
     return int(raw)
 
 
+def vera_tests(packages):
+    """The packages whose `vera` tests a job runs, space-separated: none on a
+    pull request, whose runs leave the Vera node's build to the merge queue."""
+    if os.environ.get("GATE_EVENT") == "pull_request":
+        return ""
+    return " ".join(package for package in packages if package in VERA_TESTS)
+
+
 def test_entry(group, job, role, packages, go, **extra):
     """One `test` matrix job: `job` is the group, or `<group>@macos` for a portable
     group's scheduled macOS run."""
     if role == "runtime" and os.environ.get("GATE_RUNTIME_ISOLATED") == "true":
         role = "runtime-isolated"
     return {"job": f"test:{job}", "group": group.name, "role": role, **placement(role),
-            "packages": " ".join(packages), "timeout": group.timeout, "go": go, **extra}
+            "packages": " ".join(packages), "vera": vera_tests(packages), "timeout": group.timeout, "go": go,
+            **extra}
 
 
 def balance(entries):
@@ -692,6 +710,7 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             go = bool(AFTERBURNER & set(archived))
             entry = {"archive": ARCHIVE, "run": single, "packages": " ".join(archived),
                      "timeout": 150 if single else 90, "test_cache": mode, "go": go}
+            vera = vera_tests(archived)
             # The slice that runs in the build job splits into one hash
             # partition per host group: each partition's job builds the
             # archive from its own host's compiler cache and kept target tree
@@ -700,14 +719,15 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             # a hash of its name, so it lands on the same host group, and in
             # the same store, run after run. Without host groups the build
             # takes the role's labels alone and any free portable runner
-            # picks it up.
+            # picks it up. The Vera feature tests run once, in the first job.
             partitions = min(len(groups), tested_crates) if single else 0
             if partitions > 1:
                 archives += [{**entry, **placement("portable", host_group=groups[index - 1]),
+                              "vera": vera if index == 1 else "",
                               "partition": index, "partitions": partitions}
                              for index in range(1, partitions + 1)]
             else:
-                archives.append({**entry, **placement("portable")})
+                archives.append({**entry, **placement("portable"), "vera": vera})
             # Slices alternate between host groups, so one run's slices split across hosts.
             shards = [] if single else [
                 {"archive": ARCHIVE, "index": index, "count": count, "timeout": 90, "go": go,
@@ -928,6 +948,8 @@ def run_lint(selection):
     for package in selection.get("live_e2e_lint", []):
         sh(["cargo", "clippy", "-p", package, "--tests", "--features", "live-e2e", *profile, "--", "-D", "warnings"],
            env={**os.environ, **side_tree_env("live-e2e")})
+    if "gents-cli" in affected and os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
+        sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile])
     if "gents-loop" in affected:
         sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile])
     if "gents-lens-fixture-add-label" in affected:
@@ -1030,6 +1052,9 @@ def run_test(selection, name):
     for package in packages:
         cargo_test(package, ["-p", package, *feature_flags(package)], expect_tests=package not in NO_TESTS,
                    **options)
+    for package in entry.get("vera", "").split():
+        cargo_test(f"{package} (vera)", ["-p", package, "--lib", "--features", "vera"],
+                   **{**options, "harness": [VERA_TESTS[package], *options["harness"]]})
 
 
 def target_arguments(package):
@@ -1086,6 +1111,19 @@ def macos_filterset(packages):
                 selected += " & (" + " | ".join(f"test(~{name})" for name in filters) + ")"
             terms.append(f"({selected})")
     return " | ".join(terms)
+
+
+def run_vera_tests(packages):
+    """The `vera` tests of an archive's packages, built apart from the archive in
+    one `cargo nextest run`: enabling the feature in the archive would build
+    every archived crate against a gents-store with the Vera node."""
+    if not packages:
+        return
+    os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
+    features = ",".join(f"{package}/vera" for package in packages)
+    filterset = " | ".join(f"(binary_id(={package}) & test(~{VERA_TESTS[package]}))" for package in packages)
+    native_tests(f"{' '.join(packages)} --lib (vera)", packages, ["--lib", "--features", features], filterset,
+                 set(packages))
 
 
 def native_tests(label, packages, flags, filterset, expected):
@@ -1343,7 +1381,7 @@ def run_build(selection, name, partition=None):
         entry = next((entry for entry in entries if entry.get("partition") == partition), None)
         if entry is None:
             fail(f"build {name}:{partition} is not selected by this plan")
-    lean = LeanContract.start() if entry.get("run") else None
+    lean = LeanContract.start() if entry.get("run") or entry.get("vera") else None
     try:
         build_and_run(entry, name, lean)
     finally:
@@ -1473,21 +1511,28 @@ def build_and_run(entry, name, lean):
         print(f"::error::{problem}", flush=True)
     results.append((f"check {name} archive", "ok" if not problems else "; ".join(problems),
                     f"{total} tests listed, {ignored} ignored", time.time() - started))
-    if not problems and entry.get("run") and (lean is None or lean.wait()):
-        # The whole archive, on this runner, from this job's own checkout.
-        os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
-        arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci",
-                     *partition_arguments(entry)]
-        if entry.get("partition"):
-            # Names this partition's records apart from its sibling's (test_cache.record_run).
-            os.environ["GATE_SLICE"] = str(entry["partition"])
-        if os.environ.get("RUST_TEST_THREADS"):
-            arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
-        if entry.get("test_cache", "off") == "off":
-            nextest(arguments, label=f"run {name}")
-            return
-        plan = plan_test_cache(entry, archive, source, output, name)
-        run_cached_slice(plan, arguments, f"run {name}")
+    built = lean is None or lean.wait()
+    if not problems and entry.get("run") and built:
+        run_archive(entry, archive, source, output, name)
+    if built:
+        run_vera_tests(entry.get("vera", "").split())
+
+
+def run_archive(entry, archive, source, output, name):
+    """The whole archive, on this runner, from this job's own checkout."""
+    os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
+    arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci",
+                 *partition_arguments(entry)]
+    if entry.get("partition"):
+        # Names this partition's records apart from its sibling's (test_cache.record_run).
+        os.environ["GATE_SLICE"] = str(entry["partition"])
+    if os.environ.get("RUST_TEST_THREADS"):
+        arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
+    if entry.get("test_cache", "off") == "off":
+        nextest(arguments, label=f"run {name}")
+        return
+    plan = plan_test_cache(entry, archive, source, output, name)
+    run_cached_slice(plan, arguments, f"run {name}")
 
 
 def run_shard(selection, name, index=None):

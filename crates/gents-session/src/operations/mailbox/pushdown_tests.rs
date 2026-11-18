@@ -65,6 +65,7 @@ async fn rust_mailbox_dismiss_owner_resolves_an_open_item_once() {
     ] {
         for permission in [
             gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::CollectionGet,
             gents_store::config_client::NodePermission::DocumentUpdate,
             gents_store::config_client::NodePermission::DacRelationAdd,
         ] {

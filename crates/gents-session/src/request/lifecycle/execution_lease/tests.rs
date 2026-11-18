@@ -1612,8 +1612,8 @@ async fn backend_park_releases_local_lease_only_after_durable_transition() {
 }
 
 #[tokio::test]
-async fn backend_wait_is_invisible_to_the_node_identity() {
-    let (node, _db, identity, _agent, access, mut lifecycle) = parked_fixture().await;
+async fn backend_wait_is_invisible_to_an_unrelated_reader() {
+    let (node, _db, _identity, _agent, access, mut lifecycle) = parked_fixture().await;
     let doc_id = lifecycle.request().doc_id.clone();
     assert!(lifecycle.park_for_backend().await.unwrap());
     let query = format!(
@@ -1628,11 +1628,11 @@ async fn backend_wait_is_invisible_to_the_node_identity() {
             .len(),
         1
     );
-    let as_node =
-        gents_store::config_client::ConfigAccess::local_as(node, identity.did().parse().unwrap())
-            .execute(&query)
-            .await
-            .unwrap();
+    let as_node = gents_store::test_support::unrelated_document_reader(&node)
+        .await
+        .execute(&query)
+        .await
+        .unwrap();
     assert!(as_node["data"]["AgentRequestBackendWait"]
         .as_array()
         .is_none_or(Vec::is_empty));

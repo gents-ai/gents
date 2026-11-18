@@ -354,27 +354,22 @@ mod selection_tests {
             "auth":{"kind":"credential", "id":"id", "version":"approved"}
         }))
         .unwrap();
-        let cases = gents_lean_vocab::lean_identity_household_cases();
-        let modeled = cases
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap()
-            ._backend_credential_cases
-            .iter()
-            .find(|case| case["name"] == "rotated-credential")
-            .unwrap()["may_use"]
-            .as_bool()
-            .unwrap();
-        assert_eq!(
-            InferenceBackendMetadata::from_backend(
-                backend,
-                BackendAuthSelection::Credential {
-                    id: "id".into(),
-                    version: "other".into()
-                },
-            )
-            .is_ok(),
-            modeled
+        gents_lean_vocab::families::household_backend_credential_reference_version::replay(
+            |case| {
+                let version = if case.credential_version_matches {
+                    "approved"
+                } else {
+                    "other"
+                };
+                InferenceBackendMetadata::from_backend(
+                    backend.clone(),
+                    BackendAuthSelection::Credential {
+                        id: "id".into(),
+                        version: version.into(),
+                    },
+                )
+                .is_ok()
+            },
         );
     }
 }

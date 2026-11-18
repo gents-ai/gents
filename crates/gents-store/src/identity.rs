@@ -35,7 +35,7 @@ pub use enrollment_grant::{
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
-pub use grant_sets::{GrantSet, GrantSetError};
+pub use grant_sets::{GrantSet, GrantSetError, Recipient, RecipientGrants};
 pub use macos::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
@@ -163,8 +163,19 @@ impl ManagedAgentSigner {
         self.runtime_proof.as_ref()
     }
 
-    pub fn native(&self) -> &defra_node::EmbeddedSigner {
-        &self.signer
+    /// `request`, signed with this Agent's key and decided by document ACP
+    /// even where node access control grants the Agent `bypass-dac`.
+    pub fn attach(&self, request: query::QueryRequest) -> query::QueryRequest {
+        Self::deny_dac_bypass(self.signer.attach(request))
+    }
+
+    /// `request` made as a managed Agent, decided by document ACP even where
+    /// node access control grants the Agent `bypass-dac`: managed-Agent
+    /// signing never resolves the bypass (Lean
+    /// `Configuration.toolSessionReadAllowed`).
+    pub fn deny_dac_bypass(mut request: query::QueryRequest) -> query::QueryRequest {
+        request.context = request.context.with_dac_bypass_denied();
+        request
     }
 }
 
@@ -275,7 +286,7 @@ pub fn register_ed25519_signing_identity(
             remote_signer: None,
             signing_authorization: None,
         },
-    );
+    )?;
     Ok(())
 }
 

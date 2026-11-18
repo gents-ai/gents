@@ -483,6 +483,222 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     );
 }
 
+struct PublishedWake {
+    db: gents_session::request::lifecycle::test_support::TestDb,
+    session_id: String,
+    wake_doc_id: String,
+}
+
+async fn published_wake(name: &str) -> PublishedWake {
+    let db = test_db(name).await;
+    let session_id = format!("{name}-session");
+    let mut fixture = canonical_background_fixture(&db, &session_id).await;
+    let parent = fixture.parent.clone();
+    let tool = fixture.prepare_notification(name).await.unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let enqueued = fixture
+        .publish_prepared_notification(
+            name,
+            &format!("background-completion-notification:{name}:tool"),
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap();
+    PublishedWake {
+        db,
+        session_id,
+        wake_doc_id: enqueued.request.expect("non-Goal wake").doc_id,
+    }
+}
+
+impl PublishedWake {
+    async fn claim_and_begin(&self) -> gents_session::request::lifecycle::RequestLifecycle {
+        let node = self.db.node.clone();
+        let request = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+            &self.db.agent_access,
+            &self.wake_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut lifecycle =
+            gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                node.clone(),
+                request,
+                60,
+                ExecutionOrigin::Scheduled,
+                "backend-test",
+            );
+        lifecycle
+            .bind_managed_agent(self.db.agent_identity.as_ref())
+            .unwrap();
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            gents_session::request::lifecycle::ClaimOutcome::Claimed
+        );
+        let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
+            node,
+            self.db.agent_identity.as_ref(),
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        lifecycle
+    }
+
+    async fn restart(&self) {
+        gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
+            &self.db.node,
+            self.db.node_did(),
+            std::slice::from_ref(&self.db.agent_identity),
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn observe(
+        &self,
+        session_key: &str,
+    ) -> (String, u64, u64, Option<String>, Option<String>) {
+        let response = self
+            .db
+            .agent_access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state background_completion_notification_keys_json }} }}"#,
+                escape_graphql_string(&self.wake_doc_id),
+            ))
+            .await
+            .unwrap();
+        let row = &response["data"]["AgentRequest"][0];
+        let attempted = row["background_completion_notification_keys_json"]
+            .as_str()
+            .map(|encoded| {
+                gents_session::request::lifecycle::notification_receipt_keys(encoded)
+                    .unwrap()
+                    .len() as u64
+            })
+            .unwrap_or_default();
+        let diagnostics =
+            gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
+                &self.db.agent_access,
+                self.db.node_did(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(diagnostics.epochs.len(), 1);
+        let epoch = &diagnostics.epochs[0];
+        let wake = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+            &self.db.agent_access,
+            &self.wake_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let queue = wake.input.queue.expect("wake queue");
+        assert_eq!(queue.key.as_deref(), Some(epoch.coalescing_key.as_str()));
+        (
+            row["lifecycle_state"].as_str().unwrap().to_owned(),
+            attempted,
+            epoch.acknowledged_notification_keys.len() as u64,
+            serde_json::to_value(queue.source)
+                .unwrap()
+                .as_str()
+                .map(str::to_owned),
+            queue
+                .key
+                .as_deref()
+                .and_then(|key| key.strip_suffix(self.session_id.as_str()))
+                .map(|prefix| format!("{prefix}{session_key}")),
+        )
+    }
+}
+
+#[tokio::test]
+async fn claimed_wake_terminal_state_acknowledges_its_claim_snapshot() {
+    for case in gents_lean_vocab::families::contracts_r6_acknowledgement::cases() {
+        let input = &case.input;
+        let outcome = match input.terminal_state.as_str() {
+            "completed" => RequestTerminalOutcome::Completed,
+            "failed" => RequestTerminalOutcome::Failed,
+            other => panic!("{}: no terminal outcome for {other}", input.name),
+        };
+        let wake = published_wake(&input.name).await;
+        let mut lifecycle = wake.claim_and_begin().await;
+        lifecycle
+            .terminalize_owned(
+                outcome,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                Some(input.name.as_str()),
+            )
+            .await
+            .unwrap();
+        let (terminal_state, attempted, acknowledged, queue_source, queue_key) =
+            wake.observe(&input.session_key).await;
+        assert_eq!(terminal_state, input.terminal_state, "{}", input.name);
+        case.check(
+            gents_lean_vocab::families::contracts_r6_acknowledgement::DeliveryOutput {
+                attempted,
+                acknowledged,
+                queue_source,
+                queue_key,
+            },
+        );
+    }
+}
+
+#[tokio::test]
+async fn wake_delivery_restart_boundaries_project_the_claim_snapshot() {
+    for case in gents_lean_vocab::families::contracts_r6_crash_boundary::cases() {
+        let input = &case.input;
+        let wake = published_wake(&input.name).await;
+        let lifecycle = match input.point.as_str() {
+            "beforeClaim" => None,
+            "duringInference" => Some(wake.claim_and_begin().await),
+            "duringAcknowledgement" => {
+                let mut lifecycle = wake.claim_and_begin().await;
+                lifecycle
+                    .terminalize_owned(
+                        RequestTerminalOutcome::Completed,
+                        gents_protocol::output::TerminalOutput::NoMessage,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                Some(lifecycle)
+            }
+            other => panic!("{}: no restart point {other}", input.name),
+        };
+        wake.restart().await;
+        let first = wake.observe(&input.session_key).await;
+        wake.restart().await;
+        assert_eq!(
+            wake.observe(&input.session_key).await,
+            first,
+            "{}: a second restart leaves the projection unchanged",
+            input.name
+        );
+        drop(lifecycle);
+        let (terminal_state, attempted, acknowledged, queue_source, queue_key) = first;
+        case.check(
+            gents_lean_vocab::families::contracts_r6_crash_boundary::CrashOutput {
+                terminal_state,
+                attempted,
+                acknowledged,
+                queue_source,
+                queue_key,
+            },
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     let db = test_db("wake-hop-raise").await;

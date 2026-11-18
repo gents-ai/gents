@@ -49,3 +49,21 @@ fn allocate_in_child() -> anyhow::Result<()> {
     anyhow::ensure!(allocated != reserved, "allocated reserved port {reserved}");
     Ok(())
 }
+
+/// CI runners run as systemd services with `PrivateTmp=yes`, so no path
+/// under `/tmp` is shared between two jobs on one machine; the reservation
+/// must live in the network namespace that holds the ports
+/// (`TestPortReservation.tla`, `PerRunner`). `/proc/net/unix` lists that
+/// namespace's abstract sockets.
+#[cfg(target_os = "linux")]
+#[test]
+fn reservation_lives_in_the_network_namespace() -> anyhow::Result<()> {
+    let port = ports::allocate_port()?;
+    let sockets = std::fs::read_to_string("/proc/net/unix")?;
+    let name = format!("@gents-cli-test-port-{port}");
+    anyhow::ensure!(
+        sockets.lines().any(|line| line.ends_with(&name)),
+        "no abstract socket {name} holds the reservation of port {port}"
+    );
+    Ok(())
+}

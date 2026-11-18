@@ -107,6 +107,14 @@ async fn prepare_inner(
     );
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let home = tokio::task::spawn_blocking(move || std::fs::canonicalize(home)).await??;
+    let recorded = tokio::task::spawn_blocking({
+        let home = home.clone();
+        move || read_init_config(&home)
+    })
+    .await??;
+    if let Some(config) = recorded {
+        gents_store::local::document_acp::ensure_home_opens(&config)?;
+    }
     let build = gents_store::service::executable_build_id().await?;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {

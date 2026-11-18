@@ -47,6 +47,67 @@ def managedToolIdentityAllowed (derive : String → String → String) (claimed 
   | some derived => managedToolSourceMatches claimed derived
   | none => false
 
+/-- The native tool source permissions the runtime's document projector owes
+an Agent row: every permission its selected Tools need when the row's claimed
+DID is the identity the projecting Node derives for it, and none otherwise. -/
+def owedToolSourcePermissions (derive : String → String → String) (claimed nodeKey : String)
+    (creation : Option String) (selected : List String) : List String :=
+  if managedToolIdentityAllowed derive claimed nodeKey creation then selected else []
+
+/-- Who may create an Agent row. External premise: the pinned DefraDB document
+projector runs inside the writer's transaction and changes native relations
+under the writer's identity, so an Agent create and the source grants the
+projector owes that row commit or abort together, as the creator. Each owed
+grant is a native relation change the held-bounded rule must admit for the
+creator (`GrantSets.admits`). The create therefore commits exactly when the
+row is owed nothing or the creator may add every owed permission; a refused
+create publishes neither the row nor any grant. -/
+def agentCreateCommits (creator : GrantSets.Holder) (owed : List String) : Bool :=
+  owed.all fun p => GrantSets.admits creator ⟨.permission p, false, true, false⟩
+
+/-- The permissions the created row's identity holds through the projection:
+everything owed when the create commits, nothing when it is refused. -/
+def agentCreateGrants (creator : GrantSets.Holder) (owed : List String) : List String :=
+  if agentCreateCommits creator owed then owed else []
+
+/-- Creating an Agent never extends the creator's authority: every permission
+the projection gives the new identity is one the creator administers or holds. -/
+theorem agent_create_grants_only_creator_authority (creator : GrantSets.Holder)
+    (owed : List String) (p : String) (granted : p ∈ agentCreateGrants creator owed) :
+    creator.admin = true ∨ creator.holds p = true := by
+  unfold agentCreateGrants at granted
+  split at granted
+  · rename_i commits
+    have admitted := List.all_eq_true.mp commits p granted
+    simp only [GrantSets.admits, Bool.or_eq_true, Bool.and_eq_true] at admitted
+    rcases admitted with admin | ⟨⟨⟨⟨_, _⟩, holds⟩, _⟩, _⟩
+    · exact Or.inl admin
+    · exact Or.inr holds
+  · simp at granted
+
+/-- A non-administrator that does not hold the add operation cannot create an
+Agent row that is owed any source grant: the create is refused. -/
+theorem owed_create_without_add_operation_is_refused (creator : GrantSets.Holder)
+    (owed : List String) (notAdmin : creator.admin = false)
+    (noOperation : creator.holds (GrantSets.nacOperation false) = false) (owing : owed ≠ []) :
+    agentCreateCommits creator owed = false := by
+  cases owed with
+  | nil => exact absurd rfl owing
+  | cons p rest =>
+    have refused := GrantSets.missing_operation_admits_nothing creator
+      ⟨.permission p, false, true, false⟩ notAdmin noOperation
+    simp [agentCreateCommits, refused]
+
+/-- A row whose claimed DID is not the derived identity is owed nothing, so any
+creator may write it and the claimed identity gains no tool authority. -/
+theorem foreign_identity_create_commits_without_grants (derive : String → String → String)
+    (claimed nodeKey : String) (creation : Option String) (selected : List String)
+    (creator : GrantSets.Holder)
+    (foreign : managedToolIdentityAllowed derive claimed nodeKey creation = false) :
+    agentCreateCommits creator (owedToolSourcePermissions derive claimed nodeKey creation selected) = true ∧
+    agentCreateGrants creator (owedToolSourcePermissions derive claimed nodeKey creation selected) = [] := by
+  simp [owedToolSourcePermissions, foreign, agentCreateGrants, agentCreateCommits]
+
 theorem underived_agent_cannot_receive_tool_source (derive : String → String → String)
     (claimed nodeKey : String) (creation : Option String)
     (underived : derivedAgentDid derive nodeKey creation = none) :
@@ -1554,10 +1615,25 @@ theorem projection_binding_revoked_parent_loses_inherited_control :
      Household.allowed 5 revoked "creator" "configuration" "binding" "update"] =
     [false, false, true] := by native_decide
 
+/-- The theorem above is the document policy's answer. What a read observes
+differs for one actor: `runtime` is the hosting node key, which reads past
+document ACP (`Household.nativeRead`), so revoking the binding's parent hides
+it from the Node's user and leaves it readable by the hosting runtime. The
+runtime's update stays refused by document ACP. -/
+theorem projection_binding_revoked_parent_still_read_by_hosting_runtime :
+    let revoked := apply projectionBindingFixture
+      (.revoke ⟨"configuration", "binding", "parent", .object "nodes" "node"⟩)
+    [Household.nativeRead false 5 revoked "user" "configuration" "binding",
+     Household.nativeRead true 5 revoked "runtime" "configuration" "binding",
+     Household.nativeRead false 5 revoked "outsider" "configuration" "binding",
+     Household.allowed 5 revoked "runtime" "configuration" "binding" "update"] =
+    [false, true, false, false] := by native_decide
+
 /-- An Agent-authored data-plane pairing overlay remains owned by that Agent on
 its own `application_pairings` resource. The user administers it through the
-Node parent, and the runtime reads it via the Node's explicit runtime-reader
-grant. An Agent's sibling has no access. -/
+Node parent, and document ACP grants the runtime read via the Node's explicit
+runtime-reader grant; the hosting runtime's node key reads it regardless
+(`Household.nativeRead`). An Agent's sibling has no access. -/
 def agentPairingFixture : State :=
   { objects := [⟨"nodes", "node", "user"⟩, ⟨"application_pairings", "overlay", "agent"⟩],
     relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
@@ -1908,8 +1984,14 @@ theorem agent_created_configuration_retains_creator (state : State)
       ⟨resource, id, agent⟩ :: state.objects := by
   simp [apply, directCreate, fresh]
 
-/-- A runtime reads the user-owned Node and its Agents through its own
-explicit reader grant. The grant conveys no administration or session access. -/
+/-- Document ACP grants a runtime read of the user-owned Node and its Agents
+through its own explicit reader grant, which conveys no administration or
+session access. That is the whole of what a runtime other than the hosting one
+reads, and it is what the hosting runtime may update. The hosting runtime's
+node key additionally reads every document on its node past document ACP
+(`Household.nativeRead`), so the three theorems below bound its writes and
+another runtime's reads, not its own reads
+(`hosting_runtime_reads_without_reader_grant`). -/
 def runtimeReadFixture : State :=
   { objects := [⟨"nodes", "node", "user"⟩, ⟨"agents", "agent", "user"⟩,
       ⟨"sessions", "session", "user"⟩],
@@ -1935,6 +2017,20 @@ theorem unlinked_agent_is_not_visible_to_runtime :
     Household.allowed 5 { runtimeReadFixture with
       relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩] }
       "runtime" "agents" "agent" "read" = false := by native_decide
+
+/-- With its reader grant revoked, the hosting runtime still reads the Node,
+its Agents and the session the grant never reached; a runtime that does not
+host the node reads none of them. -/
+theorem hosting_runtime_reads_without_reader_grant :
+    let revoked := apply runtimeReadFixture
+      (.revoke ⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩)
+    [Household.nativeRead true 5 revoked "runtime" "nodes" "node",
+     Household.nativeRead true 5 revoked "runtime" "agents" "agent",
+     Household.nativeRead true 5 revoked "runtime" "sessions" "session",
+     Household.nativeRead false 5 revoked "runtime" "nodes" "node",
+     Household.nativeRead false 5 revoked "runtime" "agents" "agent",
+     Household.nativeRead false 5 revoked "runtime" "sessions" "session"] =
+    [true, true, true, false, false, false] := by native_decide
 
 /-- The desktop User, its key custody, and its P2P identity belong to the
 client, independently of a managed runtime's Node identity. A runtime or

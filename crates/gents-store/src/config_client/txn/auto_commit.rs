@@ -97,9 +97,18 @@ impl ConfigAccess {
         let variables = variables.cloned();
         let operation = operation.to_owned();
         let identity = local.identity().cloned();
+        let managed_agent = local.agent_signer().is_some();
         local
             .run_owned(move |node| async move {
-                Self::execute_local_read(&node, &document, variables, &operation, identity).await
+                Self::execute_local_read(
+                    &node,
+                    &document,
+                    variables,
+                    &operation,
+                    identity,
+                    managed_agent,
+                )
+                .await
             })
             .await
     }
@@ -140,7 +149,7 @@ impl ConfigAccess {
             reached.notify_one();
             std::future::pending::<()>().await;
         }
-        Self::execute_local_read(node, document, variables.cloned(), operation, None).await
+        Self::execute_local_read(node, document, variables.cloned(), operation, None, false).await
     }
 
     async fn execute_local_read(
@@ -149,11 +158,15 @@ impl ConfigAccess {
         variables: Option<Value>,
         operation: &str,
         identity: Option<identity::Did>,
+        managed_agent: bool,
     ) -> Result<defra_node::QueryResponse> {
         let started = Instant::now();
         let mut request = query::QueryRequest::new(document).with_identity(identity);
         if let Some(variables) = variables {
             request = request.with_variables(variables);
+        }
+        if managed_agent {
+            request = crate::identity::ManagedAgentSigner::deny_dac_bypass(request);
         }
         let response = node.execute_request(request).await;
         let elapsed = started.elapsed();
@@ -456,7 +469,7 @@ impl ConfigAccess {
                     request = request.with_variables(variables);
                 }
                 let result = match signer {
-                    Some(signer) => node.execute_request(signer.native().attach(request)).await,
+                    Some(signer) => node.execute_request(signer.attach(request)).await,
                     None => node.execute_request(request).await,
                 };
                 let elapsed = started.elapsed();

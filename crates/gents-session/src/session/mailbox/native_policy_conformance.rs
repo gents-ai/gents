@@ -47,6 +47,10 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         directory.path().join("other.key"),
         None,
     )?;
+    let authority = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("authority.key"),
+        None,
+    )?;
     let binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let agent = gents_store::identity::resolve_agent_identity(&runtime, &binding)?;
     let denied_binding = gents_store::identity::provision_agent_identity(&runtime)?;
@@ -57,16 +61,17 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         EmbeddedNode::builder()
             .enable_signing()
             .with_node_identity_did(runtime.did())
-            .with_node_acp_owner(user.did().to_owned())
+            .with_node_acp_owner(authority.did().to_owned())
             .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
             .await?,
     );
-    let context = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
+    let context =
+        defra_core::RequestContext::default().with_identity(Some(authority.did().to_owned()));
     let policy = node
         .add_dac_policy_with_counter_as(&context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
-    for actor in [agent.did(), other.did(), runtime.did()] {
+    for actor in [agent.did(), user.did(), other.did(), runtime.did()] {
         for permission in [
             acp::nac::NodePermission::DocumentRead,
             acp::nac::NodePermission::DocumentUpdate,
