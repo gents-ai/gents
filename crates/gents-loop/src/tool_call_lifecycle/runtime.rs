@@ -613,8 +613,11 @@ pub struct ToolExecutionBounds {
     pub request_deadline_at: Option<DateTime<Utc>>,
 }
 
-pub fn tool_execution_bounds(command_timeout: Duration) -> ToolExecutionBounds {
-    let runtime = current_tool_runtime_context();
+pub fn tool_execution_bounds(
+    call: &ToolCallEnvelope,
+    command_timeout: Duration,
+) -> ToolExecutionBounds {
+    let runtime = call.runtime();
     let request_deadline = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
     let armed_at = Instant::now();
     let command_deadline = Utc::now()

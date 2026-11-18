@@ -54,6 +54,7 @@ impl Fixture {
         let pool = LspPool::new();
         let lease = pool
             .get_or_start(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
                 PoolKey {
                     runtime_home: None,
                     session_id: "consent".into(),

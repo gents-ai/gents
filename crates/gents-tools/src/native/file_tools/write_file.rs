@@ -167,7 +167,7 @@ impl Tool for WriteFileTool {
             let mut note = None;
             if let Some(writethrough) = &self.writethrough {
                 note = writethrough
-                    .after_mutation_under_lock(&path, crate::native::lsp::MutationKind::Write)
+                    .after_mutation_under_lock(call, &path, crate::native::lsp::MutationKind::Write)
                     .await;
                 if let Ok(bytes) = tokio::fs::read(&path).await {
                     bytes_written = bytes.len();
@@ -184,7 +184,7 @@ impl Tool for WriteFileTool {
         drop(_guard);
         if let Some(writethrough) = &self.writethrough {
             let diag = writethrough
-                .diagnostics_after_unlock(&path, crate::native::lsp::MutationKind::Write)
+                .diagnostics_after_unlock(call, &path, crate::native::lsp::MutationKind::Write)
                 .await;
             note = merge_optional_notes(note, diag);
         }

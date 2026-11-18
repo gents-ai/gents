@@ -210,8 +210,7 @@ impl Tool for EditFileTool {
                         }
                         if let Some(writethrough) = &self.writethrough {
                             edit_note = writethrough
-                                .after_mutation_under_lock(
-                                    &path,
+                                .after_mutation_under_lock(call, &path,
                                     crate::native::lsp::MutationKind::Edit,
                                 )
                                 .await;
@@ -226,8 +225,7 @@ impl Tool for EditFileTool {
                     drop(_guard);
                     if let Some(writethrough) = &self.writethrough {
                         let diag = writethrough
-                            .diagnostics_after_unlock(
-                                &path,
+                            .diagnostics_after_unlock(call, &path,
                                 crate::native::lsp::MutationKind::Edit,
                             )
                             .await;

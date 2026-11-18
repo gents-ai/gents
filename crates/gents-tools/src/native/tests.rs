@@ -2508,6 +2508,7 @@ with socket.socket() as connection:
                 deny_git_metadata_writes: true,
             };
             let command = prepare_managed_command(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
                 &root,
                 "/usr/bin/python3",
                 &[
@@ -2569,7 +2570,7 @@ with socket.socket() as connection:
         std::fs::read_to_string(fx.grant.root().join("target/success")).unwrap(),
         "artifact output"
     );
-    fx.grant.validate_for_launch().await.unwrap();
+    fx.grant.validate_for_launch(None).await.unwrap();
 }
 
 #[cfg(target_os = "macos")]
@@ -2696,7 +2697,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
     }
     assert!(!root.join("target").exists());
     assert!(fx.grant.root().join("target/debug/deps").is_dir());
-    fx.grant.validate_for_launch().await.unwrap();
+    fx.grant.validate_for_launch(None).await.unwrap();
     if std::env::var_os("GENTS_ARTIFACT_COMPILER_QA_DIR").is_some() {
         let artifact_root = fx.grant.root().to_path_buf();
         let retained = fx._dir.keep();

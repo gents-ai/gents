@@ -42,9 +42,18 @@ async fn run(
     } else {
         CommandExecutionPolicy::write_capable().with_mode(mode)
     };
-    let launch = workspace::scope(scope, prepare_command_launch(root, command, args, &policy))
-        .await
-        .unwrap();
+    let launch = workspace::scope(
+        scope,
+        prepare_command_launch(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            root,
+            command,
+            args,
+            &policy,
+        ),
+    )
+    .await
+    .unwrap();
     let mut environment = launch.environment;
     environment.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
     environment.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());

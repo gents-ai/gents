@@ -324,7 +324,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: &serde_json::Value,
         context: &BindContext<'_>,
-        _call: &ToolCallEnvelope,
+        call: &ToolCallEnvelope,
     ) -> Result<Option<BoundDir>, String> {
         let Some(binding) = &record.declaration.bind_dir else {
             return Ok(None);
@@ -380,6 +380,7 @@ impl PluginExecutor {
                 Some(decision) => {
                     let binding = decision.binding.clone();
                     let allowed = approval::workspace::consent_binding(
+                        call,
                         home,
                         decision,
                         context.interactive,

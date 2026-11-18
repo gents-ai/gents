@@ -74,7 +74,13 @@ pub async fn dispatch(
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
             let states = pool
-                .inspect_session(&session_id, &config.agent_did, workspace, &config.digest)
+                .inspect_session(
+                    call,
+                    &session_id,
+                    &config.agent_did,
+                    workspace,
+                    &config.digest,
+                )
                 .await
                 .map_err(|error| ToolError::reported_failure(FailureClass::PolicyDenied, error))?;
             Ok(status_text(states, &config.servers, workspace))
@@ -123,6 +129,7 @@ async fn run_file_action(
     }
     if looks_like_glob(file) {
         return glob_action(
+            call,
             context,
             client,
             config,
@@ -290,7 +297,7 @@ async fn run_file_action(
         truncate_model_output(format_result_with_limit(context, action, result, req.limit));
     if matches!(action, LspAction::Diagnostics) {
         if let Some(linter) =
-            run_linter_diagnostics(config, servers, &path, request_timeout(req)).await
+            run_linter_diagnostics(call, config, servers, &path, request_timeout(req)).await
         {
             output = format!("{output}\n{linter}");
         }

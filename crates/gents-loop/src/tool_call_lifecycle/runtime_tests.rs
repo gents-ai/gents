@@ -431,7 +431,7 @@ async fn explicit_session_survives_a_spawned_background_task_boundary() {
 #[tokio::test]
 async fn tool_execution_bounds_without_context_uses_the_command_timeout() {
     let before = Utc::now();
-    let bounds = tool_execution_bounds(Duration::from_secs(30));
+    let bounds = tool_execution_bounds(&ToolCallEnvelope::default(), Duration::from_secs(30));
     let after = Utc::now();
     let deadline = bounds.deadline_at.expect("deadline");
     assert!(deadline >= before + chrono::Duration::seconds(30));
@@ -443,7 +443,7 @@ async fn tool_execution_bounds_without_context_uses_the_command_timeout() {
 #[tokio::test]
 async fn tool_execution_bounds_arms_the_measurement_no_later_than_the_deadline() {
     let timeout = Duration::from_secs(30);
-    let bounds = tool_execution_bounds(timeout);
+    let bounds = tool_execution_bounds(&ToolCallEnvelope::default(), timeout);
     let closing_wall = Utc::now();
     let closing_mono = Instant::now();
     let granularity = Duration::from_micros(100);
@@ -465,7 +465,7 @@ async fn tool_execution_bounds_prefers_the_earlier_request_deadline() {
     let request_deadline = Utc::now() + chrono::Duration::seconds(5);
     let token = CancellationToken::new();
     let bounds = scope_request_tool_execution(Some(request_deadline), token, async {
-        tool_execution_bounds(Duration::from_secs(3600))
+        tool_execution_bounds(&ToolCallEnvelope::ambient(), Duration::from_secs(3600))
     })
     .await;
     assert_eq!(bounds.deadline_at, Some(request_deadline));

@@ -181,7 +181,6 @@ pub fn debug_assert_ambient(envelope: &ToolCallEnvelope) {
     }
     envelope.debug_assert_ambient();
     let _ = host(envelope);
-    let _ = gents_session::exec::ownership::process_recorder(envelope);
 }
 
 /// The placeholder envelope for a caller that has no envelope yet; every value
@@ -232,25 +231,11 @@ where
     F: std::future::Future<Output = T>,
 {
     let host = host_unchecked(envelope);
-    let recorder = if envelope.extensions().is_ambient() {
-        None
-    } else {
-        envelope
-            .extensions()
-            .get::<gents_session::exec::ownership::ProcessRecorder>()
-            .cloned()
-    };
     let runtime = envelope.runtime_unchecked();
     let future =
         gents_loop::tool_call_lifecycle::runtime::enter_ambient_runtime(runtime.as_ref(), future);
     let future = WORKSPACE_OVERLAY.scope(host.workspace, future);
-    let future = crate::plugin::approval::workspace::scope(host.approval, future);
-    match recorder {
-        Some(recorder) => {
-            gents_session::exec::ownership::scope_process_recorder(recorder, future).await
-        }
-        None => future.await,
-    }
+    crate::plugin::approval::workspace::scope(host.approval, future).await
 }
 
 fn with_workspace(

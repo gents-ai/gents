@@ -248,6 +248,7 @@ impl std::fmt::Debug for PreparedManagedCommand {
 }
 
 pub(crate) async fn prepare_managed_command(
+    call: &gents_loop::tool::ToolCallEnvelope,
     root: &Path,
     command: &str,
     args: &[String],
@@ -270,8 +271,9 @@ pub(crate) async fn prepare_managed_command(
         &spawn_policy,
     )?;
     let launch =
-        prepare_command_launch(root, &admitted.to_string_lossy(), args, &spawn_policy).await?;
-    launch.revalidate().await.map_err(command_guard_error)?;
+        prepare_command_launch(call, root, &admitted.to_string_lossy(), args, &spawn_policy)
+            .await?;
+    launch.revalidate(call).await.map_err(command_guard_error)?;
     Ok(PreparedManagedCommand {
         program: PathBuf::from(launch.program),
         args: launch.args,
@@ -292,6 +294,7 @@ pub(crate) async fn prepare_managed_command(
 }
 
 pub(crate) async fn current_managed_command_credential_snapshot(
+    call: &gents_loop::tool::ToolCallEnvelope,
     protects_credentials: bool,
 ) -> std::result::Result<Option<Vec<PathBuf>>, String> {
     if !protects_credentials {
@@ -299,13 +302,14 @@ pub(crate) async fn current_managed_command_credential_snapshot(
     }
     #[cfg(target_os = "macos")]
     {
-        command_credentials::capture()
+        command_credentials::capture(call)
             .await
             .map(|protection| Some(protection.snapshot()))
             .map_err(|error| format!("{error:#}"))
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = call;
         Ok(None)
     }
 }

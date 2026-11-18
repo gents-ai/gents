@@ -133,7 +133,13 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
             None,
             Default::default(),
             false,
-            crate::native::prepare_managed_command(&root, "/bin/echo", &[], &constraints),
+            crate::native::prepare_managed_command(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &root,
+                "/bin/echo",
+                &[],
+                &constraints,
+            ),
         )
         .await;
         let observed_mode = result.as_ref().ok().map(|_| effective.mode.as_str());

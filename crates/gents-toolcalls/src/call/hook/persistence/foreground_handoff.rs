@@ -144,7 +144,7 @@ impl DefraSessionHook {
         let handoff = crate::call::spawned_envelope::handoff_envelope(
             envelope,
             process_token.clone(),
-            recorder.clone(),
+            recorder,
         )
         .unwrap_or_else(gents_loop::tool::ToolCallEnvelope::ambient);
         tokio::spawn(gents_tools::plugin::approval::workspace::carry(
@@ -177,23 +177,20 @@ impl DefraSessionHook {
                     workspace_artifact: context.workspace_artifact,
                 };
                 let execution =
-                    AssertUnwindSafe(gents_session::exec::ownership::scope_process_recorder(
-                        recorder,
-                        scope_request_tool_execution_with_workspace_overlay(
-                            None,
-                            context.deadline_at,
-                            process_token.clone(),
-                            workspace,
-                            None,
-                            context.session_id,
-                            context.correlation,
-                            context.source_fields,
-                            false,
-                            async {
-                                gents_tools::runtime_context::debug_assert_ambient(&handoff);
-                                call(handoff.clone(), Some(cleanup)).await
-                            },
-                        ),
+                    AssertUnwindSafe(scope_request_tool_execution_with_workspace_overlay(
+                        None,
+                        context.deadline_at,
+                        process_token.clone(),
+                        workspace,
+                        None,
+                        context.session_id,
+                        context.correlation,
+                        context.source_fields,
+                        false,
+                        async {
+                            gents_tools::runtime_context::debug_assert_ambient(&handoff);
+                            call(handoff.clone(), Some(cleanup)).await
+                        },
                     ))
                     .catch_unwind();
                 tokio::pin!(execution);

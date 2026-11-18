@@ -145,7 +145,7 @@ impl ConfigCommandTool {
         .context("the plugin source task did not finish")??;
 
         self.execution.enter_mutation();
-        let build = crate::native::run_plugin_build(&prepared.root, &prepared.dir, true)
+        let build = crate::native::run_plugin_build(&self.envelope, &prepared.root, &prepared.dir, true)
             .await
             .map_err(|error| {
                 anyhow!(

@@ -5,7 +5,6 @@ use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 
 use super::shared::{ToolContext, ToolError};
-use crate::runtime_context::current_tool_runtime_context;
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_session::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
@@ -74,12 +73,14 @@ impl NativeFsRunner {
 
     pub(crate) async fn glob_paths(
         &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
         pattern: &str,
         max_matches: usize,
     ) -> Result<Vec<PathBuf>, ToolError> {
-        let base = self.effective_base();
+        let base = self.effective_base(call);
         let raw = self
             .run(
+                call,
                 NativeFsRunnerRequest::Glob(gents_fs_runner::protocol::GlobArgs {
                     pattern: pattern.to_string(),
                     path: None,
@@ -96,27 +97,30 @@ impl NativeFsRunner {
 
     pub(super) async fn run(
         &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
         request: NativeFsRunnerRequest,
         tool_name: &'static str,
     ) -> Result<String, ToolError> {
-        let runner = resolve_runner_command(&self.effective_root(), &self.effective_base())?;
-        self.run_resolved(request, tool_name, runner).await
+        let runner =
+            resolve_runner_command(&self.effective_root(call), &self.effective_base(call))?;
+        self.run_resolved(call, request, tool_name, runner).await
     }
 
     async fn run_resolved(
         &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
         request: NativeFsRunnerRequest,
         tool_name: &'static str,
         runner: RunnerCommand,
     ) -> Result<String, ToolError> {
-        let runtime = current_tool_runtime_context();
+        let runtime = crate::runtime_context::tool_runtime_context(call);
         let request_deadline = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
         let deadline_at = Some(effective_deadline(request_deadline, chrono::Utc::now()));
         let cancellation_token = runtime
             .as_ref()
             .map(|runtime| runtime.cancellation_token.clone())
             .unwrap_or_default();
-        let root = self.effective_root();
+        let root = self.effective_root(call);
         let (argv, environment) = if runtime
             .as_ref()
             .is_some_and(|scope| scope.workspace_artifact.is_some())
@@ -133,6 +137,7 @@ impl NativeFsRunner {
                 deny_git_metadata_writes: true,
             };
             let command = super::prepare_managed_command(
+                call,
                 &root,
                 &runner.argv[0],
                 &runner.argv[1..],
@@ -167,7 +172,7 @@ impl NativeFsRunner {
             environment,
             tool_name: Some(tool_name.to_string()),
             live_output: None,
-            process_recorder: None,
+            process_recorder: gents_session::exec::ownership::process_recorder(call),
         })
         .await
         {
@@ -202,15 +207,15 @@ impl NativeFsRunner {
         }
     }
 
-    fn effective_root(&self) -> PathBuf {
-        current_tool_runtime_context()
+    fn effective_root(&self, call: &gents_loop::tool::ToolCallEnvelope) -> PathBuf {
+        crate::runtime_context::tool_runtime_context(call)
             .and_then(|runtime| runtime.workspace_root)
             .unwrap_or_else(|| self.root.clone())
     }
 
-    fn effective_base(&self) -> PathBuf {
-        let root = self.effective_root();
-        let runtime_base = current_tool_runtime_context()
+    fn effective_base(&self, call: &gents_loop::tool::ToolCallEnvelope) -> PathBuf {
+        let root = self.effective_root(call);
+        let runtime_base = crate::runtime_context::tool_runtime_context(call)
             .and_then(|runtime| runtime.workspace_cwd)
             .and_then(|base| resolve_base_dir(&root, &base).ok());
         runtime_base.unwrap_or_else(|| resolve_base_dir(&root, &self.base).unwrap_or(root))
@@ -463,7 +468,12 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             None,
             Default::default(),
             false,
-            runner.run_resolved(request(), "glob", command()),
+            runner.run_resolved(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                request(),
+                "glob",
+                command(),
+            ),
         )
         .await
         .unwrap();
@@ -493,7 +503,12 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             None,
             Default::default(),
             false,
-            runner.run_resolved(request(), "glob", command()),
+            runner.run_resolved(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                request(),
+                "glob",
+                command(),
+            ),
         )
         .await
         .unwrap_err();

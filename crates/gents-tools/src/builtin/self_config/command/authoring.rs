@@ -502,7 +502,7 @@ impl ConfigCommandTool {
             self.ensure_compile_grant("build", &sources)?;
             self.execution.enter_mutation();
             Some(
-                crate::native::run_plugin_build(&context.root(), &dir, false)
+                crate::native::run_plugin_build(&self.envelope, &context.root(), &dir, false)
                     .await?
                     .sandbox,
             )
@@ -543,7 +543,8 @@ impl ConfigCommandTool {
         }
         self.ensure_compile_grant("test", &sources)?;
         self.execution.enter_mutation();
-        let build = crate::native::run_plugin_build(&context.root(), &dir, true).await?;
+        let build =
+            crate::native::run_plugin_build(&self.envelope, &context.root(), &dir, true).await?;
         let mut plugins = build.output["cases"].clone();
         let mut passed = 0;
         let mut failed = 0;

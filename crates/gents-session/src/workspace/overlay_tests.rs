@@ -721,7 +721,7 @@ async fn admission_workspace_validation_checks_scope_and_cwd_without_writes() {
 #[tokio::test]
 async fn artifact_grant_fences_current_lease_and_source_seal() {
     let fx = artifact_test_fixture(&[]).await;
-    fx.grant.validate_for_launch().await.unwrap();
+    fx.grant.validate_for_launch(None).await.unwrap();
     assert!(!fx.grant.root().starts_with(fx.grant.source_root()));
     assert!(fx.grant.root().join("target").is_dir());
     assert!(fx.grant.root().join("tmp").is_dir());
@@ -730,7 +730,7 @@ async fn artifact_grant_fences_current_lease_and_source_seal() {
     assert!(!result.has_errors(), "{:?}", result.errors);
     assert!(fx
         .grant
-        .validate_for_launch()
+        .validate_for_launch(None)
         .await
         .unwrap_err()
         .to_string()
@@ -744,7 +744,7 @@ async fn artifact_grant_rejects_replaced_output_directory() {
     let target = fx.grant.root().join("target");
     std::fs::remove_dir(&target).unwrap();
     std::os::unix::fs::symlink(fx.grant.source_root(), &target).unwrap();
-    assert!(fx.grant.validate_for_launch().await.is_err());
+    assert!(fx.grant.validate_for_launch(None).await.is_err());
 }
 
 #[tokio::test]
@@ -765,7 +765,7 @@ async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
         for (fields, should_allow) in [(input, false), (restore, true)] {
             let response = fx.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#)).await;
             assert!(!response.has_errors(), "{:?}", response.errors);
-            let validation = fx.grant.validate_for_launch().await;
+            let validation = fx.grant.validate_for_launch(None).await;
             assert_eq!(
                 validation.is_ok(),
                 should_allow,
@@ -775,7 +775,7 @@ async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
     }
     let response = fx.node.execute(&format!(r#"mutation {{ update_WorkspaceBinding(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}, input: {{ lifecycle_state: "released" }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let error = fx.grant.validate_for_launch().await.unwrap_err();
+    let error = fx.grant.validate_for_launch(None).await.unwrap_err();
     assert!(
         error.to_string().contains("active ReadOnly binding"),
         "unexpected validation failure: {error:#}"
@@ -804,7 +804,7 @@ async fn artifact_grant_rejects_source_drift_and_allocates_disjoint_outputs() {
     std::fs::write(fx.grant.source_root().join("README.md"), "changed source\n").unwrap();
     assert!(fx
         .grant
-        .validate_for_launch()
+        .validate_for_launch(None)
         .await
         .unwrap_err()
         .to_string()

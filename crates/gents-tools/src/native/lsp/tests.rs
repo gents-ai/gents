@@ -277,7 +277,7 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
                     vec![fixture_server(FIXTURE_PY.into())],
                 );
                 let _ = LspWritethrough::new(pool.clone(), config)
-                    .after_mutation(&lib)
+                    .after_mutation(&gents_loop::tool::ToolCallEnvelope::ambient(), &lib)
                     .await;
                 (None, None)
             }
@@ -590,7 +590,15 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
         operator_guard_home: None,
     };
     let pool = LspPool::new();
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let prepared = vec![
         super::edits::PreparedEdit {
             path: std::fs::canonicalize(&first).unwrap(),
@@ -1002,8 +1010,10 @@ async fn simultaneous_first_calls_share_one_process() {
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let first = pool.get_or_start(key.clone(), &server, &config);
-    let second = pool.get_or_start(key.clone(), &server, &config);
+    let ambient_call_1013 = gents_loop::tool::ToolCallEnvelope::ambient();
+    let first = pool.get_or_start(&ambient_call_1013, key.clone(), &server, &config);
+    let ambient_call_1019 = gents_loop::tool::ToolCallEnvelope::ambient();
+    let second = pool.get_or_start(&ambient_call_1019, key.clone(), &server, &config);
     let (a, b) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         tokio::join!(first, second)
     })
@@ -1062,7 +1072,12 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
         None,
         Default::default(),
         false,
-        pool.get_or_start(key.clone(), &server, &config),
+        pool.get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key.clone(),
+            &server,
+            &config,
+        ),
     )
     .await
     .unwrap();
@@ -1084,21 +1099,40 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
         Default::default(),
         false,
         async {
-            assert!(pool.get_ready(&key).await.is_none());
             assert!(pool
-                .inspect_session(&config.session_id, &config.agent_did, &root, &config.digest)
+                .get_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &key)
+                .await
+                .is_none());
+            assert!(pool
+                .inspect_session(
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &config.session_id,
+                    &config.agent_did,
+                    &root,
+                    &config.digest
+                )
                 .await
                 .unwrap()
                 .is_empty());
             let error = pool
-                .get_or_start(key.clone(), &server, &config)
+                .get_or_start(
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    key.clone(),
+                    &server,
+                    &config,
+                )
                 .await
                 .err()
                 .unwrap();
             assert!(error.contains("runtime protection changed"), "{error}");
-            pool.get_or_start(next_key.clone(), &server, &config)
-                .await
-                .unwrap()
+            pool.get_or_start(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                next_key.clone(),
+                &server,
+                &config,
+            )
+            .await
+            .unwrap()
         },
     )
     .await;
@@ -1193,11 +1227,21 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
         false,
         async {
             let first = pool
-                .get_or_start(key.clone(), &server, &config)
+                .get_or_start(
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    key.clone(),
+                    &server,
+                    &config,
+                )
                 .await
                 .unwrap();
             let unchanged = pool
-                .get_or_start(key.clone(), &server, &config)
+                .get_or_start(
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    key.clone(),
+                    &server,
+                    &config,
+                )
                 .await
                 .unwrap();
             assert!(std::ptr::eq(first.client(), unchanged.client()));
@@ -1206,13 +1250,24 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
             drop(first);
 
             write_config(&second_key);
-            assert!(pool.get_ready(&key).await.is_none());
+            assert!(pool
+                .get_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &key)
+                .await
+                .is_none());
             let refreshed = pool
-                .get_or_start(key.clone(), &server, &config)
+                .get_or_start(
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    key.clone(),
+                    &server,
+                    &config,
+                )
                 .await
                 .unwrap();
             assert_eq!(std::fs::read_to_string(&starts).unwrap().lines().count(), 2);
-            assert!(pool.has_ready(&key).await);
+            assert!(
+                pool.has_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &key)
+                    .await
+            );
             drop(refreshed);
             pool.shutdown().await;
         },
@@ -1276,7 +1331,12 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
     .unwrap();
     workspace::scope(scope, async {
         let initial = pool
-            .get_or_start(key.clone(), &server, &config)
+            .get_or_start(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                key.clone(),
+                &server,
+                &config,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1291,15 +1351,33 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             workspace::WorkspaceKey::canonical("node", "requester", &config.agent_did, &root)
                 .unwrap();
         workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
-        assert!(pool.get_ready(&key).await.is_none());
-        assert!(!pool.has_ready(&key).await);
         assert!(pool
-            .inspect_session(&config.session_id, &config.agent_did, &root, &config.digest,)
+            .get_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &key)
+            .await
+            .is_none());
+        assert!(
+            !pool
+                .has_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &key)
+                .await
+        );
+        assert!(pool
+            .inspect_session(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &config.session_id,
+                &config.agent_did,
+                &root,
+                &config.digest,
+            )
             .await
             .unwrap()
             .is_empty());
         let error = pool
-            .get_or_start(key.clone(), &server, &config)
+            .get_or_start(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                key.clone(),
+                &server,
+                &config,
+            )
             .await
             .err()
             .unwrap();
@@ -1310,7 +1388,12 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             ..key.clone()
         };
         let guarded = pool
-            .get_or_start(guarded_key.clone(), &server, &config)
+            .get_or_start(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                guarded_key.clone(),
+                &server,
+                &config,
+            )
             .await
             .unwrap();
         assert!(!std::ptr::eq(initial.client(), guarded.client()));
@@ -1332,9 +1415,18 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         );
         let alias = root.join("permission-alias");
         std::fs::hard_link(&private, &alias).unwrap();
-        assert!(pool.get_ready(&guarded_key).await.is_none());
+        assert!(pool
+            .get_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &guarded_key)
+            .await
+            .is_none());
         let states = pool
-            .inspect_session(&config.session_id, &config.agent_did, &root, &config.digest)
+            .inspect_session(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &config.session_id,
+                &config.agent_did,
+                &root,
+                &config.digest,
+            )
             .await
             .unwrap();
         assert!(matches!(
@@ -1342,13 +1434,21 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             Some(super::pool::PoolServerState::Failed(error)) if error.contains("hard-link alias")
         ));
         let error = pool
-            .get_or_start(guarded_key.clone(), &server, &config)
+            .get_or_start(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                guarded_key.clone(),
+                &server,
+                &config,
+            )
             .await
             .err()
             .unwrap();
         assert!(error.contains("hard-link alias"), "{error}");
         std::fs::remove_file(alias).unwrap();
-        let cached = pool.get_ready(&guarded_key).await.unwrap();
+        let cached = pool
+            .get_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &guarded_key)
+            .await
+            .unwrap();
         assert!(std::ptr::eq(guarded.client(), cached.client()));
         drop(cached);
         drop(initial);
@@ -1417,8 +1517,9 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
             workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
             std::fs::write(&release, "continue").unwrap();
         };
+        let ambient_call_1529 = gents_loop::tool::ToolCallEnvelope::ambient();
         let (started, ()) = tokio::join!(
-            pool.get_or_start(key.clone(), &server, &config),
+            pool.get_or_start(&ambient_call_1529, key.clone(), &server, &config),
             selection_changed
         );
         let error = match started {
@@ -1438,7 +1539,12 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
         assert_eq!(pool.live_count().await, 0);
         std::fs::remove_file(workspace::preferences_file(&home)).unwrap();
         let retried = pool
-            .get_or_start(key.clone(), &server, &config)
+            .get_or_start(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                key.clone(),
+                &server,
+                &config,
+            )
             .await
             .expect("admission changes must not create initialization backoff");
         drop(retried);
@@ -1478,7 +1584,15 @@ async fn resolved_executable_path_is_subject_to_command_prefix_policy() {
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let error = match LspPool::new().get_or_start(key, &server, &config).await {
+    let error = match LspPool::new()
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+    {
         Ok(_) => panic!("absolute-path prefix must constrain a catalog bare command"),
         Err(error) => error,
     };
@@ -1559,7 +1673,15 @@ while True:
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let result = super::actions::request::request_maybe_retry(
         lease.client(),
         "textDocument/documentSymbol",
@@ -1738,7 +1860,15 @@ async fn busy_fixture_symbols(
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let started = std::time::Instant::now();
     let result = super::actions::request::request_maybe_retry(
         lease.client(),
@@ -1782,7 +1912,15 @@ async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
         operator_guard_home: None,
     };
     let pool = LspPool::new();
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let uri = super::uri::path_to_file_uri(&path);
     lease
         .client()
@@ -1860,7 +1998,12 @@ while True:
     };
     let pool = LspPool::new();
     let first = pool
-        .get_or_start(key.clone(), &server, &config)
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key.clone(),
+            &server,
+            &config,
+        )
         .await
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -1871,7 +2014,15 @@ while True:
     .await
     .expect("fixture server should exit");
     drop(first);
-    let _second = pool.get_or_start(key, &server, &config).await.unwrap();
+    let _second = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let starts = std::fs::read_to_string(counter).unwrap();
     assert_eq!(starts.lines().count(), 2, "{starts:?}");
 }
@@ -1911,7 +2062,15 @@ async fn rust_analyzer_readiness_waits_for_workspace_and_quiescence() {
         operator_guard_home: None,
     };
     let pool = LspPool::new();
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let polls = lease
         .client()
         .request("fixture/statusPolls", serde_json::json!({}))
@@ -1989,17 +2148,33 @@ while True:
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let first = pool.get_or_start(key.clone(), &server, &config);
-    let second = pool.get_or_start(key.clone(), &server, &config);
+    let ambient_call_2163 = gents_loop::tool::ToolCallEnvelope::ambient();
+    let first = pool.get_or_start(&ambient_call_2163, key.clone(), &server, &config);
+    let ambient_call_2169 = gents_loop::tool::ToolCallEnvelope::ambient();
+    let second = pool.get_or_start(&ambient_call_2169, key.clone(), &server, &config);
     let (a, b) = tokio::join!(first, second);
     assert!(a.is_err(), "first initialize should fail");
     assert!(b.is_err(), "waiter should see initialize failure");
-    let during_backoff = pool.get_or_start(key.clone(), &server, &config).await;
+    let during_backoff = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key.clone(),
+            &server,
+            &config,
+        )
+        .await;
     assert!(during_backoff.is_err(), "backoff should reject retry");
     let starts = std::fs::read_to_string(&counter).unwrap_or_default();
     assert_eq!(starts.matches('x').count(), 1, "{starts}");
     pool.expire_init_backoffs().await;
-    let after = pool.get_or_start(key, &server, &config).await;
+    let after = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
+        .await;
     assert!(
         after.is_err(),
         "retry after backoff should still fail initialize"
@@ -2038,7 +2213,12 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
         operator_guard_home: None,
     };
     let lease = pool
-        .get_or_start(key.clone(), &server, &config)
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key.clone(),
+            &server,
+            &config,
+        )
         .await
         .expect("start");
     drop(lease);
@@ -2050,7 +2230,11 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
     )
     .await;
     pool.sweep_idle().await;
-    assert!(!pool.has_ready(&key).await);
+    assert!(
+        !pool
+            .has_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &key)
+            .await
+    );
     assert_eq!(pool.live_count().await, 0);
 }
 
@@ -2123,7 +2307,12 @@ while True:
         operator_guard_home: None,
     };
     let _lease = pool
-        .get_or_start(key, &server, &config)
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
         .await
         .expect("start");
     let writethrough = LspWritethrough::new(pool.clone(), config);
@@ -2131,7 +2320,11 @@ while True:
     let _guard = lock.lock().await;
     let note = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        writethrough.after_mutation_under_lock(&path, MutationKind::Write),
+        writethrough.after_mutation_under_lock(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &path,
+            MutationKind::Write,
+        ),
     )
     .await
     .expect("format-on-write must not deadlock")
@@ -2609,6 +2802,7 @@ exec sleep 30
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         super::actions::diagnostics::run_linter_diagnostics(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
             &config,
             std::slice::from_ref(&server),
             &source,
@@ -2634,10 +2828,12 @@ exec sleep 30
         trigger.cancel();
     };
     let servers = [server];
+    let ambient_call_2854 = gents_loop::tool::ToolCallEnvelope::ambient();
     let result = crate::runtime_context::scope_request_tool_execution(
         None,
         cancellation,
         super::actions::diagnostics::run_linter_diagnostics(
+            &ambient_call_2854,
             &config,
             &servers,
             &source,
@@ -2778,7 +2974,8 @@ while True:
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let start = pool.get_or_start(key.clone(), &server, &config);
+    let ambient_call_2996 = gents_loop::tool::ToolCallEnvelope::ambient();
+    let start = pool.get_or_start(&ambient_call_2996, key.clone(), &server, &config);
     tokio::select! {
         _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {}
         _ = start => {}
@@ -2860,7 +3057,12 @@ while True:
         operator_guard_home: None,
     };
     let lease = pool
-        .get_or_start(key.clone(), &server, &config)
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key.clone(),
+            &server,
+            &config,
+        )
         .await
         .expect("start");
     let request = lease.client().request(
@@ -2881,7 +3083,10 @@ while True:
     })
     .await;
     assert!(seen.is_ok(), "expected $/cancelRequest");
-    assert!(pool.has_ready(&key).await);
+    assert!(
+        pool.has_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &key)
+            .await
+    );
 }
 
 #[test]
@@ -2925,9 +3130,15 @@ async fn explicit_disabled_under_unrestricted_sandbox_is_unenforceable() {
     } else {
         "/bin/true"
     };
-    let err = crate::native::prepare_managed_command(root.path(), command, &[], &constraints)
-        .await
-        .unwrap_err();
+    let err = crate::native::prepare_managed_command(
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        root.path(),
+        command,
+        &[],
+        &constraints,
+    )
+    .await
+    .unwrap_err();
     assert!(
         err.to_string().to_lowercase().contains("disabled")
             || err.to_string().contains("unenforceable")
@@ -3069,7 +3280,12 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
         None,
         Default::default(),
         false,
-        async { super::overlay_lsp_constraints(&constraints) },
+        async {
+            super::overlay_lsp_constraints(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &constraints,
+            )
+        },
     )
     .await;
     assert_eq!(met.execution_mode, CommandExecutionMode::WorkspaceWrite);
@@ -3106,7 +3322,15 @@ async fn start_client_initializes_with_pool_key_workspace() {
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     assert_eq!(lease.client().workspace(), overlay.path());
     assert_ne!(lease.client().workspace(), baked.path());
 }
@@ -3203,13 +3427,22 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
                 }
             }
             let error = pool
-                .get_or_start(key.clone(), &server, &config)
+                .get_or_start(
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    key.clone(),
+                    &server,
+                    &config,
+                )
                 .await
                 .err()
                 .expect("pool must deny directly");
             assert_eq!(error, super::ARTIFACT_SCOPE_DENIAL);
-            assert!(pool.get_ready(&key).await.is_none());
+            assert!(pool
+                .get_ready(&gents_loop::tool::ToolCallEnvelope::ambient(), &key)
+                .await
+                .is_none());
             let linter = super::actions::diagnostics::run_linter_diagnostics(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
                 &config,
                 &[server.clone()],
                 &source.join("README.md"),

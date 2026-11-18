@@ -164,7 +164,7 @@ async fn run_cli_command(
             .await?;
 
     let timeout_secs = config.timeout_secs.max(1);
-    let bounds = tool_execution_bounds(std::time::Duration::from_secs(timeout_secs));
+    let bounds = tool_execution_bounds(call, std::time::Duration::from_secs(timeout_secs));
 
     let outcome = run_managed_exec(ManagedExecRequest {
         argv: launch_argv,
@@ -176,7 +176,7 @@ async fn run_cli_command(
         environment: Some(cli_tool_environment(config)),
         tool_name: Some(config.name.clone()),
         live_output: bounds.live_output.clone(),
-        process_recorder: None,
+        process_recorder: gents_session::exec::ownership::process_recorder(call),
     })
     .await;
 

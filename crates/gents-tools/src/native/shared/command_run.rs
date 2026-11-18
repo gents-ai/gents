@@ -39,7 +39,7 @@ pub async fn run_command(
         .collect::<Vec<_>>();
     let command_line = shell_join(&argv);
     let root = context.root();
-    let launch = prepare_command_launch(&root, command_name, args, &policy).await?;
+    let launch = prepare_command_launch(call, &root, command_name, args, &policy).await?;
     crate::plugin::approval::workspace::authorize_command(
         call,
         &argv,
@@ -53,8 +53,8 @@ pub async fn run_command(
         crate::native::command_observability::policy_denied();
         ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
     })?;
-    launch.revalidate().await.map_err(command_guard_error)?;
-    let bounds = tool_execution_bounds(timeout);
+    launch.revalidate(call).await.map_err(command_guard_error)?;
+    let bounds = tool_execution_bounds(call, timeout);
     let live_output = bounds.live_output.clone();
     let request_deadline = bounds.request_deadline_at;
     let started = bounds.armed_at;
@@ -70,7 +70,7 @@ pub async fn run_command(
         environment: Some(launch.environment),
         tool_name: Some(tool_name.to_string()),
         live_output: live_output.clone(),
-        process_recorder: None,
+        process_recorder: gents_session::exec::ownership::process_recorder(call),
     })
     .await;
     let duration_ms = elapsed_ms(started);
@@ -155,7 +155,7 @@ pub async fn run_command(
         stdout_truncation: stdout.metadata,
         stderr_truncation: stderr.metadata,
         hint: (timed_out
-            && !crate::runtime_context::current_tool_runtime_context()
+            && !crate::runtime_context::tool_runtime_context(call)
                 .is_some_and(|context| context.background))
         .then(|| foreground_timeout_hint(duration_ms)),
     };

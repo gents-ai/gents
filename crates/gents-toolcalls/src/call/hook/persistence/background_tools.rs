@@ -317,15 +317,13 @@ impl DefraSessionHook {
                 live_output: live_output_writer.clone(),
                 session_id: execution_session_id.clone(),
             },
-            process_recorder.clone(),
+            process_recorder,
             dispatcher.clone(),
             process_tool,
         );
         tokio::spawn(gents_tools::plugin::approval::workspace::carry(
             async move {
-                let execution = AssertUnwindSafe(gents_session::exec::ownership::scope_process_recorder(
-                process_recorder,
-                async {
+                let execution = AssertUnwindSafe(
                         gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
                             Some(gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(requester_did, request_node_did, request_agent_did, Some(execution_request_id.clone()))),
                             Some(background_deadline_at),
@@ -353,10 +351,8 @@ impl DefraSessionHook {
                                     gents_loop::tool_call_lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args, &envelope).await
                                 }
                             },
-                        )
-                        .await
-                    },
-            ))
+                        ),
+                )
             .catch_unwind()
             .await;
 

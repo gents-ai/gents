@@ -127,11 +127,12 @@ impl Tool for ListFilesTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         let output = self
             .native_runner
             .run(
+                call,
                 NativeFsRunnerRequest::ListFiles(NativeListFilesArgs {
                     path: args.path,
                     recursive: args.recursive,
@@ -223,7 +224,7 @@ impl Tool for ReadFileTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        _call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         let path = self.context.resolve_existing_file(&args.path)?;
         let bytes = tokio::fs::read(&path).await?;
@@ -320,11 +321,12 @@ impl Tool for GlobTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         let output = self
             .native_runner
             .run(
+                call,
                 NativeFsRunnerRequest::Glob(NativeGlobArgs {
                     pattern: args.pattern,
                     path: args.path,
@@ -412,11 +414,12 @@ impl Tool for GrepTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         let output = self
             .native_runner
             .run(
+                call,
                 NativeFsRunnerRequest::Grep(NativeGrepArgs {
                     pattern: args.pattern,
                     path: args.path,

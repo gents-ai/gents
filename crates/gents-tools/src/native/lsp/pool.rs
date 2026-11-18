@@ -32,8 +32,11 @@ pub struct PoolKey {
 }
 
 impl PoolKey {
-    fn validate_operator_guard(&self) -> Result<(), String> {
-        let runtime_home = crate::runtime_context::current_tool_runtime_context()
+    fn validate_operator_guard(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), String> {
+        let runtime_home = crate::runtime_context::tool_runtime_context(call)
             .and_then(|context| context.runtime_home);
         if runtime_home != self.runtime_home {
             return Err("language-server runtime protection changed; retry the action".into());
@@ -249,8 +252,12 @@ impl LspPool {
         }
     }
 
-    pub(crate) async fn get_ready(&self, key: &PoolKey) -> Option<LspLease> {
-        if super::artifact_scope_denied() {
+    pub(crate) async fn get_ready(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        key: &PoolKey,
+    ) -> Option<LspLease> {
+        if super::artifact_scope_denied(call) {
             return None;
         }
         let map = self.inner.lock().await;
@@ -258,7 +265,7 @@ impl LspPool {
         drop(map);
         let captured_credentials = slot.lock().await.credential_snapshot.clone();
         let current_credentials = if captured_credentials.is_some() {
-            match crate::native::current_managed_command_credential_snapshot(true).await {
+            match crate::native::current_managed_command_credential_snapshot(call, true).await {
                 Ok(snapshot) => snapshot,
                 Err(_) => {
                     self.retire(key).await;
@@ -278,7 +285,7 @@ impl LspPool {
             self.retire(key).await;
             return None;
         }
-        key.validate_operator_guard().ok()?;
+        key.validate_operator_guard(call).ok()?;
         if entry.credential_snapshot != current_credentials {
             drop(entry);
             self.retire(key).await;
@@ -296,18 +303,19 @@ impl LspPool {
 
     pub(crate) async fn get_or_start(
         &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
         key: PoolKey,
         server: &CatalogServer,
         config: &LspToolConfig,
     ) -> Result<LspLease, String> {
-        if super::artifact_scope_denied() {
+        if super::artifact_scope_denied(call) {
             return Err(super::ARTIFACT_SCOPE_DENIAL.into());
         }
-        key.validate_operator_guard()?;
-        let constraints = super::overlay_lsp_constraints(&config.constraints);
+        key.validate_operator_guard(call)?;
+        let constraints = super::overlay_lsp_constraints(call, &config.constraints);
         let protects_credentials = constraints.to_spawn_policy().mode.protects_credentials();
         let current_credentials =
-            crate::native::current_managed_command_credential_snapshot(protects_credentials)
+            crate::native::current_managed_command_credential_snapshot(call, protects_credentials)
                 .await?;
         self.spawn_sweeper_once();
         {
@@ -371,7 +379,7 @@ impl LspPool {
                 let mut entry = slot.lock().await;
                 if entry.state == EntryState::Ready {
                     if let Some(client) = entry.client.clone() {
-                        key.validate_operator_guard()?;
+                        key.validate_operator_guard(call)?;
                         if entry.credential_snapshot != current_credentials {
                             drop(entry);
                             self.retire(&key).await;
@@ -415,10 +423,11 @@ impl LspPool {
             runtime: DropCleanup::current(),
             disarm: Arc::new(AtomicBool::new(false)),
         };
-        let started = self.start_client(&key, server, config).await;
+        let started = self.start_client(call, &key, server, config).await;
         let credentials_current = match &started {
             Ok((_, credential_snapshot)) => {
                 crate::native::current_managed_command_credential_snapshot(
+                    call,
                     credential_snapshot.is_some(),
                 )
                 .await
@@ -429,7 +438,7 @@ impl LspPool {
         let mut entry = slot.lock().await;
         let started = match started {
             Ok((client, credential_snapshot)) => {
-                match (key.validate_operator_guard(), credentials_current) {
+                match (key.validate_operator_guard(call), credentials_current) {
                     (Ok(()), true) => Ok((client, credential_snapshot)),
                     (guard_result, false) => {
                         let error = guard_result.err().unwrap_or_else(|| {
@@ -497,16 +506,22 @@ impl LspPool {
 
     async fn start_client(
         &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
         key: &PoolKey,
         server: &CatalogServer,
         config: &LspToolConfig,
     ) -> Result<(LspClient, Option<Vec<std::path::PathBuf>>), ClientStartError> {
         let workspace = key.workspace_root.clone();
-        let constraints = super::overlay_lsp_constraints(&config.constraints);
-        let command =
-            prepare_managed_command(&workspace, &server.command, &server.args, &constraints)
-                .await
-                .map_err(|err| ClientStartError::Admission(err.to_string()))?;
+        let constraints = super::overlay_lsp_constraints(call, &config.constraints);
+        let command = prepare_managed_command(
+            call,
+            &workspace,
+            &server.command,
+            &server.args,
+            &constraints,
+        )
+        .await
+        .map_err(|err| ClientStartError::Admission(err.to_string()))?;
         if command.operator_guard_home != key.operator_guard_home {
             return Err(ClientStartError::Admission(
                 "language-server operator protection changed; retry the action".into(),
@@ -626,8 +641,12 @@ impl LspPool {
         self.failed.lock().await.clear();
     }
 
-    pub async fn has_ready(&self, key: &PoolKey) -> bool {
-        if key.validate_operator_guard().is_err() {
+    pub async fn has_ready(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        key: &PoolKey,
+    ) -> bool {
+        if key.validate_operator_guard(call).is_err() {
             return false;
         }
         let map = self.inner.lock().await;
@@ -637,7 +656,7 @@ impl LspPool {
         drop(map);
         let captured_credentials = slot.lock().await.credential_snapshot.clone();
         let current_credentials = if captured_credentials.is_some() {
-            match crate::native::current_managed_command_credential_snapshot(true).await {
+            match crate::native::current_managed_command_credential_snapshot(call, true).await {
                 Ok(snapshot) => snapshot,
                 Err(_) => {
                     self.retire(key).await;
@@ -666,12 +685,13 @@ impl LspPool {
 
     pub(crate) async fn inspect_session(
         &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
         session_id: &str,
         agent_did: &str,
         workspace: &std::path::Path,
         digest: &str,
     ) -> Result<RapidHashMap<String, PoolServerState>, String> {
-        let runtime_home = crate::runtime_context::current_tool_runtime_context()
+        let runtime_home = crate::runtime_context::tool_runtime_context(call)
             .and_then(|context| context.runtime_home);
         let operator_guard_home = crate::plugin::approval::workspace::command_guard_home()
             .map_err(|error| format!("{error:#}"))?;

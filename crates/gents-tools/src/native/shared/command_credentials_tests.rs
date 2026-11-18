@@ -300,14 +300,21 @@ async fn changed_identity_configuration_invalidates_waiting_command_exclusions()
         Default::default(),
         false,
         async {
-            let waiting = capture().await.unwrap();
+            let waiting = capture(&gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .unwrap();
             write_identity_config(&home, &replacement);
-            let error = waiting.revalidate().await.unwrap_err();
+            let error = waiting
+                .revalidate(&gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .unwrap_err();
             assert!(
                 error.to_string().contains("exclusions changed"),
                 "{error:#}"
             );
-            let current = capture().await.unwrap();
+            let current = capture(&gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .unwrap();
             assert!(current.paths.contains(&replacement));
             assert!(!current.paths.contains(&original));
         },

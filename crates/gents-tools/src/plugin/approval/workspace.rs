@@ -350,12 +350,13 @@ async fn authorize_binding(
         crate::runtime_context::tool_runtime_context(call).and_then(|context| context.session_id);
     let binding = decision.binding.clone();
     let interactive = crate::runtime_context::host(call).interactive;
-    let allowed = consent_binding(home, decision, interactive, session_id).await?;
+    let allowed = consent_binding(call, home, decision, interactive, session_id).await?;
     anyhow::ensure!(allowed, "{denied}");
     Ok(binding)
 }
 
 pub async fn consent_binding(
+    call: &gents_loop::tool::ToolCallEnvelope,
     home: &Path,
     decision: BindingDecision,
     interactive: bool,
@@ -363,7 +364,7 @@ pub async fn consent_binding(
 ) -> Result<bool> {
     use super::{Consent, Request};
 
-    let bounds = crate::runtime_context::tool_execution_bounds(super::WAIT);
+    let bounds = crate::runtime_context::tool_execution_bounds(call, super::WAIT);
     let deadline = bounds.deadline_at.context("approval deadline is missing")?;
     let remaining = deadline
         .signed_duration_since(chrono::Utc::now())

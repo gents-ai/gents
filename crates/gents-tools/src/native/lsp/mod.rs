@@ -126,8 +126,8 @@ pub fn constraints_from_effective_bash(
 
 // Persistent clients are shared across request lifetimes. Until they support
 // per-request artifact authority, neither starting nor borrowing one is legal.
-fn artifact_scope_denied() -> bool {
-    crate::runtime_context::current_tool_runtime_context()
+fn artifact_scope_denied(call: &gents_loop::tool::ToolCallEnvelope) -> bool {
+    crate::runtime_context::tool_runtime_context(call)
         .is_some_and(|scope| scope.workspace_artifact.is_some())
 }
 const ARTIFACT_SCOPE_DENIAL: &str = "persistent LSP and supplementary linters are unavailable in artifact-scoped requests; use the sandboxed Bash compiler path";
@@ -149,12 +149,12 @@ impl LspTool {
         })
     }
 
-    fn effective_workspace(&self) -> PathBuf {
-        overlay_workspace_or(&self.config.workspace)
+    fn effective_workspace(&self, call: &gents_loop::tool::ToolCallEnvelope) -> PathBuf {
+        overlay_workspace_or(call, &self.config.workspace)
     }
 
-    fn effective_file_mode(&self) -> FileToolMode {
-        crate::runtime_context::current_tool_runtime_context()
+    fn effective_file_mode(&self, call: &gents_loop::tool::ToolCallEnvelope) -> FileToolMode {
+        crate::runtime_context::tool_runtime_context(call)
             .and_then(|scope| scope.workspace_authority)
             .map(|authority| {
                 self.config
@@ -282,7 +282,7 @@ impl Tool for LspTool {
                 "limit must be between 1 and 1000".into(),
             ));
         }
-        if artifact_scope_denied() {
+        if artifact_scope_denied(call) {
             return Err(ToolError::reported_failure(
                 FailureClass::PolicyDenied,
                 ARTIFACT_SCOPE_DENIAL.into(),
@@ -297,7 +297,7 @@ impl Tool for LspTool {
         if matches!(action, LspAction::CodeActionsList) && args.apply == Some(true) {
             action = LspAction::CodeActionsApply;
         }
-        if !lsp_action_authorized(self.config.lsp, self.effective_file_mode(), action) {
+        if !lsp_action_authorized(self.config.lsp, self.effective_file_mode(call), action) {
             return Err(ToolError::reported_failure(
                 FailureClass::PolicyDenied,
                 "lsp action is not authorized for this file-tool mode".into(),
@@ -307,7 +307,7 @@ impl Tool for LspTool {
             let method = args.query.as_deref().unwrap_or("");
             actions::request::validate_raw_request(&self.context, method, args.payload.as_deref())?;
         }
-        let workspace = self.effective_workspace();
+        let workspace = self.effective_workspace(call);
         let detected = catalog::detect_admitted_servers(&workspace, &self.config.servers);
         let lease = if action.may_cold_start() {
             let file = args.file.as_deref().unwrap_or("");
@@ -316,7 +316,7 @@ impl Tool for LspTool {
                 None
             } else if is_glob {
                 let paths = crate::native::native_runner::NativeFsRunner::new(&self.context)
-                    .glob_paths(file, actions::MAX_GLOB_TARGETS)
+                    .glob_paths(call, file, actions::MAX_GLOB_TARGETS)
                     .await
                     .unwrap_or_default();
                 if paths.is_empty() {
@@ -351,12 +351,12 @@ impl Tool for LspTool {
                 None => catalog::primary_for_workspace(&detected).cloned(),
             };
             if let Some(server) = server {
-                let session_id = crate::runtime_context::current_tool_runtime_context()
+                let session_id = crate::runtime_context::tool_runtime_context(call)
                     .and_then(|scope| scope.session_id)
                     .filter(|id| !id.is_empty())
                     .unwrap_or_else(|| self.config.session_id.clone());
                 let key = PoolKey {
-                    runtime_home: crate::runtime_context::current_tool_runtime_context()
+                    runtime_home: crate::runtime_context::tool_runtime_context(call)
                         .and_then(|context| context.runtime_home),
                     session_id,
                     agent_did: self.config.agent_did.clone(),
@@ -373,7 +373,7 @@ impl Tool for LspTool {
                 };
                 Some(
                     self.pool
-                        .get_or_start(key, &server, &self.config)
+                        .get_or_start(call, key, &server, &self.config)
                         .await
                         .map_err(|err| {
                             ToolError::reported_failure(FailureClass::ServiceUnavailable, err)
@@ -429,14 +429,20 @@ impl Tool for LspTool {
     }
 }
 
-pub(crate) fn overlay_workspace_or(fallback: &Path) -> PathBuf {
-    crate::runtime_context::current_tool_runtime_context()
+pub(crate) fn overlay_workspace_or(
+    call: &gents_loop::tool::ToolCallEnvelope,
+    fallback: &Path,
+) -> PathBuf {
+    crate::runtime_context::tool_runtime_context(call)
         .and_then(|scope| scope.workspace_root)
         .unwrap_or_else(|| fallback.to_path_buf())
 }
 
-pub(crate) fn overlay_lsp_constraints(base: &CommandConstraints) -> CommandConstraints {
-    let Some(authority) = crate::runtime_context::current_tool_runtime_context()
+pub(crate) fn overlay_lsp_constraints(
+    call: &gents_loop::tool::ToolCallEnvelope,
+    base: &CommandConstraints,
+) -> CommandConstraints {
+    let Some(authority) = crate::runtime_context::tool_runtime_context(call)
         .and_then(|scope| scope.workspace_authority)
     else {
         return base.clone();
