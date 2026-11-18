@@ -34,16 +34,123 @@ const FAMILY_CALL_SPELLINGS: &[&str] = &[
     "::cases)",
 ];
 
-/// The alias declaration that makes a file a reader of a derived family:
-/// `families::<key> as family;`.
-const FAMILY_ALIAS_DECLARATION: &str = " as family;";
+/// The pre-existing alias, `families::<key> as family;`, which counts as a reader
+/// per declaration and is not also counted through its uses.
+const CONVENTIONAL_ALIAS: &str = "family";
 
-/// The alias a file gives `families::<key>`, if it declares one.
+/// Strip `//` line comments, `/* … */` blocks and string/char/raw-string literals.
 ///
-/// `use gents_lean_vocab::families::<key> as <alias>;` binds the family to
-/// `<alias>` for the rest of the file, so `<alias>::replay(` is as much a reader
-/// as `families::<key>::replay(`. Resolved per family so a file that aliases one
-/// family cannot lend that alias to another.
+/// The scan is a source-text heuristic, so a commented-out `use … as wire;` or a
+/// doc-comment example would otherwise read as a declaration, and text inside a
+/// string as a call. Replaced with a space of the same length so byte offsets and
+/// word boundaries stay meaningful.
+fn strip_comments_and_strings(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // A raw string, r"…" / r#"…"# / br#"…"#.
+        let raw_start = {
+            let mut j = i;
+            if bytes[j] == b'b' && j + 1 < bytes.len() && bytes[j + 1] == b'r' {
+                j += 1;
+            }
+            (bytes[j] == b'r' && bytes.get(j + 1).is_some_and(|b| *b == b'"' || *b == b'#'))
+                .then_some(j)
+        };
+        if let Some(j) = raw_start {
+            let hashes = bytes[j + 1..].iter().take_while(|b| **b == b'#').count();
+            let opening = j + 1 + hashes;
+            let closer = format!("\"{}", "#".repeat(hashes));
+            out.push(' ');
+            i = opening + 1;
+            if let Some(found) = source[i..].find(&closer) {
+                let end = i + found + closer.len();
+                out.extend(std::iter::repeat_n(' ', end - i));
+                i = end;
+            } else {
+                out.extend(std::iter::repeat_n(' ', source.len() - i));
+                i = source.len();
+            }
+            continue;
+        }
+        match (bytes[i], bytes.get(i + 1).copied()) {
+            // A line comment, up to and excluding the newline.
+            (b'/', Some(b'/')) => {
+                let end = source[i..]
+                    .find('\n')
+                    .map_or(source.len(), |found| i + found);
+                out.extend(std::iter::repeat_n(' ', end - i));
+                i = end;
+            }
+            // A block comment, possibly nested one level by Rust's rules; the
+            // simple form is enough here, and an unclosed one swallows the rest.
+            (b'/', Some(b'*')) => {
+                let end = source[i + 2..]
+                    .find("*/")
+                    .map_or(source.len(), |found| i + 2 + found + 2);
+                out.extend(std::iter::repeat_n(' ', end - i));
+                i = end;
+            }
+            // A string literal; an escaped quote inside does not close it.
+            (b'"', _) => {
+                let mut j = i + 1;
+                while j < bytes.len() {
+                    if bytes[j] == b'\\' {
+                        j += 2;
+                        continue;
+                    }
+                    if bytes[j] == b'"' {
+                        j += 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                out.extend(std::iter::repeat_n(' ', j - i));
+                i = j;
+            }
+            // A char literal, `'\''`, vs a lifetime `'a`: only the former closes.
+            (b'\'', _) => {
+                let mut j = i + 1;
+                let mut closed = None;
+                while j < bytes.len() && j < i + 6 {
+                    if bytes[j] == b'\\' {
+                        j += 2;
+                        continue;
+                    }
+                    if bytes[j] == b'\'' {
+                        closed = Some(j + 1);
+                        break;
+                    }
+                    j += 1;
+                }
+                match closed {
+                    Some(end) => {
+                        out.extend(std::iter::repeat_n(' ', end - i));
+                        i = end;
+                    }
+                    None => {
+                        out.push('\'');
+                        i += 1;
+                    }
+                }
+            }
+            _ => {
+                let ch = source[i..].chars().next().expect("a char boundary");
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+    }
+    out
+}
+
+/// Every alias this file gives `families::<key>`, from a standalone
+/// `use …families::<key> as <alias>;`.
+///
+/// Grouped imports (`use …families::{<key> as <alias>};`) are not recognised;
+/// `accepted_spellings` says so. An alias that is itself a family key is ignored,
+/// because it is indistinguishable from the canonical spelling.
 fn family_aliases(source: &str, key: &str, families: &BTreeSet<String>) -> Vec<String> {
     let needle = format!("families::{key} as ");
     let mut aliases = Vec::new();
@@ -56,14 +163,12 @@ fn family_aliases(source: &str, key: &str, families: &BTreeSet<String>) -> Vec<S
         if end == 0 {
             continue;
         }
-        // A plain `use … as alias;` ends at a `;`; a re-export list or a nested
-        // path carries something else there and is not an alias declaration.
+        // A standalone `use … as alias;` ends at `;`; a re-export list or a
+        // nested path carries something else there.
         if !rest[end..].trim_start().starts_with(';') {
             continue;
         }
         let alias = &rest[..end];
-        // An alias that is itself a family key would be indistinguishable from
-        // the canonical spelling, so it is left to that branch.
         if families.contains(alias) {
             continue;
         }
@@ -72,45 +177,161 @@ fn family_aliases(source: &str, key: &str, families: &BTreeSet<String>) -> Vec<S
     aliases
 }
 
-/// How many readers of `key`'s family one file contains.
+/// Every alias in the file, with the families it names.
 ///
-/// The canonical spellings count per occurrence, exactly as before. A file that
-/// additionally binds the family to its own alias counts **once** for that
-/// binding — not once per declaration and once per use, which would double every
-/// file that writes both. `as family;` keeps counting through the canonical
-/// spelling, so nothing about the existing counts changes.
-fn reader_count(source: &str, key: &str, families: &BTreeSet<String>) -> usize {
-    let alias_family = FAMILY_ALIAS_DECLARATION
-        .trim_start_matches(" as ")
-        .trim_end_matches(';');
-    // A file is a reader when it either spells the family's path out or binds it
-    // to an alias and uses that alias. The two are the *same* reader in one
-    // file, so a file that does both counts once: counting the spellings and the
-    // alias additively reported ordinary files as two readers.
-    let spelled: usize = FAMILY_CALL_SPELLINGS
-        .iter()
-        .map(|site| source.matches(&format!("families::{key}{site}")).count())
-        .sum();
-    let declared = source
-        .matches(&format!("families::{key}{FAMILY_ALIAS_DECLARATION}"))
-        .count();
-    // `as family;` is covered by `declared`; every other alias is covered here.
-    let aliased = family_aliases(source, key, families)
+/// The family set is keyed `families/<domain>`, while a `use` names the bare
+/// `<domain>`, so the prefix is stripped before matching.
+fn alias_declarations(
+    source: &str,
+    families: &BTreeSet<String>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let prefix = format!("{DERIVED_FAMILIES}/");
+    let mut declared: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for family in families {
+        let Some(key) = family.strip_prefix(&prefix) else {
+            continue;
+        };
+        for alias in family_aliases(source, key, families) {
+            declared.entry(alias).or_default().insert(family.clone());
+        }
+    }
+    declared
+}
+
+/// How many occurrences of `<alias>::replay(` / `::cases(` the file has.
+///
+/// The alias must stand on its own: the byte before it is neither an identifier
+/// character nor `:`, so `rewire::replay(` and `crate::wire::replay(` are not
+/// uses of `wire`.
+fn alias_use_count(source: &str, alias: &str) -> usize {
+    let bytes = source.as_bytes();
+    let mut total = 0;
+    let mut from = 0;
+    while let Some(found) = source[from..].find(alias) {
+        let at = from + found;
+        from = at + alias.len();
+        let boundary = at > 0 && {
+            let before = bytes[at - 1];
+            !is_identifier(before) && before != b':'
+        };
+        if !boundary && at != 0 {
+            continue;
+        }
+        let mut rest = &source[at + alias.len()..];
+        // Trimmed so `<alias> ::replay(` still reads, as Rust allows.
+        if rest.starts_with(char::is_whitespace) {
+            rest = rest.trim_start();
+        }
+        if FAMILY_CALL_SPELLINGS
+            .iter()
+            .any(|site| rest.starts_with(site))
+        {
+            total += 1;
+        }
+    }
+    total
+}
+
+/// How many readers of `key`'s family one file contains: one per occurrence.
+///
+/// Counting is per occurrence because a file holds many tests, and the rule the
+/// ledger enforces is "exactly one *replay* per derived family" — two replays in
+/// one file must stay visible as two.
+///
+/// * a canonical `families::<key>::replay(` / `::cases(` — one per occurrence;
+/// * `families::<key> as family;` — one per declaration, and not also through
+///   `family::replay(` (its pre-existing behaviour);
+/// * `<alias>::replay(` / `::cases(` for any other alias — one per use;
+/// * the alias *declaration* itself — nothing.
+///
+/// Returns `Err` when one alias names two families in this file: the uses cannot
+/// say which is meant, and crediting both would let a family nobody replays be
+/// satisfied by a sibling's call.
+fn reader_count(source: &str, key: &str, families: &BTreeSet<String>) -> Result<usize, String> {
+    reader_count_prepared(&prepare(source, families), key)
+}
+
+/// The per-file work `reader_count` needs, done once however many families are
+/// counted for this file.
+///
+/// Stripping comments and resolving aliases is O(source); doing that per family
+/// made the scan O(files x families) over 1205 families, and the full-lib test
+/// ran for over twenty minutes.
+struct PreparedSource {
+    /// The source with comments, strings and char literals blanked.
+    stripped: String,
+    /// Each alias in the file, the families it names, and its use count.
+    aliases: Vec<(String, BTreeSet<String>, usize)>,
+}
+
+fn prepare(source: &str, families: &BTreeSet<String>) -> PreparedSource {
+    let stripped = strip_comments_and_strings(source);
+    let aliases = alias_declarations(&stripped, families)
         .into_iter()
-        .filter(|alias| alias != alias_family)
-        .any(|alias| alias_used(source, &alias));
-    let any = spelled + declared > 0 || aliased;
-    usize::from(any)
+        .map(|(alias, keys)| {
+            let uses = alias_use_count(&stripped, &alias);
+            (alias, keys, uses)
+        })
+        .collect();
+    PreparedSource { stripped, aliases }
+}
+
+fn reader_count_prepared(prepared: &PreparedSource, key: &str) -> Result<usize, String> {
+    let stripped = &prepared.stripped;
+    let mut count: usize = FAMILY_CALL_SPELLINGS
+        .iter()
+        .map(|site| stripped.matches(&format!("families::{key}{site}")).count())
+        .sum();
+    // The conventional alias, per declaration. Its uses are not counted too.
+    count += stripped
+        .matches(&format!("families::{key} as {CONVENTIONAL_ALIAS};"))
+        .count();
+
+    for (alias, keys, uses) in &prepared.aliases {
+        if *uses == 0 {
+            continue;
+        }
+        // `as family;` counts per declaration and ignores its uses, so it has
+        // no attribution to lose and is exempt from the ambiguity rule.
+        if alias != CONVENTIONAL_ALIAS && keys.len() > 1 {
+            return Err(format!(
+                "ambiguous alias `{alias}`: this file declares it for {keys:?}, so its \\
+                 {uses} use(s) cannot be attributed; give each family its own alias"
+            ));
+        }
+        let wanted = format!("{DERIVED_FAMILIES}/{key}");
+        if keys.contains(&wanted) && alias != CONVENTIONAL_ALIAS {
+            count += *uses;
+        }
+    }
+    Ok(count)
+}
+
+/// How many readers this file spells *inside string literals*.
+///
+/// Not every source file is Rust: `source_files` also walks `.ts`/`.tsx`, where
+/// a conformance table names its family as a string —
+/// `("families::<key>::cases()")`. `strip_comments_and_strings` blanks exactly
+/// that text, so the quoted spellings are counted here as the difference between
+/// the raw occurrence count and the stripped one. A bare spelling is therefore
+/// still counted once, not twice.
+fn quoted_reader_count(source: &str, key: &str, stripped: &str) -> usize {
+    FAMILY_CALL_SPELLINGS
+        .iter()
+        .map(|site| {
+            let needle = format!("families::{key}{site}");
+            source
+                .matches(&needle)
+                .count()
+                .saturating_sub(stripped.matches(&needle).count())
+        })
+        .sum()
 }
 
 /// Whether `alias` is actually replayed or enumerated, as `<alias>::replay(`.
-///
-/// A bare `replay(` with no family path is not a reader of anything: the alias
-/// has to be the receiver.
+#[cfg(test)]
 fn alias_used(source: &str, alias: &str) -> bool {
-    FAMILY_CALL_SPELLINGS
-        .iter()
-        .any(|site| source.contains(&format!("{alias}{site}")))
+    alias_use_count(source, alias) > 0
 }
 
 /// The spellings `consumer_sites` accepts, for the failure message.
@@ -121,16 +342,31 @@ fn alias_used(source: &str, alias: &str) -> bool {
 fn accepted_spellings() -> String {
     let mut spellings: Vec<String> = FAMILY_CALL_SPELLINGS
         .iter()
-        .map(|call| format!("  families::<key>{call}"))
+        .map(|call| format!("    families::<key>{call}"))
         .collect();
-    spellings.push(format!(
-        "  families::<key>{}         (any other alias is counted too, when it is",
-        FAMILY_ALIAS_DECLARATION
-    ));
-    spellings.push("     declared as `use …families::<key> as <alias>;` and then".to_owned());
-    spellings.push(
-        "     replayed as `<alias>::replay(…)` or enumerated as `<alias>::cases(…)`)".to_owned(),
-    );
+    spellings.push(format!("    families::<key> as {CONVENTIONAL_ALIAS};"));
+    spellings.push(String::new());
+    spellings.push("  Counting rules:".to_owned());
+    spellings.push("    * one per occurrence — a file may hold many tests, and each".to_owned());
+    spellings.push("      occurrence counts, so two replays in one file read as two;".to_owned());
+    spellings
+        .push("    * the `as family;` declaration counts once per declaration, and its".to_owned());
+    spellings.push("      uses are not counted again.".to_owned());
+    spellings.push(String::new());
+    spellings.push("  A standalone use of any other alias also reads the family:".to_owned());
+    spellings.push("    use gents_lean_vocab::families::<key> as <alias>;".to_owned());
+    spellings.push("    <alias>::replay(…)   or   <alias>::cases(…)".to_owned());
+    spellings
+        .push("  The alias declaration itself counts nothing; each use counts one.".to_owned());
+    spellings.push(String::new());
+    spellings.push("  Not recognised, and they do not read the family:".to_owned());
+    spellings.push("    * a grouped import, `families::{{<key> as <alias>}};`;".to_owned());
+    spellings.push("    * an alias equal to a family key, which is ignored;".to_owned());
+    spellings.push("    * a bare `replay(` with no family path or alias receiver;".to_owned());
+    spellings
+        .push("    * `rewire::replay(` or `crate::wire::replay(` for alias `wire`,".to_owned());
+    spellings.push("      which need the alias at a word boundary;".to_owned());
+    spellings.push("    * anything inside a comment or a string literal.".to_owned());
     spellings.join("\n")
 }
 
@@ -373,17 +609,39 @@ pub fn consumer_sites(
                 .expect("known family")
                 .insert(relative.clone());
         }
-        // A reader needs the family's path somewhere in the file: either spelled
-        // out (`families::<key>…`) or bound to an alias first.
-        if !source.contains("families::") && !source.contains(FAMILY_ALIAS_DECLARATION) {
+        // `families_read` above has already recorded a reader reached by a
+        // loader or a domain string. This loop only adds the count from the
+        // `families::<key>` spellings and aliases, so a file with no such path
+        // has nothing to add and must not have its count overwritten with zero.
+        if !source.contains("families::") {
             continue;
         }
         let prefix = format!("{DERIVED_FAMILIES}/");
-        for (family, found) in sites.range_mut(prefix.clone()..) {
-            let Some(key) = family.strip_prefix(&prefix) else {
-                break;
-            };
-            let calls = reader_count(&source, key, families);
+        let prepared = prepare(&source, families);
+        for (family, key) in sites
+            .keys()
+            .filter_map(|family| {
+                family
+                    .strip_prefix(&prefix)
+                    .map(|key| (family.clone(), key.to_owned()))
+            })
+            .collect::<Vec<_>>()
+        {
+            let (family, key) = (family, key.as_str());
+            let found = sites.get_mut(&family).expect("seeded family");
+            // `families_read` has already decided this file reads the family
+            // (through the path, a loader, or a domain string), so the count is
+            // added whichever way it was reached. A file with no `families::`
+            // path still counts: a loader call is a replay, and the per-key
+            // count is zero only when nothing spells it out.
+            // Quoted spellings count too: a `.ts` conformance table names a
+            // reader as a string literal, "families::<key>::cases()", and
+            // stripping string contents would erase it.
+            let calls = reader_count_prepared(&prepared, key)
+                .unwrap_or_else(|error| panic!("{relative}: {error}"))
+                + quoted_reader_count(&source, key, &prepared.stripped);
+            // A zero spelling count does not mean no reader: `families_read`
+            // above may have recorded this file already, through a loader.
             found.extend((1..=calls).map(|call| format!("{relative}#{call}")));
         }
     }
@@ -403,36 +661,37 @@ mod tests {
         .expect("workspace root")
     }
 
-    /// The families these tests scan for: one derived key, plus a sibling so an
+    /// The families these tests scan for: one derived key, plus siblings so an
     /// alias cannot leak between families.
     fn scan_families() -> BTreeSet<String> {
         [
             "families/alpha_family",
             "families/beta_family",
-            "families/ordinary_family",
+            "families/gamma_family",
         ]
         .iter()
         .map(|family| (*family).to_owned())
         .collect()
     }
 
+    fn count(source: &str, key: &str) -> usize {
+        let families = scan_families();
+        reader_count(source, key, &families).expect("no ambiguous alias")
+    }
+
     /// An alias that is replayed or enumerated is a reader of that family.
     #[test]
     fn an_aliased_family_counts_as_a_reader() {
-        let families = scan_families();
-        for alias in ["wire", "family", "scenario"] {
+        for alias in ["wire", "scenario"] {
             for call in ["::replay(", "::cases("] {
                 let source = format!(
                     "use gents_lean_vocab::families::alpha_family as {alias};\n\
                      fn t() {{ {alias}{call}assert!(true) }}"
                 );
                 assert_eq!(
-                    reader_count(&source, "alpha_family", &families),
+                    count(&source, "alpha_family"),
                     1,
                     "`as {alias};` + `{alias}{call}` is one reader: {source}"
-                );
-                assert!(
-                    family_aliases(&source, "alpha_family", &families).contains(&alias.to_owned())
                 );
             }
         }
@@ -442,39 +701,22 @@ mod tests {
     /// name is not reading a family.
     #[test]
     fn an_alias_without_a_call_is_not_a_reader() {
-        let families = scan_families();
-        for alias in ["wire", "scenario"] {
-            let source = format!(
-                "use gents_lean_vocab::families::alpha_family as {alias};\n\
-                 fn t() {{ let _ = {alias}::RefusalInput::default(); }}"
-            );
-            assert_eq!(
-                reader_count(&source, "alpha_family", &families),
-                0,
-                "an unused alias reads nothing: {source}"
-            );
-            // It is still recognised as an alias; it simply is not used.
-            assert!(family_aliases(&source, "alpha_family", &families).contains(&alias.to_owned()));
-        }
+        let source = "use gents_lean_vocab::families::alpha_family as wire;\n\
+                      fn t() { let _ = wire::RefusalInput::default(); }";
+        assert_eq!(count(source, "alpha_family"), 0);
     }
 
     /// A bare `replay(` with no family path is nobody's reader. The alias must
     /// be the receiver, which is what separates this from widening the scan.
     #[test]
     fn a_bare_replay_call_is_not_a_reader() {
-        let families = scan_families();
         for source in [
-            "fn t() { replay(|| handle(input)); }".to_owned(),
-            "fn t() { cases(|c| c.value()); }".to_owned(),
+            "fn t() { replay(|| handle(input)); }",
+            "fn t() { cases(|c| c.value()); }",
             "use gents_lean_vocab::families::alpha_family as wire;\n\
-             fn t() { other::replay(|| handle(input)); }"
-                .to_owned(),
+             fn t() { other::replay(|| handle(input)); }",
         ] {
-            assert_eq!(
-                reader_count(&source, "alpha_family", &families),
-                0,
-                "no family path, no reader: {source}"
-            );
+            assert_eq!(count(source, "alpha_family"), 0, "{source}");
         }
     }
 
@@ -482,75 +724,153 @@ mod tests {
     /// to `beta_family` must not read as a reader of `alpha_family`.
     #[test]
     fn an_alias_only_reads_the_family_it_is_declared_for() {
-        let families = scan_families();
         let source = "use gents_lean_vocab::families::beta_family as wire;\n\
                       fn t() { wire::replay(|_| Ok(())); }";
-        assert_eq!(reader_count(source, "beta_family", &families), 1);
+        assert_eq!(count(source, "beta_family"), 1);
         assert_eq!(
-            reader_count(source, "alpha_family", &families),
+            count(source, "alpha_family"),
             0,
-            "beta's alias is not alpha's reader"
+            "beta's alias is not alpha's"
         );
     }
 
-    /// The rule the ledger assertion relies on still holds with the alias
-    /// spelling: one file is one reader, however many times it calls.
+    /// Counting is per occurrence: one file holds many tests, so two replays in
+    /// one file read as two and the "exactly one replay" rule can see them.
     #[test]
-    fn one_alias_counts_once_however_many_calls() {
+    fn each_replay_counts_once_however_many_are_in_the_file() {
+        let canonical =
+            "fn a() { gents_lean_vocab::families::alpha_family::replay(|_| Ok(())); }\n\
+                         fn b() { gents_lean_vocab::families::alpha_family::replay(|_| Ok(())); }";
+        assert_eq!(count(canonical, "alpha_family"), 2, "two canonical replays");
+
+        let aliased = "use gents_lean_vocab::families::alpha_family as wire;\n\
+                       fn a() { wire::replay(|_| Ok(())); }\n\
+                       fn b() { wire::replay(|_| Ok(())); }\n\
+                       fn c() { wire::cases(); }";
+        assert_eq!(count(aliased, "alpha_family"), 3, "three aliased uses");
+
+        // A canonical call and an aliased use are two readers, in one file.
+        let mixed = "use gents_lean_vocab::families::alpha_family as wire;\n\
+                     fn a() { gents_lean_vocab::families::alpha_family::cases(); }\n\
+                     fn b() { wire::replay(|_| Ok(())); }";
+        assert_eq!(count(mixed, "alpha_family"), 2);
+    }
+
+    /// The `as family;` declaration keeps its pre-existing behaviour: one per
+    /// declaration, and its `family::replay(` uses are not counted again.
+    #[test]
+    fn the_conventional_alias_counts_per_declaration_only() {
+        let source = "use gents_lean_vocab::families::alpha_family as family;\n\
+                      fn t() { family::replay(|_| Ok(())); }";
+        assert_eq!(
+            count(source, "alpha_family"),
+            1,
+            "declaration counts, uses do not"
+        );
+    }
+
+    /// The alias must stand on its own. `rewire::replay(` and
+    /// `crate::wire::replay(` are not uses of `wire`.
+    #[test]
+    fn an_alias_must_sit_on_a_word_boundary() {
+        let declare = "use gents_lean_vocab::families::alpha_family as wire;\n";
+        for call in [
+            "rewire::replay(|_| Ok(()))",
+            "crate::wire::replay(|_| Ok(()))",
+            "other_wire::replay(|_| Ok(()))",
+            "super::wire::replay(|_| Ok(()))",
+        ] {
+            let source = format!("{declare}fn t() {{ {call}; }}");
+            assert_eq!(
+                count(&source, "alpha_family"),
+                0,
+                "`{call}` is not a use of `wire`: {source}"
+            );
+        }
+        // And the plain form does count.
+        let source = format!("{declare}fn t() {{ wire::replay(|_| Ok(())); }}");
+        assert_eq!(count(&source, "alpha_family"), 1);
+    }
+
+    /// A commented-out or quoted declaration is not a declaration.
+    #[test]
+    fn comments_and_strings_are_not_read() {
+        for source in [
+            "// use gents_lean_vocab::families::alpha_family as wire;\n\
+             fn t() { wire::replay(|_| Ok(())); }",
+            "/* use gents_lean_vocab::families::alpha_family as wire; */\n\
+             fn t() { wire::replay(|_| Ok(())); }",
+            "/// use gents_lean_vocab::families::alpha_family as wire;\n\
+             fn t() { wire::replay(|_| Ok(())); }",
+            "fn t() { let s = \"use gents_lean_vocab::families::alpha_family as wire;\"; \
+             wire::replay(|_| Ok(())); }",
+        ] {
+            assert_eq!(count(source, "alpha_family"), 0, "{source}");
+        }
+        // The same declaration outside a comment does read.
+        let live = "use gents_lean_vocab::families::alpha_family as wire;\n\
+                    fn t() { wire::replay(|_| Ok(())); }";
+        assert_eq!(count(live, "alpha_family"), 1);
+    }
+
+    /// Two families sharing one alias in one file cannot be attributed, so
+    /// neither is credited and the scan says so loudly rather than letting one
+    /// family ride on the other's replay.
+    #[test]
+    fn one_alias_for_two_families_is_ambiguous_and_counted_for_neither() {
         let families = scan_families();
         let source = "use gents_lean_vocab::families::alpha_family as wire;\n\
-                      fn a() { wire::replay(|_| Ok(())); }\n\
-                      fn b() { wire::replay(|_| Ok(())); }\n\
-                      fn c() { wire::cases(); }";
-        assert_eq!(
-            reader_count(source, "alpha_family", &families),
-            1,
-            "a declaration plus its uses is one reader, not four"
-        );
+                      use gents_lean_vocab::families::beta_family as wire;\n\
+                      fn t() { wire::replay(|_| Ok(())); }";
+        for key in ["alpha_family", "beta_family"] {
+            let error = reader_count(source, key, &families)
+                .expect_err("an alias naming two families is ambiguous");
+            assert!(
+                error.contains("ambiguous alias") && error.contains("wire"),
+                "the message names the alias: {error}"
+            );
+        }
     }
 
-    /// A file that both spells the path out and binds it to an alias is still
-    /// one file, so one reader. Counting the two spellings additively reported
-    /// 18 ordinary files as two readers.
+    /// The failure message lists the spellings it accepts, and says which forms
+    /// it does not recognise, so the next reader is not misled as B8 was.
     #[test]
-    fn a_file_with_a_canonical_call_and_an_alias_is_one_reader() {
-        let families = scan_families();
-        let source = "use gents_lean_vocab::families::alpha_family as locality;\n\
-                      fn t() {\n\
-                        let cases = gents_lean_vocab::families::alpha_family::cases();\n\
-                        locality::replay(|_| Ok(()));\n\
-                      }";
-        assert_eq!(
-            reader_count(source, "alpha_family", &families),
-            1,
-            "one file, both spellings, one reader"
-        );
-    }
-
-    /// Two files read one family two different ways: an alias in one and the
-    /// canonical spelling in the other count as two readers, which is what the
-    /// "exactly one replay per derived family" rule detects.
-    #[test]
-    fn an_alias_and_a_canonical_spelling_are_two_readers() {
-        let families = scan_families();
-        let aliased = "use gents_lean_vocab::families::alpha_family as wire;\n\
-                       fn t() { wire::replay(|_| Ok(())); }";
-        let canonical = "fn t() { gents_lean_vocab::families::alpha_family::replay(|_| Ok(())); }";
-        assert_eq!(reader_count(aliased, "alpha_family", &families), 1);
-        assert_eq!(reader_count(canonical, "alpha_family", &families), 1);
-        assert_eq!(
-            reader_count(aliased, "alpha_family", &families)
-                + reader_count(canonical, "alpha_family", &families),
-            2,
-            "two files, one family, two readers"
-        );
-        // And a file that does both spellings is not a third reader.
-        let both = format!("{aliased}\n{canonical}");
-        assert_eq!(
-            reader_count(&both, "alpha_family", &families),
-            1,
-            "one file is one reader however it spells it"
-        );
+    fn the_failure_message_names_the_accepted_spellings() {
+        let message = accepted_spellings();
+        for expected in [
+            "families::<key>::replay(",
+            "families::<key>::cases(",
+            "families::<key> as family;",
+            "as <alias>;",
+            "<alias>::replay(",
+            "one per occurrence",
+            "grouped import",
+            "alias equal to a family key",
+            "bare `replay(`",
+            "word boundary",
+            "comment or a string literal",
+        ] {
+            assert!(
+                message.contains(expected),
+                "message omits {expected}: {message}"
+            );
+        }
+        // The *prose* balances: the old text opened a parenthesis and closed it
+        // two lines later. The spelling lines carry their own `(`/`)` in
+        // `::replay(` and `::cases(`, so they are excluded from the count.
+        for line in message
+            .lines()
+            // Spelling lines and inline code carry their own `(`/`)`.
+            .filter(|line| {
+                !line.contains("families::") && !line.contains("<alias>::") && !line.contains('`')
+            })
+        {
+            assert_eq!(
+                line.matches('(').count(),
+                line.matches(')').count(),
+                "prose parentheses balance: {line}"
+            );
+        }
     }
 
     #[test]
