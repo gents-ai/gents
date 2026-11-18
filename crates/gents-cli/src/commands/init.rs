@@ -1958,13 +1958,7 @@ mod tests {
             owner: owner.did(),
         };
         assert!(write_identity_only_home_metadata(options()).await.is_err());
-        let reserved = home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists();
-        for case in gents_lean_vocab::families::node_provisioning_reservation::cases()
-            .into_iter()
-            .filter(|case| !case.input.created)
-        {
-            case.check(reserved);
-        }
+        assert!(!home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
         fs::remove_file(&obstruction).unwrap();
         write_identity_only_home_metadata(options()).await.unwrap();
         assert!(home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
