@@ -315,6 +315,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     http(admin_address, &candidate)?
         .write("test.transport.publish_request", &reproject_request)
         .await?;
+    http(admin_address, &candidate)?
+        .add_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", &reader)
+        .await?;
     let granted_delivered = {
         let http_sees = count(&http(admin_address, &admin)?.execute(&query).await?) != 0;
         let embedded_sees = count(&admin_local.execute(&query).await?) != 0;
