@@ -154,15 +154,21 @@ where
                 RequestInterruptionSource::Claimed,
             ));
         };
-        let (resume_from_history, resume_same_request, aggregate_token_budget, context_calibration) =
-            admitted?;
+        let prepare::LoadedAdmission {
+            resume_from_history,
+            resume_same_request,
+            aggregate_token_budget,
+            context_calibration,
+            last_call_seq,
+        } = admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let agent_name = self.agent_config.agent_did.clone();
         let admission_context = AdmissionCallContext::for_request(
             &request,
             lifecycle.agent_did(),
             lifecycle.backend_id(),
-        );
+        )
+        .resumed_after(last_call_seq);
         // One capture scope for the whole request: the pre-request compaction
         // summarizer issues real provider calls whose input is the entire
         // pre-truncated transcript, so scoping only the inference block left

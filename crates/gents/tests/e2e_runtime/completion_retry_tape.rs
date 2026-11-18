@@ -396,6 +396,19 @@ async fn interactive_budget_is_quick() {
     assert_eq!(backend.observed_requests(marker), in_loop_attempts + 1);
     let calls = fetch_inference_calls(&actors, request_id).await;
     assert_parked_once_then_answered(&actors, &request_doc_id, &calls, in_loop_attempts).await;
+    assert_eq!(
+        calls.iter().map(|call| call.call_seq).collect::<Vec<_>>(),
+        (1..=i64::try_from(in_loop_attempts + 1).unwrap()).collect::<Vec<_>>(),
+        "the resumed execution continues the request's call sequence: {calls:?}"
+    );
+    let timeline = build_timeline(&actors, request_id).await;
+    assert_eq!(
+        timeline.request.retry_summary.retry_count,
+        u32::try_from(in_loop_attempts).unwrap(),
+        "every failed attempt before and after the park is a retry: {:?}",
+        timeline.request.retry_summary
+    );
+    assert!(timeline.request.retry_summary.recovered);
 
     agent.shutdown().await;
 }

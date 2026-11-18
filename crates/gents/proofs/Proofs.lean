@@ -33,6 +33,7 @@ import Proofs.Session.SessionQueue.Archive
 import Proofs.Session.SessionFork
 import Proofs.Session.SessionRecovery
 import Proofs.Observe.FileInventory
+import Proofs.Observe.RetrySummary
 import Proofs.Session.SessionQueue.Properties
 import Proofs.Session.SessionQueue.Interrupt
 import Proofs.Session.SessionQueue.InterruptCases
