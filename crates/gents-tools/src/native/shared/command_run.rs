@@ -31,7 +31,7 @@ pub async fn run_command(
     raw_json: bool,
     max_output_chars: usize,
 ) -> std::result::Result<String, ToolError> {
-    let policy = effective_command_policy(policy);
+    let policy = effective_command_policy(call, policy);
     validate_command_policy(command_name, args, &policy)?;
     let cwd = context.resolve_existing_dir(cwd)?;
     let argv = std::iter::once(command_name.to_string())

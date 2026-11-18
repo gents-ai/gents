@@ -69,8 +69,11 @@ pub struct ContextBudgetScope {
 impl ContextBudgetScope {
     /// Resolve the scope from the in-flight tool call. Fails closed when the
     /// runtime did not install an agent or session identity.
-    fn from_tool_runtime(node_did: &str) -> Result<Self> {
-        let runtime = crate::runtime_context::current_tool_runtime_context();
+    fn from_tool_runtime(
+        call: &gents_loop::tool::ToolCallEnvelope,
+        node_did: &str,
+    ) -> Result<Self> {
+        let runtime = crate::runtime_context::tool_runtime_context(call);
         let agent_did = runtime
             .as_ref()
             .and_then(|runtime| runtime.agent_did.clone())
@@ -246,9 +249,9 @@ impl Tool for ContextBudgetTool {
     async fn call(
         &self,
         _args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        let scope = ContextBudgetScope::from_tool_runtime(&self.node_did)?;
+        let scope = ContextBudgetScope::from_tool_runtime(context, &self.node_did)?;
         let snapshot = load_context_budget_snapshot(&self.node, &scope).await?;
         gents_session::session::output_render::render(
             &snapshot,

@@ -100,6 +100,16 @@ pub trait Tool: Sized + Send + Sync {
 
     fn definition(&self, prompt: String) -> impl Future<Output = ToolDefinition> + Send + Sync;
 
+    /// The definition offered to the model for the call `context` describes;
+    /// a tool whose definition depends on the request overrides this.
+    fn definition_for(
+        &self,
+        prompt: String,
+        _context: &ToolCallEnvelope,
+    ) -> impl Future<Output = ToolDefinition> + Send {
+        self.definition(prompt)
+    }
+
     fn call(
         &self,
         args: Self::Args,
@@ -124,11 +134,11 @@ pub trait Tool: Sized + Send + Sync {
         None
     }
 
-    fn footprint(&self, _args: &Self::Args) -> ToolFootprint {
+    fn footprint(&self, _args: &Self::Args, _context: &ToolCallEnvelope) -> ToolFootprint {
         ToolFootprint::Barrier
     }
 
-    fn admit(&self, _args: &Self::Args) -> Result<(), Self::Error> {
+    fn admit(&self, _args: &Self::Args, _context: &ToolCallEnvelope) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -148,6 +158,16 @@ pub struct ToolDispatchResult {
 pub trait ToolDyn: Send + Sync {
     fn name(&self) -> String;
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition>;
+
+    /// The definition offered to the model for the call `context` describes.
+    fn definition_for<'a>(
+        &'a self,
+        prompt: String,
+        _context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, ToolDefinition> {
+        self.definition(prompt)
+    }
+
     fn call<'a>(
         &'a self,
         args: String,
@@ -177,7 +197,7 @@ pub trait ToolDyn: Send + Sync {
         self.call_with_receipt(args, context)
     }
 
-    fn footprint(&self, _args: &str) -> ToolFootprint {
+    fn footprint(&self, _args: &str, _context: &ToolCallEnvelope) -> ToolFootprint {
         ToolFootprint::Barrier
     }
 
@@ -185,7 +205,7 @@ pub trait ToolDyn: Send + Sync {
         false
     }
 
-    fn admit(&self, _args: &str) -> Result<(), ToolError> {
+    fn admit(&self, _args: &str, _context: &ToolCallEnvelope) -> Result<(), ToolError> {
         Ok(())
     }
 }
@@ -211,6 +231,14 @@ where
 
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(<Self as Tool>::definition(self, prompt))
+    }
+
+    fn definition_for<'a>(
+        &'a self,
+        prompt: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(<Self as Tool>::definition_for(self, prompt, context))
     }
 
     fn call<'a>(
@@ -242,17 +270,16 @@ where
         Box::pin(dispatch_typed(self, args, Some(request), context))
     }
 
-    fn footprint(&self, args: &str) -> ToolFootprint {
+    fn footprint(&self, args: &str, context: &ToolCallEnvelope) -> ToolFootprint {
         parse_tool_args::<<Self as Tool>::Args>(args)
-            .map(|parsed| <Self as Tool>::footprint(self, &parsed))
+            .map(|parsed| <Self as Tool>::footprint(self, &parsed, context))
             .unwrap_or(ToolFootprint::Barrier)
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(&self, args: &str, context: &ToolCallEnvelope) -> Result<(), ToolError> {
         match parse_tool_args::<<Self as Tool>::Args>(args) {
-            Ok(parsed) => {
-                <Self as Tool>::admit(self, &parsed).map_err(<Self as Tool>::into_dyn_error)
-            }
+            Ok(parsed) => <Self as Tool>::admit(self, &parsed, context)
+                .map_err(<Self as Tool>::into_dyn_error),
             Err(_) => Ok(()),
         }
     }
@@ -306,6 +333,13 @@ impl ToolDyn for RequestBoundTool {
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
         self.tools[self.index].definition(prompt)
     }
+    fn definition_for<'a>(
+        &'a self,
+        prompt: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, ToolDefinition> {
+        self.tools[self.index].definition_for(prompt, context)
+    }
     fn call<'a>(
         &'a self,
         args: String,
@@ -320,14 +354,14 @@ impl ToolDyn for RequestBoundTool {
     ) -> BoxFuture<'a, ToolDispatchResult> {
         self.tools[self.index].call_with_request(args, context, &self.request)
     }
-    fn footprint(&self, args: &str) -> ToolFootprint {
-        self.tools[self.index].footprint(args)
+    fn footprint(&self, args: &str, context: &ToolCallEnvelope) -> ToolFootprint {
+        self.tools[self.index].footprint(args, context)
     }
     fn emits_command_envelope(&self) -> bool {
         self.tools[self.index].emits_command_envelope()
     }
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
-        self.tools[self.index].admit(args)
+    fn admit(&self, args: &str, context: &ToolCallEnvelope) -> Result<(), ToolError> {
+        self.tools[self.index].admit(args, context)
     }
 }
 

@@ -71,11 +71,18 @@ impl Fixture {
     }
 
     async fn write(&self, path: &Path) -> Result<String, ToolError> {
+        self.write_in(&self.call(), path).await
+    }
+
+    async fn write_in(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        path: &Path,
+    ) -> Result<String, ToolError> {
         let tool =
             WriteFileTool::new(ToolContext::new(self.root.path().to_owned(), false).unwrap());
-        let call = self.call();
         self.run(
-            &call,
+            call,
             Tool::call(
                 &tool,
                 WriteFileArgs {
@@ -85,7 +92,7 @@ impl Fixture {
                     expected_content_hash: None,
                     overwrite: false,
                 },
-                &call,
+                call,
             ),
         )
         .await
@@ -401,23 +408,40 @@ async fn full_access_cannot_widen_read_only_workspace_authority() {
     };
     let fixture = Fixture::new(Some(workspace::Mode::FullAccess));
     let path = fixture.outside();
+    let workspace = ToolWorkspaceScope {
+        runtime_home: None,
+        workspace_cwd: Some(fixture.key.path.clone()),
+        workspace_root: Some(fixture.root.path().canonicalize().unwrap()),
+        workspace_authority: Some(WorkspaceAuthority::ReadOnly),
+        workspace_artifact: None,
+    };
+    let token = tokio_util::sync::CancellationToken::new();
+    let call = crate::runtime_context::entered_with_workspace_overlay(
+        &fixture.call(),
+        workspace.clone(),
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            identity: None,
+            deadline_at: None,
+            cancellation_token: token.clone(),
+            workspace_cwd: None,
+            live_output: None,
+            session_id: None,
+            correlation: None,
+            source_fields: Default::default(),
+            background: false,
+        },
+    );
     let result = scope_request_tool_execution_with_workspace_overlay(
         None,
         None,
-        tokio_util::sync::CancellationToken::new(),
-        ToolWorkspaceScope {
-            runtime_home: None,
-            workspace_cwd: Some(fixture.key.path.clone()),
-            workspace_root: Some(fixture.root.path().canonicalize().unwrap()),
-            workspace_authority: Some(WorkspaceAuthority::ReadOnly),
-            workspace_artifact: None,
-        },
+        token,
+        workspace,
         None,
         None,
         None,
         Default::default(),
         false,
-        fixture.write(&path),
+        fixture.write_in(&call, &path),
     )
     .await;
     assert!(matches!(

@@ -215,7 +215,13 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
         async {
             let lock = file_mutation_lock_for(&path);
             let _guard = lock.lock().await;
-            let capture = FileChangeCapture::start(&root_path, &path).await.unwrap();
+            let capture = FileChangeCapture::start(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &root_path,
+                &path,
+            )
+            .await
+            .unwrap();
             std::fs::write(&path, "partial").unwrap();
             drop(capture);
         },

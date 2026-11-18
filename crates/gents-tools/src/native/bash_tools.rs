@@ -201,8 +201,12 @@ impl Tool for ReadOnlyBashTool {
         }
     }
 
-    fn admit(&self, args: &Self::Args) -> Result<(), Self::Error> {
-        let policy = crate::native::effective_command_policy(&self.policy);
+    fn admit(
+        &self,
+        args: &Self::Args,
+        call: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), Self::Error> {
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         validate_read_only_bash_input(&args.command, &args.args, &policy)
     }
 
@@ -211,16 +215,18 @@ impl Tool for ReadOnlyBashTool {
         args: Self::Args,
         call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        Tool::admit(self, &args)?;
-        let policy = crate::native::effective_command_policy(&self.policy);
+        let context = self.context.for_call(call);
+        Tool::admit(self, &args, call)?;
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         run_command(
             call,
-            &self.context,
+            &context,
             Self::NAME,
             &args.command,
             &args.args,
             args.cwd.as_deref(),
             resolve_command_timeout_in_scope(
+                call,
                 args.timeout_secs,
                 self.default_timeout,
                 self.max_timeout,
@@ -245,8 +251,17 @@ impl Tool for UnrestrictedBashTool {
     type Args = BashArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let policy = crate::native::effective_command_policy(&self.policy);
+    async fn definition(&self, prompt: String) -> ToolDefinition {
+        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+    }
+
+    async fn definition_for(
+        &self,
+        _prompt: String,
+        call: &gents_loop::tool::ToolCallEnvelope,
+    ) -> ToolDefinition {
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         let policy_description = match policy.mode {
             CommandExecutionMode::ReadOnly => "read-only policy",
             CommandExecutionMode::ArtifactWrite => {
@@ -308,9 +323,13 @@ impl Tool for UnrestrictedBashTool {
         }
     }
 
-    fn admit(&self, args: &Self::Args) -> Result<(), Self::Error> {
+    fn admit(
+        &self,
+        args: &Self::Args,
+        call: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), Self::Error> {
         let (command, command_args) = unrestricted_argv(args);
-        let policy = crate::native::effective_command_policy(&self.policy);
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         validate_command_policy(command, &command_args, &policy)
     }
 
@@ -319,17 +338,19 @@ impl Tool for UnrestrictedBashTool {
         args: Self::Args,
         call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        Tool::admit(self, &args)?;
+        let context = self.context.for_call(call);
+        Tool::admit(self, &args, call)?;
         let (command, command_args) = unrestricted_argv(&args);
-        let policy = crate::native::effective_command_policy(&self.policy);
+        let policy = crate::native::effective_command_policy(call, &self.policy);
         run_command(
             call,
-            &self.context,
+            &context,
             Self::NAME,
             command,
             &command_args,
             args.cwd.as_deref(),
             resolve_command_timeout_in_scope(
+                call,
                 args.timeout_secs,
                 self.default_timeout,
                 self.max_timeout,

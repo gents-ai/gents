@@ -923,7 +923,10 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
         Default::default(),
         false,
         async {
-            let met = crate::native::effective_command_policy(&policy);
+            let met = crate::native::effective_command_policy(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &policy,
+            );
             assert_eq!(met.mode, CommandExecutionMode::WorkspaceWrite);
             gents_loop::tool::Tool::call(
                 &tool,

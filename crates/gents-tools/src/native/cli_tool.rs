@@ -49,7 +49,11 @@ impl ToolDyn for CliTool {
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         let Ok(args) = serde_json::from_str::<CliToolArgs>(args) else {
             return Ok(());
         };
@@ -63,7 +67,7 @@ impl ToolDyn for CliTool {
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         let config = self.config.clone();
         Box::pin(async move {
-            deny_artifact_scope().map_err(LocalToolError::into_dispatch_error)?;
+            deny_artifact_scope(call).map_err(LocalToolError::into_dispatch_error)?;
             let args: CliToolArgs = serde_json::from_str(&args).map_err(ToolError::JsonError)?;
             admit_argv_policy(&config, &args.argv).map_err(LocalToolError::into_dispatch_error)?;
             let output = run_cli_command(call, &config, &args.argv)
@@ -120,8 +124,8 @@ fn cli_tool_environment(config: &CliToolConfig) -> RapidHashMap<String, String> 
     env
 }
 
-fn deny_artifact_scope() -> Result<(), LocalToolError> {
-    if crate::runtime_context::current_tool_runtime_context()
+fn deny_artifact_scope(call: &gents_loop::tool::ToolCallEnvelope) -> Result<(), LocalToolError> {
+    if crate::runtime_context::tool_runtime_context(call)
         .is_some_and(|scope| scope.workspace_artifact.is_some())
     {
         return Err(LocalToolError::reported_failure(
@@ -137,7 +141,7 @@ async fn run_cli_command(
     config: &CliToolConfig,
     argv: &[String],
 ) -> Result<String, LocalToolError> {
-    deny_artifact_scope()?;
+    deny_artifact_scope(call)?;
     let cwd = match config.working_dir.as_ref() {
         Some(path) => {
             if !path.is_dir() {

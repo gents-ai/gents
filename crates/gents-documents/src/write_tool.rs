@@ -67,8 +67,12 @@ impl WriteToolFieldFill {
     /// Resolve this fill from the current tool-call runtime context. Shared by
     /// the bounded write and query tools so the correlation / source-field
     /// vocabulary cannot drift.
-    pub fn resolve(&self, field_name: &str) -> Result<String> {
-        self.resolve_optional(field_name)?.ok_or_else(|| {
+    pub fn resolve(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        field_name: &str,
+    ) -> Result<String> {
+        self.resolve_optional(call, field_name)?.ok_or_else(|| {
             let source = match self {
                 Self::Correlation => "correlation",
                 Self::SourceField(source_field) => source_field,
@@ -83,13 +87,16 @@ impl WriteToolFieldFill {
     /// (absent or null on the source document) resolves to `None`. Bounded
     /// writes use this to omit an unset optional fill; query filters and
     /// plugin inputs keep [`Self::resolve`] so a missing scope fails closed.
-    pub fn resolve_optional(&self, field_name: &str) -> Result<Option<String>> {
-        let runtime = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "runtime-filled field `{field_name}` requires an active AgentRequest context"
-                )
-            })?;
+    pub fn resolve_optional(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        field_name: &str,
+    ) -> Result<Option<String>> {
+        let runtime = call.runtime().ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime-filled field `{field_name}` requires an active AgentRequest context"
+            )
+        })?;
         match self {
             Self::Correlation => runtime
                 .correlation

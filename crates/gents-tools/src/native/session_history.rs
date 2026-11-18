@@ -340,7 +340,7 @@ impl Tool for SessionHistoryTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         let action = args.action.as_deref().unwrap_or("list").trim();
         if !ACTIONS.contains(&action) {
@@ -349,13 +349,15 @@ impl Tool for SessionHistoryTool {
             )
             .into());
         }
-        let value = discovery::run(self, &args, action).await.map_err(|error| {
-            if format!("{error:#}").contains("next call:") {
-                error
-            } else {
-                anyhow!("{error:#}; next call: sessions {{\"action\":\"help\"}}")
-            }
-        })?;
+        let value = discovery::run(self, context, &args, action)
+            .await
+            .map_err(|error| {
+                if format!("{error:#}").contains("next call:") {
+                    error
+                } else {
+                    anyhow!("{error:#}; next call: sessions {{\"action\":\"help\"}}")
+                }
+            })?;
         Ok(if action == "output" {
             serde_json::to_string(
                 &gents_session::session::output_render::Ordered::reading_order(

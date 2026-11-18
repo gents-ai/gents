@@ -480,7 +480,7 @@ impl PluginExecutor {
             tool_calls,
             context: call,
         } = invocation;
-        let session = gents_tools::runtime_context::current_tool_runtime_context();
+        let session = gents_tools::runtime_context::tool_runtime_context(call);
         let workdir = session
             .as_ref()
             .and_then(|context| context.workspace_cwd.clone())
@@ -719,7 +719,7 @@ impl PluginExecutor {
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
         actor: Option<identity::Did>,
-        _context: &ToolCallEnvelope,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginCall, RunError> {
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
@@ -735,7 +735,7 @@ impl PluginExecutor {
             }
             let admitted = self.admit(record)?;
             let budget = if record.declaration.imports_host_call() {
-                super::host_calls::budget_for_invocation(admitted.budget)
+                super::host_calls::budget_for_invocation(context, admitted.budget)
             } else { admitted.budget };
             let mut input = input.clone();
             if record.declaration.service.is_some() {

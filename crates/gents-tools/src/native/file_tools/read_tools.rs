@@ -83,16 +83,30 @@ impl Tool for ListFilesTool {
     type Args = ListFilesArgs;
     type Output = String;
 
-    fn footprint(&self, _args: &ListFilesArgs) -> gents_loop::tool::ToolFootprint {
+    fn footprint(
+        &self,
+        _args: &ListFilesArgs,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> gents_loop::tool::ToolFootprint {
         gents_loop::tool::ToolFootprint::Read
     }
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
+    async fn definition(&self, prompt: String) -> ToolDefinition {
+        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+    }
+
+    async fn definition_for(
+        &self,
+        _prompt: String,
+        call: &gents_loop::tool::ToolCallEnvelope,
+    ) -> ToolDefinition {
+        let context = self.context.for_call(call);
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
                 "List files and directories under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact text with stable gents_fs metadata, skips common generated directories and paths ignored by in-tree .gitignore files by default, and reports walk stats; large walks stop at a budget with partial results (walk.budget_exhausted=true). Set raw_json=true for structured JSON.",
-                self.context.root().display()
+                context.root().display()
             ),
             parameters: serde_json::json!({
                 "type": "object",
@@ -174,16 +188,30 @@ impl Tool for ReadFileTool {
     type Args = ReadFileArgs;
     type Output = String;
 
-    fn footprint(&self, _args: &ReadFileArgs) -> gents_loop::tool::ToolFootprint {
+    fn footprint(
+        &self,
+        _args: &ReadFileArgs,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> gents_loop::tool::ToolFootprint {
         gents_loop::tool::ToolFootprint::Read
     }
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
+    async fn definition(&self, prompt: String) -> ToolDefinition {
+        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+    }
+
+    async fn definition_for(
+        &self,
+        _prompt: String,
+        call: &gents_loop::tool::ToolCallEnvelope,
+    ) -> ToolDefinition {
+        let context = self.context.for_call(call);
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
                 "Read a UTF-8 text file under the allowed root ({}). Relative paths resolve from the active request workspace when one is provided, otherwise from the root. Returns compact line-numbered text with stable gents_fs metadata, including content_hash — the raw-byte identity of the whole file, usable as edit_file or write_file expected_content_hash to guard against concurrent changes. Set raw_json=true for structured JSON.",
-                self.context.root().display()
+                context.root().display()
             ),
             parameters: serde_json::json!({
                 "type": "object",
@@ -224,9 +252,10 @@ impl Tool for ReadFileTool {
     async fn call(
         &self,
         args: Self::Args,
-        _call: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        let path = self.context.resolve_existing_file(&args.path)?;
+        let context = self.context.for_call(call);
+        let path = context.resolve_existing_file(&args.path)?;
         let bytes = tokio::fs::read(&path).await?;
         let content_hash = content_hash(&bytes);
         let text = String::from_utf8_lossy(&bytes).into_owned();
@@ -242,7 +271,7 @@ impl Tool for ReadFileTool {
                 ok: true,
                 status: "success",
                 tool: Self::NAME,
-                path: self.context.display_path(&path),
+                path: context.display_path(&path),
                 returned_count: rendered.returned_lines,
                 total_count: Some(rendered.total_lines),
                 truncated,
@@ -280,7 +309,11 @@ impl Tool for GlobTool {
     type Args = GlobArgs;
     type Output = String;
 
-    fn footprint(&self, _args: &GlobArgs) -> gents_loop::tool::ToolFootprint {
+    fn footprint(
+        &self,
+        _args: &GlobArgs,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> gents_loop::tool::ToolFootprint {
         gents_loop::tool::ToolFootprint::Read
     }
 
@@ -368,7 +401,11 @@ impl Tool for GrepTool {
     type Args = GrepArgs;
     type Output = String;
 
-    fn footprint(&self, _args: &GrepArgs) -> gents_loop::tool::ToolFootprint {
+    fn footprint(
+        &self,
+        _args: &GrepArgs,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> gents_loop::tool::ToolFootprint {
         gents_loop::tool::ToolFootprint::Read
     }
 

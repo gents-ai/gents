@@ -112,9 +112,11 @@ fn wall_clock_for_invocation(
 /// A background invocation already has an admitted lifetime on its tool row.
 /// Host-call guests use that bound, including time spent awaiting host tools;
 /// the manifest wall-clock allowance continues to bound foreground execution.
-pub fn budget_for_invocation(mut budget: PluginBudget) -> PluginBudget {
-    if let Some(context) = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()
-    {
+pub fn budget_for_invocation(
+    call: &gents_loop::tool::ToolCallEnvelope,
+    mut budget: PluginBudget,
+) -> PluginBudget {
+    if let Some(context) = call.runtime() {
         let remaining = context
             .deadline_at
             .map(|deadline| (deadline - chrono::Utc::now()).to_std().unwrap_or_default());
@@ -298,6 +300,16 @@ mod tests {
     }
 
     async fn execute(request: Value, count: u32, grant: bool, input: Value) -> PluginOutcome {
+        execute_in(None, request, count, grant, input).await
+    }
+
+    async fn execute_in(
+        runtime: Option<gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext>,
+        request: Value,
+        count: u32,
+        grant: bool,
+        input: Value,
+    ) -> PluginOutcome {
         let (home, mut record) = gents_pack::plugin::test_fixtures::installed_plugin(
             &crate::plugin::tests::executor::host_call_plugin_wat(&request, count),
             None,
@@ -305,7 +317,7 @@ mod tests {
         record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
         gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
         let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
-        let context = gents_loop::tool::ToolCallEnvelope::default()
+        let context = gents_loop::tool::ToolCallEnvelope::new(runtime)
             .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
         executor
             .call_data_bound_for(
@@ -412,12 +424,28 @@ mod tests {
 
     #[tokio::test]
     async fn background_sleep_uses_the_admitted_tool_lifetime() {
+        let deadline = Some(chrono::Utc::now() + chrono::Duration::seconds(30));
+        let token = tokio_util::sync::CancellationToken::new();
+        let runtime = gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext::entered(
+            None,
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+                identity: None,
+                deadline_at: deadline,
+                cancellation_token: token.clone(),
+                workspace_cwd: None,
+                live_output: None,
+                session_id: None,
+                correlation: None,
+                source_fields: Default::default(),
+                background: true,
+            },
+        );
         let outcome = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             None,
-            Some(chrono::Utc::now() + chrono::Duration::seconds(30)),
-            tokio_util::sync::CancellationToken::new(), None, None, None, None,
+            deadline,
+            token, None, None, None, None,
             Default::default(), true,
-            execute(json!({"sleep_ms": 6000}), 1, false, json!({})),
+            execute_in(Some(runtime), json!({"sleep_ms": 6000}), 1, false, json!({})),
         ).await;
         assert_eq!(
             outcome.verdict,

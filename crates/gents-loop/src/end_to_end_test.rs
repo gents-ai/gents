@@ -100,7 +100,11 @@ impl Tool for EchoTool {
         }
     }
 
-    fn admit(&self, _args: &Self::Args) -> Result<(), Self::Error> {
+    fn admit(
+        &self,
+        _args: &Self::Args,
+        _context: &crate::tool::ToolCallEnvelope,
+    ) -> Result<(), Self::Error> {
         if self.policy_allows {
             Ok(())
         } else {
@@ -1030,7 +1034,7 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
                 Ok("done".into())
             })
         }
-        fn footprint(&self, _: &str) -> ToolFootprint {
+        fn footprint(&self, _: &str, _: &crate::tool::ToolCallEnvelope) -> ToolFootprint {
             ToolFootprint::Read
         }
     }

@@ -13,7 +13,6 @@ use gents_documents::{PluginToolRef, WriteToolField};
 use gents_loop::live_output::DeferredToolWrites;
 use gents_loop::tool::ToolCallEnvelope;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError};
-use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
 use gents_pack::plugin::store::InstalledPlugin;
 use gents_pack::plugin::PluginVerdict;
 
@@ -102,6 +101,7 @@ impl PluginTool {
     /// without a data grant keeps its output whole.
     fn defer_writes(
         &self,
+        context: &ToolCallEnvelope,
         output: &mut serde_json::Value,
     ) -> Result<Option<DeferredToolWrites>, ToolError> {
         let Some(grant) = self.record.data_grant() else {
@@ -118,8 +118,9 @@ impl PluginTool {
         if writes.is_empty() {
             return Ok(None);
         }
-        if current_tool_runtime_context()
-            .and_then(|context| context.live_output)
+        if context
+            .runtime()
+            .and_then(|runtime| runtime.live_output)
             .is_none()
         {
             return Err(tool_error("plugin writes commit with a persisted tool call, and this call has none; call the tool from a session"));
@@ -193,7 +194,7 @@ struct Invoked {
 
 impl PluginTool {
     async fn invoke(&self, mut input: serde_json::Value, context: &ToolCallEnvelope) -> Invoked {
-        if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
+        if let Err(error) = fill_inputs(context, &mut input, &self.input_fields) {
             return Invoked {
                 result: Err(tool_error(format!("{error:#}"))),
                 receipt: super::executor::initial_receipt(&self.record, &input),
@@ -219,7 +220,7 @@ impl PluginTool {
             .map_err(|error| tool_error(format!("{error:#}")))
             .and_then(|mut call| match call.outcome.verdict {
                 PluginVerdict::Success => {
-                    deferred_writes = self.defer_writes(&mut call.outcome.output)?;
+                    deferred_writes = self.defer_writes(context, &mut call.outcome.output)?;
                     Ok((call.outcome.output, call.binding_note))
                 }
                 _ => Err(tool_error(format!(
@@ -283,8 +284,9 @@ impl PluginTool {
             None => None,
         };
         if let Some(writes) = invoked.deferred_writes {
-            current_tool_runtime_context()
-                .and_then(|context| context.live_output)
+            context
+                .runtime()
+                .and_then(|runtime| runtime.live_output)
                 .context("plugin writes commit with a persisted tool call")?
                 .record_deferred_writes(writes)
                 .await
@@ -367,7 +369,11 @@ fn bound_schema(
     Ok(schema)
 }
 
-fn fill_inputs(input: &mut serde_json::Value, fields: &[WriteToolField]) -> Result<()> {
+fn fill_inputs(
+    call: &ToolCallEnvelope,
+    input: &mut serde_json::Value,
+    fields: &[WriteToolField],
+) -> Result<()> {
     if fields.is_empty() {
         return Ok(());
     }
@@ -389,7 +395,7 @@ fn fill_inputs(input: &mut serde_json::Value, fields: &[WriteToolField]) -> Resu
             .ok_or_else(|| anyhow::anyhow!("missing plugin input fill"))?;
         resolved.push((
             field.name.clone(),
-            serde_json::Value::String(fill.resolve(&field.name)?),
+            serde_json::Value::String(fill.resolve(call, &field.name)?),
         ));
     }
     object.extend(resolved);
@@ -449,14 +455,14 @@ mod tests {
                     let mut input=json!({"page":3});
                     if let Some(value)=value {input["path"]=value;}
                     let before=input.clone();
-                    let result=fill_inputs(&mut input,&fields());
+                    let result=fill_inputs(&ToolCallEnvelope::ambient(),&mut input,&fields());
                     if result.is_ok() {assert_eq!(input,json!({"page":3,"path":"/books/one","run_id":"book-run"}));}
                     else {assert_eq!(input,before);}
                     case.check(result.is_ok());
                 }
             }).await;
         let mut missing = json!({"page":3});
-        assert!(fill_inputs(&mut missing, &fields()).is_err());
+        assert!(fill_inputs(&ToolCallEnvelope::default(), &mut missing, &fields()).is_err());
         assert_eq!(missing, json!({"page":3}));
     }
 }

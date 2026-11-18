@@ -302,7 +302,11 @@ impl BoundedQueryTool {
         Ok(Some(order.clone()))
     }
 
-    fn resolve_filter(&self, args: &Map<String, Value>) -> Result<Option<Value>> {
+    fn resolve_filter(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        args: &Map<String, Value>,
+    ) -> Result<Option<Value>> {
         for key in args.keys() {
             if matches!(
                 key.as_str(),
@@ -346,7 +350,7 @@ impl BoundedQueryTool {
         let mut filter = Map::new();
         for field in &self.decl.filter_fields {
             let value = if let Some(fill) = &field.fill {
-                Some(Value::String(fill.resolve(&field.name)?))
+                Some(Value::String(fill.resolve(call, &field.name)?))
             } else {
                 args.get(&field.name).cloned()
             };
@@ -481,11 +485,11 @@ impl Tool for BoundedQueryTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         self.ensure_well_formed()?;
         let fields = self.resolve_projection(&args.0)?;
-        let filter = self.resolve_filter(&args.0)?;
+        let filter = self.resolve_filter(call, &args.0)?;
         let limit = self.resolve_limit(&args.0)?;
         let offset = self.resolve_offset(&args.0)?;
         let order = self.resolve_order(&args.0)?;

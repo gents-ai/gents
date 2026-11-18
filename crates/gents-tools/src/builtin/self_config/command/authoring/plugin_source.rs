@@ -194,6 +194,7 @@ impl ConfigCommandTool {
             node: self.node.clone(),
             actor: self.identity.clone(),
             home: Some(home),
+            envelope: self.envelope.clone(),
         };
         // A dropped request (an interrupt cancels the tool call's future)
         // must not stop between a pin move and the install it waits for, so

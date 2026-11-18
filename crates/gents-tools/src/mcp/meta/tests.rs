@@ -302,6 +302,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                 tool_name: "hidden".into(),
                 arguments: serde_json::json!({"value":1}),
             },
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .unwrap_err();
         assert!(admission.to_string().contains("tool_not_allowed"));
@@ -329,7 +330,12 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                 ..
             }
         ));
-        let admission = gents_loop::tool::ToolDyn::admit(&flat, "{}").unwrap_err();
+        let admission = gents_loop::tool::ToolDyn::admit(
+            &flat,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .unwrap_err();
         assert!(matches!(
             admission,
             gents_loop::tool::ToolError::ReportedFailure {

@@ -340,6 +340,7 @@ impl ConfigCommandTool {
             .and_then(Value::as_str)
             .with_context(|| format!("pack {operation} requires an effective tool root"))?;
         crate::native::ToolContext::new(root.into(), false)
+            .map(|context| context.for_call(&self.envelope))
     }
 
     async fn scaffold(&self, name: &str, input: &ScaffoldInput) -> Result<String> {

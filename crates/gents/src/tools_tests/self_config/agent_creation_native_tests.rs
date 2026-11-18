@@ -770,6 +770,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         node: node.clone(),
         actor: Some(signer.clone()),
         home: Some(plugin_home.path().to_owned()),
+        envelope: gents_loop::tool::ToolCallEnvelope::default(),
     };
     let args = gents_protocol::operations::pack::PackChangeInput {
         package: "fixture/native_echo_pack".into(),
@@ -1910,6 +1911,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         node: node.clone(),
         actor: Some(signer.clone()),
         home: None,
+        envelope: gents_loop::tool::ToolCallEnvelope::default(),
     };
     let args = gents_protocol::operations::pack::PackChangeInput {
         package: "fixture/native_child".into(),

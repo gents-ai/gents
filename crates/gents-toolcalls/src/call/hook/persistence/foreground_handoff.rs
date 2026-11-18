@@ -3,8 +3,7 @@ use anyhow::Context;
 use futures::FutureExt;
 use gents_loop::session_hook::{ForegroundCall, ForegroundResult};
 use gents_tools::runtime_context::{
-    current_tool_runtime_context, scope_request_tool_execution_with_workspace_overlay,
-    ToolWorkspaceScope,
+    scope_request_tool_execution_with_workspace_overlay, tool_runtime_context, ToolWorkspaceScope,
 };
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
@@ -59,7 +58,7 @@ impl DefraSessionHook {
         call: ForegroundCall,
         envelope: &gents_loop::tool::ToolCallEnvelope,
     ) -> ForegroundResult {
-        let context = current_tool_runtime_context();
+        let context = tool_runtime_context(envelope);
         if !gents_tools::native::is_bash_tool_name(name) {
             return ForegroundResult::Settled(call(envelope.clone(), None).await);
         }

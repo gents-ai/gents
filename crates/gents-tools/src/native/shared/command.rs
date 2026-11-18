@@ -53,11 +53,14 @@ pub(crate) fn apply_workspace_authority(
     met
 }
 
-pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> CommandExecutionPolicy {
+pub(crate) fn effective_command_policy(
+    call: &gents_loop::tool::ToolCallEnvelope,
+    policy: &CommandExecutionPolicy,
+) -> CommandExecutionPolicy {
     if policy.mode == CommandExecutionMode::ArtifactWrite {
         return policy.clone();
     }
-    match crate::runtime_context::current_tool_runtime_context()
+    match crate::runtime_context::tool_runtime_context(call)
         .and_then(|scope| scope.workspace_authority)
     {
         Some(authority) => apply_workspace_authority(policy, authority),

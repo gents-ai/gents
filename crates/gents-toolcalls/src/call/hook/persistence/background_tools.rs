@@ -119,7 +119,7 @@ impl DefraSessionHook {
 
         let target_tool_name = target_name.to_string();
         let target_args = serde_json::to_string(&parsed.args)?;
-        if let Err(error) = target_tool.admit(&target_args) {
+        if let Err(error) = target_tool.admit(&target_args, context) {
             let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
                 class,
                 denial,
@@ -271,7 +271,7 @@ impl DefraSessionHook {
         let live_output_writer = live_outputs
             .canonical_writer_for(lifecycle.tool_output_binding()?)
             .await;
-        let runtime_context = gents_tools::runtime_context::current_tool_runtime_context();
+        let runtime_context = gents_tools::runtime_context::tool_runtime_context(context);
         let workspace = gents_tools::runtime_context::ToolWorkspaceScope {
             runtime_home: runtime_context
                 .as_ref()

@@ -14,7 +14,11 @@ impl ToolDyn for SuccessfulProbe {
     fn emits_command_envelope(&self) -> bool {
         true
     }
-    fn footprint(&self, _args: &str) -> ToolFootprint {
+    fn footprint(
+        &self,
+        _args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> ToolFootprint {
         ToolFootprint::Read
     }
     fn definition<'a>(

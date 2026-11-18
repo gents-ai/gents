@@ -542,7 +542,11 @@ impl ToolDyn for AdmissionChild {
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         let args: serde_json::Value = serde_json::from_str(args).unwrap();
         if args.get("admit").is_none_or(|value| value == true) {
             return Ok(());
@@ -802,7 +806,11 @@ impl ToolDyn for ParallelReadProbe {
             }
         })
     }
-    fn footprint(&self, _: &str) -> gents_loop::tool::ToolFootprint {
+    fn footprint(
+        &self,
+        _: &str,
+        _: &gents_loop::tool::ToolCallEnvelope,
+    ) -> gents_loop::tool::ToolFootprint {
         gents_loop::tool::ToolFootprint::Read
     }
     fn call<'a>(
@@ -922,7 +930,11 @@ impl ToolDyn for SerialReadMeasurement {
     ) -> BoxFuture<'a, gents_loop::tool::ToolDispatchResult> {
         self.0.call_with_receipt(args, context)
     }
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
-        self.0.admit(args)
+    fn admit(
+        &self,
+        args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
+        self.0.admit(args, context)
     }
 }

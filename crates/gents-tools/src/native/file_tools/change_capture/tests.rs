@@ -80,7 +80,13 @@ async fn incomplete_images_retain_the_original_without_claiming_a_finished_mutat
         async {
             let lock = file_mutation_lock_for(&path);
             let _guard = lock.lock().await;
-            let capture = FileChangeCapture::start(&root_path, &path).await.unwrap();
+            let capture = FileChangeCapture::start(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &root_path,
+                &path,
+            )
+            .await
+            .unwrap();
             std::fs::write(&path, "partial bytes").unwrap();
             drop(capture);
         },

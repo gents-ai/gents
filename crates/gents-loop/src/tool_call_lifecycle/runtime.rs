@@ -700,7 +700,7 @@ where
     F: Fn(Option<&ToolOutcome>) -> bool,
 {
     let name = tool.name();
-    let Ok(scope) = TOOL_RUNTIME_SCOPE.try_with(Clone::clone) else {
+    let Some(scope) = context.runtime() else {
         return ToolOutcome::from_dispatch(
             &name,
             dispatch_with_receipt(tool, args, None, context).await,

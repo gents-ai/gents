@@ -76,10 +76,9 @@ where
             self.composed
                 .store(true, std::sync::atomic::Ordering::Release);
             let result = async {
-                let scope = current_tool_runtime_context().ok_or_else(|| {
+                let scope = parent.runtime().ok_or_else(|| {
                     Unavailable("tool effects require a request execution scope".to_owned())
                 })?;
-                parent.debug_assert_ambient_runtime();
                 let child =
                     child_envelope(parent).unwrap_or_else(|| parent.clone().with_effects(None));
                 let child = &child;
@@ -103,7 +102,7 @@ where
                             .await
                             .map_err(Unavailable)?;
                         if let Some(outcome) =
-                            admit_tool_effect(self.tools.as_slice(), name, arguments)
+                            admit_tool_effect(self.tools.as_slice(), name, arguments, child)
                         {
                             let result = match self
                                 .hook
@@ -212,14 +211,20 @@ pub(super) fn admit_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
     args: &str,
+    context: &ToolCallEnvelope,
 ) -> Option<ToolOutcome> {
     let tool = tools.iter().find(|tool| tool.name() == name)?;
-    tool.admit(args)
+    tool.admit(args, context)
         .err()
         .map(|error| ToolOutcome::from_dispatch(name, Err(error)))
 }
 
-fn admit_tool_effect(tools: &[Box<dyn ToolDyn>], name: &str, args: &str) -> Option<ToolOutcome> {
+fn admit_tool_effect(
+    tools: &[Box<dyn ToolDyn>],
+    name: &str,
+    args: &str,
+    context: &ToolCallEnvelope,
+) -> Option<ToolOutcome> {
     if !tools.iter().any(|tool| tool.name() == name) {
         return Some(ToolOutcome::from_dispatch(
             name,
@@ -229,7 +234,7 @@ fn admit_tool_effect(tools: &[Box<dyn ToolDyn>], name: &str, args: &str) -> Opti
             }),
         ));
     }
-    admit_tool(tools, name, args)
+    admit_tool(tools, name, args, context)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -397,7 +402,7 @@ pub(super) async fn dispatch_provider_tool(
         )
     };
 
-    let Some(scope) = current_tool_runtime_context() else {
+    let Some(scope) = context.runtime() else {
         return outcome(
             crate::tool_call_lifecycle::runtime::dispatch_with_receipt(
                 tool.as_ref(),
@@ -408,12 +413,7 @@ pub(super) async fn dispatch_provider_tool(
             .await,
         );
     };
-    let tool_call = match context.runtime() {
-        Some(explicit) => {
-            dispatch_envelope(context, &explicit, live_output.clone(), session_id.clone())
-        }
-        None => context.clone(),
-    };
+    let tool_call = dispatch_envelope(context, &scope, live_output.clone(), session_id.clone());
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
         let decided = ToolOutcome::TimedOut {
@@ -1047,7 +1047,7 @@ mod tests {
             Box::pin(async { Ok(String::new()) })
         }
 
-        fn admit(&self, _args: &str) -> Result<(), ToolError> {
+        fn admit(&self, _args: &str, _context: &ToolCallEnvelope) -> Result<(), ToolError> {
             if self.admitted {
                 Ok(())
             } else {
@@ -1072,7 +1072,7 @@ mod tests {
                 name: surface,
                 admitted: i.admitted,
             })];
-            admit_tool_effect(&tools, name, "{}").is_none()
+            admit_tool_effect(&tools, name, "{}", &ToolCallEnvelope::default()).is_none()
         });
     }
 
