@@ -6,7 +6,7 @@
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use gents_store::test_support::hold_sibling;
 
@@ -26,11 +26,15 @@ fn watch_creation(directory: &Path) -> std::fs::File {
     std::fs::File::from(inotify)
 }
 
-/// The source is a FIFO, so the copy holds the staged file open while it
-/// waits for content: the test forks a held sibling exactly then, and execs
-/// the staged file before that sibling execs.
-#[test]
-fn a_sibling_forked_mid_copy_does_not_keep_the_staged_executable_busy() {
+/// Stages `copy`'s output with the model's bad order forced: the source is a
+/// FIFO, so the copy holds the staged file open until its content arrives, and
+/// a held sibling forks exactly then and stays short of its exec until the
+/// staged file has run. The content comes from a child process told to write
+/// only after the sibling has forked: a FIFO writer held in this process would
+/// be inherited by the sibling and keep the copy from ever reading its end.
+fn stage_beside_a_sibling_forked_mid_copy(
+    copy: fn(&Path, &Path) -> anyhow::Result<()>,
+) -> std::io::Result<std::process::Output> {
     let source_directory = tempfile::tempdir().unwrap();
     let target_directory = tempfile::tempdir().unwrap();
     let source = source_directory.path().join("candidate");
@@ -42,18 +46,30 @@ fn a_sibling_forked_mid_copy_does_not_keep_the_staged_executable_busy() {
     let mut created = watch_creation(target_directory.path());
     let copying = {
         let (source, target) = (source.clone(), target.clone());
-        std::thread::spawn(move || super::files::copy_executable(&source, &target))
+        std::thread::spawn(move || copy(&source, &target))
     };
-    let mut content = std::fs::OpenOptions::new()
-        .write(true)
-        .open(&source)
+    let mut feeder = Command::new("/bin/sh")
+        .args([
+            "-c",
+            r#"exec 3>"$1"; read _; printf '#!/bin/sh\nprintf staged\n' >&3"#,
+            "sh",
+        ])
+        .arg(&source)
+        .stdin(Stdio::piped())
+        .spawn()
         .unwrap();
     created.read(&mut [0u8; 4096]).unwrap();
     let sibling = hold_sibling();
-    content.write_all(b"#!/bin/sh\nprintf staged\n").unwrap();
-    drop(content);
+    feeder.stdin.take().unwrap().write_all(b"go\n").unwrap();
+    assert!(feeder.wait().unwrap().success());
     copying.join().unwrap().unwrap();
     let ran = Command::new(&target).output();
     sibling.release();
+    ran
+}
+
+#[test]
+fn a_sibling_forked_mid_copy_does_not_keep_the_staged_executable_busy() {
+    let ran = stage_beside_a_sibling_forked_mid_copy(super::files::copy_executable);
     assert_eq!(ran.unwrap().stdout, b"staged");
 }
