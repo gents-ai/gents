@@ -521,8 +521,8 @@ where
             } = input;
             let effects =
                 effects.map(|value| value as Arc<dyn crate::tool_effects::ToolEffectDispatcher>);
-            let (call, token) = foreground_envelope(&hook, scope.clone(), effects.clone());
-            let execute = crate::tool_effects::scope(effects, async move {
+            let (call, token) = foreground_envelope(&hook, scope.clone(), effects);
+            let execute = async move {
                 dispatch_provider_tool(
                     tools.as_slice(),
                     &name,
@@ -536,7 +536,7 @@ where
                     &call,
                 )
                 .await
-            });
+            };
             let scoped = async {
                 match scope {
                 Some(scope) => crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
@@ -938,7 +938,7 @@ mod tests {
             let outcome = scope_request_tool_execution(
                 None,
                 tokio_util::sync::CancellationToken::new(),
-                crate::tool_effects::scope(Some(dispatcher.clone()), async {
+                async {
                     let result = dispatcher
                         .call(
                             &crate::tool::ToolCallEnvelope::ambient(),
@@ -952,7 +952,7 @@ mod tests {
                         Err(crate::tool_effects::ToolEffectError::Fatal(_))
                     ));
                     ToolOutcome::Completed("guest swallowed the error".into())
-                }),
+                },
             )
             .await;
             let action = dispatcher

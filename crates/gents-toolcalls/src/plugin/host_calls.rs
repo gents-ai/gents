@@ -251,12 +251,11 @@ mod tests {
         record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
         gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
         let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
-        let context = gents_loop::tool::ToolCallEnvelope::ambient();
+        let context = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
         let call = executor.call_data_bound_for(
 &record, json!({"script": "let sum=0; for(let i=0;i<3;i++) sum += (await tools.query({})).ordinal; await sleep(1); return {sum};"}), crate::plugin::executor::ToolInvocation { tool_root: None, tool_calls: true, context: &context }, None);
-        let result = gents_loop::tool_effects::scope(Some(Arc::new(Tools)), call)
-            .await
-            .unwrap();
+        let result = call.await.unwrap();
         assert_eq!(
             result.outcome.verdict,
             PluginVerdict::Success,
@@ -289,7 +288,6 @@ mod tests {
             arguments: &'a str,
         ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
             Box::pin(async move {
-                assert!(gents_loop::tool_effects::current().is_none());
                 assert_eq!(name, "query");
                 assert_eq!(arguments, "{}");
                 Ok(ToolOutcome::Completed(
@@ -307,22 +305,22 @@ mod tests {
         record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
         gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
         let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
-        gents_loop::tool_effects::scope(
-            Some(Arc::new(Tools)),
-            executor.call_data_bound_for(
+        let context = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
+        executor
+            .call_data_bound_for(
                 &record,
                 input,
                 crate::plugin::executor::ToolInvocation {
                     tool_root: None,
                     tool_calls: grant,
-                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    context: &context,
                 },
                 None,
-            ),
-        )
-        .await
-        .unwrap()
-        .outcome
+            )
+            .await
+            .unwrap()
+            .outcome
     }
 
     #[tokio::test]
@@ -393,12 +391,9 @@ mod tests {
             let tool =
                 crate::plugin::tool::PluginTool::for_run(executor.clone(), &coordinate, &selected)
                     .unwrap();
-            let (output, unserved, _) = gents_loop::tool_effects::scope(
-                Some(Arc::new(Tools)),
-                tool.run_once(json!({}), &gents_loop::tool::ToolCallEnvelope::ambient()),
-            )
-            .await
-            .unwrap();
+            let context = gents_loop::tool::ToolCallEnvelope::default()
+                .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
+            let (output, unserved, _) = tool.run_once(json!({}), &context).await.unwrap();
             assert_eq!(output, expected, "tool_calls {tool_calls}");
             assert_eq!(unserved, None);
         }

@@ -241,10 +241,8 @@ where
             .cloned()
     };
     let runtime = envelope.runtime_unchecked();
-    let future = gents_loop::tool_effects::scope(
-        envelope.effects_unchecked(),
-        gents_loop::tool_call_lifecycle::runtime::enter_ambient_runtime(runtime.as_ref(), future),
-    );
+    let future =
+        gents_loop::tool_call_lifecycle::runtime::enter_ambient_runtime(runtime.as_ref(), future);
     let future = WORKSPACE_OVERLAY.scope(host.workspace, future);
     let future = crate::plugin::approval::workspace::scope(host.approval, future);
     match recorder {

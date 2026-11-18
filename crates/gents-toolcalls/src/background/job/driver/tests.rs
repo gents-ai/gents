@@ -1068,10 +1068,12 @@ async fn job_step_runs_without_a_tool_dispatcher() {
     // tools, so the step's `false` below is the job entry's, not an
     // absent dispatcher's.
     let (input, _) = step.input(&step.row).await;
-    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
-    let ordinary = gents_loop::tool_effects::scope(
-        live(),
-        step.job.runtime.plugins.call_data_bound_with_receipt(
+    let envelope = gents_loop::tool::ToolCallEnvelope::default().with_effects(live());
+    let ordinary = step
+        .job
+        .runtime
+        .plugins
+        .call_data_bound_with_receipt(
             &step.installed,
             serde_json::to_value(&input).unwrap(),
             crate::plugin::executor::ToolInvocation {
@@ -1079,15 +1081,11 @@ async fn job_step_runs_without_a_tool_dispatcher() {
                 tool_calls: true,
                 context: &envelope,
             },
-        ),
-    )
-    .await
-    .1;
+        )
+        .await
+        .1;
     assert!(ordinary.authority.unwrap().host_tools);
-    assert_eq!(
-        gents_loop::tool_effects::scope(live(), step.run(&step.row)).await,
-        StepOutcome::Settled
-    );
+    assert_eq!(step.run(&step.row).await, StepOutcome::Settled);
     let evidence = step.state(&step.row).await.unwrap().evidence.unwrap();
     let authority = evidence.authority.unwrap();
     assert!(!authority.host_tools);

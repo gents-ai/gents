@@ -482,7 +482,7 @@ impl ToolDyn for ComposingParent {
         context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            let dispatcher = context.effects().expect("live dispatcher");
             let mut spawned = String::new();
             let mut session = String::new();
             for (ordinal, name, arguments) in &self.children {
@@ -491,11 +491,7 @@ impl ToolDyn for ComposingParent {
                     .replace(NEW_SESSION, &session);
                 // A child runs without the parent's dispatcher, as the plugin
                 // host's `tool_calls` service runs it (`children_cannot_delegate`).
-                let outcome = gents_loop::tool_effects::scope(
-                    None,
-                    dispatcher.call(context, *ordinal, name, &arguments),
-                )
-                .await;
+                let outcome = dispatcher.call(context, *ordinal, name, &arguments).await;
                 assert!(
                     !matches!(
                         outcome,
@@ -740,15 +736,12 @@ impl ToolDyn for StoppingParent {
         context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            let dispatcher = context.effects().expect("live dispatcher");
             // A script that exhausts its own allowance drops the child call it awaits.
             tokio::select! {
                 biased;
                 _ = self.0.notified() => {}
-                finished = gents_loop::tool_effects::scope(
-                    None,
-                    dispatcher.call(context, 1, "stall", "{}"),
-                ) => {
+                finished = dispatcher.call(context, 1, "stall", "{}") => {
                     panic!("the child outlives the script: {finished:?}")
                 }
             }
