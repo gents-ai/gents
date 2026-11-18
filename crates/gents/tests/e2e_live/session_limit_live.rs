@@ -125,7 +125,7 @@ async fn live_child_without_an_execution_limit_completes_a_six_step_read() {
         json!({"agent":"chain-worker", "prompt":worker_prompt}),
     )).await;
     assert_eq!(
-        wait_for_request_terminal(&live, PARENT_REQUEST, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&live, PARENT_REQUEST).await,
         "completed"
     );
     let query = format!(

@@ -135,12 +135,8 @@ async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
         assert_eq!(backend.observed_requests(marker), 0);
         backend.release(&markers[index - 1]);
         assert_eq!(
-            wait_for_request_terminal(
-                &reconnected,
-                &entries[index - 1].request_id.to_string(),
-                Duration::from_secs(60)
-            )
-            .await,
+            wait_for_request_terminal(&reconnected, &entries[index - 1].request_id.to_string())
+                .await,
             "completed"
         );
         backend
@@ -217,8 +213,7 @@ async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
     assert_eq!(
         wait_for_request_terminal(
             &reconnected,
-            &entries.last().unwrap().request_id.to_string(),
-            Duration::from_secs(60)
+            &entries.last().unwrap().request_id.to_string()
         )
         .await,
         "completed"

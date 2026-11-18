@@ -281,10 +281,7 @@ impl Processes {
         let call = self.running_call(id, "bash").await;
         self.output(&call, "READY").await;
         if background {
-            assert_eq!(
-                wait_for_request_terminal(&self.live, id, WAIT).await,
-                "completed"
-            );
+            assert_eq!(wait_for_request_terminal(&self.live, id).await, "completed");
         }
         (request, call)
     }
@@ -356,10 +353,7 @@ impl Processes {
 
     async fn control(&self, id: &str, session: &str, tool: &str, args: Value) -> Value {
         self.request(&self.primary, id, session, tool, args).await;
-        assert_eq!(
-            wait_for_request_terminal(&self.live, id, WAIT).await,
-            "completed"
-        );
+        assert_eq!(wait_for_request_terminal(&self.live, id).await, "completed");
         let call = self.call(id, tool).await;
         self.result(&call).await
     }
@@ -399,14 +393,14 @@ async fn interrupting_one_request_does_not_affect_another() {
         .await;
     processes.interrupt(&target).await;
     assert_eq!(
-        wait_for_request_terminal(&processes.live, "target", WAIT).await,
+        wait_for_request_terminal(&processes.live, "target").await,
         "interrupted"
     );
     processes.state(&target_call, "cancelled").await;
     processes.state(&survivor_call, "running").await;
     processes.release("survivor").await;
     assert_eq!(
-        wait_for_request_terminal(&processes.live, "survivor", WAIT).await,
+        wait_for_request_terminal(&processes.live, "survivor").await,
         "completed"
     );
     processes.state(&survivor_call, "completed").await;
@@ -447,7 +441,7 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(&p.live, "produce", WAIT).await,
+        wait_for_request_terminal(&p.live, "produce").await,
         "completed"
     );
     let job = p.call("produce", "bash").await;
@@ -474,7 +468,7 @@ async fn background_tool_rejects_not_allowlisted_target() {
     let mut p = Processes::new("live-unavailable-process-tool").await;
     p.live.request(&p.primary, "denied", "session", "Exercise the runtime's rejection of an unknown background target. Call the available spawn_process tool exactly once with {\"tool_name\":\"other_tool\",\"args\":{}} even though other_tool is unavailable. The runtime must validate the nested target; do not prevalidate it or explain the expected result instead of calling spawn_process. After its error result, acknowledge briefly and call no other tool.").await;
     assert_eq!(
-        wait_for_request_terminal(&p.live, "denied", WAIT).await,
+        wait_for_request_terminal(&p.live, "denied").await,
         "completed"
     );
     let calls = p
@@ -508,10 +502,7 @@ async fn background_process_survives_creator_and_waiter_deadlines() {
     .await;
     let waiter = p.running_call("wait", "wait_process").await;
     p.state(&waiter, "running").await;
-    assert_eq!(
-        wait_for_request_terminal(&p.live, "wait", WAIT).await,
-        "failed"
-    );
+    assert_eq!(wait_for_request_terminal(&p.live, "wait").await, "failed");
     let stopped = p.state(&waiter, "timedOut").await;
     assert_eq!(stopped["cancel_cause"], "deadline");
     let running = p.state(&job, "running").await;
@@ -538,7 +529,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
     p.state(&waiter, "running").await;
     p.interrupt(&request).await;
     assert_eq!(
-        wait_for_request_terminal(&p.live, "wait", WAIT).await,
+        wait_for_request_terminal(&p.live, "wait").await,
         "interrupted"
     );
     let running = p.state(&job, "running").await;
@@ -681,7 +672,7 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
         Default::default(),
     ).await;
     assert_eq!(
-        wait_for_request_terminal(&foreign_access, "foreign-read", WAIT).await,
+        wait_for_request_terminal(&foreign_access, "foreign-read").await,
         "completed"
     );
     let rows = foreign_access.read_data(r#"{AgentToolCall(filter: {request_id: {_eq: "foreign-read"}, tool_name: {_eq: "read_process"}}) {_docID}}"#).await;

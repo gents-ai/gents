@@ -231,7 +231,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         json!({"tool_name":"bash", "args":{"command":"printf", "args":["durable recovery result"]}})).await;
     let call = recovery.call("notification", "completed").await;
     assert_eq!(
-        wait_for_request_terminal(&recovery.actors.fixture.access, "notification", WAIT).await,
+        wait_for_request_terminal(&recovery.actors.fixture.access, "notification").await,
         "completed"
     );
     recovery.shutdown().await;
@@ -321,7 +321,7 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
     .await
     .unwrap();
     assert_eq!(
-        wait_for_request_terminal(&recovery.actors.fixture.access, "interrupted-tool", WAIT).await,
+        wait_for_request_terminal(&recovery.actors.fixture.access, "interrupted-tool").await,
         "interrupted"
     );
     recovery.recover_tools().await;

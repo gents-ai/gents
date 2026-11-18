@@ -179,7 +179,7 @@ impl LiveJobs {
     async fn invoke_in_session(&self, session: &str, name: &str, plan: Vec<PlanEntry>) -> Value {
         self.submit_job(session, name, plan).await;
         assert_eq!(
-            wait_for_request_terminal(&self.live.access, name, Duration::from_secs(120)).await,
+            wait_for_request_terminal(&self.live.access, name).await,
             "completed"
         );
         let rows = self.live.access.execute(&format!(
@@ -526,12 +526,7 @@ async fn operator_cancel_and_non_job_stop_each_end_the_row_cancelled() {
         let view = h.job(&row, |view| view.state == JobState::Cancelled).await;
         for child in view.children {
             assert_eq!(
-                wait_for_request_terminal(
-                    &h.live.access,
-                    &child.request_id,
-                    Duration::from_secs(120)
-                )
-                .await,
+                wait_for_request_terminal(&h.live.access, &child.request_id).await,
                 "interrupted"
             );
         }

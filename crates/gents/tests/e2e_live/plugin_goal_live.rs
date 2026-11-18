@@ -337,7 +337,7 @@ pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarne
         );
     }
     assert_eq!(
-        wait_for_request_terminal(&live.access, &request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&live.access, &request_id).await,
         "completed"
     );
     LiveJobHarness {
@@ -376,8 +376,7 @@ async fn live_plugin_job_adopts_a_child_and_completes() {
         .expect("the job adopted its requested child");
     assert_eq!(child.state, JobChildState::Completed);
     assert_eq!(
-        wait_for_request_terminal(&h.live.access, &child.request_id, Duration::from_secs(120))
-            .await,
+        wait_for_request_terminal(&h.live.access, &child.request_id).await,
         "completed"
     );
     h.runtime.shutdown().await;
@@ -445,7 +444,7 @@ async fn live_waited_process_defers_goal_until_its_completion_wake() {
         format!("Call spawn_process once with exactly {arguments}. Use its returned tool_call_id to call wait_process with timeout_secs 1. When that wait returns still running, acknowledge briefly and end this turn. Do not wait again and do not call update_goal."), &root_path,
     ).await;
     assert_eq!(
-        wait_for_request_terminal(&actors.fixture.access, REQUEST, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&actors.fixture.access, REQUEST).await,
         "completed"
     );
     let calls = actors.fixture.access.execute(&format!(r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{REQUEST}"}}}}) {{_docID tool_call_id tool_name lifecycle_state await_mode}} }}"#)).await.unwrap();
@@ -552,8 +551,7 @@ async fn live_waited_process_defers_goal_until_its_completion_wake() {
     assert_eq!(
         wait_for_request_terminal(
             &actors.fixture.access,
-            child["request_id"].as_str().unwrap(),
-            Duration::from_secs(120)
+            child["request_id"].as_str().unwrap()
         )
         .await,
         "completed"

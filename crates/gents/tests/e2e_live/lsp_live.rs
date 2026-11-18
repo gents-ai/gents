@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use gents_documents::{FileToolMode, FileTools, HostTools, IntegrationTools, LspTools, Tools};
 use gents_tools::surface::ToolCeiling;
@@ -98,8 +97,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
     submit_user_request(actors.node_did(), &actors.fixture, "lsp-live-session", REQUEST,
         "Call lsp with action hover, file src/lib.rs, symbol berth_count, line 2. After the hover succeeds, acknowledge briefly.",
         Default::default()).await;
-    let terminal =
-        wait_for_request_terminal(&actors.fixture.access, REQUEST, Duration::from_secs(600)).await;
+    let terminal = wait_for_request_terminal(&actors.fixture.access, REQUEST).await;
     let calls = fetch_tool_call_payloads_for_request_as(&actors.fixture.access, REQUEST).await;
     let answer = terminal_assistant_answer(&actors.fixture.access, REQUEST).await;
     runtime.shutdown().await;

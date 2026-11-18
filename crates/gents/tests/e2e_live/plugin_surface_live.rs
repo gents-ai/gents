@@ -122,7 +122,6 @@ async fn live_resumed_prompt_follows_the_persisted_completion_notification() {
             wake["data"]["AgentRequest"][0]["request_id"]
                 .as_str()
                 .unwrap(),
-            Duration::from_secs(120),
         )
         .await,
         "completed"
@@ -151,7 +150,7 @@ async fn live_resumed_prompt_follows_the_persisted_completion_notification() {
     .await
     .unwrap();
     assert_eq!(
-        wait_for_request_terminal(&h.live.access, request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&h.live.access, request_id).await,
         "completed"
     );
     let messages = h

@@ -3,8 +3,9 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use crate::support::live_inference::STALL_CEILING;
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, Sse};
@@ -323,10 +324,7 @@ impl MockStreamingBackend {
     }
 
     pub async fn wait_for_chunks(&self, marker: &str, expected: usize) {
-        let observed = self
-            .state
-            .wait_for_chunk_count(marker, expected, Duration::from_secs(5))
-            .await;
+        let observed = self.state.wait_for_chunk_count(marker, expected).await;
         assert!(
             observed >= expected,
             "timed out waiting for {expected} chunk(s) for marker {marker}, observed {observed}"
@@ -504,19 +502,18 @@ impl StreamingState {
             .unwrap_or_default()
     }
 
-    async fn wait_for_chunk_count(
-        &self,
-        marker: &str,
-        expected: usize,
-        timeout: Duration,
-    ) -> usize {
-        let started = Instant::now();
+    async fn wait_for_chunk_count(&self, marker: &str, expected: usize) -> usize {
         loop {
+            let changed = self.notify.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let actual = self.chunk_count(marker);
-            if actual >= expected || started.elapsed() >= timeout {
+            if actual >= expected {
                 return actual;
             }
-            let _ = tokio::time::timeout(Duration::from_millis(25), self.notify.notified()).await;
+            if tokio::time::timeout(STALL_CEILING, changed).await.is_err() {
+                return actual;
+            }
         }
     }
 
