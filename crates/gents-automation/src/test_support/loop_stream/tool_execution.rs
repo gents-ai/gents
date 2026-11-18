@@ -204,7 +204,7 @@ pub async fn owned_tool_result_threaded(
         ],
     ]);
     let profile = counter.profile();
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
         model.clone(),
@@ -237,7 +237,7 @@ pub async fn persisted_plugin_image_result_replay(
     let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let node = db.node.clone();
     let profile = counter.profile();
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
         ScriptedModel::new_turns(plugin_call_then_text_turns()),
@@ -309,7 +309,7 @@ pub async fn terminalization_with_principal_output(
         TaggedMessage::unassociated(Message::user("run echo")),
         Vec::new(),
         Arc::new(tools),
-        owned_config(turns + 2),
+        owned_config_for(turns + 2, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,

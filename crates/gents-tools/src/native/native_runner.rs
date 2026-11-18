@@ -458,25 +458,18 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             ],
             cwd: source.clone(),
         };
-        let output = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None,
-            None,
-            tokio_util::sync::CancellationToken::new(),
+        let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             scope.clone(),
-            None,
-            None,
-            None,
-            Default::default(),
-            false,
-            runner.run_resolved(
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-                request(),
-                "glob",
-                command(),
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
             ),
-        )
-        .await
-        .unwrap();
+        );
+        let output = runner
+            .run_resolved(&scope_call, request(), "glob", command())
+            .await
+            .unwrap();
         assert_eq!(output, "sandboxed read");
         assert_eq!(std::fs::read(source.join("README.md")).unwrap(), original);
         assert_eq!(
@@ -493,25 +486,18 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             )
             .await
             .unwrap();
-        let error = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None,
-            None,
-            tokio_util::sync::CancellationToken::new(),
+        let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             scope,
-            None,
-            None,
-            None,
-            Default::default(),
-            false,
-            runner.run_resolved(
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-                request(),
-                "glob",
-                command(),
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
             ),
-        )
-        .await
-        .unwrap_err();
+        );
+        let error = runner
+            .run_resolved(&scope_call, request(), "glob", command())
+            .await
+            .unwrap_err();
         assert!(!error.to_string().is_empty());
         assert!(!fixture.grant.root().join("target/native-readback").exists());
         assert_eq!(std::fs::read(source.join("README.md")).unwrap(), original);

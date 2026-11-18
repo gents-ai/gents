@@ -388,13 +388,27 @@ async fn plugin_file_effect_entries_are_ordered() -> bool {
         effect.start_running().await.unwrap();
         let document = effect.doc_id().unwrap().to_owned();
         let writer = registry.writer_for(document.clone()).await;
-        let output = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            None,
-            None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
-            Default::default(), false,
-            writer_tool.call(WriteFileArgs {path: "file.txt".into(), content: after.into(),
-                expected_content_hash: None, overwrite: true, raw_json: true}, &gents_loop::tool::ToolCallEnvelope::ambient()),
-        ).await.unwrap();
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            live_output: Some(writer),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            )
+        }
+        .call();
+        let output = writer_tool
+            .call(
+                WriteFileArgs {
+                    path: "file.txt".into(),
+                    content: after.into(),
+                    expected_content_hash: None,
+                    overwrite: true,
+                    raw_json: true,
+                },
+                &scope_call,
+            )
+            .await
+            .unwrap();
         effect.stage_deferred_writes(registry.deferred_writes(&document).await);
         effect.complete(&output).await.unwrap();
         let replayed = parent
@@ -532,15 +546,27 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     let registry = LiveToolOutputRegistry::default();
     let writer = registry.writer_for(doc_id.clone()).await;
     let tool = WriteFileTool::new(ToolContext::new(root_path.clone(), false).unwrap());
-    let output = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-        None,
-        None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
-        Default::default(), false,
-        tool.call(WriteFileArgs {
-            path: "file.bin".into(), content: "replacement bytes".into(), raw_json: true,
-            expected_content_hash: None, overwrite: true,
-        }, &gents_loop::tool::ToolCallEnvelope::ambient()),
-    ).await.unwrap();
+    let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        live_output: Some(writer),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        )
+    }
+    .call();
+    let output = tool
+        .call(
+            WriteFileArgs {
+                path: "file.bin".into(),
+                content: "replacement bytes".into(),
+                raw_json: true,
+                expected_content_hash: None,
+                overwrite: true,
+            },
+            &scope_call,
+        )
+        .await
+        .unwrap();
     assert!(
         !output.contains("file_changes") && !output.contains("AP+A"),
         "{output}"

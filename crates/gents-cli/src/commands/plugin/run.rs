@@ -300,7 +300,7 @@ mod tests {
         let caller = || Some((access.clone(), node_did.clone()));
         let result = call_installed_for_operator(home.path(), "gents", "echo", serde_json::json!({
             "response": "ok", "writes": [{"op": "insert", "collection": "UxNote", "fields": {"body": "one"}}]
-        }), caller(), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap();
+        }), caller(), &gents_loop::tool::ToolCallEnvelope::default()).await.unwrap();
         assert_eq!(result["response"], "ok");
         assert!(result.get("writes").is_none());
         let refused = call_installed_for_operator(
@@ -314,7 +314,7 @@ mod tests {
                 ]
             }),
             caller(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
         assert!(refused.is_err());
@@ -328,7 +328,7 @@ mod tests {
             .to_owned();
         call_installed_for_operator(home.path(), "gents", "echo", serde_json::json!({
             "writes": [{"op": "update", "collection": "UxNote", "doc_id": doc, "fields": {"body": "uno"}}]
-        }), caller(), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap();
+        }), caller(), &gents_loop::tool::ToolCallEnvelope::default()).await.unwrap();
         let rows = access.execute("{ UxNote { body } }").await.unwrap();
         assert_eq!(rows["data"]["UxNote"], serde_json::json!([{"body": "uno"}]));
         call_installed_for_operator(
@@ -339,7 +339,7 @@ mod tests {
                 "writes": [{"op": "delete", "collection": "UxNote", "doc_id": doc, "fields": {}}]
             }),
             caller(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();

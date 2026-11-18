@@ -15,7 +15,6 @@ mod review_task;
 pub(crate) use command::guard_home as command_guard_home;
 pub use command::{authorize_command, writable_root as command_writable_root};
 pub use context::carry;
-pub(crate) use context::current;
 #[cfg(target_os = "macos")]
 pub(crate) use context::current_home as command_context_home;
 pub use context::{for_request, scope, Context, ReviewInvocation, Reviewer};

@@ -775,7 +775,7 @@ mod tests {
                     tool_name: "query_metrics".to_string(),
                     raw_schema: false,
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect_err("disallowed service should return a typed failure");
@@ -818,7 +818,7 @@ mod tests {
                     tool_name: "search_posts".to_string(),
                     raw_schema: false,
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect_err("missing service should return a typed failure");

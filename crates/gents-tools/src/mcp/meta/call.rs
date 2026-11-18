@@ -513,7 +513,7 @@ mod tests {
                     tool_name: "query_metrics".to_string(),
                     arguments: json!("not an object"),
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect_err("disallowed service should return a typed failure");

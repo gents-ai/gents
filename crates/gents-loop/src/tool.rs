@@ -632,7 +632,7 @@ mod tests {
         let success = ToolDyn::call_with_receipt(
             &tool,
             "true".into(),
-            &crate::tool::ToolCallEnvelope::ambient(),
+            &crate::tool::ToolCallEnvelope::default(),
         )
         .await;
         assert_eq!(success.result.unwrap(), "visible output");
@@ -645,7 +645,7 @@ mod tests {
         let failure = ToolDyn::call_with_receipt(
             &tool,
             "false".into(),
-            &crate::tool::ToolCallEnvelope::ambient(),
+            &crate::tool::ToolCallEnvelope::default(),
         )
         .await;
         assert!(failure.result.is_err());
@@ -654,7 +654,7 @@ mod tests {
         let invalid = ToolDyn::call_with_receipt(
             &tool,
             "{}".into(),
-            &crate::tool::ToolCallEnvelope::ambient(),
+            &crate::tool::ToolCallEnvelope::default(),
         )
         .await;
         assert!(invalid.result.is_err());
@@ -664,7 +664,7 @@ mod tests {
             ToolDyn::call(
                 &tool,
                 "true".into(),
-                &crate::tool::ToolCallEnvelope::ambient()
+                &crate::tool::ToolCallEnvelope::default()
             )
             .await
             .unwrap(),
@@ -733,7 +733,7 @@ mod tests {
         };
         let first = bind_request_tools(shared.clone(), context("one", "alice"));
         let second = bind_request_tools(shared, context("two", "bob"));
-        let envelope = crate::tool::ToolCallEnvelope::ambient();
+        let envelope = crate::tool::ToolCallEnvelope::default();
         let (a, b) = tokio::join!(
             first[0].call_with_receipt("true".into(), &envelope),
             second[0].call_with_receipt("true".into(), &envelope)
@@ -741,7 +741,7 @@ mod tests {
         assert_eq!(a.result.unwrap(), "one:alice");
         assert_eq!(b.result.unwrap(), "two:bob");
         let receipt = first[1]
-            .call_with_receipt("true".into(), &crate::tool::ToolCallEnvelope::ambient())
+            .call_with_receipt("true".into(), &crate::tool::ToolCallEnvelope::default())
             .await;
         assert_eq!(receipt.result.unwrap(), "visible output");
         assert_eq!(

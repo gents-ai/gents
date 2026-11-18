@@ -272,7 +272,7 @@ mod tests {
                 crate::plugin::executor::ToolInvocation {
                     tool_root: None,
                     tool_calls: false,
-                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    context: &gents_loop::tool::ToolCallEnvelope::default(),
                 },
                 None,
             )
@@ -440,13 +440,14 @@ mod tests {
                 background: true,
             },
         );
-        let outcome = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            None,
-            deadline,
-            token, None, None, None, None,
-            Default::default(), true,
-            execute_in(Some(runtime), json!({"sleep_ms": 6000}), 1, false, json!({})),
-        ).await;
+        let outcome = execute_in(
+            Some(runtime),
+            json!({"sleep_ms": 6000}),
+            1,
+            false,
+            json!({}),
+        )
+        .await;
         assert_eq!(
             outcome.verdict,
             PluginVerdict::Success,

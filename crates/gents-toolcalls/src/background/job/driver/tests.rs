@@ -1024,7 +1024,7 @@ impl Stepper {
                 serde_json::to_value(input).unwrap(),
                 Some(data),
                 jobs,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .1

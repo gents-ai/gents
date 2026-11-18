@@ -103,7 +103,7 @@ async fn check(batched_tail: bool) {
         TaggedMessage::unassociated(Message::user("observe the tool")),
         Vec::new(),
         tools,
-        owned_config(32),
+        owned_config_for(32, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,

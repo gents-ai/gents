@@ -63,7 +63,7 @@ async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
             .call(
                 &record,
                 serde_json::json!({}),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -89,7 +89,7 @@ async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
             .call(
                 &record,
                 serde_json::json!({}),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap_err();
@@ -121,7 +121,7 @@ async fn a_model_tool_runs_the_installed_plugin_with_its_declared_schema() {
         let output = tool
             .call(
                 format!(r#"{{"n":{n}}}"#),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -175,7 +175,7 @@ async fn changed_resource_declaration_invalidates_admission_without_new_artifact
             .call(
                 &record,
                 input.clone(),
-                &gents_loop::tool::ToolCallEnvelope::ambient()
+                &gents_loop::tool::ToolCallEnvelope::default()
             )
             .await
             .unwrap()
@@ -190,7 +190,7 @@ async fn changed_resource_declaration_invalidates_admission_without_new_artifact
             .call(
                 &record,
                 input,
-                &gents_loop::tool::ToolCallEnvelope::ambient()
+                &gents_loop::tool::ToolCallEnvelope::default()
             )
             .await
             .unwrap()
@@ -207,9 +207,7 @@ mod bound {
     use gents_pack::plugin::allowed;
     use gents_pack::plugin::test_fixtures::{create_file_wat, open_and_copy_wat};
     use gents_tools::plugin::approval;
-    use gents_tools::runtime_context::{
-        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
-    };
+    use gents_tools::runtime_context::ToolWorkspaceScope;
 
     fn tool_for(home: &tempfile::TempDir, record: &InstalledPlugin) -> PluginTool {
         let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
@@ -223,7 +221,7 @@ mod bound {
     async fn refusal(tool: &PluginTool, path: &std::path::Path) -> String {
         format!(
             "{:#}",
-            tool.call(args(path), &gents_loop::tool::ToolCallEnvelope::ambient())
+            tool.call(args(path), &gents_loop::tool::ToolCallEnvelope::default())
                 .await
                 .unwrap_err()
         )
@@ -268,23 +266,9 @@ mod bound {
                 ..Default::default()
             },
         );
-        approval::workspace::scope(
-            approval,
-            scope_request_tool_execution_with_workspace_overlay(
-                None,
-                None,
-                token,
-                ToolWorkspaceScope::cwd_only(Some(workdir.to_owned())),
-                None,
-                Some("session-1".into()),
-                None,
-                Default::default(),
-                false,
-                tool.call(args(path), &call),
-            ),
-        )
-        .await
-        .map_err(|error| format!("{error:#}"))
+        approval::workspace::scope(approval, tool.call(args(path), &call))
+            .await
+            .map_err(|error| format!("{error:#}"))
     }
 
     async fn answer(
@@ -404,7 +388,7 @@ mod bound {
                 &fx.record,
                 &input,
                 &BindContext::headless(Some(&work)),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             ),
         )
         .await
@@ -416,7 +400,7 @@ mod bound {
                 &fx.record,
                 changed,
                 bound.clone(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap_err();
@@ -431,7 +415,7 @@ mod bound {
                 &fx.record,
                 input.clone(),
                 bound.clone(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -453,7 +437,7 @@ mod bound {
                 &fx.record,
                 input,
                 bound,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap_err();
@@ -496,7 +480,7 @@ mod bound {
                             &fx.record,
                             &input,
                             &bind,
-                            &gents_loop::tool::ToolCallEnvelope::ambient(),
+                            &gents_loop::tool::ToolCallEnvelope::default(),
                         ),
                     )
                     .await
@@ -517,7 +501,7 @@ mod bound {
                             &fx.record,
                             input,
                             bound,
-                            &gents_loop::tool::ToolCallEnvelope::ambient()
+                            &gents_loop::tool::ToolCallEnvelope::default()
                         )
                         .await
                         .unwrap_err()
@@ -528,7 +512,7 @@ mod bound {
                         &fx.record,
                         &input,
                         &bind,
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     ),
                 )
                 .await
@@ -542,7 +526,7 @@ mod bound {
                     &fx.record,
                     &file_input,
                     &bind,
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 ),
             )
             .await
@@ -699,7 +683,7 @@ mod bound {
         let output = tool_for(&fx.home, &fx.record)
             .call(
                 args(&fx.root.join("docs/in.json")),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -719,7 +703,7 @@ mod bound {
         let output = tool
             .call(
                 args(&fx.root.join("docs/sibling.json")),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -765,7 +749,7 @@ mod bound {
 
         tool.call(
             args(&writer),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -790,7 +774,7 @@ mod bound {
         let writer = fx.root.join("work");
         allowed::add(fx.home.path(), &reader, BindAccess::Read).unwrap();
         allowed::add(fx.home.path(), &writer, BindAccess::ReadWrite).unwrap();
-        let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+        let envelope = gents_loop::tool::ToolCallEnvelope::default();
         let call = |path: &std::path::Path, output: bool| {
             let mut input = serde_json::json!({ "path": path });
             if output {
@@ -819,7 +803,7 @@ mod bound {
             tool.call(
                 serde_json::json!({ "path": reader, "output": "out.json", "delete": true })
                     .to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient()
+                &gents_loop::tool::ToolCallEnvelope::default()
             )
             .await
             .unwrap_err()
@@ -980,7 +964,7 @@ mod bound {
                     &fx.record,
                     &input,
                     &context,
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 )
                 .await;
             let prompt = match operator {
@@ -1019,40 +1003,18 @@ mod bound {
                 ..Default::default()
             },
         );
-        let call = scope_request_tool_execution_with_workspace_overlay(
-            None,
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            ToolWorkspaceScope::cwd_only(Some(work.clone())),
-            None,
-            Some("session-1".into()),
-            None,
-            Default::default(),
-            false,
-            async {
-                tokio::spawn(scope_request_tool_execution_with_workspace_overlay(
-                    None,
-                    None,
-                    spawned_token,
-                    ToolWorkspaceScope::cwd_only(Some(work)),
-                    None,
-                    Some("session-1".into()),
-                    None,
-                    Default::default(),
-                    false,
-                    async move {
-                        gents_loop::tool_call_lifecycle::runtime::call_tool_managed(
-                            tool.as_ref(),
-                            args(&target),
-                            &envelope,
-                        )
-                        .await
-                    },
-                ))
+        let call = async {
+            tokio::spawn(async move {
+                gents_loop::tool_call_lifecycle::runtime::call_tool_managed(
+                    tool.as_ref(),
+                    args(&target),
+                    &envelope,
+                )
                 .await
-                .unwrap()
-            },
-        );
+            })
+            .await
+            .unwrap()
+        };
         let operator = async {
             let request = loop {
                 if let Some(request) = approval::pending(&home).unwrap().into_iter().next() {
@@ -1084,7 +1046,7 @@ mod bound {
                 crate::plugin::executor::ToolInvocation {
                     tool_root: Some(&work),
                     tool_calls: false,
-                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    context: &gents_loop::tool::ToolCallEnvelope::default(),
                 },
             )
             .await
@@ -1097,7 +1059,7 @@ mod bound {
                 crate::plugin::executor::ToolInvocation {
                     tool_root: None,
                     tool_calls: false,
-                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    context: &gents_loop::tool::ToolCallEnvelope::default(),
                 },
             )
             .await
@@ -1128,7 +1090,7 @@ mod bound {
                 crate::plugin::executor::ToolInvocation {
                     tool_root: Some(&root),
                     tool_calls: false,
-                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    context: &gents_loop::tool::ToolCallEnvelope::default(),
                 },
             )
             .await
@@ -1149,7 +1111,7 @@ mod bound {
                 crate::plugin::executor::ToolInvocation {
                     tool_root: Some(&root),
                     tool_calls: false,
-                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    context: &gents_loop::tool::ToolCallEnvelope::default(),
                 },
             )
             .await
@@ -1170,7 +1132,7 @@ async fn generated_plugin_invocation_retry_revalidates_current_installation() {
             .call(
                 &original,
                 serde_json::json!({"attempt":"first"}),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -1216,7 +1178,7 @@ async fn generated_plugin_invocation_retry_revalidates_current_installation() {
                     &original,
                     input.clone(),
                     bound,
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 )
                 .await
         } else {
@@ -1224,7 +1186,7 @@ async fn generated_plugin_invocation_retry_revalidates_current_installation() {
                 .call(
                     &original,
                     input.clone(),
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 )
                 .await
         };
@@ -1254,7 +1216,7 @@ async fn execution_receipt_hashes_canonical_values_and_keeps_tool_output_native(
             crate::plugin::executor::ToolInvocation {
                 tool_root: None,
                 tool_calls: false,
-                context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                context: &gents_loop::tool::ToolCallEnvelope::default(),
             },
         )
         .await;
@@ -1275,7 +1237,7 @@ async fn execution_receipt_hashes_canonical_values_and_keeps_tool_output_native(
     let dispatched = tool
         .call_with_receipt(
             input.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert_eq!(
@@ -1310,7 +1272,7 @@ async fn execution_receipts_distinguish_refusal_bad_output_and_guest_trap() {
                 crate::plugin::executor::ToolInvocation {
                     tool_root: None,
                     tool_calls: false,
-                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    context: &gents_loop::tool::ToolCallEnvelope::default(),
                 },
             )
             .await;
@@ -1326,7 +1288,7 @@ async fn execution_receipts_distinguish_refusal_bad_output_and_guest_trap() {
                 crate::plugin::executor::ToolInvocation {
                     tool_root: None,
                     tool_calls: false,
-                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    context: &gents_loop::tool::ToolCallEnvelope::default(),
                 },
             )
             .await;
@@ -1356,7 +1318,7 @@ async fn corrupted_store_bytes_are_refused_and_never_cached() {
         .call(
             &record,
             serde_json::json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err();
@@ -1378,7 +1340,7 @@ async fn bound_receipt_names_the_declared_field_not_the_host_path() {
             &record,
             serde_json::json!({}),
             bound,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1461,7 +1423,7 @@ mod data_calls {
                 &record,
                 json!({}),
                 DataCaller::for_agent(node.clone(), NODE, AGENT).unwrap(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap()
@@ -1537,7 +1499,7 @@ mod data_calls {
                 &record,
                 json!({}),
                 caller,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -1653,7 +1615,7 @@ mod data_calls {
                         &record,
                         caller_input.clone(),
                         caller,
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     )
                     .await
             } else {
@@ -1661,7 +1623,7 @@ mod data_calls {
                     .call(
                         &record,
                         caller_input.clone(),
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     )
                     .await
             }
@@ -1846,20 +1808,27 @@ mod tool_writes {
             ))
             .await
             .unwrap();
-
-        let dispatched = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-                Some(gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(None, Some(NODE.into()), None, None)),
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            identity: Some(
+                gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+                    None,
+                    Some(NODE.into()),
+                    None,
+                    None,
+                ),
+            ),
+            live_output: Some(writer),
+            session_id: Some(format!("session-{name}")),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
                 None,
                 tokio_util::sync::CancellationToken::new(),
-                None,
-                Some(writer),
-                Some(format!("session-{name}")),
-                None,
-                BTreeMap::new(),
-                false,
-                tool.call_with_receipt(output.to_string(), &gents_loop::tool::ToolCallEnvelope::ambient()),
             )
-        .await;
+        }
+        .call();
+
+        let dispatched = tool
+            .call_with_receipt(output.to_string(), &scope_call)
+            .await;
         if let Some(writes) = dispatched.deferred_writes {
             registry
                 .writer_for(doc_id.clone())
@@ -2087,7 +2056,7 @@ mod job_calls {
                 &record,
                 json!({}),
                 caller,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap()

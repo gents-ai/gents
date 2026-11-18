@@ -309,10 +309,8 @@ mod tests {
         let mut config = config(5);
         config.working_dir = Some(source.clone());
         let tool = CliTool::new(config.clone());
-        crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None,
-            None,
-            tokio_util::sync::CancellationToken::new(),
+        let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             crate::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(source.clone()),
@@ -320,36 +318,30 @@ mod tests {
                 workspace_authority: Some(crate::native::WorkspaceAuthority::ReadOnly),
                 workspace_artifact: Some(fixture.grant.clone()),
             },
-            None,
-            None,
-            None,
-            Default::default(),
-            false,
-            async {
-                let argv = vec!["-c".to_owned(), "touch cli-must-not-launch".to_owned()];
-                let error = run_cli_command(
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
-                    &config,
-                    &argv,
-                )
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        async {
+            let argv = vec!["-c".to_owned(), "touch cli-must-not-launch".to_owned()];
+            let error = run_cli_command(&scope_call, &config, &argv)
                 .await
                 .unwrap_err();
-                assert!(error.to_string().contains("artifact-scoped"));
-                let args = serde_json::json!({"argv": argv}).to_string();
-                let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
-                    "sh",
-                    tool.call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
-                        .await,
-                );
-                assert!(matches!(
-                    outcome,
-                    gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
-                        class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
-                        ..
-                    }
-                ));
-            },
-        )
+            assert!(error.to_string().contains("artifact-scoped"));
+            let args = serde_json::json!({"argv": argv}).to_string();
+            let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
+                "sh",
+                tool.call(args, &scope_call).await,
+            );
+            assert!(matches!(
+                outcome,
+                gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+                    class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
+                    ..
+                }
+            ));
+        }
         .await;
         assert!(!sentinel.exists());
     }
@@ -357,7 +349,7 @@ mod tests {
     #[tokio::test]
     async fn reports_exit_code_and_output_and_env() {
         let out = run_cli_command(
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &config(5),
             &["-c".into(), "echo $GENTS_T; echo err 1>&2; exit 3".into()],
         )
@@ -373,7 +365,7 @@ mod tests {
         let mut config = config(5);
         config.max_output_chars = 7;
         let out = run_cli_command(
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &config,
             &[
                 "-c".into(),
@@ -390,7 +382,7 @@ mod tests {
     #[tokio::test]
     async fn tool_timeout_kills_the_process_group() {
         let err = run_cli_command(
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &config(1),
             &[
                 "-c".into(),
@@ -429,8 +421,6 @@ mod tests {
 
     #[tokio::test]
     async fn request_cancellation_stops_the_command() {
-        use crate::runtime_context::scope_request_tool_execution;
-
         let token = tokio_util::sync::CancellationToken::new();
         let cancel = token.clone();
         let temp = tempfile::tempdir().unwrap();
@@ -449,12 +439,10 @@ mod tests {
             .expect("command must write output before cancellation");
             cancel.cancel();
         });
-        let err = scope_request_tool_execution(
-            None,
-            token,
-            run_cli_command(&gents_loop::tool::ToolCallEnvelope::ambient(), &config, &["-c".into(),
-                "printf 'partial stdout'; printf 'partial stderr' >&2; : > \"$GENTS_READY\"; sleep 30".into()]),
-        )
+        let scope_call =
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, token).call();
+        let err = run_cli_command(&scope_call, &config, &["-c".into(),
+                "printf 'partial stdout'; printf 'partial stderr' >&2; : > \"$GENTS_READY\"; sleep 30".into()])
         .await
         .unwrap_err();
         cancellation.await.unwrap();

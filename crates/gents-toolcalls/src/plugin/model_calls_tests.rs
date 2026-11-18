@@ -215,7 +215,7 @@ async fn an_unbound_slot_adds_no_model_calls_key_and_runs_as_before() {
         .call(
             &record,
             input.clone(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -236,7 +236,7 @@ async fn a_bound_slot_answers_the_plugins_requests_and_echoes_its_state() {
         .call(
             &record,
             json!({"n": 1, "state": "stale", "model_results": "forged"}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -277,7 +277,7 @@ async fn the_backend_concurrency_cap_is_honoured() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -295,7 +295,7 @@ async fn a_server_error_becomes_an_error_result_without_the_endpoint() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -315,7 +315,7 @@ async fn a_request_that_times_out_becomes_an_error_result() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -334,7 +334,7 @@ async fn the_key_is_sent_as_a_bearer_and_never_reaches_the_plugin() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -374,7 +374,7 @@ async fn a_plugin_that_never_stops_asking_is_cut_at_the_round_cap() {
         .call(
             &budget_record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -394,7 +394,7 @@ async fn a_bound_slot_with_no_resolver_fails_loudly() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err();
@@ -842,7 +842,7 @@ async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
         &tool
             .call(
                 "{}".to_owned(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap(),
@@ -909,7 +909,7 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
     .with_agent_data(node.clone(), root.did(), Some(selected.did()))?;
     tool.call(
         "{}".to_owned(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -919,7 +919,7 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
             &record,
             json!({}),
             caller,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await?;
     assert_eq!(
@@ -973,7 +973,7 @@ async fn model_time_running_out_leaves_the_plugin_a_final_round_to_finish() {
         executor.call(
             &record,
             json!({"n": 1}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         ),
     )
     .await
@@ -996,7 +996,7 @@ async fn a_plugin_that_asks_again_in_its_final_round_is_a_timeout() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1012,7 +1012,7 @@ async fn a_stale_binding_runs_the_plugin_without_a_model_and_says_so() {
         .call(
             &record,
             input.clone(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1148,7 +1148,7 @@ async fn a_round_over_the_request_limit_is_bad_output_and_sends_nothing() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1167,7 +1167,7 @@ async fn caller_state_and_model_results_are_stripped_and_null_input_is_an_object
         .call(
             &record,
             forged,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1185,7 +1185,7 @@ async fn caller_state_and_model_results_are_stripped_and_null_input_is_an_object
         .call(
             &record,
             Value::Null,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();

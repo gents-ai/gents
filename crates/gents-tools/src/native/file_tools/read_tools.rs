@@ -92,7 +92,7 @@ impl Tool for ListFilesTool {
     }
 
     async fn definition(&self, prompt: String) -> ToolDefinition {
-        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::ambient())
+        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::default())
             .await
     }
 
@@ -197,7 +197,7 @@ impl Tool for ReadFileTool {
     }
 
     async fn definition(&self, prompt: String) -> ToolDefinition {
-        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::ambient())
+        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::default())
             .await
     }
 

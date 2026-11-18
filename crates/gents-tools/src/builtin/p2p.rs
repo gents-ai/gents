@@ -171,7 +171,7 @@ impl P2pTool {
             agent,
             mutate,
             approver: None,
-            envelope: gents_loop::tool::ToolCallEnvelope::ambient(),
+            envelope: gents_loop::tool::ToolCallEnvelope::default(),
         }
     }
 

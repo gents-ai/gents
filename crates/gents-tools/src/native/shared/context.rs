@@ -113,7 +113,7 @@ impl ToolContext {
         Ok(Self {
             root: Arc::new(canonical),
             base: Arc::new(base),
-            call: gents_loop::tool::ToolCallEnvelope::ambient(),
+            call: gents_loop::tool::ToolCallEnvelope::default(),
         })
     }
 

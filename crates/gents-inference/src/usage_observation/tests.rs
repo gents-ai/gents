@@ -1079,7 +1079,7 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
     let output = tool
         .call(
             ProviderLimitsArgs {},
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1087,7 +1087,7 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
     let cached = tool
         .call(
             ProviderLimitsArgs {},
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();

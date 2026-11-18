@@ -648,7 +648,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
             None,
             "list-call",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Skip { .. }
@@ -723,7 +723,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
                 None,
                 id,
                 args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
         let ToolCallHookAction::Skip { reason } = action else {

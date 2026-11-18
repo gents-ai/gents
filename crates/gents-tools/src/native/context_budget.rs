@@ -769,28 +769,25 @@ mod tests {
     }
 
     async fn call_as(tool: &ContextBudgetTool, agent_did: &str, session_id: &str) -> String {
-        crate::runtime_context::scope_request_tool_execution_with_session(
-            Some(crate::runtime_context::ToolRequestIdentity::new(
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            identity: Some(crate::runtime_context::ToolRequestIdentity::new(
                 None,
                 Some("did:key:z-context".into()),
                 Some(agent_did.into()),
                 Some("caller-request".into()),
             )),
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            Some(session_id.into()),
-            async {
-                Tool::call(
-                    tool,
-                    ContextBudgetParams {},
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
-                )
+            session_id: Some(session_id.into()),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            )
+        }
+        .call();
+        async {
+            Tool::call(tool, ContextBudgetParams {}, &scope_call)
                 .await
                 .unwrap()
-            },
-        )
+        }
         .await
     }
 
@@ -979,7 +976,7 @@ mod tests {
         let error = Tool::call(
             &tool,
             ContextBudgetParams {},
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .expect_err("unscoped call must not fall back to a node-wide scan");

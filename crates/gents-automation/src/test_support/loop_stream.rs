@@ -342,8 +342,42 @@ pub fn config(max_turns: usize) -> LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
+        tool_context: gents_loop::tool::ToolCallEnvelope::default(),
     }
+}
+
+/// The envelope the tools of the claimed request `lifecycle` are called
+/// with: its identity, session and claimed deadline.
+pub fn request_call(
+    lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
+) -> gents_loop::tool::ToolCallEnvelope {
+    let request = lifecycle.request();
+    gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        identity: Some(
+            gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+                request.requester_did.clone(),
+                Some(request.node_did.clone()),
+                Some(request.agent_did.clone()),
+                Some(request.request_id.clone()),
+            ),
+        ),
+        session_id: Some(request.session_id.clone()),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            lifecycle.claimed_deadline_at(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+    }
+    .call()
+}
+
+/// [`owned_config`] for the claimed request `lifecycle`.
+pub fn owned_config_for(
+    max_turns: usize,
+    lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
+) -> LoopConfig {
+    let mut config = owned_config(max_turns);
+    config.tool_context = request_call(lifecycle);
+    config
 }
 
 pub fn owned_config(max_turns: usize) -> LoopConfig {
@@ -461,14 +495,6 @@ where
             Arc::new(|_| Box::pin(async { Ok(()) })),
         )
     });
-    let deadline = lifecycle.claimed_deadline_at();
-    let request = lifecycle.request();
-    let session_id = request.session_id.clone();
-    let requester_did = request.requester_did.clone();
-    let node_did = request.node_did.clone();
-    let agent_did = request.agent_did.clone();
-    let request_id = request.request_id.clone();
-    let inherited = gents_tools::runtime_context::current_tool_runtime_context().is_some();
     let collection = gents_inference::rendered_request::scope::scope_request(scope, async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
@@ -510,27 +536,7 @@ where
         }
         collected
     });
-    if inherited {
-        collection.await
-    } else {
-        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
-            Some(
-                gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
-                    requester_did,
-                    Some(node_did),
-                    Some(agent_did),
-                    Some(request_id),
-                ),
-            ),
-            deadline,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            Some(session_id),
-            collection,
-        )
-        .await
-    }
+    collection.await
 }
 
 pub async fn owned_test_hook() -> (

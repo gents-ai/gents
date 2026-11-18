@@ -2,9 +2,6 @@ use super::*;
 use anyhow::Context;
 use futures::FutureExt;
 use gents_loop::session_hook::{ForegroundCall, ForegroundResult};
-use gents_tools::runtime_context::{
-    scope_request_tool_execution_with_workspace_overlay, tool_runtime_context, ToolWorkspaceScope,
-};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -58,11 +55,10 @@ impl DefraSessionHook {
         call: ForegroundCall,
         envelope: &gents_loop::tool::ToolCallEnvelope,
     ) -> ForegroundResult {
-        let context = tool_runtime_context(envelope);
         if !gents_tools::native::is_bash_tool_name(name) {
             return ForegroundResult::Settled(call(envelope.clone(), None).await);
         }
-        let Some(context) = context else {
+        let Some(context) = envelope.runtime() else {
             return ForegroundResult::Settled(
                 gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
                     "native process requires an owned execution context",
@@ -145,7 +141,7 @@ impl DefraSessionHook {
             process_token.clone(),
             recorder,
         )
-        .unwrap_or_else(gents_loop::tool::ToolCallEnvelope::ambient);
+        .unwrap_or_default();
         tokio::spawn(gents_tools::plugin::approval::workspace::carry(
             async move {
                 let mut lifecycle = lifecycle;
@@ -168,30 +164,9 @@ impl DefraSessionHook {
                         check_registry.live_process_evidence(&check_call, &check_doc)
                             != gents_session::exec::ownership::LiveProcessEvidence::NeverSpawned
                     });
-                let workspace = ToolWorkspaceScope {
-                    runtime_home: context.runtime_home,
-                    workspace_cwd: context.workspace_cwd,
-                    workspace_root: context.workspace_root,
-                    workspace_authority: context.workspace_authority,
-                    workspace_artifact: context.workspace_artifact,
-                };
                 let execution =
-                    AssertUnwindSafe(scope_request_tool_execution_with_workspace_overlay(
-                        None,
-                        context.deadline_at,
-                        process_token.clone(),
-                        workspace,
-                        None,
-                        context.session_id,
-                        context.correlation,
-                        context.source_fields,
-                        false,
-                        async {
-                            gents_tools::runtime_context::debug_assert_ambient(&handoff);
-                            call(handoff.clone(), Some(cleanup)).await
-                        },
-                    ))
-                    .catch_unwind();
+                    AssertUnwindSafe(async { call(handoff.clone(), Some(cleanup)).await })
+                        .catch_unwind();
                 tokio::pin!(execution);
                 let mut changes = Some(changes);
                 let mut answer = Some(answer);

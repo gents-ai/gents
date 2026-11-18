@@ -161,7 +161,6 @@ impl ToolDyn for PluginTool {
         context: &'a ToolCallEnvelope,
     ) -> BoxFuture<'a, ToolDispatchResult> {
         Box::pin(async move {
-            gents_tools::runtime_context::debug_assert_ambient(context);
             let input: serde_json::Value = match gents_loop::tool::parse_tool_args(&args) {
                 Ok(input) => input,
                 Err(error) => {
@@ -441,26 +440,48 @@ mod tests {
 
     #[tokio::test]
     async fn plugin_bound_inputs_follow_generated_write_input_admission() {
-        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            None,
-            None,tokio_util::sync::CancellationToken::new(),None,None,None,
-            Some("book-run".into()),[("book_path".into(),"/books/one".into())].into(),false,async {
-                for case in gents_lean_vocab::families::contracts_write_input_plugin_fill::cases::<String>() {
-                    let value = match case.input.actual.as_deref() {
-                        None => None, Some("text")=>Some(json!("/books/other")),
-                        Some("integer")=>Some(json!(1)),Some("number")=>Some(json!(0.5)),
-                        Some("boolean")=>Some(json!(false)),Some("array")=>Some(json!([1])),
-                        Some("object")=>Some(json!({"path":"other"})),Some("null")=>Some(serde_json::Value::Null),
-                        other=>panic!("unknown modeled input {other:?}")};
-                    let mut input=json!({"page":3});
-                    if let Some(value)=value {input["path"]=value;}
-                    let before=input.clone();
-                    let result=fill_inputs(&ToolCallEnvelope::ambient(),&mut input,&fields());
-                    if result.is_ok() {assert_eq!(input,json!({"page":3,"path":"/books/one","run_id":"book-run"}));}
-                    else {assert_eq!(input,before);}
-                    case.check(result.is_ok());
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            correlation: Some("book-run".into()),
+            source_fields: [("book_path".into(), "/books/one".into())].into(),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            )
+        }
+        .call();
+        async {
+            for case in
+                gents_lean_vocab::families::contracts_write_input_plugin_fill::cases::<String>()
+            {
+                let value = match case.input.actual.as_deref() {
+                    None => None,
+                    Some("text") => Some(json!("/books/other")),
+                    Some("integer") => Some(json!(1)),
+                    Some("number") => Some(json!(0.5)),
+                    Some("boolean") => Some(json!(false)),
+                    Some("array") => Some(json!([1])),
+                    Some("object") => Some(json!({"path":"other"})),
+                    Some("null") => Some(serde_json::Value::Null),
+                    other => panic!("unknown modeled input {other:?}"),
+                };
+                let mut input = json!({"page":3});
+                if let Some(value) = value {
+                    input["path"] = value;
                 }
-            }).await;
+                let before = input.clone();
+                let result = fill_inputs(&scope_call, &mut input, &fields());
+                if result.is_ok() {
+                    assert_eq!(
+                        input,
+                        json!({"page":3,"path":"/books/one","run_id":"book-run"})
+                    );
+                } else {
+                    assert_eq!(input, before);
+                }
+                case.check(result.is_ok());
+            }
+        }
+        .await;
         let mut missing = json!({"page":3});
         assert!(fill_inputs(&ToolCallEnvelope::default(), &mut missing, &fields()).is_err());
         assert_eq!(missing, json!({"page":3}));

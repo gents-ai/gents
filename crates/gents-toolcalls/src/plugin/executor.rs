@@ -915,7 +915,7 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
         input: serde_json::Value,
     ) -> Result<PluginOutcome> {
         Ok(
-            PluginExecutor::call(self, record, input, &ToolCallEnvelope::ambient())
+            PluginExecutor::call(self, record, input, &ToolCallEnvelope::default())
                 .await?
                 .outcome,
         )
@@ -932,7 +932,7 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
     ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
         super::tool::PluginTool::for_run(self, coordinate, selected)?
             .with_agent_data(node, node_did, agent_did)?
-            .run_once(input, &ToolCallEnvelope::ambient())
+            .run_once(input, &ToolCallEnvelope::default())
             .await
     }
 

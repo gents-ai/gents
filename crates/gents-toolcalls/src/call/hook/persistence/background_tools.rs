@@ -271,39 +271,6 @@ impl DefraSessionHook {
         let live_output_writer = live_outputs
             .canonical_writer_for(lifecycle.tool_output_binding()?)
             .await;
-        let runtime_context = gents_tools::runtime_context::tool_runtime_context(context);
-        let workspace = gents_tools::runtime_context::ToolWorkspaceScope {
-            runtime_home: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.runtime_home.clone()),
-            workspace_cwd: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.workspace_cwd.clone()),
-            workspace_root: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.workspace_root.clone()),
-            workspace_authority: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.workspace_authority),
-            workspace_artifact: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.workspace_artifact.clone()),
-        };
-        let correlation = runtime_context
-            .as_ref()
-            .and_then(|runtime| runtime.correlation.clone());
-        let requester_did = runtime_context
-            .as_ref()
-            .and_then(|runtime| runtime.requester_did.clone());
-        let request_node_did = runtime_context
-            .as_ref()
-            .and_then(|runtime| runtime.node_did.clone());
-        let request_agent_did = runtime_context
-            .as_ref()
-            .and_then(|runtime| runtime.agent_did.clone());
-        let source_fields = runtime_context
-            .map(|runtime| runtime.source_fields)
-            .unwrap_or_default();
         let executions = self.background_executions.clone();
         let process_tool = gents_tools::native::is_bash_tool_name(target_name);
         let process_recorder =
@@ -324,19 +291,8 @@ impl DefraSessionHook {
         tokio::spawn(gents_tools::plugin::approval::workspace::carry(
             async move {
                 let execution = AssertUnwindSafe(
-                        gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-                            Some(gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(requester_did, request_node_did, request_agent_did, Some(execution_request_id.clone()))),
-                            Some(background_deadline_at),
-                            cancellation_token.clone(),
-                            workspace,
-                            Some(live_output_writer),
-                            Some(execution_session_id.clone()),
-                            correlation,
-                            source_fields,
-                            true,
                             async {
                                 if process_tool {
-                                    gents_tools::runtime_context::debug_assert_ambient(&envelope);
                                     gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
                                         target_tool.as_ref(), target_args, &envelope, |outcome| {
                                             if let Some(outcome) = outcome.filter(|outcome| gents_session::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
@@ -347,11 +303,9 @@ impl DefraSessionHook {
                                         },
                                     ).await
                                 } else {
-                                    gents_tools::runtime_context::debug_assert_ambient(&envelope);
                                     gents_loop::tool_call_lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args, &envelope).await
                                 }
                             },
-                        ),
                 )
             .catch_unwind()
             .await;

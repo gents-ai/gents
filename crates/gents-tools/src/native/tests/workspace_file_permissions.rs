@@ -403,9 +403,7 @@ async fn full_access_file_changes_still_obey_the_configured_tool_root() {
 
 #[tokio::test]
 async fn full_access_cannot_widen_read_only_workspace_authority() {
-    use crate::runtime_context::{
-        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
-    };
+    use crate::runtime_context::ToolWorkspaceScope;
     let fixture = Fixture::new(Some(workspace::Mode::FullAccess));
     let path = fixture.outside();
     let workspace = ToolWorkspaceScope {
@@ -431,19 +429,7 @@ async fn full_access_cannot_widen_read_only_workspace_authority() {
             background: false,
         },
     );
-    let result = scope_request_tool_execution_with_workspace_overlay(
-        None,
-        None,
-        token,
-        workspace,
-        None,
-        None,
-        None,
-        Default::default(),
-        false,
-        fixture.write_in(&call, &path),
-    )
-    .await;
+    let result = fixture.write_in(&call, &path).await;
     assert!(matches!(
         result,
         Err(ToolError::ReportedFailure {

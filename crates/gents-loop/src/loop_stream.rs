@@ -38,9 +38,7 @@ use crate::output_obligation::OutputObligationCheck;
 use crate::provider_audit::ClaudeAuditEvent;
 use crate::session_hook::SessionHook;
 use crate::stream_processor::{AssistantTurnAccumulator, StreamProcessorError};
-use crate::tool_call_lifecycle::runtime::{
-    deadline_remaining, scope_request_tool_execution_with_session, ToolOutcome,
-};
+use crate::tool_call_lifecycle::runtime::{deadline_remaining, ToolOutcome};
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
 mod aggregate_budget;

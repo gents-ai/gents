@@ -252,7 +252,7 @@ impl Tool for UnrestrictedBashTool {
     type Output = String;
 
     async fn definition(&self, prompt: String) -> ToolDefinition {
-        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::ambient())
+        self.definition_for(prompt, &gents_loop::tool::ToolCallEnvelope::default())
             .await
     }
 
@@ -388,7 +388,7 @@ mod input_tests {
                 timeout_secs: None,
                 raw_json: false,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()

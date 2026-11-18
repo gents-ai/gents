@@ -157,7 +157,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
                     None,
                     id,
                     args,
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 )
                 .await,
             );

@@ -61,7 +61,7 @@ async fn call(tools: &[Box<dyn ToolDyn>], args: Value) -> Result<Value, String> 
         .expect("config registered")
         .call(
             args.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .map_err(|error| error.to_string())?;
