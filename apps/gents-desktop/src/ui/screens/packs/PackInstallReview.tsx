@@ -691,7 +691,7 @@ export function PackInstallReview({
                     : why === "authority"
                       ? "It needs the access above to install. Nothing was installed."
                       : why === "edited"
-                        ? "Choose what happens to your edits, then install."
+                        ? refusal
                         : `Couldn't install: ${refusal}`}
                 </p>
               )}

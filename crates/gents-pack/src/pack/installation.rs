@@ -1149,9 +1149,10 @@ pub enum PackChangeSurface {
     Hosted,
 }
 
-fn document_change_message(
+pub fn document_change_message(
     coordinate: &str,
     documents: &[String],
+    unnamed: usize,
     edited: bool,
     surface: PackChangeSurface,
 ) -> String {
@@ -1160,10 +1161,15 @@ fn document_change_message(
     } else {
         "already exist on this node with different content"
     };
+    let listed = match (documents.join(", "), unnamed) {
+        (names, _) if names.is_empty() => String::new(),
+        (names, 0) => format!(": {names}"),
+        (names, 1) => format!(": {names} and 1 other"),
+        (names, rest) => format!(": {names} and {rest} others"),
+    };
     let mut message = format!(
-        "{} of {coordinate}'s documents {state}: {}. ",
-        documents.len(),
-        documents.join(", "),
+        "{} of {coordinate}'s documents {state}{listed}. ",
+        documents.len() + unnamed,
     );
     if !edited {
         message.push_str("The pack adopts an existing document only when it matches. Rename or remove them, or decide: ");
@@ -1183,7 +1189,7 @@ fn document_change_message(
 pub enum PackChangeError {
     #[error(
         "{}",
-        document_change_message(coordinate, edited, true, PackChangeSurface::Local)
+        document_change_message(coordinate, edited, 0, true, PackChangeSurface::Local)
     )]
     Edited {
         coordinate: String,
@@ -1191,7 +1197,7 @@ pub enum PackChangeError {
     },
     #[error(
         "{}",
-        document_change_message(coordinate, differing, false, PackChangeSurface::Local)
+        document_change_message(coordinate, differing, 0, false, PackChangeSurface::Local)
     )]
     Differing {
         coordinate: String,
@@ -1214,12 +1220,12 @@ impl PackChangeError {
     pub fn message_for_surface(&self, surface: PackChangeSurface) -> String {
         match self {
             Self::Edited { coordinate, edited } => {
-                document_change_message(coordinate, edited, true, surface)
+                document_change_message(coordinate, edited, 0, true, surface)
             }
             Self::Differing {
                 coordinate,
                 differing,
-            } => document_change_message(coordinate, differing, false, surface),
+            } => document_change_message(coordinate, differing, 0, false, surface),
             _ => self.to_string(),
         }
     }

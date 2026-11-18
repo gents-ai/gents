@@ -277,7 +277,7 @@ describe("the install review", () => {
 
   it("says what its preview doesn't check, as the preview words it", async () => {
     const note =
-      "Existing documents are not compared by this preview; the install may still refuse documents that differ or were edited.";
+      "Existing documents' content is not compared by this preview; the install may still refuse documents that differ or were edited.";
     const secondNote = "A second limitation supplied by the preview.";
     show(bridge(() => preview({ notes: [note, secondNote] })));
     const { review } = await openRegistryReview();
@@ -491,13 +491,16 @@ describe("the install review", () => {
   });
 
   it("asks about edits there when the install finds some", async () => {
+    const refusal =
+      "the runtime refused the install (not_installed, documents_edited): " +
+      "3 of acme/docs's documents were edited since it was installed: Tools/literal-tools and 2 others. " +
+      "overwrite replaces them with the pack's versions; keep leaves them as they are. " +
+      "Retry the same install with --overwrite or --keep; in the desktop choose overwrite or keep in the install review";
     let refused = false;
     const installPack = bridge(undefined, () => {
       if (!refused) {
         refused = true;
-        throw new Error(
-          "1 of acme/docs's documents were edited since it was installed: Agent/writer; use --overwrite or --keep",
-        );
+        throw new Error(refusal);
       }
       return { pack: "docs", digest: DIGEST, source: "registry" };
     });
@@ -506,6 +509,7 @@ describe("the install review", () => {
     await waitFor(() => expect(installButton(review)).toBeEnabled());
     await user.click(installButton(review));
     const edits = await within(review).findByRole("region", { name: "Your edits" });
+    expect(within(review).getByRole("alert")).toHaveTextContent(refusal);
     expect(within(edits).getByRole("radio", { name: "Keep my edits" })).toBeChecked();
     await user.click(installButton(review));
     await waitFor(() => expect(installs(installPack)).toHaveLength(2));

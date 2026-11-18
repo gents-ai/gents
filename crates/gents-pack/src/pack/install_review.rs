@@ -9,7 +9,7 @@ use crate::pack::{PackInferenceBindingPreview, PackInferenceBindings, PackManife
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-pub const EXISTING_DOCUMENTS_NOTE: &str = "Existing documents are not compared by this preview; the install may still refuse documents that differ or were edited.";
+pub const EXISTING_DOCUMENTS_NOTE: &str = "Existing documents' content is not compared by this preview; the install may still refuse documents that differ or were edited.";
 
 /// One pack's inference as its install would bind it, and the required slots
 /// that binding still leaves out.

@@ -1549,6 +1549,73 @@ async fn hosted_refusals_hide_variable_derived_tools_and_plugin_identifiers() {
     }
 }
 
+#[tokio::test]
+async fn an_edited_refusal_names_the_literal_document_shipped_by_the_reinstall() {
+    let home = crate::test_support::ClientHome::new().await;
+    let owner = home.node_did().to_owned();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let server = hosted_install_server(&home, plugin_home.path(), "hosted-edited-literal").await;
+    let (_root, pack) = tools_pack_config(json!({
+        "tools_id": "literal-tools", "display_name": "pack original"
+    }));
+    let mut args = preview_request(plugin_home.path());
+    args.preview = false;
+    crate::http::pack_install_client::install_remote(
+        &server.endpoint,
+        &owner,
+        &pack,
+        &[],
+        &args,
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .unwrap();
+    let edited = serde_json::from_value(json!({
+        "tools_id": "literal-tools", "node_did": owner, "display_name": "operator edit",
+    }))
+    .unwrap();
+    gents_documents::write_tools_document(
+        &home.access,
+        &edited,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
+    let query = "{ Tools { tools_id display_name } PackInstallation { coordinate } }";
+    let before = home.access.execute(query).await.unwrap();
+    assert!(before.to_string().contains("operator edit"));
+    let error = crate::http::pack_install_client::install_remote(
+        &server.endpoint,
+        &owner,
+        &pack,
+        &[],
+        &args,
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .expect_err("reinstall refuses the operator edit");
+    let text = format!("{error:#}");
+    let reason = gents_pack::pack::document_change_message(
+        "fixture/differ",
+        &["Tools/literal-tools".into()],
+        0,
+        true,
+        gents_pack::pack::PackChangeSurface::Hosted,
+    );
+    assert!(text.contains("documents_edited"), "{text}");
+    assert!(text.contains(&reason), "{text}");
+    assert!(text.contains("Tools/literal-tools"), "{text}");
+    assert!(
+        text.contains("overwrite replaces them with the pack's versions"),
+        "{text}"
+    );
+    assert!(text.contains("keep leaves them as they are"), "{text}");
+    assert!(!text.contains("operator edit"), "{text}");
+    assert_eq!(home.access.execute(query).await.unwrap(), before);
+}
+
 /// An edited document can be one the previous installation wrote under an id
 /// rendered from an install variable. A later install from a literal archive
 /// cannot vouch for that id, so the session counts it without naming it.
@@ -1611,6 +1678,14 @@ async fn an_edited_refusal_never_names_a_prior_document_rendered_from_a_variable
     .expect_err("the session refuses the edited document");
     let text = format!("{error:#}");
     assert!(text.contains("documents_edited"), "{text}");
+    let counted = gents_pack::pack::document_change_message(
+        "fixture/differ",
+        &[],
+        1,
+        true,
+        gents_pack::pack::PackChangeSurface::Hosted,
+    );
+    assert!(text.contains(&counted), "{text}");
     assert!(text.contains("--overwrite or --keep"), "{text}");
     for unsafe_text in unsafe_texts {
         assert!(!text.contains(unsafe_text), "{text}");

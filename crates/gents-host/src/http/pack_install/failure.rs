@@ -253,23 +253,19 @@ impl RefusalIdentifiers {
     /// An edited refusal: the documents this check can name first, then a
     /// count of the rest.
     fn edited(&self, coordinate: &str, edited: &[String]) -> SessionFailure {
-        let named: Vec<&str> = edited
+        let named: Vec<String> = edited
             .iter()
-            .map(String::as_str)
             .filter(|name| self.literal && self.shipped.contains(*name))
+            .cloned()
             .collect();
-        let listed = match (named.join(", "), edited.len() - named.len()) {
-            (named, _) if named.is_empty() => String::new(),
-            (named, 0) => format!(": {named}"),
-            (named, 1) => format!(": {named} and 1 other"),
-            (named, rest) => format!(": {named} and {rest} others"),
-        };
         SessionFailure::shown(
             PackSessionFailureClass::DocumentsEdited,
-            format!(
-                "{} of {coordinate}'s documents were edited since it was installed{listed}; \
-                 decide with --overwrite or --keep on the same command",
-                edited.len()
+            gents_pack::pack::document_change_message(
+                coordinate,
+                &named,
+                edited.len() - named.len(),
+                true,
+                gents_pack::pack::PackChangeSurface::Hosted,
             ),
             "not_installed",
         )
@@ -366,23 +362,14 @@ impl SessionFailure {
         }
     }
 
-    /// The shown text or class description, with the outcome and class.
-    pub fn body(&self) -> serde_json::Value {
+    /// The `failed` message the client receives.
+    pub fn message(&self) -> serde_json::Value {
         serde_json::json!({
-            "error": self
-                .shown
-                .clone()
-                .unwrap_or_else(|| self.class.description().to_owned()),
+            "type": "failed",
+            "error": self.shown.as_deref().unwrap_or_else(|| self.class.description()),
             "outcome": self.outcome,
             "class": self.class,
         })
-    }
-
-    /// The `failed` message the client receives.
-    pub fn message(&self) -> serde_json::Value {
-        let mut message = self.body();
-        message["type"] = "failed".into();
-        message
     }
 }
 
@@ -533,8 +520,9 @@ mod tests {
                     let message = failure.message();
                     let expected = match failure.class {
                         PackSessionFailureClass::DocumentsEdited => {
-                            "1 of fixture/root's documents were edited since it was installed; \
-                             decide with --overwrite or --keep on the same command"
+                            "1 of fixture/root's documents were edited since it was installed. \
+                             overwrite replaces them with the pack's versions; keep leaves them as they are. \
+                             Retry the same install with --overwrite or --keep; in the desktop choose overwrite or keep in the install review"
                         }
                         class => class.description(),
                     };
@@ -693,18 +681,18 @@ mod tests {
         ] {
             assert_eq!(failure.class, PackSessionFailureClass::DocumentsEdited);
             assert_eq!(failure.outcome, "not_installed");
-            for body in [failure.message(), failure.body()] {
-                assert_eq!(
+            let body = failure.message();
+            assert_eq!(
                     body["error"],
                     "4 of fixture/root's documents were edited since it was installed: \
-                     Tools/literal-tools, Tools/second-tools and 2 others; decide with \
-                     --overwrite or --keep on the same command",
+                     Tools/literal-tools, Tools/second-tools and 2 others. \
+                     overwrite replaces them with the pack's versions; keep leaves them as they are. \
+                     Retry the same install with --overwrite or --keep; in the desktop choose overwrite or keep in the install review",
                     "{body}"
                 );
-                assert_eq!(body["class"], "documents_edited", "{body}");
-                for withheld in [prior, "stale-tools"] {
-                    assert!(!body.to_string().contains(withheld), "{body}");
-                }
+            assert_eq!(body["class"], "documents_edited", "{body}");
+            for withheld in [prior, "stale-tools"] {
+                assert!(!body.to_string().contains(withheld), "{body}");
             }
         }
     }
@@ -723,14 +711,14 @@ mod tests {
             ))
             .unwrap();
         for (edited, literal, expected) in [
-            (vec!["Tools/received"], true, ": Tools/received; decide"),
+            (vec!["Tools/received"], true, ": Tools/received. overwrite"),
             (
                 vec!["Tools/received", "Tools/old"],
                 true,
-                ": Tools/received and 1 other; decide",
+                ": Tools/received and 1 other. overwrite",
             ),
-            (vec!["Tools/old"], true, "installed; decide"),
-            (vec!["Tools/received"], false, "installed; decide"),
+            (vec!["Tools/old"], true, "installed. overwrite"),
+            (vec!["Tools/received"], false, "installed. overwrite"),
         ] {
             identifiers.literal = literal;
             let failure = SessionFailure::change_refusal(

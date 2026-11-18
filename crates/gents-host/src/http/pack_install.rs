@@ -189,7 +189,7 @@ pub async fn encode_install_request(
     .context("packing remote document archives")?
 }
 
-/// A refusal of the session's HTTP upgrade.
+/// A refusal before an install or session upgrade can proceed.
 fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
     (
         status,
