@@ -55,13 +55,36 @@ impl DefraQueryMcp {
     #[tool(
         description = "Read documents: argv:[fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection and options; count aggregates every matching row; find returns a bounded ordered page; search ranks keywords with native BM25. Explain inspects a native plan; executing it requires options.mode:execute."
     )]
-    async fn query(&self, Parameters(args): Parameters<McpQueryArgs>) -> Result<String, ErrorData> {
+    async fn query(
+        &self,
+        Parameters(args): Parameters<McpQueryArgs>,
+        ctx: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<String, ErrorData> {
         let params = QueryParams {
             argv: args.argv,
             collection: args.collection,
             options: args.options,
         };
-        let access = gents_store::config_client::ConfigAccess::graphql(self.graphql.clone());
+        let authorization = ctx
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(|parts| parts.headers.get(axum::http::header::AUTHORIZATION))
+            .map(|header| {
+                header
+                    .to_str()
+                    .map_err(|error| ErrorData::invalid_request(error.to_string(), None))
+            })
+            .transpose()?;
+        let access = match authorization {
+            Some(authorization) => gents_store::config_client::ConfigAccess::Graphql(
+                gents_store::config_client::GraphqlEndpoint::with_delegated_authorization(
+                    self.graphql.clone(),
+                    authorization,
+                )
+                .map_err(|error| ErrorData::invalid_request(error.to_string(), None))?,
+            ),
+            None => gents_store::config_client::ConfigAccess::graphql(self.graphql.clone()),
+        };
         let value=gents_tools::builtin::defra_query::execute_command(&access,&params,&self.options.scope).await
             .map_err(|error|ErrorData::internal_error(serde_json::json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help"]}}}).to_string(),None))?;
         gents_tools::builtin::defra_query::render_result(value)

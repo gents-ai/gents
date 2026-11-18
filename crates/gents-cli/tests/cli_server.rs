@@ -2737,7 +2737,7 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
     let request = ["--request-id", "home-trace-req"];
     // Every CLI caller holds its own User key: another User sees no such row.
     let foreign = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
-    assert!(foreign.contains("home-trace-req not found"), "{foreign}");
+    assert!(foreign.contains("401 Unauthorized"), "{foreign}");
 
     let served_home = home_dir.join(".gents");
     let served_home = served_home.to_str().context("home path is not UTF-8")?;
@@ -2746,7 +2746,7 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
         &caller_dir,
         &[&trace[..], &["--home", served_home], &request[..]].concat(),
     )?;
-    assert!(named.contains("home-trace-req not found"), "{named}");
+    assert!(named.contains("401 Unauthorized"), "{named}");
     let timeline = run_cli_json(
         &home_dir,
         &[&trace[..], &["--home", served_home], &request[..]].concat(),
@@ -2813,6 +2813,20 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
     let mcp = ().serve(transport).await.context("MCP client handshake with /mcp")?;
 
+    let _identity = identity_from_init(&init)?;
+    let bearer = gents_store::identity::defradb_bearer_authorization(
+        &node_did,
+        &format!("127.0.0.1:{port}"),
+    )?;
+    let config =
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"))
+            .auth_header(bearer.strip_prefix("Bearer ").unwrap());
+    let authenticated = ()
+        .serve(rmcp::transport::StreamableHttpClientTransport::from_config(
+            config,
+        ))
+        .await?;
+
     let tools = mcp.peer().list_tools(None).await.context("list_tools")?;
     assert!(
         tools.tools.iter().any(|tool| tool.name.as_ref() == "query"),
@@ -2829,7 +2843,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     });
     let params =
         CallToolRequestParams::new("query").with_arguments(args.as_object().unwrap().clone());
-    let result = mcp
+    let result = authenticated
         .peer()
         .call_tool(params)
         .await
@@ -2874,7 +2888,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     let denied_args = serde_json::json!({"argv":["find"], "collection": "InferenceBackend", "options":{"fields": ["auth"]} });
     let denied_params = CallToolRequestParams::new("query")
         .with_arguments(denied_args.as_object().unwrap().clone());
-    let denied = mcp.peer().call_tool(denied_params).await;
+    let denied = authenticated.peer().call_tool(denied_params).await;
     let blocked = match denied {
         Err(_) => true,
         Ok(result) => {
@@ -2909,24 +2923,11 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         },
         "anonymous MCP write must fail"
     );
-    let _identity = identity_from_init(&init)?;
     let access = gents_store::config_client::ConfigAccess::Graphql(
         support::graphql::node_principal_endpoint(&graphql),
     );
     access
         .add_collection("type McpParcel { reference: String status: String }")
-        .await?;
-    let bearer = gents_store::identity::defradb_bearer_authorization(
-        &node_did,
-        &format!("127.0.0.1:{port}"),
-    )?;
-    let config =
-        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"))
-            .auth_header(bearer.strip_prefix("Bearer ").unwrap());
-    let authenticated = ()
-        .serve(rmcp::transport::StreamableHttpClientTransport::from_config(
-            config,
-        ))
         .await?;
     for command in [
         preview,
