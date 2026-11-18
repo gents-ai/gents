@@ -580,13 +580,22 @@ impl ConfigClientError {
         &self,
     ) -> Option<gents_protocol::delegation_audience::CredentialAnswer> {
         use gents_protocol::delegation_audience::CredentialAnswer;
-        if self.database_failure().is_some_and(
-            gents_protocol::database_error::GraphqlFailure::is_delegation_outside_window,
-        ) {
+        if self.delegation_outside_window() {
             return Some(CredentialAnswer::OutsideWindow);
         }
         self.credential_refusal_status()
             .map(|status| CredentialAnswer::of_status(status.as_u16()))
+    }
+
+    fn delegation_outside_window(&self) -> bool {
+        match self {
+            Self::Response(crate::graphql::GraphqlResponseError::Access(error))
+            | Self::StorageFailure(error)
+            | Self::HttpQuery { source: error, .. } => error.delegation_outside_window(),
+            _ => self.database_failure().is_some_and(
+                gents_protocol::database_error::GraphqlFailure::is_delegation_outside_window,
+            ),
+        }
     }
 
     /// The 401 or 403 a node answered this request with, which may refuse
