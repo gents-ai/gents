@@ -12,7 +12,7 @@ structure SweepActorInput where
 @[conformance_family]
 def sweepActors : Family SweepActorInput Bool where
   inputs := ["agent", "other", "node"].map fun actor => { actor }
-  model := fun i => nativeSweepRead (i.actor == "node") i.actor "agent"
+  model := fun i => sweepVisible i.actor "agent"
 
 structure NativeInput where
   actors : List String

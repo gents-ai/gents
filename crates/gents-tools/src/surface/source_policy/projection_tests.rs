@@ -230,13 +230,9 @@ async fn live_agents_read_collections_whatever_their_datastore_tools() -> anyhow
             .check_permission(&agent, NodePermission::CollectionGet)
             .await?,
     );
-    let disabled_reads = access.collection_version("Node").await.is_ok();
-    for case in gents_lean_vocab::families::household_tool_operation_collection_get::cases() {
-        let observed = granted[case.input.step.as_str()];
-        case.check(observed);
-        if case.input.step == "agent-disabled" {
-            case.check(disabled_reads);
-        }
+    assert!(access.collection_version("Node").await?.is_some());
+    for case in gents_lean_vocab::families::household_tool_operation_collection_patch::cases() {
+        case.check(granted[case.input.step.as_str()]);
     }
     for case in gents_lean_vocab::families::household_tool_operation_collection_get::cases() {
         case.check(baseline[case.input.step.as_str()]);

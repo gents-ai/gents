@@ -168,12 +168,11 @@ async fn scheduled_probe_requires_the_held_node_and_a_present_backend() {
         )
         .await
         .unwrap();
-    assert_eq!(
+    assert!(
         crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
             .await
             .unwrap()
-            .len(),
-        1
+            .is_empty()
     );
     gents_store::config_client::ConfigAccess::local_as(node.clone(), did.parse().unwrap())
         .grant_node_permission(

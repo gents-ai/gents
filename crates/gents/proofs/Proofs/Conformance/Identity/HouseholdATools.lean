@@ -252,6 +252,11 @@ def toolOperationCollectionGet : Family OperationStep Bool where
     ⟨"agent-disabled", operation "none" false false false false false false "none"⟩]
   model := liveAgentHolds "get-collection"
 
+@[conformance_family]
+def toolOperationCollectionPatch : Family OperationStep Bool where
+  inputs := toolOperationCollectionGet.inputs
+  model := liveAgentHolds "patch-collection"
+
 /-- The delete-source scenario edits one Agent's self-config categories and
 pack installation in this order; the last step follows the revocation of an
 independent direct grant. -/
