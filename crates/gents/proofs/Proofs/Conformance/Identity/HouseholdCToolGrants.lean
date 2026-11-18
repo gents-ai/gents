@@ -129,12 +129,18 @@ def groupInputs : List GroupInput :=
    row "schema-disable-rollback" initial schemaToolSources false true false,
    row "mixed-actor-rejected" {} [toolSource, otherAgentSource] true true true]
 
+/-- `enabled` and `grants` are the group's tool sources alone; the Agent's
+projected grant sets are sources outside every tool group. `permissions` is
+what the live Agent holds: the group's effective grants and its baseline,
+which keeps `get-collection` whatever the group does
+(`GrantSets.get_collection_survives_tool_removal`). -/
 def groupOutput (i : GroupInput) : GroupOutput :=
   let result := Configuration.changeToolGrantGroup i.initial.toModel (i.sources.map (·.toModel))
     i.enable i.authorized i.committed
   { enabled := result.enabled.map .ofModel, grants := result.grants.map .ofModel,
     permissions := Configuration.schemaToolPermissions.map fun permission =>
-      ⟨permission, Configuration.toolGrantEffective result agentDid permission⟩ }
+      ⟨permission, Configuration.toolGrantEffective result agentDid permission ||
+        GrantSets.GrantSet.agentBaseline.permissions.contains permission⟩ }
 
 /-- Only the schema purpose projects `patch-collection`, so an initial state
 that also holds an `other` purpose source for it cannot be built; one Tools
