@@ -47,20 +47,24 @@ pub enum SourceLanguage {
 }
 
 impl SourceLanguage {
+    /// The language of a scanned file.
+    ///
+    /// Explicit, and loud on anything else: an extension added to
+    /// `source_files` without a decision here would otherwise be silently read
+    /// by whichever rules the catch-all happened to pick.
     fn of(path: &std::path::Path) -> Self {
         match path.extension().and_then(|extension| extension.to_str()) {
+            Some("rs") => SourceLanguage::Rust,
             Some("ts" | "tsx") => SourceLanguage::TypeScript,
-            _ => SourceLanguage::Rust,
+            other => panic!(
+                "consumer_scan has no language for extension {other:?} ({}); \
+                 add it to SourceLanguage::of and to source_files",
+                path.display()
+            ),
         }
     }
 }
 
-/// Strip `//` line comments, `/* … */` blocks and string/char/raw-string literals.
-///
-/// The scan is a source-text heuristic, so a commented-out `use … as wire;` or a
-/// doc-comment example would otherwise read as a declaration, and text inside a
-/// string as a call. Replaced with a space of the same length so byte offsets and
-/// word boundaries stay meaningful.
 /// The offset of the `r` and the hash count of a Rust raw string at `i`.
 ///
 /// `r"…"`, `r#"…"#`, `br##"…"##`. Three conditions, each of which an earlier
@@ -87,8 +91,13 @@ fn raw_string_opening(bytes: &[u8], i: usize) -> Option<(usize, usize)> {
     (bytes.get(j) == Some(&b'"')).then_some((at, hashes))
 }
 
-fn strip_comments_and_strings(source: &str, language: SourceLanguage) -> String {
-    let _ = language;
+/// Strip `//` line comments, `/* … */` blocks and string/char/raw-string literals, by Rust rules.
+///
+/// The scan is a source-text heuristic, so a commented-out `use … as wire;` or a
+/// doc-comment example would otherwise read as a declaration, and text inside a
+/// string as a call. Replaced with a space of the same length so byte offsets and
+/// word boundaries stay meaningful.
+fn strip_rust_comments_and_strings(source: &str) -> String {
     let bytes = source.as_bytes();
     let mut out = String::with_capacity(source.len());
     let mut i = 0;
@@ -166,13 +175,11 @@ fn strip_comments_and_strings(source: &str, language: SourceLanguage) -> String 
                             _ => j += 1,
                         }
                     }
-                } else if let Ok(rest) = std::str::from_utf8(&bytes[j..]) {
-                    if let Some(ch) = rest.chars().next() {
-                        if ch != '\'' && ch != '\n' {
-                            j += ch.len_utf8();
-                            if bytes.get(j) == Some(&b'\'') {
-                                closed = Some(j + 1);
-                            }
+                } else if let Some(ch) = source[j..].chars().next() {
+                    if ch != '\'' && ch != '\n' {
+                        j += ch.len_utf8();
+                        if bytes.get(j) == Some(&b'\'') {
+                            closed = Some(j + 1);
                         }
                     }
                 }
@@ -197,16 +204,14 @@ fn strip_comments_and_strings(source: &str, language: SourceLanguage) -> String 
     out
 }
 
-/// Strip `//` and `/* */` comments and keep string literals.
-///
-/// A `.ts` conformance table names its reader inside a string
-/// (`"families::<key>::cases()"`), so for those files only comments go.
 /// The offset just past the closing delimiter of a quoted run starting at `i`.
 ///
-/// An escaped delimiter inside does not close it. An **unmatched** delimiter
-/// stops at the end of its line rather than swallowing the rest of the file: a
-/// stray quote is a local mistake, and blanking the remainder would hide every
-/// reader after it.
+/// An escaped delimiter inside does not close it.
+///
+/// A **backtick** template literal spans lines: JavaScript allows one to contain
+/// newlines, and a `//` inside it is text rather than a comment. Single and double
+/// quotes do not span lines — they stop at the end of theirs, so a stray quote is
+/// a local mistake instead of blanking the remainder of the file.
 fn quoted_end(source: &str, i: usize, delimiter: u8) -> usize {
     let bytes = source.as_bytes();
     let mut j = i + 1;
@@ -214,13 +219,20 @@ fn quoted_end(source: &str, i: usize, delimiter: u8) -> usize {
         match bytes[j] {
             b'\\' => j += 2,
             byte if byte == delimiter => return j + 1,
-            b'\n' => return j,
+            b'\n' if delimiter != b'`' => return j,
             _ => j += 1,
         }
     }
     source.len()
 }
 
+/// Strip `//` and `/* */` comments and keep string literals.
+///
+/// A `.ts` conformance table names its reader inside a string
+/// (`"families::<key>::cases()"`), so for those files only comments go — the
+/// strings stay, and a spelling inside one counts. A backtick template literal
+/// is one string across its newlines, so a `//`-led line inside it is text, not
+/// a comment.
 fn strip_comments(source: &str) -> String {
     let bytes = source.as_bytes();
     let mut out = String::with_capacity(source.len());
@@ -255,8 +267,11 @@ fn strip_comments(source: &str) -> String {
             i = end;
             continue;
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        // By `char`, not by byte: `bytes[i] as char` would turn each byte of a
+        // non-ASCII character into its own Latin-1 character and mangle the copy.
+        let ch = source[i..].chars().next().expect("a char boundary");
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
 }
@@ -396,7 +411,7 @@ struct PreparedSource {
 }
 
 fn prepare(source: &str, families: &BTreeSet<String>, language: SourceLanguage) -> PreparedSource {
-    let stripped = strip_comments_and_strings(source, language);
+    let stripped = strip_rust_comments_and_strings(source);
     let aliases = alias_declarations(&stripped, families)
         .into_iter()
         .map(|(alias, keys)| {
@@ -1112,17 +1127,26 @@ mod tests {
     /// swallowing the file.
     #[test]
     fn a_typescript_template_literal_spans_lines_and_terminates() {
+        // The decisive shape: the spelling is **on** a `//`-led line inside a
+        // multi-line template. If the template stopped at its first newline, that
+        // line would be read as a comment and the spelling blanked — the exact
+        // undercount this test exists to catch. (A spelling on a later, unled
+        // line would survive either way, so it would not test this.)
         let source = "const q = `\n\
-                      families::alpha_family::cases()\n\
-                      `;\n\
-                      export const X = ('families::alpha_family::replay(i)');\n";
+                      // families::alpha_family::cases()\n\
+                      `;\n";
         assert_eq!(
             ts_count(source, "alpha_family"),
-            2,
-            "the template's spelling and the table's both count: {source}"
+            1,
+            "a `//`-led line inside a multi-line template is text, not a comment: {source}"
         );
-        // And a comment after it is still blanked, so the template did not
-        // swallow the rest of the file.
+
+        // And a single-line template still counts its contents.
+        let inline = "export const X = ('families::alpha_family::replay(i)');\n";
+        assert_eq!(ts_count(inline, "alpha_family"), 1);
+
+        // A comment *after* a template is still blanked, so the template
+        // terminated rather than swallowing the rest of the file.
         let after_comment = "const q = `x`;\n\
                              // families::alpha_family::cases()\n\
                              export const X = ('families::alpha_family::replay(i)');\n";
