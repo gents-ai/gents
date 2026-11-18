@@ -2442,7 +2442,7 @@ async fn agent_facing_plugin_tool_preserves_the_complete_failure_chain_once() {
         panic!("expected agent-facing plugin error: {error}");
     };
     let expected =
-        "executing plugin team/plugin: resolving plugin team/plugin: plugin store is busy";
+        "executing plugin team/plugin: resolving plugin team/plugin: plugin store is busy; retry this pack operation";
     assert_eq!(message.to_string(), expected);
     assert_eq!(format!("{message:#}"), expected);
     assert_eq!(expected.matches("plugin store is busy").count(), 1);
@@ -2450,7 +2450,7 @@ async fn agent_facing_plugin_tool_preserves_the_complete_failure_chain_once() {
     let typed = executor.resolve("team/plugin", None).unwrap_err();
     assert_eq!(
         gents_protocol::error_chain::ErrorChain(&typed).to_string(),
-        "resolving plugin team/plugin: plugin store is busy"
+        "resolving plugin team/plugin: plugin store is busy; retry this pack operation"
     );
     assert!(store::PublishedPluginReadError::error_chain_is_busy(&typed));
 }
