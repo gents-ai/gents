@@ -104,7 +104,7 @@ impl Tool for EditFileTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         if !args.dry_run {
             deny_workspace_file_writes()?;
@@ -114,6 +114,7 @@ impl Tool for EditFileTool {
             None
         } else {
             crate::plugin::approval::workspace::authorize_file_mutation(
+                call,
                 Self::NAME,
                 &self.context.root(),
                 &path,

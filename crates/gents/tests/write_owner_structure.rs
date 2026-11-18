@@ -1911,7 +1911,6 @@ const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-inference/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
     ("crates/gents-session/src/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-tools/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-tools/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-tools/src/runtime_context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
 ];

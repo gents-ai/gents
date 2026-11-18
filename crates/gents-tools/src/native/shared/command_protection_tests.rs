@@ -285,6 +285,7 @@ async fn bounded_commands_protect_runtime_keys_without_workspace_consent() {
             let policy = CommandExecutionPolicy::write_capable()
                 .with_mode(CommandExecutionMode::WorkspaceWrite);
             let output = run_command(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
                 &context,
                 "bash",
                 "/bin/cat",

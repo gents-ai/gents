@@ -147,7 +147,7 @@ impl DefraSessionHook {
             recorder.clone(),
         )
         .unwrap_or_else(gents_loop::tool::ToolCallEnvelope::ambient);
-        tokio::spawn(gents_tools::plugin::approval::carry_interactive(
+        tokio::spawn(gents_tools::plugin::approval::workspace::carry(
             async move {
                 let mut lifecycle = lifecycle;
                 let check_registry = hook.background_executions.clone();

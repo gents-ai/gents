@@ -168,7 +168,7 @@ pub(crate) fn current() -> Option<Context> {
     CURRENT.try_with(Clone::clone).ok().flatten()
 }
 
-pub(crate) fn carry<F>(future: F) -> impl Future<Output = F::Output>
+pub fn carry<F>(future: F) -> impl Future<Output = F::Output>
 where
     F: Future,
 {
@@ -270,7 +270,7 @@ mod tests {
                     &expected.review_history
                 ));
             };
-            let inherited = tokio::spawn(super::super::super::carry_interactive(async {
+            let inherited = tokio::spawn(carry(async {
                 CURRENT.try_with(Clone::clone).ok().flatten()
             }))
             .await?;

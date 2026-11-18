@@ -229,25 +229,58 @@ mod bound {
         )
     }
 
+    fn session_call(
+        workdir: &std::path::Path,
+        token: &tokio_util::sync::CancellationToken,
+        host: gents_tools::runtime_context::ToolHostContext,
+    ) -> gents_loop::tool::ToolCallEnvelope {
+        gents_tools::runtime_context::entered_with_workspace_overlay(
+            &host.call(),
+            ToolWorkspaceScope::cwd_only(Some(workdir.to_owned())),
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+                identity: None,
+                deadline_at: None,
+                cancellation_token: token.clone(),
+                workspace_cwd: None,
+                live_output: None,
+                session_id: Some("session-1".into()),
+                correlation: None,
+                source_fields: Default::default(),
+                background: false,
+            },
+        )
+    }
+
     async fn in_session(
         tool: &PluginTool,
         path: &std::path::Path,
         workdir: &std::path::Path,
         interactive: bool,
+        approval: Option<approval::workspace::Context>,
     ) -> Result<String, String> {
-        scope_request_tool_execution_with_workspace_overlay(
-            None,
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            ToolWorkspaceScope::cwd_only(Some(workdir.to_owned())),
-            None,
-            Some("session-1".into()),
-            None,
-            Default::default(),
-            false,
-            approval::scope_interactive(
+        let token = tokio_util::sync::CancellationToken::new();
+        let call = session_call(
+            workdir,
+            &token,
+            gents_tools::runtime_context::ToolHostContext {
                 interactive,
-                tool.call(args(path), &gents_loop::tool::ToolCallEnvelope::ambient()),
+                approval: approval.clone(),
+                ..Default::default()
+            },
+        );
+        approval::workspace::scope(
+            approval,
+            scope_request_tool_execution_with_workspace_overlay(
+                None,
+                None,
+                token,
+                ToolWorkspaceScope::cwd_only(Some(workdir.to_owned())),
+                None,
+                Some("session-1".into()),
+                None,
+                Default::default(),
+                false,
+                tool.call(args(path), &call),
             ),
         )
         .await
@@ -327,7 +360,7 @@ mod bound {
             } else {
                 None
             };
-            workspace::scope(context, in_session(&tool, &work, &work, mode == Mode::Ask))
+            in_session(&tool, &work, &work, mode == Mode::Ask, context)
                 .await
                 .unwrap();
             if let Some(operator) = operator {
@@ -549,7 +582,7 @@ mod bound {
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
         let operator = answer(fx.home.path(), true, false).await;
-        let error = workspace::scope(context, in_session(&tool, &work, &work, true))
+        let error = in_session(&tool, &work, &work, true, context)
             .await
             .unwrap_err();
         operator.await.unwrap();
@@ -577,8 +610,10 @@ mod bound {
         )
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
-        workspace::scope(context, async {
-            let output = in_session(&tool, &target, &other, true).await.unwrap();
+        workspace::scope(context.clone(), async {
+            let output = in_session(&tool, &target, &other, true, context.clone())
+                .await
+                .unwrap();
             assert_eq!(output, r#"{"read":true}"#);
             assert!(allowed::list(fx.home.path()).unwrap().is_empty());
             assert!(approval::pending_requests(fx.home.path())
@@ -594,7 +629,9 @@ mod bound {
             )
             .unwrap();
             let declined = answer(fx.home.path(), false, false).await;
-            let error = in_session(&tool, &target, &other, true).await.unwrap_err();
+            let error = in_session(&tool, &target, &other, true, context.clone())
+                .await
+                .unwrap_err();
             assert!(error.contains("operator declined"), "{error}");
             declined.await.unwrap();
         })
@@ -620,7 +657,7 @@ mod bound {
                 None,
             )
             .unwrap();
-            let error = workspace::scope(other_context, in_session(&tool, &target, folder, false))
+            let error = in_session(&tool, &target, folder, false, other_context)
                 .await
                 .unwrap_err();
             assert!(error.contains("outside the folders"), "{error}");
@@ -648,12 +685,9 @@ mod bound {
         std::fs::rename(&work, fx.root.join("original-work")).unwrap();
         std::os::unix::fs::symlink(fx.root.join("docs"), &work).unwrap();
         let tool = tool_for(&fx.home, &fx.record);
-        let error = workspace::scope(
-            context,
-            in_session(&tool, &work.join("in.json"), &work, false),
-        )
-        .await
-        .unwrap_err();
+        let error = in_session(&tool, &work.join("in.json"), &work, false, context)
+            .await
+            .unwrap_err();
         assert!(error.contains("path changed"), "{error}");
         assert!(allowed::list(fx.home.path()).unwrap().is_empty());
     }
@@ -697,7 +731,7 @@ mod bound {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
-        let output = in_session(&tool, &work.join("in.json"), &work, false)
+        let output = in_session(&tool, &work.join("in.json"), &work, false, None)
             .await
             .unwrap();
         assert_eq!(output, r#"{"read":true}"#);
@@ -705,7 +739,9 @@ mod bound {
         let writer = fixture(&create_file_wat("out.json"), BindAccess::ReadWrite);
         let tool = tool_for(&writer.home, &writer.record);
         let work = writer.root.join("work");
-        let error = in_session(&tool, &work, &work, false).await.unwrap_err();
+        let error = in_session(&tool, &work, &work, false, None)
+            .await
+            .unwrap_err();
         assert!(
             error.contains("gents config pack plugin dirs add"),
             "{error}"
@@ -811,7 +847,9 @@ mod bound {
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
         let dotdot = work.join("..").join("outside").join("in.json");
-        let error = in_session(&tool, &dotdot, &work, false).await.unwrap_err();
+        let error = in_session(&tool, &dotdot, &work, false, None)
+            .await
+            .unwrap_err();
         assert!(
             error.contains("gents config pack plugin dirs add"),
             "{error}"
@@ -821,7 +859,9 @@ mod bound {
         {
             std::os::unix::fs::symlink(fx.root.join("outside"), work.join("escape")).unwrap();
             let through = work.join("escape").join("in.json");
-            let error = in_session(&tool, &through, &work, false).await.unwrap_err();
+            let error = in_session(&tool, &through, &work, false, None)
+                .await
+                .unwrap_err();
             assert!(
                 error.contains("gents config pack plugin dirs add"),
                 "{error}"
@@ -849,7 +889,7 @@ mod bound {
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
         let asked = answer(fx.home.path(), true, false).await;
-        let output = in_session(&tool, &target, &work, true).await.unwrap();
+        let output = in_session(&tool, &target, &work, true, None).await.unwrap();
         assert_eq!(output, r#"{"read":true}"#);
         let prompt = asked.await.unwrap();
         assert_eq!(
@@ -865,7 +905,7 @@ mod bound {
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
         let asked = answer(fx.home.path(), true, true).await;
-        in_session(&tool, &fx.root.join("outside/in.json"), &work, true)
+        in_session(&tool, &fx.root.join("outside/in.json"), &work, true, None)
             .await
             .unwrap();
         asked.await.unwrap();
@@ -876,7 +916,7 @@ mod bound {
                 access: BindAccess::Read
             }]
         );
-        let output = in_session(&tool, &fx.root.join("outside/in.json"), &work, true).await;
+        let output = in_session(&tool, &fx.root.join("outside/in.json"), &work, true, None).await;
         assert_eq!(output.unwrap(), r#"{"read":true}"#);
     }
 
@@ -886,7 +926,7 @@ mod bound {
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
         let asked = answer(fx.home.path(), false, true).await;
-        let error = in_session(&tool, &fx.root.join("outside/in.json"), &work, true)
+        let error = in_session(&tool, &fx.root.join("outside/in.json"), &work, true, None)
             .await
             .unwrap_err();
         asked.await.unwrap();
@@ -901,7 +941,9 @@ mod bound {
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
         let asked = answer(fx.home.path(), false, true).await;
-        let error = in_session(&tool, &target, &work, true).await.unwrap_err();
+        let error = in_session(&tool, &target, &work, true, None)
+            .await
+            .unwrap_err();
         let prompt = tokio::time::timeout(std::time::Duration::from_secs(10), asked)
             .await
             .expect("the operator was asked about the child's path")
@@ -968,6 +1010,15 @@ mod bound {
         let target = fx.root.join("outside/in.json");
         let home = fx.home.path().to_owned();
         let queue = approval::queue_dir(&home);
+        let spawned_token = tokio_util::sync::CancellationToken::new();
+        let envelope = session_call(
+            &work,
+            &spawned_token,
+            gents_tools::runtime_context::ToolHostContext {
+                interactive: true,
+                ..Default::default()
+            },
+        );
         let call = scope_request_tool_execution_with_workspace_overlay(
             None,
             None,
@@ -978,31 +1029,29 @@ mod bound {
             None,
             Default::default(),
             false,
-            approval::scope_interactive(true, async {
-                tokio::spawn(approval::carry_interactive(
-                    scope_request_tool_execution_with_workspace_overlay(
-                        None,
-                        None,
-                        tokio_util::sync::CancellationToken::new(),
-                        ToolWorkspaceScope::cwd_only(Some(work)),
-                        None,
-                        Some("session-1".into()),
-                        None,
-                        Default::default(),
-                        false,
-                        async move {
-                            gents_loop::tool_call_lifecycle::runtime::call_tool_managed(
-                                tool.as_ref(),
-                                args(&target),
-                                &gents_loop::tool::ToolCallEnvelope::ambient(),
-                            )
-                            .await
-                        },
-                    ),
+            async {
+                tokio::spawn(scope_request_tool_execution_with_workspace_overlay(
+                    None,
+                    None,
+                    spawned_token,
+                    ToolWorkspaceScope::cwd_only(Some(work)),
+                    None,
+                    Some("session-1".into()),
+                    None,
+                    Default::default(),
+                    false,
+                    async move {
+                        gents_loop::tool_call_lifecycle::runtime::call_tool_managed(
+                            tool.as_ref(),
+                            args(&target),
+                            &envelope,
+                        )
+                        .await
+                    },
                 ))
                 .await
                 .unwrap()
-            }),
+            },
         );
         let operator = async {
             let request = loop {

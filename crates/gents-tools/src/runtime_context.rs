@@ -105,10 +105,17 @@ pub struct ToolHostContext {
     pub approval: Option<crate::plugin::approval::workspace::Context>,
 }
 
+impl ToolHostContext {
+    /// A call envelope that carries only these host values.
+    pub fn call(self) -> ToolCallEnvelope {
+        ToolCallEnvelope::default().with_extension(self)
+    }
+}
+
 fn ambient_host() -> ToolHostContext {
     ToolHostContext {
         workspace: WORKSPACE_OVERLAY.try_with(Clone::clone).unwrap_or_default(),
-        interactive: crate::plugin::approval::interactive(),
+        interactive: false,
         approval: crate::plugin::approval::workspace::current(),
     }
 }
@@ -149,7 +156,6 @@ fn debug_assert_same_host(explicit: &ToolHostContext, ambient: &ToolHostContext)
             host.workspace.workspace_root.clone(),
             host.workspace.workspace_authority,
             host.workspace.workspace_artifact.is_some(),
-            host.interactive,
             host.approval.is_some(),
         )
     };
@@ -240,7 +246,6 @@ where
         gents_loop::tool_call_lifecycle::runtime::enter_ambient_runtime(runtime.as_ref(), future),
     );
     let future = WORKSPACE_OVERLAY.scope(host.workspace, future);
-    let future = crate::plugin::approval::scope_interactive(host.interactive, future);
     let future = crate::plugin::approval::workspace::scope(host.approval, future);
     match recorder {
         Some(recorder) => {

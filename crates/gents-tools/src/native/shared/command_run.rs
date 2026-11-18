@@ -20,6 +20,7 @@ use gents_session::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecReque
     reason = "run_command_for_test is called by tests outside the toolset module"
 )]
 pub async fn run_command(
+    call: &gents_loop::tool::ToolCallEnvelope,
     context: &ToolContext,
     tool_name: &'static str,
     command_name: &str,
@@ -40,6 +41,7 @@ pub async fn run_command(
     let root = context.root();
     let launch = prepare_command_launch(&root, command_name, args, &policy).await?;
     crate::plugin::approval::workspace::authorize_command(
+        call,
         &argv,
         &cwd,
         &root,

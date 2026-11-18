@@ -58,6 +58,7 @@ pub struct ActionRequest {
 }
 
 pub async fn dispatch(
+    call: &gents_loop::tool::ToolCallEnvelope,
     context: &ToolContext,
     lease: Option<&LspLease>,
     pool: &super::pool::LspPool,
@@ -68,7 +69,7 @@ pub async fn dispatch(
 ) -> Result<String, ToolError> {
     match req.action {
         LspAction::Status => {
-            let session_id = crate::runtime_context::current_tool_runtime_context()
+            let session_id = crate::runtime_context::tool_runtime_context(call)
                 .and_then(|scope| scope.session_id)
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
@@ -79,7 +80,7 @@ pub async fn dispatch(
             Ok(status_text(states, &config.servers, workspace))
         }
         LspAction::Reload => {
-            let session_id = crate::runtime_context::current_tool_runtime_context()
+            let session_id = crate::runtime_context::tool_runtime_context(call)
                 .and_then(|scope| scope.session_id)
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
@@ -96,12 +97,13 @@ pub async fn dispatch(
         }
         action => {
             let lease = lease.ok_or_else(|| unavailable_for_workspace(workspace, config))?;
-            run_file_action(context, lease.client(), config, servers, action, &req).await
+            run_file_action(call, context, lease.client(), config, servers, action, &req).await
         }
     }
 }
 
 async fn run_file_action(
+    call: &gents_loop::tool::ToolCallEnvelope,
     context: &ToolContext,
     client: &LspClient,
     config: &super::LspToolConfig,
@@ -281,7 +283,7 @@ async fn run_file_action(
                 prepared.push(rename);
             }
         }
-        let applied = apply_prepared_edits(context, client, &prepared).await?;
+        let applied = apply_prepared_edits(call, context, client, &prepared).await?;
         return Ok(format!("Applied edit to {applied} file(s)"));
     }
     let mut output =

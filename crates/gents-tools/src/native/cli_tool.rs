@@ -56,17 +56,17 @@ impl ToolDyn for CliTool {
         admit_argv_policy(&self.config, &args.argv).map_err(LocalToolError::into_dispatch_error)
     }
 
-    fn call(
-        &self,
+    fn call<'a>(
+        &'a self,
         args: String,
-        _context: &gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'_, Result<String, ToolError>> {
+        call: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         let config = self.config.clone();
         Box::pin(async move {
             deny_artifact_scope().map_err(LocalToolError::into_dispatch_error)?;
             let args: CliToolArgs = serde_json::from_str(&args).map_err(ToolError::JsonError)?;
             admit_argv_policy(&config, &args.argv).map_err(LocalToolError::into_dispatch_error)?;
-            let output = run_cli_command(&config, &args.argv)
+            let output = run_cli_command(call, &config, &args.argv)
                 .await
                 .map_err(LocalToolError::into_dispatch_error)?;
             serde_json::to_string(&output).map_err(ToolError::JsonError)
@@ -133,6 +133,7 @@ fn deny_artifact_scope() -> Result<(), LocalToolError> {
 }
 
 async fn run_cli_command(
+    call: &gents_loop::tool::ToolCallEnvelope,
     config: &CliToolConfig,
     argv: &[String],
 ) -> Result<String, LocalToolError> {
@@ -159,7 +160,8 @@ async fn run_cli_command(
         .to_str()
         .context("CLI executable path is not valid UTF-8")?;
     let launch_argv =
-        prepare_declared_cli_command(&cwd, command, argv, &config.allowed_argv_prefixes).await?;
+        prepare_declared_cli_command(call, &cwd, command, argv, &config.allowed_argv_prefixes)
+            .await?;
 
     let timeout_secs = config.timeout_secs.max(1);
     let bounds = tool_execution_bounds(std::time::Duration::from_secs(timeout_secs));
@@ -321,7 +323,13 @@ mod tests {
             false,
             async {
                 let argv = vec!["-c".to_owned(), "touch cli-must-not-launch".to_owned()];
-                let error = run_cli_command(&config, &argv).await.unwrap_err();
+                let error = run_cli_command(
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &config,
+                    &argv,
+                )
+                .await
+                .unwrap_err();
                 assert!(error.to_string().contains("artifact-scoped"));
                 let args = serde_json::json!({"argv": argv}).to_string();
                 let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
@@ -345,6 +353,7 @@ mod tests {
     #[tokio::test]
     async fn reports_exit_code_and_output_and_env() {
         let out = run_cli_command(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
             &config(5),
             &["-c".into(), "echo $GENTS_T; echo err 1>&2; exit 3".into()],
         )
@@ -360,6 +369,7 @@ mod tests {
         let mut config = config(5);
         config.max_output_chars = 7;
         let out = run_cli_command(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
             &config,
             &[
                 "-c".into(),
@@ -376,6 +386,7 @@ mod tests {
     #[tokio::test]
     async fn tool_timeout_kills_the_process_group() {
         let err = run_cli_command(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
             &config(1),
             &[
                 "-c".into(),
@@ -437,7 +448,7 @@ mod tests {
         let err = scope_request_tool_execution(
             None,
             token,
-            run_cli_command(&config, &["-c".into(),
+            run_cli_command(&gents_loop::tool::ToolCallEnvelope::ambient(), &config, &["-c".into(),
                 "printf 'partial stdout'; printf 'partial stderr' >&2; : > \"$GENTS_READY\"; sleep 30".into()]),
         )
         .await

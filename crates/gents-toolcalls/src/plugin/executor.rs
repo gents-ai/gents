@@ -492,7 +492,7 @@ impl PluginExecutor {
         let context = BindContext {
             workdir: workdir.as_deref(),
             session_id: session_id.as_deref(),
-            interactive: approval::interactive(),
+            interactive: gents_tools::runtime_context::host(call).interactive,
         };
         let bound = self
             .bind_input(record, &input, &context, call)

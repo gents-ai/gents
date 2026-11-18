@@ -271,7 +271,7 @@ impl Tool for LspTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         if args
             .limit
@@ -393,6 +393,7 @@ impl Tool for LspTool {
             None
         };
         actions::dispatch(
+            call,
             &self.context,
             lease.as_ref(),
             &self.pool,

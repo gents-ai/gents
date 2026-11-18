@@ -110,7 +110,12 @@ impl Fixture {
         .with_reviewer(reviewer);
         workspace::scope(
             Some(scope),
-            super::super::edits::apply_prepared_edits(&self.context, self.lease.client(), edits),
+            super::super::edits::apply_prepared_edits(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &self.context,
+                self.lease.client(),
+                edits,
+            ),
         )
         .await
     }
@@ -243,7 +248,9 @@ async fn lsp_edit_rechecks_operator_aliases_before_any_write() {
     let original = std::fs::read(&operator).unwrap();
     gents_pack::plugin::allowed::protect(&fixture.home);
     let guard = file_mutation_lock_for(&first).lock_owned().await;
+    let call = gents_loop::tool::ToolCallEnvelope::ambient();
     let mut applying = Box::pin(super::super::edits::apply_prepared_edits(
+        &call,
         &fixture.context,
         fixture.lease.client(),
         &edits,
@@ -272,7 +279,9 @@ async fn lsp_edit_rechecks_parent_paths_before_any_write() {
     let edits = [fixture.edit(&first), fixture.edit(&second)];
     std::fs::write(outside.path().join("second.rs"), "original\n").unwrap();
     let guard = file_mutation_lock_for(&first).lock_owned().await;
+    let call = gents_loop::tool::ToolCallEnvelope::ambient();
     let mut applying = Box::pin(super::super::edits::apply_prepared_edits(
+        &call,
         &fixture.context,
         fixture.lease.client(),
         &edits,
@@ -303,10 +312,14 @@ async fn lsp_rename_rechecks_the_source_content_before_moving_it() {
             "newUri": super::super::uri::path_to_file_uri(&destination) }],
     }), super::super::encoding::PositionEncoding::Utf16).unwrap();
     std::fs::write(&source, "changed elsewhere\n").unwrap();
-    let error =
-        super::super::edits::apply_prepared_edits(&fixture.context, fixture.lease.client(), &edits)
-            .await
-            .unwrap_err();
+    let error = super::super::edits::apply_prepared_edits(
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &fixture.context,
+        fixture.lease.client(),
+        &edits,
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("changed between preflight"));
     assert!(!destination.exists());
     assert_eq!(
@@ -331,6 +344,7 @@ async fn lsp_rename_does_not_overwrite_a_changed_destination() {
             super::super::edits::prepare_rename(source.clone(), destination.clone()).unwrap();
         std::fs::write(&destination, "changed elsewhere\n").unwrap();
         let error = super::super::edits::apply_prepared_edits(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
             &fixture.context,
             fixture.lease.client(),
             &[rename],

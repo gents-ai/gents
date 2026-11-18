@@ -188,6 +188,7 @@ pub(super) fn command_guard_error(error: anyhow::Error) -> ToolError {
 }
 
 pub(crate) async fn prepare_declared_cli_command(
+    call: &gents_loop::tool::ToolCallEnvelope,
     cwd: &Path,
     command: &str,
     args: &[String],
@@ -218,7 +219,7 @@ pub(crate) async fn prepare_declared_cli_command(
     let argv: Vec<_> = std::iter::once(command.to_owned())
         .chain(args.iter().cloned())
         .collect();
-    crate::plugin::approval::workspace::authorize_command(&argv, cwd, cwd, None, &policy)
+    crate::plugin::approval::workspace::authorize_command(call, &argv, cwd, cwd, None, &policy)
         .await
         .map_err(command_guard_error)?;
     match protection {

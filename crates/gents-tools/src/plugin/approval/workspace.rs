@@ -14,9 +14,10 @@ mod file;
 mod review_task;
 pub(crate) use command::guard_home as command_guard_home;
 pub use command::{authorize_command, writable_root as command_writable_root};
+pub use context::carry;
+pub(crate) use context::current;
 #[cfg(target_os = "macos")]
 pub(crate) use context::current_home as command_context_home;
-pub(crate) use context::{carry, current};
 pub use context::{for_request, scope, Context, ReviewInvocation, Reviewer};
 pub(crate) use file::authorize_file_mutation;
 pub use review_task::{
@@ -340,14 +341,16 @@ pub struct BindingDecision {
 }
 
 async fn authorize_binding(
+    call: &gents_loop::tool::ToolCallEnvelope,
     home: &Path,
     decision: BindingDecision,
     denied: &str,
 ) -> Result<Binding> {
-    let session_id = crate::runtime_context::current_tool_runtime_context()
-        .and_then(|context| context.session_id);
+    let session_id =
+        crate::runtime_context::tool_runtime_context(call).and_then(|context| context.session_id);
     let binding = decision.binding.clone();
-    let allowed = consent_binding(home, decision, super::interactive(), session_id).await?;
+    let interactive = crate::runtime_context::host(call).interactive;
+    let allowed = consent_binding(home, decision, interactive, session_id).await?;
     anyhow::ensure!(allowed, "{denied}");
     Ok(binding)
 }

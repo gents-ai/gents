@@ -454,6 +454,7 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
     workspace::scope(Some(context), async {
         if launch {
             let output = gents_tools::native::run_command_for_test(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
                 &tool_context,
                 "bash_unrestricted",
                 program,
@@ -474,9 +475,16 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
                 "fixture"
             );
         } else {
-            workspace::authorize_command(&argv, &key.path, &tool_root, None, &policy)
-                .await
-                .unwrap();
+            workspace::authorize_command(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &argv,
+                &key.path,
+                &tool_root,
+                None,
+                &policy,
+            )
+            .await
+            .unwrap();
         }
     })
     .await;
@@ -576,6 +584,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
     let project_path = key.path.clone();
     let consent = tokio::spawn(workspace::scope(Some(context), async move {
         workspace::authorize_command(
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
             &["echo".into(), "fixture".into()],
             &project_path,
             &project_path,
@@ -710,6 +719,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
     let run = || async {
         if launch {
             gents_tools::native::run_command_for_test(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
                 &tool_context,
                 "bash_unrestricted",
                 &program,
@@ -724,7 +734,15 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
             .map(|_| ())
             .map_err(anyhow::Error::new)
         } else {
-            workspace::authorize_command(&argv, &key.path, &key.path, None, &policy).await
+            workspace::authorize_command(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &argv,
+                &key.path,
+                &key.path,
+                None,
+                &policy,
+            )
+            .await
         }
     };
     workspace::scope(Some(context), async {
@@ -837,6 +855,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
             None,
             cancellation.clone(),
             workspace::authorize_command(
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
                 &["echo".into(), "fixture".into()],
                 &key.path,
                 &key.path,

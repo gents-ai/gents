@@ -321,7 +321,7 @@ impl DefraSessionHook {
             dispatcher.clone(),
             process_tool,
         );
-        tokio::spawn(gents_tools::plugin::approval::carry_interactive(
+        tokio::spawn(gents_tools::plugin::approval::workspace::carry(
             async move {
                 let execution = AssertUnwindSafe(gents_session::exec::ownership::scope_process_recorder(
                 process_recorder,

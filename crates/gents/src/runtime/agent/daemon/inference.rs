@@ -432,10 +432,7 @@ where
                 trigger_correlation.clone(),
                 trigger_context.source_fields.clone(),
                 false,
-                gents_tools::plugin::approval::scope_interactive(
-                    request.execution_origin.as_deref() == Some("interactive"),
-                    gents_tools::plugin::approval::workspace::scope(approval_context, inference),
-                ),
+                gents_tools::plugin::approval::workspace::scope(approval_context, inference),
             )
             .await;
 

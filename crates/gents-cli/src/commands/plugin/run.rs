@@ -40,9 +40,7 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
 /// as the CLI honors it. The input's declared `bind_dir` field is bound
 /// through the same owner a model tool's call uses
 /// ([`PluginExecutor::call_data_bound`]): the folder it names must be one
-/// the operator allowed, or be approved by them when the caller runs under
-/// [`gents::plugin::approval::scope_interactive`]; an input without the
-/// field runs sealed. There is no `--bind-dir` here: the operator never
+/// the operator allowed; an input without the field runs sealed. There is no `--bind-dir` here: the operator never
 /// names a folder directly on this path.
 pub async fn call_installed(
     home: &Path,

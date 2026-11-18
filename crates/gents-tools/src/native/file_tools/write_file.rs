@@ -125,11 +125,12 @@ impl Tool for WriteFileTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         deny_workspace_file_writes()?;
         let path = self.context.resolve_path_allow_create(&args.path)?;
         let consent = crate::plugin::approval::workspace::authorize_file_mutation(
+            call,
             Self::NAME,
             &self.context.root(),
             &path,

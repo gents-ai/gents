@@ -2338,6 +2338,7 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
     let policy =
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::ArtifactWrite);
     let error = super::shared::run_command(
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
         &context,
         "bash",
         "/bin/sh",
@@ -2411,6 +2412,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
                         .with_mode(CommandExecutionMode::ArtifactWrite)
                         .with_network_mode(CommandNetworkMode::Disabled);
                     super::shared::run_command(
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
                         &context,
                         "bash",
                         "/bin/sh",
