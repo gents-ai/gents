@@ -98,6 +98,9 @@ pub struct PluginCall {
     pub receipt: PluginExecutionReceipt,
 }
 
+// Display is this layer only, preserving typed sources without duplicate chain
+// text. Presentation boundaries must render the anyhow chain (or ErrorChain
+// for the typed resolution enum), never use a bare to_string() for diagnostics.
 #[derive(Debug, thiserror::Error)]
 #[error("executing plugin {}", .receipt.coordinate)]
 struct PluginAttemptError {
@@ -109,6 +112,8 @@ pub(super) fn digest_in_pins(pins: &[&str], running: &str) -> bool {
     pins.contains(&running)
 }
 
+/// A typed resolution cause. Render `ErrorChain(&error)` when presenting this
+/// enum directly; after conversion to anyhow, `{error:#}` includes each cause.
 #[derive(Debug, thiserror::Error)]
 pub enum PluginResolutionError {
     #[error("invalid plugin coordinate {coordinate}")]

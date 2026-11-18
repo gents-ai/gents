@@ -147,7 +147,17 @@ pub(super) async fn execute(
     }
     let record = match plugins.resolve(handler.plugin, Some(handler.digest)) {
         Ok(record) => record,
-        Err(error) => return deny(node, access, invocation, &format!("{error:#}")).await,
+        // Typed Display formats only this resolution layer. Explicitly render
+        // its sources, just as the anyhow call failure below does with {:#}.
+        Err(error) => {
+            return deny(
+                node,
+                access,
+                invocation,
+                &gents_protocol::error_chain::ErrorChain(&error).to_string(),
+            )
+            .await
+        }
     };
     let input = gents_documents::callback_secret_fields::strip_secret_fields(source.clone());
     let bound = match plugins

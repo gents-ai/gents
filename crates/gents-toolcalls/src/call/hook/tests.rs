@@ -464,8 +464,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     bind_interruptible_request(&hook, "req-deadline", &session_id, deadline).await;
 
-    // Provider publication records the owned lifecycle's claimed deadline, not
-    // a separately sampled test clock. Bind the hook to that same authority.
+    // The shared binder must align hook and provider-publication authority.
     let claimed_deadline = {
         let fixtures = hook_execution_fixtures().lock().await;
         fixtures[&hook_execution_fixture_key(&hook, "req-deadline")]
@@ -473,7 +472,10 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
             .claimed_deadline_at()
             .unwrap()
     };
-    hook.set_request_deadline_at(Some(claimed_deadline)).await;
+    assert_eq!(
+        *hook.request_deadline_at.lock().await,
+        Some(claimed_deadline)
+    );
 
     accept_hook_tool_call(&hook, "internal-deadline", "read", "{}", None).await;
     assert!(matches!(

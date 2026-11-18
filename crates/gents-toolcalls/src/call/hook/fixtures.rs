@@ -244,7 +244,7 @@ pub async fn bind_interruptible_request(
 pub async fn bind_claimed_hook_request(
     hook: &DefraSessionHook,
     mut lifecycle: gents_session::request::lifecycle::RequestLifecycle,
-    deadline_at: chrono::DateTime<chrono::Utc>,
+    _deadline_at: chrono::DateTime<chrono::Utc>,
 ) {
     let request_id = lifecycle.request().request_id.clone();
     let request_doc_id = lifecycle.request().doc_id.clone();
@@ -281,7 +281,10 @@ pub async fn bind_claimed_hook_request(
         requester_did,
     )
     .await;
-    hook.set_request_deadline_at(Some(deadline_at)).await;
+    // Match the production preparation owner: publication and the hook share
+    // the claimed lifecycle deadline, never the caller's separately sampled clock.
+    hook.set_request_deadline_at(lifecycle.claimed_deadline_at())
+        .await;
     hook_execution_fixtures().lock().await.insert(
         hook_execution_fixture_key(hook, &request_id),
         HookExecutionFixture {

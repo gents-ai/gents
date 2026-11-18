@@ -2426,3 +2426,31 @@ fn running_digest_must_belong_to_the_current_pin_set() {
         digest_in_pins(&refs, &i.running_digest.to_string())
     });
 }
+
+#[tokio::test]
+async fn agent_facing_plugin_tool_preserves_the_complete_failure_chain_once() {
+    let (home, _) = installed_echo();
+    let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
+    let tool = PluginTool::resolve(executor.clone(), &tool_ref(None), None).unwrap();
+    // Resolution was successful, but publication becomes busy before invocation.
+    // This traverses PluginAttemptError -> PluginResolutionError::Published ->
+    // PublishedPluginReadError, then the real tool's agent-facing text boundary.
+    let _guard = store::try_lock_store(home.path()).unwrap();
+    let dispatched = tool.call_with_receipt("{}".into()).await;
+    let error = dispatched.result.unwrap_err();
+    let gents_loop::tool::ToolError::ToolCallError(message) = &error else {
+        panic!("expected agent-facing plugin error: {error}");
+    };
+    let expected =
+        "executing plugin team/plugin: resolving plugin team/plugin: plugin store is busy";
+    assert_eq!(message.to_string(), expected);
+    assert_eq!(format!("{message:#}"), expected);
+    assert_eq!(expected.matches("plugin store is busy").count(), 1);
+    assert!(dispatched.plugin_receipt.is_some());
+    let typed = executor.resolve("team/plugin", None).unwrap_err();
+    assert_eq!(
+        gents_protocol::error_chain::ErrorChain(&typed).to_string(),
+        "resolving plugin team/plugin: plugin store is busy"
+    );
+    assert!(store::PublishedPluginReadError::error_chain_is_busy(&typed));
+}

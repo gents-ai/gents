@@ -12,8 +12,11 @@ use super::store::{self, InstalledPlugin};
 
 #[derive(Debug, thiserror::Error)]
 enum PluginRunLookupError {
-    #[error("no plugins are installed in this home ({home}); install one with `gents config pack plugin install` first")]
-    NoPluginsInstalled { home: std::path::PathBuf },
+    #[error("no plugins are installed in this home ({home}); plugin {coordinate} is not installed; install it with `gents config pack plugin install {coordinate}`")]
+    NoPluginsInstalled {
+        home: std::path::PathBuf,
+        coordinate: String,
+    },
 }
 
 fn installed_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {
@@ -25,11 +28,12 @@ fn installed_record(home: &Path, namespace: &str, name: &str) -> Result<Installe
             ..
         }) => Err(PluginRunLookupError::NoPluginsInstalled {
             home: home.to_owned(),
+            coordinate: coordinate.clone(),
         }
         .into()),
         Err(error) => Err(error).with_context(|| {
             format!(
-                "{coordinate} is not installed or could not be read under {}",
+                "{coordinate} is not installed or could not be read under {}; install it with `gents config pack plugin install {coordinate}`",
                 home.display()
             )
         }),
@@ -423,6 +427,12 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("gents/does_not_exist"), "{message}");
         assert!(message.contains("not installed"), "{message}");
+        assert!(
+            message.contains(
+                "install it with `gents config pack plugin install gents/does_not_exist`"
+            ),
+            "{message}"
+        );
     }
 
     #[tokio::test]
@@ -446,7 +456,15 @@ mod tests {
                     .count(),
                 1
             );
-            assert!(message.contains("gents config pack plugin install"));
+            assert!(
+                message.contains("plugin gents/missing is not installed"),
+                "{message}"
+            );
+            assert!(
+                message
+                    .contains("install it with `gents config pack plugin install gents/missing`"),
+                "{message}"
+            );
             assert!(!home.join("plugins").exists());
             assert!(!root.path().join("nonexistent").exists());
         }
