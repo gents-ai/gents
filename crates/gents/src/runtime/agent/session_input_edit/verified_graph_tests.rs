@@ -44,6 +44,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             .await?;
         for did in [collaborator.did(), binding.agent_did.as_str()] {
             for permission in [
+                NodePermission::CollectionGet,
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,

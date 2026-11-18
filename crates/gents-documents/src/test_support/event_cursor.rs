@@ -6,7 +6,7 @@ use gents_protocol::event_delivery::EventConsumer;
 use gents_store::collection::Collection;
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::NodeIdentity;
+use gents_store::identity::{GrantSet, NodeIdentity};
 use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -78,25 +78,16 @@ pub async fn fixture(enabled: bool) -> Result<Fixture> {
     gents_store::schema::ensure_runtime_schemas(&node).await?;
     let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(PIN_FIXED_DID)?);
     for did in [user_identity.did(), agent_identity.did()] {
-        for permission in [
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-            NodePermission::DacRelationDelete,
-        ] {
-            runtime
-                .grant_node_permission(&identity::Did::new(did)?, permission)
-                .await?;
-        }
-    }
-    for permission in [
-        NodePermission::CollectionPatch,
-        NodePermission::CollectionGet,
-    ] {
-        runtime
-            .grant_node_permission(&identity::Did::new(user_identity.did())?, permission)
+        GrantSet::AgentBaseline
+            .grant(&runtime, &identity::Did::new(did)?)
             .await?;
     }
+    runtime
+        .grant_node_permission(
+            &identity::Did::new(user_identity.did())?,
+            NodePermission::CollectionPatch,
+        )
+        .await?;
     let user = ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(user_identity.did())?,

@@ -153,7 +153,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
                     .iter()
                     .any(|row| row["_docID"] == doc_id && row["payload"] == "client secret"),
                 Err(error) if identity.is_none() => {
-                    assert!(error.to_string().contains("not authorized"), "{error:#}");
+                    assert!(error.is_permission_denied(), "{error:#}");
                     false
                 }
                 Err(error) => panic!("authenticated journal read failed: {error:#}"),

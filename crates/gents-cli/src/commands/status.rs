@@ -28,8 +28,8 @@ pub(crate) async fn status(args: StatusArgs) -> Result<()> {
         None if std::io::stdout().is_terminal() => OutputFormat::Text,
         None => OutputFormat::Json,
     };
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let output = load_runtime_status_output(args.home.as_deref(), &graphql, &node_did).await?;
     if format == OutputFormat::Json {
         return print_json(&output);
