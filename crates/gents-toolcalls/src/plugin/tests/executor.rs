@@ -2484,6 +2484,6 @@ async fn agent_facing_plugin_attempt_preserves_the_complete_failure_chain_once()
     assert_eq!(receipt.coordinate, "team/plugin");
     assert_eq!(
         receipt.verdict,
-        gents_protocol::plugin::PluginExecutionVerdict::Refused
+        gents_protocol::plugin::PluginExecutionVerdict::AdmissionRefused
     );
 }
