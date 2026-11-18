@@ -83,9 +83,7 @@ impl RuntimeDocumentProjector {
         ) {
             self.tools.update(ctx).await?;
         }
-        if collection == gents_protocol::schemas::NODE_NAME {
-            self.reconcile_transport(ctx).await?;
-        } else if project_transport_document(ctx, collection, doc_id).await? {
+        if project_transport_document(ctx, collection, doc_id).await? {
             ctx.notify_access_changed(collection, doc_id).await?;
         }
         Ok(())
@@ -120,6 +118,19 @@ impl db::DocumentMutationProjector for RuntimeDocumentProjector {
 
     async fn reconcile(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
         self.reconcile_runtime(ctx).await
+    }
+
+    async fn project_related(
+        &self,
+        ctx: &db::DocumentMutationContext<'_>,
+        collection: &str,
+        _doc_id: &str,
+    ) -> Result<()> {
+        if collection == gents_protocol::schemas::NODE_NAME {
+            self.require_node(ctx)?;
+            self.reconcile_transport(ctx).await?;
+        }
+        Ok(())
     }
 
     async fn project(
