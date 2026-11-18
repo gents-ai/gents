@@ -1985,31 +1985,30 @@ mod tests {
             );
             let runtime_did = runtime.did().to_owned();
             let agent_did = agent.did().to_owned();
-            admin
-                .transact_write("test.admission_fixture_executor", |txn| {
-                    let runtime_did = &runtime_did;
-                    let agent_did = &agent_did;
-                    Box::pin(async move {
-                        let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
-                            txn,
-                            gents_store::collection::Collection::Agent,
-                            runtime_did,
-                            agent_did,
-                        )
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("fixture Agent document is missing"))?;
-                        txn.add_actor_relationship(
-                            "Agent",
-                            &agent_doc,
-                            "executor",
-                            &identity::Did::new(agent_did)?,
-                        )
-                        .await?;
-                        Ok::<_, anyhow::Error>(())
-                    })
+            user.transact_write("test.admission_fixture_executor", |txn| {
+                let runtime_did = &runtime_did;
+                let agent_did = &agent_did;
+                Box::pin(async move {
+                    let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        gents_store::collection::Collection::Agent,
+                        runtime_did,
+                        agent_did,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("fixture Agent document is missing"))?;
+                    txn.add_actor_relationship(
+                        "Agent",
+                        &agent_doc,
+                        "executor",
+                        &identity::Did::new(agent_did)?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
                 })
-                .await
-                .unwrap();
+            })
+            .await
+            .unwrap();
             Self {
                 db,
                 runtime,

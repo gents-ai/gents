@@ -1175,17 +1175,18 @@ def configurationPresent (state : State) (id : String) : Bool :=
 
 /-- Where a destructive admin decision learns which documents exist.
 `acpFiltered` is every read Gents has: an ordinary query, filtered by document
-ACP for its own actor. Native premise: DefraDB does not apply its DacBypass to
-ordinary reads, so the native admin (the client User key,
-`GrantSets.GrantSet.householdOwner`) does not see documents other actors own
-through them. The conformance evidence is the admin case of
-`crates/gents/src/pack/installation/tests.rs` on branch
-`aos/g20-admin-retire-refuted` (commit 43928b8f33), which refuted the earlier
-premise that "the admin can tell missing from hidden". An ACP-filtered read is
-therefore not a complete inventory for any actor, the admin included: a
-document it cannot read is not known to be absent. `complete` names a read
-that enumerates every document whatever its ACP; no such source exists yet,
-and until one does every destructive decision that needs it is refused. -/
+ACP for its own actor. Native premise, before defradb.rs #2744: DefraDB did not
+apply its DacBypass to ordinary reads, so the native admin (the client User
+key, `GrantSets.GrantSet.householdOwner`) did not see documents other actors
+own through them; the admin case of `crates/gents/src/pack/installation/tests.rs`
+on branch `aos/g20-admin-retire-refuted` (commit 43928b8f33) refuted the
+premise that "the admin can tell missing from hidden". Since #2744 the NAC
+owner and the native admin do read past document ACP
+(`NodeProvisioning.NacOwner`), but no conformance case evidences that such a
+read enumerates every document, so it is still `acpFiltered`: a document an
+actor cannot read is not known to be absent. `complete` names a read that
+enumerates every document whatever its ACP; no such source is evidenced yet,
+and until one is every destructive decision that needs it is refused. -/
 inductive InventoryRead where
   | acpFiltered
   | complete

@@ -44,7 +44,8 @@ pub(super) async fn install(
     // The evaluator is the User that creates the throwaway trial node, so it is
     // that node's init User (`Recipient.initUser`): the native admin whose
     // client key installs the pack, including the Tools projections that stage
-    // schema authority an enrolled User may not grant.
+    // schema authority an enrolled User may not grant. Its direct set is
+    // issued as the trial home's NAC owner.
     gents_store::identity::GrantSet::HouseholdOwner
         .grant(&schema_access, &::identity::Did::new(&spec.evaluator_did)?)
         .await

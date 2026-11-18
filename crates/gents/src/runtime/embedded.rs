@@ -180,7 +180,17 @@ impl EmbeddedHome {
         };
         let store_key = trial_store_key(&path, &data_path, fresh).await?;
         if let Some(fresh_store) = fresh_store {
-            fresh_store.initialize(&store_key, Some(&did)).await?;
+            // A trial node's NAC is owned by its home's own owner key, never
+            // its Node (`Identity.NodeProvisioning.nacOwner`); installation
+            // issues the evaluator's direct set as that owner.
+            let owner_path = path.join("owner.key");
+            let owner =
+                tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(owner_path, None))
+                    .await?
+                    .context("trial NAC owner identity")?;
+            fresh_store
+                .initialize(&store_key, Some(&did), &::identity::Did::new(owner.did())?)
+                .await?;
         }
         let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
             &data_path,

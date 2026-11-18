@@ -141,6 +141,24 @@ impl GrantSet {
     }
 }
 
+/// `Identity.GrantSets.nodeRuntimePermissions`: every native node permission
+/// but reading past document ACP and the enforcement switches, which the NAC
+/// owner grants the Node when its fresh store is first opened.
+pub fn node_runtime_permissions() -> impl Iterator<Item = NodePermission> {
+    NodePermission::all().iter().copied().filter(|permission| {
+        !matches!(
+            permission,
+            NodePermission::DacBypass
+                | NodePermission::DacEnable
+                | NodePermission::DacDisable
+                | NodePermission::DacPurge
+                | NodePermission::NacReEnable
+                | NodePermission::NacDisable
+                | NodePermission::NacPurge
+        )
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Relation {
     Admin,

@@ -194,6 +194,11 @@ impl ConfigAccess {
 
     /// Native NAC decides the change as this access's actor: locally its
     /// identity under its managed signer, over HTTP the endpoint principal.
+    /// The runtime principal's own change is issued as the NAC owner, which
+    /// is never the Node (`Identity.NodeProvisioning.nacOwner`): native admits
+    /// a NAC change with no node exception, so the runtime names the owner in
+    /// process and keeps the NAC authority it had as owner without its read
+    /// bypass.
     async fn change_node_relation(
         &self,
         relation: &'static str,
@@ -203,13 +208,24 @@ impl ConfigAccess {
         match self.write_route() {
             WriteRoute::Local(local) => {
                 local.require_mutation_signer()?;
-                local
+                let actor = local
                     .identity()
-                    .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                    .ok_or(ConfigClientError::NodePermissionActorRequired)?
+                    .clone();
                 let context = local.request_context();
                 let target = target.clone();
                 local
                     .run_owned(move |node| async move {
+                        let context = match node.node_identity_did() == Some(actor.as_str()) {
+                            true => defra_core::RequestContext::default().with_identity(Some(
+                                node.nac_manager()
+                                    .owner()
+                                    .await
+                                    .ok_or(ConfigClientError::NodeAcpOwnerUnknown)?
+                                    .to_string(),
+                            )),
+                            false => context,
+                        };
                         if delete {
                             node.delete_nac_actor_relationship_as(
                                 &context,

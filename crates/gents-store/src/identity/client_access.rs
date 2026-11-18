@@ -291,6 +291,7 @@ impl ClientAccessOwner {
                 grant_enrollment_authority(
                     &approver,
                     &runtime,
+                    &runtime,
                     &existing.node_doc_id,
                     &receipt.request_id,
                     &member,
@@ -304,7 +305,7 @@ impl ClientAccessOwner {
                     EnrollmentGrantWithdrawal::plan(&receipt.request_id, &receipts)?
                 {
                     withdrawal
-                        .withdraw_as(&approver, &runtime, &existing.node_doc_id)
+                        .withdraw_as(&approver, &runtime, &runtime, &existing.node_doc_id)
                         .await?;
                 }
             }

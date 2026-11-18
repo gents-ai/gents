@@ -1,5 +1,16 @@
 use anyhow::Context;
 use gents_store::identity::NodeIdentity;
+
+/// A NAC owner for a fresh test store: never its Node
+/// (`Identity.NodeProvisioning.nacOwner`).
+async fn store_owner(home: &std::path::Path) -> anyhow::Result<::identity::Did> {
+    let path = home.join("owner.key");
+    let owner = tokio::task::spawn_blocking(move || {
+        gents_store::identity::KeyIdentity::load_or_create(path, None)
+    })
+    .await??;
+    Ok(::identity::Did::new(owner.did())?)
+}
 use gents_store::local::backend_protection::{FreshBackendStore, ProtectedBackendStore};
 use gents_store::local::{home, store_key::StoreKey};
 
@@ -48,7 +59,7 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
     );
     FreshBackendStore::observe(&data, &lock)
         .await?
-        .initialize(&key, Some(&did))
+        .initialize(&key, Some(&did), &store_owner(&home).await?)
         .await?;
     assert_eq!(
         ProtectedBackendStore::open(&data, &other_key, &lock)
@@ -133,7 +144,7 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
         let did = runtime.did().to_owned();
         FreshBackendStore::observe(&data, &lock)
             .await?
-            .initialize(&key, Some(&did))
+            .initialize(&key, Some(&did), &store_owner(&home).await?)
             .await?;
         let (node, admission) = ProtectedBackendStore::open(&data, &key, &lock)
             .await?
@@ -148,6 +159,14 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
                 &gents_session::test_support::no_lifecycle_plugins(),
             )
             .await?;
+        if case.input.node_reads_past_dac {
+            gents_store::config_client::ConfigAccess::local_as(
+                node.clone(),
+                ::identity::Did::new(&did)?,
+            )
+            .grant_node_admin(&::identity::Did::new(&did)?)
+            .await?;
+        }
         match case.input.status.as_str() {
             "enabled" => {}
             "disabled_temporarily" => {
@@ -156,12 +175,12 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
             }
             other => panic!("no production start reaches NAC status {other}"),
         }
+        use gents_store::local::backend_protection::BackendProtectionError;
         let admitted = match admission.validate(&node).await {
             Ok(()) => true,
             Err(
-                gents_store::local::backend_protection::BackendProtectionError::NodeAcpNotEnabled {
-                    ..
-                },
+                BackendProtectionError::NodeAcpNotEnabled { .. }
+                | BackendProtectionError::NodeReadsPastDocumentAcp,
             ) => false,
             Err(error) => panic!("{:?} refused for another reason: {error}", case.input),
         };
@@ -173,15 +192,18 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
             .await
         {
             Ok(_) => true,
-            Err(
-                error @ gents_store::local::backend_protection::BackendProtectionError::NodeAcpNotEnabled {
-                    ..
-                },
-            ) => {
+            Err(error @ BackendProtectionError::NodeAcpNotEnabled { .. }) => {
                 assert!(error.to_string().contains("re-enable NAC"), "{error}");
                 false
             }
-            Err(error) => panic!("{:?} preflight refused for another reason: {error}", case.input),
+            Err(error @ BackendProtectionError::NodeReadsPastDocumentAcp) => {
+                assert!(error.to_string().contains("set up a fresh one"), "{error}");
+                false
+            }
+            Err(error) => panic!(
+                "{:?} preflight refused for another reason: {error}",
+                case.input
+            ),
         };
         assert_eq!(
             admitted, restarted,
