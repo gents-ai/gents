@@ -2061,7 +2061,12 @@ const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
 ];
 
 /// What sends the request a closure builds through `send_resolving`.
-const RESOLVING_SENDERS: &[&str] = &["send_resolving", "endpoint_get_json", "endpoint_send"];
+const RESOLVING_SENDERS: &[&str] = &[
+    "send_resolving",
+    "send_counting_resends",
+    "endpoint_get_json",
+    "endpoint_send",
+];
 
 #[derive(Default)]
 struct UnrecoveredAuthorizeVisitor {
