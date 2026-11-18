@@ -483,7 +483,7 @@ impl UsageRefusalView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_lean_vocab::families::provider_usage_refusal_standing as wire;
+    use gents_lean_vocab::families::provider_usage_refusal_standing as family;
 
     fn at(text: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(text)
@@ -837,7 +837,7 @@ mod tests {
             persisted_failure_reason(&raw, now)
         };
 
-        let call = |evidence: &wire::CallWire| CallEvidence {
+        let call = |evidence: &family::CallWire| CallEvidence {
             call_id: None,
             at: moment(evidence.observed_at),
             call_state: if evidence.completed {
@@ -859,12 +859,12 @@ mod tests {
                 )
             }),
         };
-        wire::replay(|input: &wire::RefusalInput| {
+        family::replay(|input: &family::RefusalInput| {
             let calls: Vec<CallEvidence> = input.calls.iter().map(call).collect();
             let established = standing_refusal(&calls, moment(input.now), usize::MAX);
             let exhausted = established.is_some();
-            wire::RefusalOutput {
-                standing: established.map(|view: UsageRefusalView| wire::RefusalWire {
+            family::RefusalOutput {
+                standing: established.map(|view: UsageRefusalView| family::RefusalWire {
                     model: view.model,
                     observed_at: moment_of(
                         DateTime::parse_from_rfc3339(&view.at)
