@@ -396,6 +396,7 @@ impl rig::completion::CompletionModel for AssemblyOnlyModel {
 
 fn replay_assembly_config() -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: LoopReplayInput::default(),
         provider_input_counter: Arc::new(crate::provider_input::ProviderInputCounter::new(
             crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,

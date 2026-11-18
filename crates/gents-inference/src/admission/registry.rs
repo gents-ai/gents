@@ -3,13 +3,14 @@ use std::sync::{Arc, Mutex};
 
 use defra_node::Node as EmbeddedNode;
 
-use super::client::{current_context, AdmissionError};
-#[cfg(any(test, feature = "test-fixtures"))]
-use super::client::{scope_request, AdmissionCallContext, CallKind};
+use super::client::AdmissionError;
 use super::config::BackendAdmissionConfig;
 use super::controller::{BackendAdmissionController, CapacityPool, InferenceCallRecord};
 use super::permit::AdmissionPermit;
 use super::persistence::persist_terminal_call;
+use gents_loop::provider_call::admission::AdmissionCallContext;
+#[cfg(any(test, feature = "test-fixtures"))]
+use gents_loop::provider_call::admission::CallKind;
 use gents_store::drop_cleanup::{CleanupTracker, DropCleanup};
 
 #[cfg(test)]
@@ -129,28 +130,49 @@ impl AdmissionRegistry {
         connection: &str,
         signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> Result<AdmissionPermit, AdmissionError> {
-        use std::sync::atomic::AtomicU64;
-        let context = AdmissionCallContext {
+        let request = gents_protocol::row::AgentRequest {
+            retry_parent_request_doc_id: None,
+            purpose: gents_protocol::request_admission::RequestPurpose::Normal,
+            doc_id: "doc-test".to_string(),
             request_id: request_id.into(),
-            request_doc_id: "doc-test".to_string(),
-            backend_id: backend_id.into(),
-            agent_did: agent.agent_did.clone(),
             node_did: agent.node_did().to_owned(),
-            session_id: "session-test".to_string(),
             requester_did: None,
-            request_purpose: gents_protocol::request_admission::RequestPurpose::Normal,
-            call_kind,
-            attempt: 1,
-            call_seq: Arc::new(AtomicU64::new(0)),
-            current_call: Arc::new(std::sync::Mutex::new(None)),
-            inference_token: None,
-            terminal_failure_reason: None,
+            agent_did: agent.agent_did.clone(),
+            session_id: "session-test".to_string(),
+            content: String::new(),
+            max_total_tokens: None,
+            input: Default::default(),
+            execution_origin: None,
+            created_at: String::new(),
+            deadline: None,
+            execution_generation: None,
+            execution_lease_expires_at: None,
+            execution_lease_secs: None,
+            request_hop: 0,
+            caused_by_parent_request_id: None,
+            caused_by_parent_request_doc_id: None,
+            caused_by_parent_tool_call_id: None,
+            caused_by_parent_tool_call_doc_id: None,
+            caused_by_trigger_id: None,
+            caused_by_trigger_kind: None,
+            caused_by_source_doc_id: None,
+            caused_by_correlation: None,
+            caused_by_trigger_context: None,
+            workspace_id: None,
+            workspace_authority: None,
+            workspace_owner_node_did: None,
+            workspace_seal_hash: None,
+            executed_model_name: None,
+            executed_reasoning_effort: None,
+            executed_service_tier: None,
+            executed_inference_profile_id: None,
+            executed_runtime_generation: None,
         };
-        scope_request(context, async {
-            self.acquire_current_call_with_signer(connection, None, None, signer)
-                .await
-        })
-        .await
+        let context =
+            AdmissionCallContext::for_request(&request, agent.agent_did.clone(), backend_id)
+                .for_call(call_kind, 1);
+        self.acquire_call_with_signer(Some(&context), connection, None, None, signer)
+            .await
     }
 
     #[cfg(test)]
@@ -170,16 +192,18 @@ impl AdmissionRegistry {
             .map(|entry| entry.pool.clone())
     }
 
-    pub(super) async fn acquire_current_call_with_signer(
+    pub(super) async fn acquire_call_with_signer(
         &self,
+        context: Option<&AdmissionCallContext>,
         connection: &str,
         model_name: Option<&str>,
         profile_id: Option<&str>,
         agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> Result<AdmissionPermit, AdmissionError> {
-        let context = current_context()?;
+        let context =
+            context.ok_or_else(|| AdmissionError("missing inference admission context".into()))?;
         if let Some(signer) = &agent_signer {
-            if signer.did() != context.agent_did || signer.node_did() != context.node_did {
+            if signer.did() != context.agent_did() || signer.node_did() != context.node_did() {
                 return Err(AdmissionError(
                     "inference call differs from managed Agent signer".into(),
                 ));
@@ -189,9 +213,10 @@ impl AdmissionRegistry {
                 "inference call requires a managed Agent signer".into(),
             ));
         }
-        let cancel_observer = context.inference_token.clone();
-        let terminal_failure_observer = context.terminal_failure_reason.clone();
-        let pending = context.next_call(
+        let cancel_observer = context.inference_token().cloned();
+        let terminal_failure_observer = context.terminal_failure_reason().cloned();
+        let pending = super::client::next_call(
+            context,
             &self.inner.runtime_instance_id,
             model_name,
             profile_id,

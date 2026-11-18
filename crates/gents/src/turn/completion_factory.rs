@@ -68,6 +68,7 @@ pub(crate) fn loop_config(
         provider_input_counter.profile(),
     );
     LoopConfig {
+        provider_call: Default::default(),
         replay: Default::default(),
         provider_input_counter,
         preamble: Some(preamble),

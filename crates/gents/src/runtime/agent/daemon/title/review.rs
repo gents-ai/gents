@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{AgentDaemon, AuxiliaryResult, AuxiliaryTask};
 use crate::runtime::agent::loop_stream::AggregateTokenBudget;
-use gents_inference::admission::{self, CallKind};
+use gents_loop::provider_call::admission::{AdmissionCallContext, CallKind};
 use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]
@@ -292,6 +292,7 @@ where
         &self,
         request: &AgentRequest,
         parent: &AgentRequest,
+        admission: &AdmissionCallContext,
         execution: Option<ReviewExecution>,
         mut shutdown: watch::Receiver<bool>,
         interrupt: &mut watch::Receiver<Option<gents_session::request::interrupt::InterruptIntent>>,
@@ -345,17 +346,14 @@ where
         config.retry_policy = gents_loop::completion_retry::CompletionRetryPolicy::no_retry();
         config.aggregate_token_budget = execution.aggregate_token_budget;
         let mut budget_guard = ReviewBudgetGuard(config.aggregate_token_budget.clone());
-        let call = admission::scope_call(
-            CallKind::OneOff,
-            1,
-            Box::pin(crate::runtime::agent::loop_stream::run_loop_to_text::<M>(
-                (*self.model).clone(),
-                gents_inference::llm::message::Message::user(request.content.clone()),
-                Vec::new(),
-                Arc::new(Vec::new()),
-                config,
-            )),
-        );
+        config.provider_call.admission = Some(admission.for_call(CallKind::OneOff, 1));
+        let call = Box::pin(crate::runtime::agent::loop_stream::run_loop_to_text::<M>(
+            (*self.model).clone(),
+            gents_inference::llm::message::Message::user(request.content.clone()),
+            Vec::new(),
+            Arc::new(Vec::new()),
+            config,
+        ));
         let result = tokio::select! {
             biased;
             _ = execution.cancellation.cancelled() => None,

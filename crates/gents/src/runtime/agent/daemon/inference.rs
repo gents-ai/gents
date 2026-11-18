@@ -10,10 +10,10 @@ use tracing::Instrument;
 use super::ShutdownDrainFailure;
 use super::{AgentDaemon, HandleRequestOutcome};
 use crate::runtime::agent::loop_stream::{LoopReplayInput, TaggedMessage};
-use gents_inference::admission::{self, CallKind};
 use gents_inference::llm::message::Message;
 use gents_inference::resolved::MaxTurnsProvenance;
 use gents_loop::error::LoopFailureCause;
+use gents_loop::provider_call::admission::{self, AdmissionCallContext, CallKind};
 use gents_protocol::row::AgentRequest;
 
 mod drive;
@@ -203,6 +203,7 @@ where
         consumed_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
         folded_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
         context_calibration: crate::turn::provider_input::budget::ContextCalibration,
+        admission: &AdmissionCallContext,
     ) -> Result<HandleRequestOutcome> {
         workspace.runtime_home = self.approval_home.clone();
         let request_deadline = lifecycle.claimed_deadline_at();
@@ -332,12 +333,12 @@ where
                 let terminal_failure_reason = admission::terminal_failure_reason_observer();
                 let hook_for_start_interrupt = persistence_hook.clone();
                 let provider_profile = loop_config.provider_input_counter.profile();
-                let stream = admission::scope_call_with_token_and_failure_reason(
-                    CallKind::Inference,
-                    attempt_index,
-                    inference_token.clone(),
-                    terminal_failure_reason.clone(),
-                    async {
+                loop_config.provider_call.admission = Some(
+                    admission
+                        .for_call(CallKind::Inference, attempt_index)
+                        .with_cancellation(inference_token.clone(), terminal_failure_reason.clone()),
+                );
+                let stream = async {
                         tokio::select! {
                             biased;
                             _ = shutdown.changed() => {
@@ -365,16 +366,10 @@ where
                                 loop_config,
                             ))) => Ok(stream)
                         }
-                    },
-                )
+                    }
                 .await?;
 
-                admission::scope_call_with_token_and_failure_reason(
-                    CallKind::Inference,
-                    attempt_index,
-                    inference_token.clone(),
-                    terminal_failure_reason.clone(),
-                    Box::pin(drive::drive_inference_stream(
+                Box::pin(drive::drive_inference_stream(
                         drive::StreamDrive {
                             persistence_hook: &persistence_hook,
                             stream_writer,
@@ -394,8 +389,7 @@ where
                         lifecycle,
                         shutdown,
                         interrupt_rx,
-                    )),
-                )
+                    ))
                 .await
             }
             .instrument(tracing::info_span!(

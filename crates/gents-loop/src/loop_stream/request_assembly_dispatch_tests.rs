@@ -32,6 +32,7 @@ fn claude_config_without_compactor(
     max_tokens: u64,
 ) -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: crate::loop_stream::LoopReplayInput::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
             BackendProviderKind::AnthropicApiKey,

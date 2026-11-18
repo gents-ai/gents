@@ -164,7 +164,10 @@ impl crate::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
             if let Some(patched) = self.service_tier.and_then(|tier| tier.patch(&body).ok()) {
                 body = patched.into();
             }
-            let join = crate::admission::current_call_join();
+            let join = call
+                .admission
+                .as_ref()
+                .and_then(|admission| admission.current_join());
             tracing::info!(
                 call_id = join.as_ref().map(|join| join.call_id.as_str()),
                 call_seq = join.as_ref().map(|join| join.call_seq),
@@ -236,7 +239,10 @@ fn retain_turn_state(call: &ProviderCall, headers: &HeaderMap) {
         .get("x-codex-turn-state")
         .and_then(|header| header.to_str().ok());
     let retained = affinity.and_then(|affinity| affinity.token());
-    let join = crate::admission::current_call_join();
+    let join = call
+        .admission
+        .as_ref()
+        .and_then(|admission| admission.current_join());
     // Opaque routing tokens may carry provider state. Record presence and
     // equality only; body comparisons use the existing rendered captures.
     tracing::info!(

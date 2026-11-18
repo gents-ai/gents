@@ -12,9 +12,9 @@ use super::{
 use crate::runtime::agent::loop_stream::LoopStreamItem;
 use crate::runtime::agent::stream_processor::{processor_failure, StreamProcessor};
 use crate::turn::provider_input::ProviderInputProfile;
-use gents_inference::admission;
 use gents_inference::resolved::MaxTurnsProvenance;
 use gents_loop::error::LoopStreamError;
+use gents_loop::provider_call::admission;
 use gents_session::request::lifecycle::{RequestLifecycle, TriggerExecutionContext};
 use gents_session::request::seam_error::RuntimeSeamError;
 use gents_session::request::streaming::{DefraStreamWriter, StreamWriter};

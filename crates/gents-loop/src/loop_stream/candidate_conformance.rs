@@ -203,6 +203,7 @@ fn config(
         )
     });
     LoopConfig {
+        provider_call: Default::default(),
         replay: Default::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
             BackendProviderKind::OpenAiCompatible,

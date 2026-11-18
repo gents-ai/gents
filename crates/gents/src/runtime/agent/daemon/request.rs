@@ -2,8 +2,8 @@ use anyhow::Result;
 use tracing::Instrument;
 
 use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
-use gents_inference::admission::{self, AdmissionCallContext};
 use gents_loop::loop_stream::TaggedMessage;
+use gents_loop::provider_call::admission::AdmissionCallContext;
 use gents_observe::observe::runtime_trace::RequestTraceAttrs;
 
 mod prepare;
@@ -182,7 +182,7 @@ where
         let capture_scope = self
             .request_capture_scope(&request, lifecycle, stream_writer, &request_commit_cid)
             .await?;
-        let handled = admission::scope_request(admission_context, async {
+        let handled = async {
             let response_agent_did = lifecycle.agent_did().to_string();
             lifecycle
                 .begin_owned_execution(stream_writer)
@@ -206,6 +206,7 @@ where
                 effective_seed,
                 resume_from_history,
                 resume_same_request,
+                admission: &admission_context,
             });
             let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
             else {
@@ -248,6 +249,7 @@ where
                     consumed_prompts,
                     folded_prompts,
                     context_calibration,
+                    &admission_context,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",
@@ -276,7 +278,7 @@ where
 
             resolve_inference_outcome(lifecycle, &request, &request_token, &interrupt_rx, result)
                 .await
-        });
+        };
 
         match capture_scope {
             Some(scope) => {

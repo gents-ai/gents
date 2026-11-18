@@ -8,7 +8,7 @@ use gents_protocol::request_admission::RequestPurpose;
 use tokio::sync::watch;
 
 use super::{AgentDaemon, ShutdownDrainFailure};
-use gents_inference::admission::{self, AdmissionCallContext, CallKind};
+use gents_loop::provider_call::admission::{AdmissionCallContext, CallKind};
 use gents_protocol::row::AgentRequest;
 use gents_session::request::lifecycle::{
     ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
@@ -196,6 +196,7 @@ struct TitleGeneration<'a> {
     prompt: &'a str,
     config: crate::runtime::agent::loop_stream::LoopConfig,
     parent_requester_did: Option<String>,
+    admission: &'a AdmissionCallContext,
 }
 
 impl<M> AuxiliaryTask<M>
@@ -447,114 +448,118 @@ where
             &self.agent_config.agent_did,
             self.agent_config.backend_id.clone().unwrap_or_default(),
         );
-        admission::scope_request(
-            admission_context,
-            gents_inference::rendered_request::scope::scope_request(capture_scope, async {
-                lifecycle.begin_owned_execution(writer).await?;
-                if request.purpose == RequestPurpose::AccessReview {
-                    return self
-                        .execute_review(&request, &parent, review, shutdown, &mut interrupt_rx)
-                        .await;
-                }
-                let preparation = async {
-                    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-                        self.node.clone(),
-                        identity::Did::new(&request.agent_did)?,
-                        self.agent_config.agent_identity.as_ref(),
-                    )?;
-                    match session::session_needs_generated_title(
-                        &access,
-                        &request.node_did,
-                        parent.requester_did.as_deref(),
-                        &request.session_id,
+        gents_inference::rendered_request::scope::scope_request(capture_scope, async {
+            lifecycle.begin_owned_execution(writer).await?;
+            if request.purpose == RequestPurpose::AccessReview {
+                return self
+                    .execute_review(
+                        &request,
+                        &parent,
+                        &admission_context,
+                        review,
+                        shutdown,
+                        &mut interrupt_rx,
                     )
-                    .await?
-                    {
-                        session::GeneratedTitleNeed::Needed => {}
-                        session::GeneratedTitleNeed::AlreadyTitled => return Ok(None),
-                        session::GeneratedTitleNeed::SessionUnreadable => {
-                            tracing::warn!(
-                                target: TRACING_TARGET,
-                                node_did = %request.node_did,
-                                session_id = %request.session_id,
-                                agent_did = %request.agent_did,
-                                requester_did = ?parent.requester_did,
-                                "session row not readable for the title audit; skipping generated title"
-                            );
-                            return Ok(None);
-                        }
+                    .await;
+            }
+            let preparation = async {
+                let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+                    self.node.clone(),
+                    identity::Did::new(&request.agent_did)?,
+                    self.agent_config.agent_identity.as_ref(),
+                )?;
+                match session::session_needs_generated_title(
+                    &access,
+                    &request.node_did,
+                    parent.requester_did.as_deref(),
+                    &request.session_id,
+                )
+                .await?
+                {
+                    session::GeneratedTitleNeed::Needed => {}
+                    session::GeneratedTitleNeed::AlreadyTitled => return Ok(None),
+                    session::GeneratedTitleNeed::SessionUnreadable => {
+                        tracing::warn!(
+                            target: TRACING_TARGET,
+                            node_did = %request.node_did,
+                            session_id = %request.session_id,
+                            agent_did = %request.agent_did,
+                            requester_did = ?parent.requester_did,
+                            "session row not readable for the title audit; skipping generated title"
+                        );
+                        return Ok(None);
                     }
-                    let recent = session::load_recent_titles_for_agent(
-                        &access,
-                        &request.node_did,
-                        &request.session_id,
-                        RECENT_TITLE_LIMIT,
-                    )
-                    .await
-                    .unwrap_or_default();
-                    let source = gents_session::session::title_text::generation_input(
-                        &parent.content,
-                        &parent.input.captured_context,
-                    );
-                    let prompt = title_generation_prompt(&source, &recent);
-                    let mut config = crate::turn::completion_factory::loop_config(
-                        &self.agent_config,
-                        title_generation_preamble(),
-                        0,
-                        gents_inference::rendered_request::CaptureScopeKind::Title,
-                    );
-                    crate::claude_request_context::apply(
-                        &mut config,
-                        crate::claude_request_context::for_request(
-                            &gents_store::config_client::ConfigAccess::local(self.node.clone()),
-                            &self.agent_config,
-                            &request,
-                            gents_claude::origin::Kind::Title,
-                        )
-                        .await?
-                        .as_ref(),
-                    )?;
-                    config.temperature = Some(0.0);
-                    config.max_tokens =
-                        title_max_tokens(config.additional_params.as_ref(), config.max_tokens);
-                    config.max_turns = 1;
-                    config.retry_policy =
-                        gents_loop::completion_retry::CompletionRetryPolicy::no_retry();
-                    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-                        self.node.clone(),
-                        identity::Did::new(request.agent_did.clone())?,
-                        self.agent_config.agent_identity.as_ref(),
-                    )?;
-                    config.aggregate_token_budget =
-                        crate::turn::completion_factory::aggregate_token_budget_for_request(
-                            &access, &request,
-                        )
-                        .await?;
-                    Ok::<_, anyhow::Error>(Some((prompt, config, source)))
-                };
-                let Some(prepared) =
-                    super::request::prepare_unless_interrupted(&mut interrupt_rx, preparation)
-                        .await
-                else {
-                    return Ok(AuxiliaryResult::Interrupted);
-                };
-                let Some((prompt, config, source)) = prepared? else {
-                    return Ok(AuxiliaryResult::Skipped);
-                };
-                self.generate_with_fallback(
-                    TitleGeneration {
-                        request_id: &request.request_id,
-                        fallback_source: &source,
-                        prompt: &prompt,
-                        config,
-                        parent_requester_did: parent.requester_did,
-                    },
-                    shutdown,
-                    &mut interrupt_rx,
+                }
+                let recent = session::load_recent_titles_for_agent(
+                    &access,
+                    &request.node_did,
+                    &request.session_id,
+                    RECENT_TITLE_LIMIT,
                 )
                 .await
-            }),
-        )
+                .unwrap_or_default();
+                let source = gents_session::session::title_text::generation_input(
+                    &parent.content,
+                    &parent.input.captured_context,
+                );
+                let prompt = title_generation_prompt(&source, &recent);
+                let mut config = crate::turn::completion_factory::loop_config(
+                    &self.agent_config,
+                    title_generation_preamble(),
+                    0,
+                    gents_inference::rendered_request::CaptureScopeKind::Title,
+                );
+                crate::claude_request_context::apply(
+                    &mut config,
+                    crate::claude_request_context::for_request(
+                        &gents_store::config_client::ConfigAccess::local(self.node.clone()),
+                        &self.agent_config,
+                        &request,
+                        gents_claude::origin::Kind::Title,
+                    )
+                    .await?
+                    .as_ref(),
+                )?;
+                config.temperature = Some(0.0);
+                config.max_tokens =
+                    title_max_tokens(config.additional_params.as_ref(), config.max_tokens);
+                config.max_turns = 1;
+                config.retry_policy =
+                    gents_loop::completion_retry::CompletionRetryPolicy::no_retry();
+                let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+                    self.node.clone(),
+                    identity::Did::new(request.agent_did.clone())?,
+                    self.agent_config.agent_identity.as_ref(),
+                )?;
+                config.aggregate_token_budget =
+                    crate::turn::completion_factory::aggregate_token_budget_for_request(
+                        &access, &request,
+                    )
+                    .await?;
+                Ok::<_, anyhow::Error>(Some((prompt, config, source)))
+            };
+            let Some(prepared) =
+                super::request::prepare_unless_interrupted(&mut interrupt_rx, preparation).await
+            else {
+                return Ok(AuxiliaryResult::Interrupted);
+            };
+            let Some((prompt, config, source)) = prepared? else {
+                return Ok(AuxiliaryResult::Skipped);
+            };
+            self.generate_with_fallback(
+                TitleGeneration {
+                    request_id: &request.request_id,
+                    fallback_source: &source,
+                    prompt: &prompt,
+                    config,
+                    parent_requester_did: parent.requester_did,
+                    admission: &admission_context,
+                },
+                shutdown,
+                &mut interrupt_rx,
+            )
+            .await
+        })
         .await
     }
 
@@ -572,23 +577,23 @@ where
             prompt,
             config,
             parent_requester_did,
+            admission,
         } = generation;
         let mut last_error = None;
         for attempt in 1..=TITLE_GENERATION_MAX_ATTEMPTS {
             if *shutdown.borrow() {
                 return Ok(AuxiliaryResult::Interrupted);
             }
-            let run = admission::scope_call(
-                CallKind::OneOff,
-                attempt,
-                Box::pin(crate::runtime::agent::loop_stream::run_loop_to_text::<M>(
-                    (*self.model).clone(),
-                    gents_inference::llm::message::Message::user(prompt.to_string()),
-                    Vec::new(),
-                    Arc::new(Vec::new()),
-                    config.clone(),
-                )),
-            );
+            let mut attempt_config = config.clone();
+            attempt_config.provider_call.admission =
+                Some(admission.for_call(CallKind::OneOff, attempt));
+            let run = Box::pin(crate::runtime::agent::loop_stream::run_loop_to_text::<M>(
+                (*self.model).clone(),
+                gents_inference::llm::message::Message::user(prompt.to_string()),
+                Vec::new(),
+                Arc::new(Vec::new()),
+                attempt_config,
+            ));
             let result = tokio::select! {
                 biased;
                 _ = async {

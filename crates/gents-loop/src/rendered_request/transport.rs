@@ -184,7 +184,11 @@ fn decide(
     }
 }
 
-async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_client::Result<()> {
+async fn capture_or_refuse(
+    call: &ProviderCall,
+    decision: CaptureDecision,
+    body: &Bytes,
+) -> http_client::Result<()> {
     let (
         scope,
         pending,
@@ -254,6 +258,7 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
     let claimed = pending.clone();
     match scope::capture_body(
         scope.as_ref(),
+        call.admission.as_ref(),
         *pending,
         source,
         provider_endpoint,
@@ -320,7 +325,7 @@ where
             Sha256::digest(parts.uri.to_string().as_bytes()).into(),
         );
         async move {
-            capture_or_refuse(decision, &body).await?;
+            capture_or_refuse(&call, decision, &body).await?;
             let req = Request::from_parts(parts, body);
             Transport::send(&inner, &call, req).await
         }
@@ -364,7 +369,7 @@ where
             CaptureDecision::Forward | CaptureDecision::Refuse { .. } => None,
         };
         async move {
-            capture_or_refuse(decision, &body).await?;
+            capture_or_refuse(&call, decision, &body).await?;
             if let Some(activity) = &activity {
                 activity.touch();
             }

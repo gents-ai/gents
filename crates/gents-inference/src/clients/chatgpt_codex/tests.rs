@@ -17,6 +17,7 @@ async fn routing_affinity_follows_the_lean_model() {
                 input.main,
                 input.execution_session.clone(),
             ),
+            ..Default::default()
         };
         for response in &input.responses {
             let mut headers = HeaderMap::new();
@@ -57,6 +58,7 @@ async fn routing_affinity_isolates_concurrent_executions_without_capture() {
     let run = |state: Arc<RoutingAffinity>, token: &'static str| async move {
         let call = ProviderCall {
             routing_affinity: Some(state.clone()),
+            ..Default::default()
         };
         let mut headers = HeaderMap::new();
         headers.insert("x-codex-turn-state", HeaderValue::from_static(token));

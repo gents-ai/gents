@@ -52,9 +52,21 @@ struct ScopeState {
     last_auxiliary: Option<(gents_protocol::rendered_request::CaptureScope, usize, u32)>,
 }
 
-pub type AdmissionJoinLookup = Arc<dyn Fn(&str) -> Option<AdmissionJoin> + Send + Sync>;
+/// The join of the capture labelled by its first argument, from the admission
+/// of the call that sends it.
+pub type AdmissionJoinLookup = Arc<
+    dyn Fn(
+            &str,
+            Option<&crate::provider_call::admission::AdmissionCallContext>,
+        ) -> Option<AdmissionJoin>
+        + Send
+        + Sync,
+>;
 
-fn no_admission_join(_capture_scope: &str) -> Option<AdmissionJoin> {
+fn no_admission_join(
+    _capture_scope: &str,
+    _admission: Option<&crate::provider_call::admission::AdmissionCallContext>,
+) -> Option<AdmissionJoin> {
     None
 }
 
@@ -530,6 +542,7 @@ impl CaptureFailureStage {
 
 pub async fn capture_body(
     scope: &RequestCaptureScope,
+    admission: Option<&crate::provider_call::admission::AdmissionCallContext>,
     pending: PendingCapture,
     source: super::RenderedRequestSource,
     provider_endpoint: Option<String>,
@@ -539,7 +552,7 @@ pub async fn capture_body(
     let request_json: serde_json::Value =
         serde_json::from_slice(body).map_err(CaptureBodyError::DecodeBody)?;
     let components = super::RenderedRequestComponents::from_provider_body(request_json, source);
-    let admission_join = (scope.admission_join_lookup)(&pending.capture_scope);
+    let admission_join = (scope.admission_join_lookup)(&pending.capture_scope, admission);
     let capture_kind = pending
         .capture_scope
         .parse::<gents_protocol::rendered_request::CaptureScope>()

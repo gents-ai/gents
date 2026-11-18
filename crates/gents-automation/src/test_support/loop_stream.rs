@@ -325,6 +325,7 @@ pub fn tool_result_text(content: &ToolResultContent) -> &str {
 
 pub fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(

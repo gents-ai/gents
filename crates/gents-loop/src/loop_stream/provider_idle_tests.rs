@@ -276,6 +276,7 @@ impl CompletionModel for WireModel {
 
 fn config(retry_policy: CompletionRetryPolicy) -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: crate::loop_stream::LoopReplayInput::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
             BackendProviderKind::OpenAiCompatible,

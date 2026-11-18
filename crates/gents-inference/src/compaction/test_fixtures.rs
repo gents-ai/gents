@@ -121,6 +121,7 @@ pub fn summary_worthy_messages() -> Vec<Message> {
 
 pub fn scheduled_origin_config() -> gents_loop::loop_stream::LoopConfig {
     gents_loop::loop_stream::LoopConfig {
+        provider_call: Default::default(),
         replay: gents_loop::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(

@@ -495,6 +495,7 @@ where
                         prepared_dispatch.projection().estimated_input_tokens;
                     let dispatch_model = model.for_call(&crate::provider_call::ProviderCall {
                         routing_affinity: routing_affinity.clone(),
+                        ..config.provider_call.clone()
                     });
                     let dispatch_activity = activity.clone();
                     let dispatch_idle_timeout = config.provider_idle_timeout;

@@ -53,6 +53,7 @@ fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
 
 fn gate_test_loop_config() -> gents_loop::loop_stream::LoopConfig {
     gents_loop::loop_stream::LoopConfig {
+        provider_call: Default::default(),
         replay: gents_loop::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(

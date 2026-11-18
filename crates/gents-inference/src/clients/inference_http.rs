@@ -2,9 +2,9 @@
 //! agent session id and trace context. `x-session-id` lets a load balancer in
 //! front of a multi-replica, prefix-caching inference backend pin every turn
 //! of a conversation to the same replica (sticky-session routing), keeping its
-//! prefix cache warm; the session id is resolved per request from the
-//! admission task-local context because the completion client is built once
-//! per agent while the session id varies per request.
+//! prefix cache warm; the session id comes from the admission of the call
+//! each request belongs to, because the provider's reusable parts are built
+//! once per agent while the session id varies per request.
 
 use rapidhash::RapidHashMap;
 use std::future::Future;
@@ -108,24 +108,27 @@ impl<H> SessionTaggingHttpClient<H> {
         Self { inner }
     }
 
-    fn tag(req: Request<Bytes>) -> Request<Bytes> {
+    fn tag(call: &ProviderCall, req: Request<Bytes>) -> Request<Bytes> {
         Self::tag_with_trace_context_headers(
+            call,
             req,
             crate::trace_context::current_trace_context_headers(),
         )
     }
 
     fn tag_with_trace_context_headers(
+        call: &ProviderCall,
         mut req: Request<Bytes>,
         trace_context_headers: RapidHashMap<String, String>,
     ) -> Request<Bytes> {
-        Self::inject_headers(req.headers_mut(), trace_context_headers);
+        Self::inject_headers(call, req.headers_mut(), trace_context_headers);
         req
     }
 
-    fn tag_multipart(req: Request<MultipartForm>) -> Request<MultipartForm> {
+    fn tag_multipart(call: &ProviderCall, req: Request<MultipartForm>) -> Request<MultipartForm> {
         let (mut parts, body) = req.into_parts();
         Self::inject_headers(
+            call,
             &mut parts.headers,
             crate::trace_context::current_trace_context_headers(),
         );
@@ -133,11 +136,12 @@ impl<H> SessionTaggingHttpClient<H> {
     }
 
     fn inject_headers(
+        call: &ProviderCall,
         headers: &mut HeaderMap,
         trace_context_headers: RapidHashMap<String, String>,
     ) {
-        if let Some(session_id) = crate::admission::current_session_id() {
-            if let Ok(value) = HeaderValue::from_str(&session_id) {
+        if let Some(admission) = &call.admission {
+            if let Ok(value) = HeaderValue::from_str(admission.session_id()) {
                 headers.insert(SESSION_ID_HEADER, value);
             }
         }
@@ -171,7 +175,7 @@ where
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
         let call = call.clone();
-        let req = Self::tag(req);
+        let req = Self::tag(&call, req);
         async move { Transport::send(&inner, &call, req).await }
     }
 
@@ -182,7 +186,7 @@ where
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
         let call = call.clone();
-        let req = Self::tag_multipart(req);
+        let req = Self::tag_multipart(&call, req);
         async move { Transport::send_multipart(&inner, &call, req).await }
     }
 
@@ -193,7 +197,7 @@ where
     ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.inner.clone();
         let call = call.clone();
-        let req = Self::tag(req);
+        let req = Self::tag(&call, req);
         async move { Transport::send_streaming(&inner, &call, req).await }
     }
 }
@@ -344,7 +348,7 @@ mod tests {
     #[test]
     fn tag_is_noop_without_session_context() {
         let req = Request::new(Bytes::from_static(b""));
-        let tagged = SessionTaggingHttpClient::<ReqwestClient>::tag(req);
+        let tagged = SessionTaggingHttpClient::<ReqwestClient>::tag(&ProviderCall::default(), req);
         assert!(
             !tagged.headers().contains_key(SESSION_ID_HEADER),
             "x-session-id must not be set when there is no active session context"
@@ -355,6 +359,7 @@ mod tests {
     fn tag_adds_valid_trace_context_headers() {
         let req = Request::new(Bytes::from_static(b""));
         let tagged = SessionTaggingHttpClient::<ReqwestClient>::tag_with_trace_context_headers(
+            &ProviderCall::default(),
             req,
             RapidHashMap::from_iter([
                 (
