@@ -312,9 +312,35 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         escape_graphql_string(&doc),
         escape_graphql_string(&offer.token)
     );
+    assert_eq!(
+        admin_node
+            .document_acp()
+            .get_doc_owner(
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                "enrollment_records",
+                &doc
+            )
+            .await?,
+        Some(identity::Did::new(candidate.did())?)
+    );
     http(admin_address, &candidate)?
         .write("test.transport.publish_request", &reproject_request)
         .await?;
+    assert!(
+        http(admin_address, &candidate)?
+            .observe_actor_relationship(
+                "NetworkEnrollmentRequest",
+                &doc,
+                "local_publication",
+                &reader
+            )
+            .await?
+    );
+    assert!(
+        http(admin_address, &candidate)?
+            .observe_actor_relationship("NetworkEnrollmentRequest", &doc, "pending_parent", &reader)
+            .await?
+    );
     http(admin_address, &candidate)?
         .add_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", &reader)
         .await?;
