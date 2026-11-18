@@ -198,6 +198,7 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
             )
             .await?
     );
+    node.database().reconcile_document_projector().await?;
     let candidate_endpoints = RuntimeEndpoints::new(candidate.clone());
     let candidate_endpoint = candidate_endpoints.endpoint(runtime.did(), &url)?;
     let candidate_access = ConfigAccess::Graphql(candidate_endpoint.clone());
