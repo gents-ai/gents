@@ -174,29 +174,6 @@ async fn scheduled_probe_requires_the_held_node_and_a_present_backend() {
             .unwrap()
             .is_empty()
     );
-    gents_store::config_client::ConfigAccess::local_as(node.clone(), did.parse().unwrap())
-        .grant_node_permission(
-            &user.did().parse().unwrap(),
-            gents_store::config_client::NodePermission::DocumentDelete,
-        )
-        .await
-        .unwrap();
-    user_access
-        .transact_write("test.probe.remove_backend", |txn| {
-            let doc = &doc;
-            Box::pin(async move {
-                txn.delete_configuration_document("InferenceBackendMetadata", doc)
-                    .await
-            })
-        })
-        .await
-        .unwrap();
-    assert!(
-        crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
-            .await
-            .unwrap()
-            .is_empty()
-    );
     assert!(
         crate::backends::registry::capture_backend_document(&node, &configured)
             .await
@@ -246,6 +223,29 @@ async fn scheduled_probe_requires_the_held_node_and_a_present_backend() {
             .probe_status
             .as_deref(),
         Some("healthy")
+    );
+    gents_store::config_client::ConfigAccess::local_as(node.clone(), did.parse().unwrap())
+        .grant_node_permission(
+            &user.did().parse().unwrap(),
+            gents_store::config_client::NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
+    user_access
+        .transact_write("test.probe.remove_backend", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.delete_configuration_document("InferenceBackendMetadata", doc)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(
+        crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
+            .await
+            .unwrap()
+            .is_empty()
     );
     models.shutdown().await;
 }
