@@ -245,7 +245,7 @@ jobs:
       - name: Check the live node backstop
         run: |
           shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh \
-            .github/scripts/setup-shellcheck.sh .github/scripts/setup-ruff.sh
+            .github/scripts/setup-shellcheck.sh .github/scripts/setup-ruff.sh .github/scripts/install-browser-deps.sh
           python3 .github/scripts/test-host-runtime-service.py
 
       - name: Check Harbor runner syntax
@@ -815,8 +815,9 @@ jobs:
           echo "key=${ImageOS:-self}-${ImageVersion:-self}-playwright-${version}-${browsers// /-}" >> "${GITHUB_OUTPUT}"
 
       - name: Restore the browser packages and browsers
+        id: browser-cache
         if: runner.environment == 'github-hosted'
-        uses: actions/cache@v5.0.5
+        uses: actions/cache/restore@v5.0.5
         with:
           path: |
             ~/.cache/ms-playwright
@@ -856,8 +857,8 @@ jobs:
 
       # The unit lane's interaction budgets drive Chromium; the journeys
       # also need WebKit. Its own timeout keeps a slow install from spending
-      # the suite's time; it covers a cold cache (about 27 minutes of apt
-      # downloads), and a warm one takes about a minute.
+      # the suite's time; the system packages download in parallel
+      # (install-browser-deps.sh), and a warm cache takes about a minute.
       - name: Install Playwright browsers
         working-directory: apps/gents-desktop
         timeout-minutes: 30
@@ -867,12 +868,24 @@ jobs:
         run: |
           read -ra browsers <<< "${BROWSERS}"
           if [[ "${HOSTED}" == true ]]; then
-            npx playwright install --with-deps "${browsers[@]}"
-            # The cache step saves as this user; apt wrote the packages as root.
+            ../../.github/scripts/install-browser-deps.sh "${HOME}/.cache/apt-browser-archives" "${browsers[@]}"
+            # The cache saves as this user; apt may have written as root.
             sudo chown -R "$(id -u):$(id -g)" "${HOME}/.cache/apt-browser-archives"
-          else
-            npx playwright install "${browsers[@]}"
           fi
+          npx playwright install "${browsers[@]}"
+
+      # Saved as soon as the install ends, even when it or a later step fails,
+      # so one runner's cold download warms the next run's.
+      - name: Save the browser packages and browsers
+        if: >-
+          always() && runner.environment == 'github-hosted' &&
+          steps.browser-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5.0.5
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/apt-browser-archives
+          key: browsers-${{ steps.browsers.outputs.key }}
 
       - name: Run the desktop ${{ matrix.suite }} suite
         timeout-minutes: 25
