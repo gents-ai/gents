@@ -401,7 +401,7 @@ External premise (defradb.rs#2982): a provider that proves its decisions
 admits a verified update or delete made with no credential when its signer
 holds the `update` or `delete` permission on evidence at most 30 seconds old,
 refuses it otherwise as any refused update or delete, and owes nothing for
-it. Decision (gents#3831): a write for a User that carries no
+it. Decision (gents#3831): any other write for a User that carries no
 delegation is refused, never made under another authority; an identity token
 is no delegation.
 Admission comes before the command's nonce or receipt is consumed and before
