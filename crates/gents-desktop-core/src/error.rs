@@ -631,7 +631,7 @@ mod tests {
             &endpoint,
             "{__typename}",
             gents_protocol::graphql::GraphqlRequestOptions {
-                timeout: std::time::Duration::from_secs(5),
+                timeout: Some(std::time::Duration::from_secs(5)),
                 max_attempts: 1,
                 retry_backoff: std::time::Duration::ZERO,
             },

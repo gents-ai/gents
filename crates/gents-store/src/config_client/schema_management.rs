@@ -95,7 +95,6 @@ impl ConfigAccess {
                 let client = super::graphql::http_client().await?;
                 endpoint
                     .authorize(client.post(&url))?
-                    .timeout(std::time::Duration::from_secs(120))
                     .body(version_id.to_owned())
                     .send()
                     .await?
@@ -264,9 +263,7 @@ impl ConfigAccess {
         };
         let url = format!("{}/{}", graphql_api_base(endpoint.url())?, route);
         let client = super::graphql::http_client().await?;
-        let mut request = endpoint
-            .authorize(client.request(method, &url))?
-            .timeout(std::time::Duration::from_secs(120));
+        let mut request = endpoint.authorize(client.request(method, &url))?;
         if let Some(body) = body {
             request = request.json(&body);
         }

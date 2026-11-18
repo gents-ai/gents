@@ -3,9 +3,13 @@ use std::time::Duration;
 #[cfg(feature = "native")]
 use super::{GraphqlError, Result};
 
+/// `timeout` bounds each attempt by the clock; `None` waits for the answer or
+/// a connection failure. A store read takes `None`: a total timeout fails a
+/// live server that is only slow on a loaded host
+/// (`tla/CommitResponseWait.tla`, `ClientWindow`).
 #[derive(Debug, Clone, Copy)]
 pub struct GraphqlRequestOptions {
-    pub timeout: Duration,
+    pub timeout: Option<Duration>,
     pub max_attempts: usize,
     pub retry_backoff: Duration,
 }
@@ -13,11 +17,38 @@ pub struct GraphqlRequestOptions {
 impl Default for GraphqlRequestOptions {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(30),
+            timeout: None,
             max_attempts: 5,
             retry_backoff: Duration::from_millis(100),
         }
     }
+}
+
+/// How long a store client waits to establish a connection. A request that
+/// never connected was never sent, so giving up decides nothing about its
+/// outcome.
+const STORE_CONNECT_LIMIT: Duration = Duration::from_secs(30);
+
+/// TCP keepalive on store connections: idle time before the first probe, the
+/// probe interval and the unanswered probes that end the connection. A live
+/// host's kernel answers probes whatever its load, so they end only a
+/// connection whose host is gone, which no reset reports
+/// (`tla/CommitResponseWait.tla`, `NoKeepalive`).
+const STORE_KEEPALIVE_IDLE: Duration = Duration::from_secs(15);
+const STORE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const STORE_KEEPALIVE_RETRIES: u32 = 3;
+
+/// The builder of every HTTP client that talks to a DefraDB endpoint: no
+/// total request timeout, a connect limit, keepalive probes and the pooled
+/// connection idle limit.
+#[cfg(feature = "native")]
+pub fn store_http_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(STORE_CONNECT_LIMIT)
+        .tcp_keepalive(STORE_KEEPALIVE_IDLE)
+        .tcp_keepalive_interval(STORE_KEEPALIVE_INTERVAL)
+        .tcp_keepalive_retries(STORE_KEEPALIVE_RETRIES)
+        .pool_idle_timeout(POOLED_CONNECTION_IDLE_LIMIT)
 }
 
 /// How long a pooled connection to a DefraDB HTTP server may sit idle before
@@ -37,13 +68,9 @@ pub(super) async fn graphql_http_client() -> Result<&'static reqwest::Client> {
     CLIENT
         .get_or_try_init(|| async {
             // Native certificate loading can block; initialize once off the executor.
-            tokio::task::spawn_blocking(|| {
-                reqwest::Client::builder()
-                    .pool_idle_timeout(POOLED_CONNECTION_IDLE_LIMIT)
-                    .build()
-            })
-            .await?
-            .map_err(GraphqlError::ClientBuild)
+            tokio::task::spawn_blocking(|| store_http_client_builder().build())
+                .await?
+                .map_err(GraphqlError::ClientBuild)
         })
         .await
 }
@@ -54,9 +81,11 @@ pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOp
         Ok(client) => client,
         Err(_) => return false,
     };
-    match client
-        .post(graphql)
-        .timeout(options.timeout)
+    let mut request = client.post(graphql);
+    if let Some(timeout) = options.timeout {
+        request = request.timeout(timeout);
+    }
+    match request
         .json(&serde_json::json!({ "query": "{ __typename }" }))
         .send()
         .await
@@ -117,7 +146,10 @@ pub(super) async fn execute_graphql_async_with_tx(
             Some(variables) => serde_json::json!({ "query": query, "variables": variables }),
             None => serde_json::json!({ "query": query }),
         };
-        let mut request = client.post(graphql).timeout(options.timeout).json(&body);
+        let mut request = client.post(graphql).json(&body);
+        if let Some(timeout) = options.timeout {
+            request = request.timeout(timeout);
+        }
         if let Some(id) = txn_id {
             request = request.header("x-defradb-tx", id);
         }
@@ -141,7 +173,7 @@ pub(super) async fn execute_graphql_async_with_tx(
                     cause = ?error,
                     is_timeout = error.is_timeout(),
                     is_connect = error.is_connect(),
-                    timeout_ms = options.timeout.as_millis() as u64,
+                    timeout_ms = options.timeout.map(|timeout| timeout.as_millis() as u64),
                     "retrying async GraphQL request after transport error"
                 );
                 last_error = Some(GraphqlError::Post {
