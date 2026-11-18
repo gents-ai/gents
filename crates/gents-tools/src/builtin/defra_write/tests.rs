@@ -10,37 +10,24 @@ use gents_store::config_client::ConfigAccess;
 
 #[test]
 fn write_confirmation_matches_modeled_result() {
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    assert_eq!(model.configuration_datastore_write_cases.len(), 4);
-    for name in ["committed", "unconfirmed"] {
-        let case = model
-            .configuration_datastore_write_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap();
-        let rows = if case["response_confirmed"] == true {
+    gents_lean_vocab::families::household_datastore_write_confirmation::replay(|case| {
+        let rows = if case.response_confirmed {
             json!([{ "_docID":"document" }])
         } else {
             json!([])
         };
         let response = json!({"data":{"add_ActionRequest":rows}});
-        assert_eq!(
-            gents_store::graphql::created_doc_id(&response, "ActionRequest").is_ok(),
-            case["expected"].as_bool().unwrap(),
-            "{case}"
-        );
-        let mailbox = json!({"data":{"create_MailboxItem":if case["response_confirmed"] == true {
+        let confirmed = gents_store::graphql::created_doc_id(&response, "ActionRequest").is_ok();
+        let mailbox = json!({"data":{"create_MailboxItem":if case.response_confirmed {
             json!([{ "_docID":"mailbox" }])
         } else { json!([]) }}});
         assert_eq!(
             gents_store::graphql::created_doc_id(&mailbox, "MailboxItem").is_ok(),
-            case["expected"].as_bool().unwrap(),
-            "{case}"
+            confirmed,
+            "{case:?}"
         );
-    }
+        confirmed
+    });
     for rows in [
         json!([{"_docID":""}]),
         json!([{"_docID":"a"},{"_docID":"b"}]),

@@ -43,7 +43,8 @@ structure Case where
   invokeGrant : Bool
   binding : Binding
   actions : List Action
-  claimCommit : NativeCommit
+  /-- The writes that land on the target's claim attempts, one per attempt. -/
+  claimRaces : List ClaimRace := []
 
 def grantedCommit : NativeCommit := ⟨true, true, true, true⟩
 def deniedCommit : NativeCommit := ⟨true, false, true, true⟩
@@ -52,30 +53,53 @@ def observed : Action := .observe true true
 def grant : Action := .publish "parent-agent" true allGrants
 
 def cases : List Case :=
-  [ ⟨"published", true, binding, [good, observed, grant], grantedCommit⟩
-  , ⟨"same-agent-published", false, sameAgentBinding, [good, observed, grant], deniedCommit⟩
+  [ ⟨"published", true, binding, [good, observed, grant], []⟩
+  , ⟨"same-agent-published", false, sameAgentBinding, [good, observed, grant], []⟩
   , ⟨"same-agent-partial-visible", false, sameAgentBinding,
-      [good, observed, .publish "parent-agent" true visiblePartialGrants], deniedCommit⟩
+      [good, observed, .publish "parent-agent" true visiblePartialGrants], []⟩
   , ⟨"same-agent-marker-conflict", false, sameAgentBinding, [good, observed, grant],
-      { deniedCommit with committed := false }⟩
-  , ⟨"invoke-denied", false, binding, [good, observed, grant], deniedCommit⟩
-  , ⟨"invoke-revoked-at-commit", true, binding, [good, observed, grant], deniedCommit⟩
-  , ⟨"marker-commit-conflict", true, binding, [good, observed, grant], { grantedCommit with committed := false }⟩
-  , ⟨"native-commit-failed", true, binding, [.commit true true false, observed, grant], grantedCommit⟩
-  , ⟨"missing-starter", true, binding, [.commit false true true, observed, grant], grantedCommit⟩
-  , ⟨"missing-creation-receipt", true, binding, [.commit true false true, observed, grant], grantedCommit⟩
-  , ⟨"wrong-signer", true, { binding with signer := "user" }, [good, observed, grant], grantedCommit⟩
-  , ⟨"wrong-physical-session", true, { binding with signedSession := "other" }, [good, observed, grant], grantedCommit⟩
-  , ⟨"wrong-physical-agent", true, { binding with signedAgent := "other" }, [good, observed, grant], grantedCommit⟩
-  , ⟨"commit-unconfirmed", true, binding, [good, grant], grantedCommit⟩
-  , ⟨"wrong-receipt", true, binding, [good, .observe false true, grant], grantedCommit⟩
-  , ⟨"wrong-owner", true, binding, [good, .observe true false, grant], grantedCommit⟩
-  , ⟨"partial-grants", true, binding, [good, observed, .publish "parent-agent" true partialGrants], grantedCommit⟩
-  , ⟨"visible-before-publication-complete", true, binding, [good, observed, .publish "parent-agent" true visiblePartialGrants], grantedCommit⟩
-  , ⟨"partial-then-recover", true, binding, [good, observed, .publish "parent-agent" true partialGrants, grant], grantedCommit⟩
-  , ⟨"foreign-recovery-actor", true, binding, [good, observed, .publish "user" true allGrants], grantedCommit⟩
-  , ⟨"mismatched-recovery-binding", true, binding, [good, observed, .publish "parent-agent" false allGrants], grantedCommit⟩
-  , ⟨"revoked-after-publication", true, binding, [good, observed, grant, .revokeSessionParent, grant], grantedCommit⟩ ]
+      [.rewriteMarkers]⟩
+  , ⟨"invoke-denied", false, binding, [good, observed, grant], []⟩
+  , ⟨"invoke-revoked-at-commit", true, binding, [good, observed, grant], [.revokeInvoke]⟩
+  , ⟨"marker-commit-conflict", true, binding, [good, observed, grant], [.rewriteMarkers]⟩
+  , ⟨"marker-reset-at-commit", true, binding, [good, observed, grant], [.resetRequestMarker]⟩
+  , ⟨"native-commit-failed", true, binding, [.commit true true false, observed, grant], []⟩
+  , ⟨"missing-starter", true, binding, [.commit false true true, observed, grant], []⟩
+  , ⟨"missing-creation-receipt", true, binding, [.commit true false true, observed, grant], []⟩
+  , ⟨"wrong-signer", true, { binding with signer := "user" }, [good, observed, grant], []⟩
+  , ⟨"wrong-physical-session", true, { binding with signedSession := "other" }, [good, observed, grant], []⟩
+  , ⟨"wrong-physical-agent", true, { binding with signedAgent := "other" }, [good, observed, grant], []⟩
+  , ⟨"commit-unconfirmed", true, binding, [good, grant], []⟩
+  , ⟨"wrong-receipt", true, binding, [good, .observe false true, grant], []⟩
+  , ⟨"wrong-owner", true, binding, [good, .observe true false, grant], []⟩
+  , ⟨"partial-grants", true, binding, [good, observed, .publish "parent-agent" true partialGrants], []⟩
+  , ⟨"visible-before-publication-complete", true, binding, [good, observed, .publish "parent-agent" true visiblePartialGrants], []⟩
+  , ⟨"partial-then-recover", true, binding, [good, observed, .publish "parent-agent" true partialGrants, grant], []⟩
+  , ⟨"foreign-recovery-actor", true, binding, [good, observed, .publish "user" true allGrants], []⟩
+  , ⟨"mismatched-recovery-binding", true, binding, [good, observed, .publish "parent-agent" false allGrants], []⟩
+  , ⟨"revoked-after-publication", true, binding, [good, observed, grant, .revokeSessionParent, grant], []⟩ ]
+
+/-- The User's revocation lands on the target's first claim attempt, which
+conflicts; the rerun reads the revoked invoke and denies. -/
+theorem invoke_revoked_at_commit_is_denied :
+    claimRetrying ([good, observed, grant].foldl step (initial true)) [.revokeInvoke] = .denied := by
+  native_decide
+
+/-- A marker reset between the claim's check and its commit conflicts the
+attempt; the rerun reads the pending marker and leaves the work unavailable. -/
+theorem marker_reset_at_commit_is_unavailable :
+    claimRetrying ([good, observed, grant].foldl step (initial true)) [.resetRequestMarker] =
+      .unavailable := by
+  native_decide
+
+/-- Rewriting the markers to the value they hold conflicts the attempt and
+changes nothing the rerun reads, so the rerun claims, for a cross-actor and a
+same-Agent request alike. -/
+theorem rewritten_markers_rerun_claims :
+    claimRetrying ([good, observed, grant].foldl step (initial true)) [.rewriteMarkers] = .claimed ∧
+    claimRetrying ([good, observed, grant].foldl step (initial false sameAgentBinding))
+      [.rewriteMarkers] = .claimed := by
+  native_decide
 
 theorem complete_publication_exposes_child_and_preserves_user_control :
     let s := [good, observed, grant].foldl step (initial true)
@@ -127,47 +151,5 @@ theorem cancelled_after_child_commit_recovers_relationships_in_the_actor_watcher
     watcherRecoveredState.requestPending = false ∧
     allowed 5 watcherRecoveredState.household "child-agent" "delivered_requests" "child-request" "read" = true ∧
     claim watcherRecoveredState grantedCommit = .claimed := by native_decide
-
-def actionJson : Action → Json
-  | .commit starter receipt native => Json.mkObj [("kind", toJson ("commit" : String)),
-      ("starter", toJson starter), ("creation_receipt", toJson receipt), ("native_commit", toJson native)]
-  | .observe exact owner => Json.mkObj [("kind", toJson ("observe" : String)),
-      ("exact", toJson exact), ("owner", toJson owner)]
-  | .publish actor exact g => Json.mkObj [("kind", toJson ("publish" : String)),
-      ("actor", toJson actor), ("exact", toJson exact), ("session_parent", toJson g.sessionParent),
-      ("session_worker", toJson g.sessionWorker), ("request_parent", toJson g.requestParent),
-      ("request_session", toJson g.requestSession), ("request_worker", toJson g.requestWorker),
-      ("mark_session", toJson g.markSession), ("mark_request", toJson g.markRequest)]
-  | .revokeSessionParent => Json.mkObj [("kind", toJson ("revoke_session_parent" : String))]
-
-def decisionName : Decision → String
-  | .blocked => "blocked" | .unavailable => "unavailable" | .denied => "denied"
-  | .conflict => "conflict" | .claimed => "claimed"
-
-def caseJson (c : Case) : Json :=
-  let s := c.actions.foldl step (initial c.invokeGrant c.binding)
-  let b := s.binding
-  Json.mkObj [("name", toJson c.name), ("invoke_grant", toJson c.invokeGrant),
-    ("node_owner", toJson b.nodeOwner), ("parent_agent", toJson b.parentAgent),
-    ("target_agent", toJson b.targetAgent), ("session_doc", toJson b.sessionDoc),
-    ("agent_doc", toJson b.agentDoc), ("request_doc", toJson b.requestDoc),
-    ("signed_session", toJson b.signedSession), ("signed_agent", toJson b.signedAgent),
-    ("signer", toJson b.signer), ("actions", toJson (c.actions.map actionJson)),
-    ("claim_session_permission", toJson c.claimCommit.sessionPermission),
-    ("claim_agent_invoke", toJson c.claimCommit.agentInvoke),
-    ("claim_native_commit", toJson c.claimCommit.committed),
-    ("expected_committed", toJson s.committed), ("expected_observed", toJson s.observed),
-    ("expected_tool_running", toJson s.toolRunning), ("expected_receipt", toJson s.receipt),
-    ("expected_starter", toJson s.starterVerified), ("expected_creation_receipt", toJson s.creationReceipt),
-    ("expected_session_pending", toJson s.sessionPending), ("expected_request_pending", toJson s.requestPending),
-    ("expected_target_read", toJson (allowed 5 s.household b.targetAgent "delivered_requests" b.requestDoc "read")),
-    ("expected_node_owner_read", toJson (allowed 5 s.household b.nodeOwner "sessions" b.sessionDoc "read")),
-    ("expected_node_owner_update", toJson (allowed 5 s.household b.nodeOwner "sessions" b.sessionDoc "update")),
-    ("expected_node_owner_admin", toJson (allowed 5 s.household b.nodeOwner "sessions" b.sessionDoc "delete")),
-    ("expected_other_user_read", toJson (allowed 5 s.household "other-user" "sessions" b.sessionDoc "read")),
-    ("expected_other_user_admin", toJson (allowed 5 s.household "other-user" "sessions" b.sessionDoc "delete")),
-    ("expected_claim", toJson (decisionName (claim s c.claimCommit)))]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
 
 end Identity.DelegatedPublication.Cases

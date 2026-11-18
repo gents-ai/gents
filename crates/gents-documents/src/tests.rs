@@ -748,11 +748,6 @@ fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
 
 #[test]
 fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    assert_eq!(model.configuration_datastore_tool_use_cases.len(), 5);
     let expected = SurfaceToolDecl::Query(QueryToolDecl {
         tool_name: "find_entries".into(),
         collection: "Entry".into(),
@@ -760,8 +755,8 @@ fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
         fields: vec!["name".into()],
         filter_fields: vec![],
     });
-    for case in &model.configuration_datastore_tool_use_cases {
-        let selected = case["selected"].as_bool().unwrap();
+    gents_lean_vocab::families::household_datastore_tool_selection::replay(|case| {
+        let selected = case.selected;
         let tools = Tools {
             tools_id: "tools".into(),
             node_did: "node".into(),
@@ -776,25 +771,18 @@ fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
             ..Default::default()
         };
         let mut entry = expected.clone();
-        if !case["declaration_matches"].as_bool().unwrap() {
+        if !case.declaration_matches {
             if let SurfaceToolDecl::Query(query) = &mut entry {
                 query.fields = vec!["other".into()];
             }
         }
         let surface: DatastoreToolSurfaceDocument = serde_json::from_value(serde_json::json!({
-            "surface_id": "surface", "node_did": "node", "enabled": case["enabled"],
+            "surface_id": "surface", "node_did": "node", "enabled": case.enabled,
             "entries": [entry]
         }))
         .unwrap();
-        let visible = if case["visible"].as_bool().unwrap() {
-            vec![surface]
-        } else {
-            vec![]
-        };
-        let actual = super::surface_tool::confirm_cached_datastore_tool(
-            &tools, &visible, "surface", &expected,
-        )
-        .is_ok();
-        assert_eq!(actual, case["expected"].as_bool().unwrap(), "{case}");
-    }
+        let visible = if case.visible { vec![surface] } else { vec![] };
+        super::surface_tool::confirm_cached_datastore_tool(&tools, &visible, "surface", &expected)
+            .is_ok()
+    });
 }

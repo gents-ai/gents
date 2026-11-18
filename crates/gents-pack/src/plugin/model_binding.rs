@@ -237,3 +237,7 @@ fn endpoint_for_selected(
         profile_visibility: None,
     })
 }
+
+#[cfg(test)]
+#[path = "model_binding_tests.rs"]
+mod tests;

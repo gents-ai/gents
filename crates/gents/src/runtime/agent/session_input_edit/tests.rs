@@ -1,9 +1,7 @@
 use super::super::session_commands::{unanswered_commands, CommandKind, Sweep};
 use super::*;
-use gents_lean_vocab::{
-    LeanQueueManagementState, LeanSessionInputEditAuthority, LeanSessionInputEditCommand,
-    LeanSessionInputEditStep, LeanSessionInputEditor, QueueImage,
-};
+use gents_lean_vocab::families::fold_queue_contracts_input_edit_atomic as atomic;
+use gents_lean_vocab::QueueImage;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -15,6 +13,11 @@ use gents_store::identity::KeyIdentity;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 const SESSION: &str = "edit-session";
+
+type ModelState = atomic::StateWire<String, String, String, String>;
+type ModelCommand = atomic::CommandWire<String, String, String, String>;
+type ModelAuthority = atomic::Authority<String>;
+type ModelReceipt = atomic::Receipt<SessionInputEditOutcome>;
 
 struct Fixture {
     db: gents_inference::test_support::TestDb,
@@ -288,20 +291,20 @@ struct ModeledQueue {
     fixture: Fixture,
     request_ids: RapidHashMap<u64, String>,
     doc_ids: RapidHashMap<u64, String>,
-    commands: RapidHashMap<(u64, u64), (String, SessionInputEdit)>,
+    commands: Vec<((u64, u64), (String, SessionInputEdit))>,
     active: Option<gents_session::request::lifecycle::RequestLifecycle>,
     anchor: DateTime<Utc>,
     nows: Vec<u64>,
 }
 
 impl ModeledQueue {
-    async fn seed(state: &LeanQueueManagementState, nows: Vec<u64>) -> Self {
+    async fn seed(state: &ModelState, nows: Vec<u64>) -> Self {
         let fixture = Fixture::empty().await;
         let mut queue = Self {
             fixture,
             request_ids: RapidHashMap::new(),
             doc_ids: RapidHashMap::new(),
-            commands: RapidHashMap::new(),
+            commands: Vec::new(),
             active: None,
             anchor: Utc::now(),
             nows,
@@ -397,13 +400,84 @@ impl ModeledQueue {
             );
             queue.active = Some(lifecycle);
         }
-        assert_eq!(queue.image().await, queue.modeled(state));
+        let seeded = |entries: &[atomic::EntryWire<String, String, String, String>]| {
+            entries
+                .iter()
+                .map(|entry| entry.request_id.to_string())
+                .collect()
+        };
+        assert_eq!(
+            queue.image().await,
+            QueueImage {
+                active: state.active.map(|id| id.to_string()),
+                folding: seeded(&state.folding),
+                pending: seeded(&state.pending),
+                terminal: state.terminal.iter().map(|id| id.to_string()).collect(),
+            },
+            "the fixture seeds the modeled queue"
+        );
         queue.anchor = Utc::now();
         queue
     }
 
-    fn modeled(&self, state: &LeanQueueManagementState) -> QueueImage {
-        state.image(|id| self.request_ids[&id].clone())
+    fn model_id(&self, native: &str) -> u64 {
+        self.request_ids
+            .iter()
+            .find(|(_, bound)| bound.as_str() == native)
+            .map(|(model, _)| *model)
+            .unwrap_or_else(|| panic!("request {native} has no modeled identity"))
+    }
+
+    async fn observed(&self) -> atomic::EditImageWire<SessionInputEditOutcome> {
+        let image = self.image().await;
+        let mut terminal = image
+            .terminal
+            .iter()
+            .map(|id| self.model_id(id))
+            .collect::<Vec<_>>();
+        terminal.sort_unstable();
+        let mut receipts = Vec::new();
+        for (key, _) in &self.commands {
+            if let Some(receipt) = self.answered(*key).await {
+                receipts.push(receipt);
+            }
+        }
+        atomic::EditImageWire {
+            queue: atomic::QueueImageWire {
+                active: image.active.as_deref().map(|id| self.model_id(id)),
+                pending: image.pending.iter().map(|id| self.model_id(id)).collect(),
+                folding: image.folding.iter().map(|id| self.model_id(id)).collect(),
+                terminal,
+            },
+            receipts,
+        }
+    }
+
+    async fn answered(&self, key: (u64, u64)) -> Option<ModelReceipt> {
+        let (doc, command) = &self.commands.iter().find(|(known, _)| *known == key)?.1;
+        let native = self.receipt_json(doc).await?;
+        let receipt: SessionInputEditReceipt = serde_json::from_str(&native).unwrap();
+        receipt.validate_for(command).unwrap();
+        assert!(self
+            .fixture
+            .identity
+            .verify(
+                &receipt.node_did,
+                &receipt.signing_payload(),
+                &receipt.signature
+            )
+            .await
+            .unwrap());
+        Some(atomic::Receipt {
+            command_id: key.0,
+            digest: key.1,
+            outcome: receipt.outcome,
+            request_ids: receipt
+                .request_ids
+                .iter()
+                .map(|id| self.model_id(id))
+                .collect(),
+        })
     }
 
     async fn image(&self) -> QueueImage {
@@ -439,20 +513,18 @@ impl ModeledQueue {
 
     async fn intent(
         &mut self,
-        model: &LeanSessionInputEditCommand,
-        authority: &LeanSessionInputEditAuthority,
+        model: &ModelCommand,
+        authority: &ModelAuthority,
     ) -> SessionInputEdit {
         assert!(authority.command_identity_unique);
         let foreign;
         // The fixture's client key is the session's requester; a fresh key is
         // neither requester, working Agent nor admin.
-        let requester: &dyn NodeIdentity = if authority.editor == LeanSessionInputEditor::Requester
-        {
+        let requester: &dyn NodeIdentity = if authority.editor == "requester" {
             self.fixture.identity.as_ref()
         } else {
             assert_eq!(
-                authority.editor,
-                LeanSessionInputEditor::Other,
+                authority.editor, "other",
                 "generated local edit names an unrealized editor"
             );
             foreign = KeyIdentity::load_or_create(
@@ -479,8 +551,8 @@ impl ModeledQueue {
         .entries;
         let selected = pending
             .iter()
-            .skip(model.offset)
-            .take(model.count)
+            .skip(usize::try_from(model.offset).unwrap())
+            .take(usize::try_from(model.count).unwrap())
             .map(|entry| entry.request_doc_id.clone())
             .collect::<Vec<_>>();
         let mut edit = PendingQueueEdit {
@@ -570,14 +642,13 @@ impl ModeledQueue {
         command
     }
 
-    async fn process(
-        &mut self,
-        now: u64,
-        model: &LeanSessionInputEditCommand,
-        authority: &LeanSessionInputEditAuthority,
-    ) {
+    async fn process(&mut self, now: u64, model: &ModelCommand, authority: &ModelAuthority) {
         self.wait_until(now).await;
-        let doc = if let Some((doc, _)) = self.commands.get(&(model.id, model.digest)) {
+        let doc = if let Some((_, (doc, _))) = self
+            .commands
+            .iter()
+            .find(|(key, _)| *key == (model.id, model.digest))
+        {
             doc.clone()
         } else {
             let command = self.intent(model, authority).await;
@@ -594,7 +665,7 @@ impl ModeledQueue {
                         .insert(model.request_id, native.request_id.clone());
                 }
                 self.commands
-                    .insert((model.id, model.digest), (doc.clone(), command));
+                    .push(((model.id, model.digest), (doc.clone(), command)));
                 doc
             }
         };
@@ -609,7 +680,7 @@ impl ModeledQueue {
     }
 
     async fn lose_receipts(&self) {
-        for (doc, _) in self.commands.values() {
+        for (_, (doc, _)) in &self.commands {
             ConfigAccess::local_as(self.fixture.node.clone(), ::identity::Did::new(self.fixture.identity.did().to_owned()).unwrap()).write("test.edit.lose_receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: null }}) {{ _docID }} }}"#, escape_graphql_string(doc))).await.unwrap();
         }
     }
@@ -687,101 +758,69 @@ async fn session_input_edit_malformed_intent_matches_lean_model() {
 
 #[tokio::test]
 async fn generated_commands_bind_to_atomic_queue_owner() {
-    let cases = gents_lean_vocab::lean_session_input_edit_cases()
-        .iter()
-        .filter(|case| {
-            case.authority.command_identity_unique
-                && case.history.iter().all(|step| match step {
-                    LeanSessionInputEditStep::Apply { authority, .. } => {
-                        authority.command_identity_unique
-                    }
-                    LeanSessionInputEditStep::LoseReceipts => true,
-                    LeanSessionInputEditStep::OtherSession { .. } => false,
-                })
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(cases.len(), 11, "local generated input-edit cases");
-    for case in cases {
-        let name = &case.name;
-        assert!(case.initial.receipts.is_empty());
-        let mut nows = case
+    for case in gents_lean_vocab::families::fold_queue_contracts_input_edit_atomic::cases::<
+        String,
+        String,
+        String,
+        SessionInputEditOutcome,
+        String,
+        String,
+        String,
+    >() {
+        let input = &case.input;
+        let name = &input.name;
+        assert!(
+            input.initial.receipts.is_empty(),
+            "{name}: no seeded receipt"
+        );
+        let mut nows = input
             .history
             .iter()
-            .filter_map(|step| match step {
-                LeanSessionInputEditStep::Apply { now, .. } => Some(*now),
-                _ => None,
-            })
+            .filter_map(|step| step.now)
             .collect::<Vec<_>>();
-        nows.push(case.now);
-        let mut queue = ModeledQueue::seed(&case.initial.queue, nows).await;
-        for step in &case.history {
-            match step {
-                LeanSessionInputEditStep::Apply {
-                    now,
-                    authority,
-                    command,
-                } => queue.process(*now, command, authority).await,
-                LeanSessionInputEditStep::LoseReceipts => queue.lose_receipts().await,
-                LeanSessionInputEditStep::OtherSession { .. } => unreachable!(),
+        nows.push(input.now);
+        let mut queue = ModeledQueue::seed(&input.initial.queue, nows).await;
+        for step in &input.history {
+            match step.kind.as_str() {
+                "apply" => {
+                    queue
+                        .process(
+                            step.now.unwrap(),
+                            step.command.as_ref().unwrap(),
+                            step.authority.as_ref().unwrap(),
+                        )
+                        .await
+                }
+                "lose_receipts" => queue.lose_receipts().await,
+                other => panic!("{name}: the queue owner fixture has no {other} step"),
             }
         }
-        assert_eq!(
-            queue.image().await,
-            queue.modeled(&case.before.queue),
-            "{name}: history reaches the modeled starting queue"
-        );
-        let mut prior = RapidHashMap::new();
-        for (doc, _) in queue.commands.values() {
-            prior.insert(doc.clone(), queue.receipt_json(doc).await);
+        let before = queue.observed().await;
+        let mut prior = Vec::new();
+        for (_, (doc, _)) in &queue.commands {
+            prior.push((doc.clone(), queue.receipt_json(doc).await));
         }
         queue
-            .process(case.now, &case.command, &case.authority)
+            .process(input.now, &input.command, &input.authority)
             .await;
-        assert_eq!(
-            queue.image().await,
-            queue.modeled(&case.after.queue),
-            "{name}: queue state"
-        );
-        for ((id, digest), (doc, command)) in &queue.commands {
-            let native = queue.receipt_json(doc).await;
-            let Some(model) = case.after.receipts.iter().find(|r| r.command_id == *id) else {
-                assert!(native.is_none(), "{name}: command {id} stays undecided");
-                continue;
-            };
-            if case.before.receipts.iter().any(|r| r.command_id == *id) {
-                assert_eq!(native, prior[doc], "{name}: recorded receipt is final");
+        for (doc, recorded) in prior {
+            if recorded.is_some() {
+                assert_eq!(
+                    queue.receipt_json(&doc).await,
+                    recorded,
+                    "{name}: recorded receipt is final"
+                );
             }
-            assert_eq!(model.digest, *digest, "{name}: receipt intent");
-            let receipt: SessionInputEditReceipt = serde_json::from_str(
-                &native.unwrap_or_else(|| panic!("{name}: modeled receipt for command {id}")),
-            )
-            .unwrap();
-            receipt.validate_for(command).unwrap();
-            assert!(queue
-                .fixture
-                .identity
-                .verify(
-                    &receipt.node_did,
-                    &receipt.signing_payload(),
-                    &receipt.signature
-                )
-                .await
-                .unwrap());
-            assert_eq!(
-                serde_json::to_value(receipt.outcome).unwrap(),
-                model.outcome,
-                "{name}: outcome"
-            );
-            assert_eq!(
-                receipt.request_ids,
-                model
-                    .request_ids
-                    .iter()
-                    .map(|id| queue.request_ids[id].clone())
-                    .collect::<Vec<_>>(),
-                "{name}: receipt request IDs"
-            );
         }
+        let after = queue.observed().await;
+        let receipt = queue
+            .answered((input.command.id, input.command.digest))
+            .await;
+        case.check(Some(atomic::InputEditObservation {
+            before,
+            after,
+            receipt,
+        }));
     }
 }
 

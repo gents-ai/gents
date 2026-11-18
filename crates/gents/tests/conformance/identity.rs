@@ -5,54 +5,21 @@ use identity::Did;
 async fn modeled_configuration_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    use gents_lean_vocab::{
-        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
-    };
     use gents_store::config_client::NodePermission;
     use gents_store::graphql::{created_doc_id, escape_graphql_string};
     use gents_store::identity::NodeIdentity;
 
-    let case = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("modeled configuration case");
-    let owner = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "home")
-        .unwrap()
-        .owner;
-    let agent = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "agent-created")
-        .unwrap()
-        .owner;
-    let runtime = case
-        .relations
-        .iter()
-        .find_map(|relation| match &relation.subject {
-            LeanIdentitySubject::Actor { actor }
-                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .expect("modeled runtime reader");
-    let sibling = case
-        .actions
-        .iter()
-        .find_map(|action| match action {
-            LeanIdentityAction::Check { actor, .. }
-                if actor != owner && actor != agent && actor != runtime =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .expect("modeled sibling");
-
+    let traces = gents_lean_vocab::families::household_configuration_grant_trace::cases();
+    let trace = traces.first().expect("modeled configuration trace");
+    let role = |modeled: &str| -> anyhow::Result<&str> {
+        trace
+            .input
+            .roles
+            .iter()
+            .find(|role| role.actor == modeled)
+            .map(|role| role.role.as_str())
+            .ok_or_else(|| anyhow::anyhow!("unknown modeled actor {modeled}"))
+    };
     let db = crate::support::test_db("modeled-configuration-native").await;
     let fixture = crate::support::managed_agent_fixture(&db).await;
     let node = db.node.clone();
@@ -96,36 +63,24 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         }
     }
     let actual_actor = |modeled: &str| -> anyhow::Result<Did> {
-        let actual = if modeled == owner {
-            fixture.user.did()
-        } else if modeled == agent {
-            fixture.agent.did()
-        } else if modeled == sibling {
-            sibling_signer.did()
-        } else if modeled == runtime {
-            node_did
-        } else {
-            anyhow::bail!("unknown modeled actor {modeled}")
+        let actual = match role(modeled)? {
+            "user" => fixture.user.did(),
+            "agent" => fixture.agent.did(),
+            "sibling" => sibling_signer.did(),
+            "runtime" => node_did,
+            other => anyhow::bail!("unmodeled configuration actor {other}"),
         };
         Ok(Did::new(actual)?)
     };
     let access_for = |modeled: &str| -> anyhow::Result<gents_store::config_client::ConfigAccess> {
-        if modeled == owner {
-            Ok(user_access.clone())
-        } else if modeled == agent {
-            Ok(agent_access.clone())
-        } else if modeled == sibling {
-            Ok(sibling_access.clone())
-        } else if modeled == runtime {
-            Ok(runtime_access.clone())
-        } else {
-            anyhow::bail!("unknown modeled actor {modeled}")
+        match role(modeled)? {
+            "user" => Ok(user_access.clone()),
+            "agent" => Ok(agent_access.clone()),
+            "sibling" => Ok(sibling_access.clone()),
+            "runtime" => Ok(runtime_access.clone()),
+            other => anyhow::bail!("unmodeled configuration actor {other}"),
         }
     };
-    assert_eq!(
-        case.policy_yaml,
-        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY
-    );
     let selected =
         serde_json::json!({"node_did":node_did,"tools_id":"selected", "display_name":"initial"});
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -182,14 +137,17 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         .add_resource_relationship("Tools", &agent_doc, "parent", "nodes", &node_doc)
         .await?;
 
-    for (step, action) in case.actions.iter().enumerate() {
-        match action {
-            LeanIdentityAction::Grant { relation } | LeanIdentityAction::Revoke { relation } => {
-                let LeanIdentitySubject::Actor { actor } = &relation.subject else {
-                    anyhow::bail!("configuration relation must name an actor");
-                };
+    let mut outcomes = Vec::new();
+    for (step, action) in trace.input.steps.iter().enumerate() {
+        let outcome = match (action.action.as_str(), action.permission.as_deref()) {
+            ("grant" | "revoke", _) => {
+                let relation = action.relation.as_ref().expect("relationship step");
+                let actor =
+                    relation.subject.actor.as_deref().ok_or_else(|| {
+                        anyhow::anyhow!("configuration relation must name an actor")
+                    })?;
                 let actual = actual_actor(actor)?;
-                if matches!(action, LeanIdentityAction::Grant { .. }) {
+                if action.action == "grant" {
                     user_access
                         .add_actor_relationship("Tools", &selected_doc, &relation.relation, &actual)
                         .await?;
@@ -209,25 +167,17 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                         )
                         .await?;
                 }
+                None
             }
-            LeanIdentityAction::Check {
-                actor,
-                id,
-                permission,
-                expected,
-                ..
-            } if permission == "read" => {
+            ("check", Some("read")) => {
+                let actor = action.actor.as_deref().expect("checking actor");
+                let id = action.id.as_deref().expect("checked document");
                 let response = access_for(actor)?.execute(&query(id)).await?;
-                let visible = !response["data"]["Tools"].as_array().unwrap().is_empty();
-                assert_eq!(visible, *expected, "modeled {actor} reading {id}");
+                Some(!response["data"]["Tools"].as_array().unwrap().is_empty())
             }
-            LeanIdentityAction::Check {
-                actor,
-                id,
-                permission,
-                expected,
-                ..
-            } if permission == "update" => {
+            ("check", Some("update")) => {
+                let actor = action.actor.as_deref().expect("checking actor");
+                let id = action.id.as_deref().expect("checked document");
                 let access = access_for(actor)?;
                 let doc_id = if id == "selected" {
                     &selected_doc
@@ -238,7 +188,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                     ["display_name"]
                     .clone();
                 let value = format!("update-{step}");
-                let updated = if actor == owner {
+                let updated = if role(actor)? == "user" {
                     let document =
                         serde_json::json!({"node_did":node_did,"tools_id":id,"display_name":value});
                     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -266,30 +216,52 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                         escape_graphql_string(doc_id), escape_graphql_string(&value),
                     )).await {
                         Ok(response) => !response["data"]["update_Tools"].as_array().expect("update rows").is_empty(),
-                        Err(error) if !*expected && error.is_graphql_rejection() => false,
+                        Err(error) if error.is_graphql_rejection() => false,
                         Err(error) => return Err(error.into()),
                     }
                 };
-                assert_eq!(updated, *expected, "modeled {actor} updating {id}");
                 let after = user_access.execute(&query(id)).await?["data"]["Tools"][0]
                     ["display_name"]
                     .clone();
                 assert_eq!(
                     after,
-                    if *expected {
+                    if updated {
                         serde_json::json!(value)
                     } else {
                         before
                     },
                     "modeled {actor} update effect on {id}"
                 );
+                Some(updated)
             }
-            _ => {}
-        }
+            ("check", Some("delete")) => {
+                let actor = action.actor.as_deref().expect("checking actor");
+                let id = action.id.as_deref().expect("checked document");
+                let doc_id = if id == "selected" {
+                    &selected_doc
+                } else {
+                    &agent_doc
+                };
+                Some(
+                    node.document_acp()
+                        .check_doc_access(
+                            &Identity::Authenticated(actual_actor(actor)?),
+                            DocumentPermission::Delete,
+                            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                            "configuration",
+                            doc_id,
+                        )
+                        .await?,
+                )
+            }
+            other => anyhow::bail!("unmodeled configuration step {other:?}"),
+        };
+        outcomes.push(outcome);
     }
+    trace.check(outcomes);
     let actual_agent = Did::new(fixture.agent.did())?;
-    for observation in &case.configuration_atomic_cases {
-        let commit = observation["commit"].as_bool().unwrap();
+    for observation in gents_lean_vocab::families::household_configuration_atomic::cases() {
+        let commit = observation.input.commit;
         let document = serde_json::json!({"node_did":node_did,"tools_id":"atomic"});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: gents_store::collection::Collection::Tools,
@@ -329,19 +301,21 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
             commit,
             "modeled transaction outcome: {result:?}"
         );
-        for (modeled, field) in [
-            (owner, "owner_read"),
-            (agent, "agent_read"),
-            (sibling, "sibling_read"),
-        ] {
-            let rows = access_for(modeled)?.execute(&query("atomic")).await?;
-            let visible = !rows["data"]["Tools"].as_array().unwrap().is_empty();
-            assert_eq!(
-                visible,
-                observation[field].as_bool().unwrap(),
-                "modeled {modeled} {field}"
-            );
-        }
+        let reads = |access: &gents_store::config_client::ConfigAccess| {
+            let access = access.clone();
+            let query = query("atomic");
+            async move {
+                let rows = access.execute(&query).await?;
+                Ok::<_, anyhow::Error>(!rows["data"]["Tools"].as_array().unwrap().is_empty())
+            }
+        };
+        observation.check(
+            gents_lean_vocab::families::household_configuration_atomic::AtomicReads {
+                owner_read: reads(&user_access).await?,
+                agent_read: reads(&agent_access).await?,
+                sibling_read: reads(&sibling_access).await?,
+            },
+        );
     }
     node.shutdown().await?;
     Ok(())
@@ -350,40 +324,11 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
 #[tokio::test]
 async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
     use anyhow::Context;
-    use gents_lean_vocab::{
-        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
-    };
     use gents_store::config_client::AgentSelfConfigPermission;
     use gents_store::identity::NodeIdentity;
 
-    let case = lean_identity_household_cases()
-        .first()
-        .expect("household case");
-    let model_user = &case
-        .objects
-        .iter()
-        .find(|object| object.resource == "nodes" && object.id == "home")
-        .expect("modeled Node")
-        .owner;
-    let executor = |id: &str| -> &str {
-        let relation = case
-            .relations
-            .iter()
-            .find(|relation| {
-                relation.resource == "agents"
-                    && relation.id == id
-                    && relation.relation == "executor"
-            })
-            .expect("modeled executor");
-        match &relation.subject {
-            LeanIdentitySubject::Actor { actor } => actor,
-            LeanIdentitySubject::Object { .. } | LeanIdentitySubject::EntitySet { .. } => {
-                panic!("executor is an actor")
-            }
-        }
-    };
-    let model_agent = executor("general");
-    let model_sibling = executor("sibling");
+    let traces = gents_lean_vocab::families::household_self_config_trace::cases();
+    let trace = traces.first().expect("modeled self-config trace");
     let db = crate::support::test_db("modeled-self-config-native").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
@@ -451,31 +396,33 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
         }
     };
     let actor = |modeled: &str| -> anyhow::Result<Did> {
-        let did = if modeled == model_user {
-            user.did()
-        } else if modeled == model_agent {
-            &agent.agent_did
-        } else if modeled == model_sibling {
-            &sibling.agent_did
-        } else {
-            anyhow::bail!("unknown modeled actor {modeled}")
+        let role = trace
+            .input
+            .roles
+            .iter()
+            .find(|role| role.actor == modeled)
+            .map(|role| role.role.as_str());
+        let did = match role {
+            Some("user") => user.did(),
+            Some("agent") => &agent.agent_did,
+            Some("sibling") => &sibling.agent_did,
+            _ => anyhow::bail!("unknown modeled actor {modeled}"),
         };
         Ok(Did::new(did)?)
     };
-    for observation in &case.self_config_lookup_cases {
+    for observation in gents_lean_vocab::families::household_self_config_lookup::cases() {
+        let attempt = &observation.input;
         let (caller, requested): (&str, &str) = match (
-            observation.present,
-            observation.visible,
-            observation.same_generation,
-            observation.native_allows,
+            attempt.present,
+            attempt.visible,
+            attempt.same_generation,
+            attempt.native_allows,
         ) {
             (false, false, _, _) => (user.did(), &sibling.agent_did),
             (true, false, _, _) => (&sibling.agent_did, &agent.agent_did),
             (true, true, true, false) => (&agent.agent_did, &agent.agent_did),
             (true, true, true, true) => (user.did(), &agent.agent_did),
-            // ACP1 cannot fence a document replacement between lookup and grant.
-            (true, true, false, _) => continue,
-            _ => anyhow::bail!("unrepresentable modeled lookup case {}", observation.name),
+            _ => anyhow::bail!("unrepresentable modeled lookup case {}", attempt.name),
         };
         let access = access_for(caller)?;
         let outcome = match access
@@ -503,11 +450,6 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
             }
             Err(error) => return Err(error.into()),
         };
-        assert_eq!(
-            outcome, observation.expected,
-            "modeled {}",
-            observation.name
-        );
         if outcome == "applied" {
             access
                 .set_agent_self_config_permission(
@@ -517,21 +459,15 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                 )
                 .await?;
         }
+        observation.check(outcome.to_owned());
     }
-    for action in &case.self_config_actions {
-        match action {
-            LeanIdentityAction::GrantAs {
-                actor: modeled,
-                expected,
-                ..
-            }
-            | LeanIdentityAction::RevokeAs {
-                actor: modeled,
-                expected,
-                ..
-            } => {
+    let mut outcomes = Vec::new();
+    for action in &trace.input.steps {
+        let modeled = action.actor.as_deref().unwrap_or_default();
+        let outcome = match action.action.as_str() {
+            "grant_as" | "revoke_as" => {
                 let access = access_for(actor(modeled)?.as_str())?;
-                let permission = if matches!(action, LeanIdentityAction::GrantAs { .. }) {
+                let permission = if action.action == "grant_as" {
                     AgentSelfConfigPermission::Grant
                 } else {
                     AgentSelfConfigPermission::Revoke
@@ -539,13 +475,9 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                 let result = access
                     .set_agent_self_config_permission(runtime.did(), &agent.agent_did, permission)
                     .await;
-                assert_eq!(result.is_ok(), *expected, "modeled {action:?}: {result:?}");
+                result.is_ok()
             }
-            LeanIdentityAction::Check {
-                actor: modeled,
-                expected,
-                ..
-            } => {
+            "check" => {
                 let allowed = node
                     .document_acp()
                     .check_doc_access(
@@ -556,7 +488,6 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                         &agent_doc,
                     )
                     .await?;
-                assert_eq!(allowed, *expected, "modeled {action:?}");
                 let access = access_for(actor(modeled)?.as_str())?;
                 let response = if actor(modeled)?.as_str() == user.did() {
                     let mut updated = agent_value.clone();
@@ -593,11 +524,17 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                     }).map_err(anyhow::Error::from)
                 };
                 let changed = response.as_ref().is_ok_and(|changed| *changed);
-                assert_eq!(changed, *expected, "modeled {action:?}: {response:?}");
+                assert_eq!(
+                    changed, allowed,
+                    "native update decision {action:?}: {response:?}"
+                );
+                allowed
             }
             _ => anyhow::bail!("unexpected self-config action {action:?}"),
-        }
+        };
+        outcomes.push(Some(outcome));
     }
+    trace.check(outcomes);
     node.shutdown().await.expect("node shutdown");
     Ok(())
 }

@@ -1068,6 +1068,77 @@ fn owed_delivery_traces_follow_the_lean_model() {
     );
 }
 
+#[test]
+fn owed_delivery_sweep_rows_follow_the_lean_model() {
+    use gents_lean_vocab::families::recovery_sweeps_owed_delivery::{OwedDeliveryInput, Swept};
+    gents_lean_vocab::families::recovery_sweeps_owed_delivery::replay(
+        |input: &OwedDeliveryInput| {
+            let record = owed::Record::fresh(
+                owed::Kind::Staging,
+                Some("user"),
+                "agent",
+                owed::Key {
+                    point: "control.session.halt".to_owned(),
+                    plugin: "goals".to_owned(),
+                    subject: "s".to_owned(),
+                },
+            );
+            let observation = owed::Observation {
+                authorized: input.authorized,
+                current: input.current,
+            };
+            let attempt = match input.attempt.as_str() {
+                "applied" => owed::Attempt::Applied(
+                    input
+                        .writes
+                        .iter()
+                        .map(|write| owed::Write {
+                            subject: write.subject.clone(),
+                            doc: write.doc.clone(),
+                        })
+                        .collect(),
+                ),
+                "failed" => owed::Attempt::Failed(
+                    input
+                        .error
+                        .clone()
+                        .expect("a failed attempt carries its error"),
+                ),
+                other => panic!("the model has no attempt {other}"),
+            };
+            let refused: Vec<owed::Write> = input
+                .refused
+                .iter()
+                .map(|write| owed::Write {
+                    subject: write.subject.clone(),
+                    doc: write.doc.clone(),
+                })
+                .collect();
+            let may_write = |write: &owed::Write| !refused.contains(write);
+            let state = |record: &owed::Record| {
+                match record.settled {
+                    None => "running",
+                    Some(owed::Settlement::Delivered) => "delivered",
+                    Some(owed::Settlement::Dropped) => "dropped",
+                }
+                .to_owned()
+            };
+            assert_eq!(state(&record), input.pre_state, "{}", input.name);
+            let settles = |record: &owed::Record| {
+                u64::from(
+                    record.pending() && !record.redrive(observation, &attempt, may_write).pending(),
+                )
+            };
+            let after = record.redrive(observation, &attempt, may_write);
+            Swept {
+                terminal_state: state(&after),
+                measure_before: settles(&record),
+                measure_after: settles(&after),
+            }
+        },
+    );
+}
+
 /// Lean `Hooks.OwedDelivery.deriveHalts` drives the sweep's derivation.
 #[test]
 fn owed_halt_derivation_follows_the_lean_model() {

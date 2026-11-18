@@ -299,14 +299,6 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             .build()
             .await?,
     );
-    let contract: Value = gents_lean_contract::load_contract_snapshot()?;
-    let modeled_revoked_invoke = contract["identity_household_cases"]
-        .as_array()
-        .context("modeled household cases")?
-        .iter()
-        .find_map(|case| case.get("agent_node_manager_invoke_case"))
-        .and_then(|case| case["after"].as_bool())
-        .context("modeled invoke after session_writer revocation")?;
     let user_access = ConfigAccess::local_as(node.clone(), user_did.parse()?);
     let caller_did: identity::Did = bindings[0].agent_did.parse()?;
     assert!(
@@ -337,17 +329,17 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             })
         })
         .await?;
-    assert!(
-        matches!(
-            invoke.as_slice(),
-            [gents::defra_node::DocumentAccessDecision::Denied]
-        ),
-        "the actual caller must lack native invoke after revocation: {invoke:?}"
-    );
-    assert!(
-        !modeled_revoked_invoke,
-        "model must deny invoke after session_writer revocation"
-    );
+    let [decision] = invoke.as_slice() else {
+        panic!("one native invoke decision for one Agent document: {invoke:?}");
+    };
+    for case in gents_lean_vocab::families::household_agent_manager_invoke_live::cases() {
+        assert_eq!(case.input.phase, "after", "{:?}", case.input);
+        case.check(match decision {
+            gents::defra_node::DocumentAccessDecision::Allowed => true,
+            gents::defra_node::DocumentAccessDecision::Denied => false,
+            other => panic!("invoke decision is neither allowed nor denied: {other:?}"),
+        });
+    }
     let mut unrelated_root_reads = Vec::new();
     for (binding, documents) in [
         (

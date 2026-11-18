@@ -47,6 +47,67 @@ def managedToolIdentityAllowed (derive : String → String → String) (claimed 
   | some derived => managedToolSourceMatches claimed derived
   | none => false
 
+/-- The native tool source permissions the runtime's document projector owes
+an Agent row: every permission its selected Tools need when the row's claimed
+DID is the identity the projecting Node derives for it, and none otherwise. -/
+def owedToolSourcePermissions (derive : String → String → String) (claimed nodeKey : String)
+    (creation : Option String) (selected : List String) : List String :=
+  if managedToolIdentityAllowed derive claimed nodeKey creation then selected else []
+
+/-- Who may create an Agent row. External premise: the pinned DefraDB document
+projector runs inside the writer's transaction and changes native relations
+under the writer's identity, so an Agent create and the source grants the
+projector owes that row commit or abort together, as the creator. Each owed
+grant is a native relation change the held-bounded rule must admit for the
+creator (`GrantSets.admits`). The create therefore commits exactly when the
+row is owed nothing or the creator may add every owed permission; a refused
+create publishes neither the row nor any grant. -/
+def agentCreateCommits (creator : GrantSets.Holder) (owed : List String) : Bool :=
+  owed.all fun p => GrantSets.admits creator ⟨.permission p, false, true, false⟩
+
+/-- The permissions the created row's identity holds through the projection:
+everything owed when the create commits, nothing when it is refused. -/
+def agentCreateGrants (creator : GrantSets.Holder) (owed : List String) : List String :=
+  if agentCreateCommits creator owed then owed else []
+
+/-- Creating an Agent never extends the creator's authority: every permission
+the projection gives the new identity is one the creator administers or holds. -/
+theorem agent_create_grants_only_creator_authority (creator : GrantSets.Holder)
+    (owed : List String) (p : String) (granted : p ∈ agentCreateGrants creator owed) :
+    creator.admin = true ∨ creator.holds p = true := by
+  unfold agentCreateGrants at granted
+  split at granted
+  · rename_i commits
+    have admitted := List.all_eq_true.mp commits p granted
+    simp only [GrantSets.admits, Bool.or_eq_true, Bool.and_eq_true] at admitted
+    rcases admitted with admin | ⟨⟨⟨⟨_, _⟩, holds⟩, _⟩, _⟩
+    · exact Or.inl admin
+    · exact Or.inr holds
+  · simp at granted
+
+/-- A non-administrator that does not hold the add operation cannot create an
+Agent row that is owed any source grant: the create is refused. -/
+theorem owed_create_without_add_operation_is_refused (creator : GrantSets.Holder)
+    (owed : List String) (notAdmin : creator.admin = false)
+    (noOperation : creator.holds (GrantSets.nacOperation false) = false) (owing : owed ≠ []) :
+    agentCreateCommits creator owed = false := by
+  cases owed with
+  | nil => exact absurd rfl owing
+  | cons p rest =>
+    have refused := GrantSets.missing_operation_admits_nothing creator
+      ⟨.permission p, false, true, false⟩ notAdmin noOperation
+    simp [agentCreateCommits, refused]
+
+/-- A row whose claimed DID is not the derived identity is owed nothing, so any
+creator may write it and the claimed identity gains no tool authority. -/
+theorem foreign_identity_create_commits_without_grants (derive : String → String → String)
+    (claimed nodeKey : String) (creation : Option String) (selected : List String)
+    (creator : GrantSets.Holder)
+    (foreign : managedToolIdentityAllowed derive claimed nodeKey creation = false) :
+    agentCreateCommits creator (owedToolSourcePermissions derive claimed nodeKey creation selected) = true ∧
+    agentCreateGrants creator (owedToolSourcePermissions derive claimed nodeKey creation selected) = [] := by
+  simp [owedToolSourcePermissions, foreign, agentCreateGrants, agentCreateCommits]
+
 theorem underived_agent_cannot_receive_tool_source (derive : String → String → String)
     (claimed nodeKey : String) (creation : Option String)
     (underived : derivedAgentDid derive nodeKey creation = none) :
