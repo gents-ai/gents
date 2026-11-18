@@ -289,7 +289,7 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
         .unwrap();
     gents_p2p::node_access::operations(&fixture.peer.node)
         .unwrap()
-        .sync_documents("PeerRegistry", std::slice::from_ref(&public_doc))
+        .sync_documents("PeerRegistry", vec![public_doc.clone()], None)
         .await
         .unwrap();
     let public_doc = escape_graphql_string(&public_doc);
