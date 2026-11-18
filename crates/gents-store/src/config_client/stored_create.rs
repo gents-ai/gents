@@ -24,7 +24,7 @@ pub(crate) fn request_relations(
 }
 
 enum Subject {
-    Actor(vera::SubjectRef),
+    Actor(vera_delegation::SubjectRef),
     Object { resource: String, object_id: String },
 }
 
@@ -41,26 +41,28 @@ struct Command {
 }
 
 impl Command {
-    fn sent(&self) -> vera::PolicyCommand<'_> {
+    fn sent(&self) -> vera_delegation::PolicyCommand<'_> {
         let action = match &self.action {
-            Action::Register => vera::PolicyAction::RegisterObject,
-            Action::Relate { relation, subject } => vera::PolicyAction::SetRelationship {
-                relation,
-                subject: match subject {
-                    Subject::Actor(actor) => vera::PolicySubject::Actor(actor),
-                    Subject::Object {
-                        resource,
-                        object_id,
-                    } => vera::PolicySubject::Structured {
-                        kind: OBJECT_SUBJECT,
-                        resource,
-                        object_id,
-                        relation: "",
+            Action::Register => vera_delegation::PolicyAction::RegisterObject,
+            Action::Relate { relation, subject } => {
+                vera_delegation::PolicyAction::SetRelationship {
+                    relation,
+                    subject: match subject {
+                        Subject::Actor(actor) => vera_delegation::PolicySubject::Actor(actor),
+                        Subject::Object {
+                            resource,
+                            object_id,
+                        } => vera_delegation::PolicySubject::Structured {
+                            kind: OBJECT_SUBJECT,
+                            resource,
+                            object_id,
+                            relation: "",
+                        },
                     },
-                },
-            },
+                }
+            }
         };
-        vera::PolicyCommand {
+        vera_delegation::PolicyCommand {
             policy_id: &self.policy_id,
             resource: &self.resource,
             object_id: &self.object_id,
@@ -117,7 +119,7 @@ impl StoredCreateCommands {
                     object_id,
                 },
                 Ok(acp::Subject::Entity(did)) => {
-                    Subject::Actor(vera::SubjectRef::Actor(did.to_string()))
+                    Subject::Actor(vera_delegation::SubjectRef::Actor(did.to_string()))
                 }
                 _ => return Err(ConfigClientError::InvalidResourceRelationshipTarget),
             };
@@ -218,14 +220,14 @@ fn worse(left: Verdict, right: Verdict) -> Verdict {
 }
 
 /// What one request-bound credential comes to for `command`. External
-/// premise (`vera::vera_rs::bearer::request`, defradb.rs#2987): DefraDB sends
+/// premise (`vera_delegation::bearer::request`, defradb.rs#2987): DefraDB sends
 /// `command` under `token` only when the token verifies, names the provider's
 /// worker and deployment, is current with an operation identity still open,
 /// names the deployment's genesis identity and the digest of `command`; it
 /// offers no way to ask before the write, so the runtime asks the same of the
 /// token here and DefraDB asks again when it sends.
 fn judge_one<F>(
-    command: &vera::PolicyCommand<'_>,
+    command: &vera_delegation::PolicyCommand<'_>,
     token: &str,
     audience: Option<&acp::DelegationAudience>,
     issued_by_signer: F,
@@ -239,7 +241,7 @@ where
     let Some(request) = claims.request.as_ref() else {
         return (Scope::General, Verdict::Refused);
     };
-    let Ok(digest) = vera::vera_rs::request_digest(command) else {
+    let Ok(digest) = vera_delegation::request_digest(command) else {
         return (Scope::AnotherWrite, Verdict::Refused);
     };
     if request.digest != digest {

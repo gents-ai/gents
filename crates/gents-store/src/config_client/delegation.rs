@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use futures::FutureExt as _;
 use gents_protocol::delegation_audience::{DelegationAudience, HomeClock};
-use vera::vera_rs::{DelegationSigner as _, Ed25519Signer};
+use vera_delegation::{DelegationSigner as _, Ed25519Signer};
 
 use super::ClientSigningCapability;
 
@@ -16,17 +16,17 @@ pub const VERA_REQUEST_BOUND_LIFETIME: Duration = Duration::from_secs(570);
 #[derive(Debug, thiserror::Error)]
 pub enum DelegationError {
     #[error("this device's key cannot be used to connect to this home")]
-    Signer(#[source] vera::vera_rs::SignerError),
+    Signer(#[source] vera_delegation::SignerError),
     #[error("this device's key belongs to {signer}, not to {actor}")]
     Actor { signer: String, actor: String },
     #[error("preparing this device's connection to the home")]
-    Mint(#[source] vera::vera_rs::BearerError),
+    Mint(#[source] vera_delegation::BearerError),
     #[error("this device's key did not answer")]
     Pending,
     #[error("this home's runtime is still starting; try again in a moment")]
     AudienceUnavailable,
     #[error("preparing this change for the home")]
-    Command(#[source] vera::vera_rs::BearerError),
+    Command(#[source] vera_delegation::BearerError),
 }
 
 /// The general delegation `capability`'s User presents to `audience`, on a
@@ -63,7 +63,7 @@ fn mint_for(
     lifetime: Duration,
 ) -> Result<String, DelegationError> {
     let signer = signer_of(capability)?;
-    vera::vera_rs::caller_delegation(&signer, &provider_audience(audience)?, lifetime)
+    vera_delegation::caller_delegation(&signer, &provider_audience(audience)?, lifetime)
         .now_or_never()
         .ok_or(DelegationError::Pending)?
         .map_err(DelegationError::Mint)
@@ -84,7 +84,7 @@ pub struct RequestBoundAudience {
 pub(crate) fn mint_request_bound(
     capability: &ClientSigningCapability,
     bound: &RequestBoundAudience,
-    command: &vera::PolicyCommand<'_>,
+    command: &vera_delegation::PolicyCommand<'_>,
     lifetime: Duration,
 ) -> Result<String, DelegationError> {
     let signer = signer_of(capability)?;
@@ -92,10 +92,13 @@ pub(crate) fn mint_request_bound(
     if audience.genesis_id.is_none() {
         return Err(DelegationError::AudienceUnavailable);
     }
-    let binding =
-        vera::vera_rs::RequestBinding::for_command(&audience, command, rand::random::<[u8; 24]>())
-            .map_err(DelegationError::Command)?;
-    vera::vera_rs::request_delegation_at(&signer, &audience, &binding, lifetime, bound.issued_at)
+    let binding = vera_delegation::RequestBinding::for_command(
+        &audience,
+        command,
+        rand::random::<[u8; 24]>(),
+    )
+    .map_err(DelegationError::Command)?;
+    vera_delegation::request_delegation_at(&signer, &audience, &binding, lifetime, bound.issued_at)
         .now_or_never()
         .ok_or(DelegationError::Pending)?
         .map_err(DelegationError::Mint)
