@@ -186,8 +186,15 @@ mod legacy_backend_tests {
                 )
             })
             .await??;
+            let owner_path = home.join("owner.key");
+            let owner = tokio::task::spawn_blocking(move || -> anyhow::Result<identity::Did> {
+                Ok(identity::Did::new(
+                    crate::identity::KeyIdentity::load_or_create(owner_path, None)?.did(),
+                )?)
+            })
+            .await??;
             let initialized = match FreshBackendStore::observe(&data, &lock).await {
-                Ok(fresh) => fresh.initialize(&key, Some(&did)).await.is_ok(),
+                Ok(fresh) => fresh.initialize(&key, Some(&did), &owner).await.is_ok(),
                 Err(_) => false,
             };
             let admitted = if initialized {
