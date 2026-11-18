@@ -79,6 +79,7 @@ pub async fn fixture(enabled: bool) -> Result<Fixture> {
     let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(PIN_FIXED_DID)?);
     for did in [user_identity.did(), agent_identity.did()] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,

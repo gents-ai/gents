@@ -1,4 +1,5 @@
 import Proofs.Runtime.BackendHealth.State
+import Proofs.Runtime.RuntimeReconcile.HttpAccess
 import Proofs.Runtime.RuntimeReconcile.MetricsScrapeAccess
 import Proofs.Runtime.RuntimeReconcile.UpdateHandoff
 import Proofs.Runtime.RouterDispatch
@@ -7,6 +8,10 @@ import Proofs.Conformance.Family
 namespace Proofs.BackendHealth
 deriving instance Lean.ToJson for HealthState
 end Proofs.BackendHealth
+
+namespace RuntimeReconcile.HttpAccess
+deriving instance Lean.ToJson for Identity
+end RuntimeReconcile.HttpAccess
 
 namespace RuntimeReconcile.MetricsScrapeAccess
 deriving instance Lean.ToJson for Bind
@@ -30,3 +35,4 @@ attribute [conformance_function]
   Proofs.BackendHealth.awaitProbeRequest
   RuntimeReconcile.MetricsScrapeAccess.decide
   RuntimeReconcile.MetricsScrapeAccess.bindAllowed
+  RuntimeReconcile.HttpAccess.mcpQueryReadsAs

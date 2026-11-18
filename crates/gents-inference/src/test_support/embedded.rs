@@ -167,11 +167,14 @@ async fn start(
     composition: &gents_store::node_extension::Extensions,
     tool_policy: Arc<dyn ToolSourcePolicy>,
 ) -> Result<(Arc<EmbeddedNode>, String)> {
-    let did = identity.did().to_string();
     let protected =
         gents_store::local::backend_protection::ProtectedBackendStore::open(data_path, key, lock)
             .await?
-            .preflight(key, Some(&did))
+            .preflight(
+                key,
+                &identity,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
             .await?;
     let served: ServedNode = ServedNode::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -331,7 +334,6 @@ async fn test_db_at_with_tool_policy(
         tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(identity_path, None))
             .await??,
     );
-    let did = identity.did().to_string();
     let data_path = path.join("data");
     tokio::fs::create_dir_all(&data_path).await?;
     let (lock_home, lock_data) = (path.clone(), data_path.clone());
@@ -355,7 +357,13 @@ async fn test_db_at_with_tool_policy(
         )
         .await?;
         let key = store_key(&path, &data_path).await?;
-        fresh.initialize(&key, Some(&did)).await?;
+        fresh
+            .initialize(
+                &key,
+                &identity,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
+            .await?;
         key
     };
     let (node, endpoint) = start(

@@ -202,6 +202,12 @@ pub(crate) async fn init_home_with_core_packs(
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
+    admit_document_acp(
+        &home_dir,
+        args.document_acp,
+        args.identity_backend,
+        !args.dangerously_overwrite,
+    )?;
     crate::interactive_backend::resolve_backend_interactively(&mut args, || {}).await?;
     if !args.identity_only {
         resolve_init_model_name(&args)?;
@@ -217,6 +223,8 @@ pub(crate) async fn init_home_with_core_packs(
         .await?
         .is_none();
     stage("store_locked");
+    let document_acp =
+        admit_document_acp(&home_dir, args.document_acp, args.identity_backend, true)?;
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -291,7 +299,7 @@ pub(crate) async fn init_home_with_core_packs(
             read_init_config(&home_dir)?.context("existing home has no initialized identity")?;
         let identity =
             gents_service::home_state::load_initialized_home_identity(&home_dir, &existing)?;
-        provenance.preflight(&key, Some(identity.did())).await?;
+        provenance.preflight(&key, &identity, document_acp).await?;
         None
     };
 
@@ -332,6 +340,7 @@ pub(crate) async fn init_home_with_core_packs(
         tool_root: resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?
             .map(|path| path.to_string_lossy().to_string()),
         store_encryption: None,
+        document_acp,
     };
     let store_key = initialize_home_store(
         &home_dir,
@@ -342,10 +351,7 @@ pub(crate) async fn init_home_with_core_packs(
     .await?;
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
-            .initialize(
-                &store_key,
-                Some(initialized_identity.node_identity_did.as_str()),
-            )
+            .initialize(&store_key, &initialized_identity.identity, document_acp)
             .await?;
     }
     stage("store_key_initialized");
@@ -362,6 +368,14 @@ pub(crate) async fn init_home_with_core_packs(
         )?)
         .with_node_identity_did(initialized_identity.node_identity_did.clone())
         .with_node_acp_enabled();
+    node_builder = gents_store::local::document_acp::configure(
+        node_builder,
+        &data_dir,
+        &store_key,
+        document_acp,
+        &initialized_identity.identity,
+    )
+    .map_err(gents_store::local::backend_protection::BackendProtectionError::from)?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let graphql_url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     // Init publishes through this loopback endpoint as the client, so its
@@ -372,10 +386,13 @@ pub(crate) async fn init_home_with_core_packs(
             .with_extra_routes(owner_staged.router()),
     );
     let node_arc = std::sync::Arc::new(
-        node_builder
-            .build()
-            .await
-            .context("building embedded DefraDB node for init")?,
+        gents_store::local::backend_protection::build_configured(
+            node_builder,
+            &data_dir,
+            document_acp,
+        )
+        .await
+        .context("building embedded DefraDB node for init")?,
     );
     stage("embedded_node_built");
     let client_identity = if fresh_store {
@@ -906,6 +923,7 @@ pub(crate) struct IdentityOnlyHomeSummary {
 pub(crate) async fn write_identity_only_home_metadata(
     options: IdentityOnlyHomeOptions<'_>,
 ) -> Result<IdentityOnlyHomeSummary> {
+    let document_acp = admit_document_acp(options.home, None, options.identity_backend, true)?;
     let data_dir = default_data_dir(options.home);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
@@ -953,6 +971,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         tool_ceiling,
         tool_root: tool_root.clone(),
         store_encryption: None,
+        document_acp,
     };
     let store_key = initialize_home_store(
         options.home,
@@ -963,7 +982,7 @@ pub(crate) async fn write_identity_only_home_metadata(
     .await?;
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
-            .initialize(&store_key, Some(initialized_identity.identity.did()))
+            .initialize(&store_key, &initialized_identity.identity, document_acp)
             .await?;
         bootstrap_identity_only_owner(
             options.home,
@@ -971,6 +990,7 @@ pub(crate) async fn write_identity_only_home_metadata(
             &store_key,
             options.store_lock,
             initialized_identity.identity.clone(),
+            document_acp,
             options.owner,
         )
         .await?;
@@ -1007,6 +1027,7 @@ async fn bootstrap_identity_only_owner(
     store_key: &gents_store::local::store_key::StoreKey,
     store_lock: &gents_store::local::home::StoreLock,
     runtime: Arc<dyn NodeIdentity>,
+    document_acp: gents_store::local::document_acp::DocumentAcp,
     owner: &str,
 ) -> Result<()> {
     use gents_store::identity::{GrantSet, Recipient};
@@ -1015,7 +1036,7 @@ async fn bootstrap_identity_only_owner(
         data_dir, store_key, store_lock,
     )
     .await?
-    .preflight(store_key, Some(runtime_did.as_str()))
+    .preflight(store_key, &runtime, document_acp)
     .await?;
     let (node, _admission) = gents::runtime::node_start::start_node(
         preflight,
@@ -1037,6 +1058,34 @@ async fn bootstrap_identity_only_owner(
     granted.context("granting the init User native administration")?;
     shutdown.context("shutting down the bootstrap node")?;
     Ok(())
+}
+
+fn admit_document_acp(
+    home: &Path,
+    requested: Option<DocumentAcpArg>,
+    identity_backend: IdentityBackendArg,
+    recorded_applies: bool,
+) -> Result<gents_store::local::document_acp::DocumentAcp> {
+    let recorded = if recorded_applies {
+        read_init_config(home)?
+    } else {
+        None
+    };
+    let secure_enclave_node_key = match &recorded {
+        Some(config) => {
+            config.identity_backend.as_deref().map(str::trim)
+                == Some(gents_store::local::home::SECURE_ENCLAVE_IDENTITY_BACKEND)
+        }
+        None => identity_backend == IdentityBackendArg::MacosSecureEnclave,
+    };
+    let recorded = recorded.map(|config| config.document_acp);
+    let requested = requested.map(Into::into).or(recorded).unwrap_or_default();
+    gents_store::local::document_acp::ensure_admissible(
+        recorded,
+        requested,
+        secure_enclave_node_key,
+    )?;
+    Ok(requested)
 }
 
 /// Identity and key custody must survive an error or interruption before
@@ -1954,11 +2003,16 @@ mod tests {
         let config = read_init_config(&home).unwrap().unwrap();
         let runtime =
             gents_service::home_state::load_initialized_home_identity(&home, &config).unwrap();
+        assert_eq!(runtime.did(), summary.node_did);
         let preflight =
             gents_store::local::backend_protection::ProtectedBackendStore::open(&data, &key, &lock)
                 .await
                 .expect("the identity-only store carries fresh provenance")
-                .preflight(&key, Some(&summary.node_did))
+                .preflight(
+                    &key,
+                    &runtime,
+                    gents_store::local::document_acp::DocumentAcp::Local,
+                )
                 .await
                 .expect("the protected store is bound to the home's Node DID");
         let (node, _admission) = gents::runtime::node_start::start_node(
@@ -2595,10 +2649,11 @@ mod tests {
             }
             let key = gents_store::local::store_key::StoreKey::from_host(&[7; 32])?;
             let path = directory.path().join("node.key");
-            let did = tokio::task::spawn_blocking(move || -> Result<String> {
-                Ok(KeyIdentity::load_or_create(path, None)?.did().to_owned())
+            let runtime = tokio::task::spawn_blocking(move || -> Result<Arc<dyn NodeIdentity>> {
+                Ok(Arc::new(KeyIdentity::load_or_create(path, None)?))
             })
             .await??;
+            let did = runtime.did().to_owned();
             let initialized =
                 match gents_store::local::backend_protection::FreshBackendStore::observe(
                     &data,
@@ -2606,7 +2661,14 @@ mod tests {
                 )
                 .await
                 {
-                    Ok(fresh) => fresh.initialize(&key, Some(&did)).await.is_ok(),
+                    Ok(fresh) => fresh
+                        .initialize(
+                            &key,
+                            &runtime,
+                            gents_store::local::document_acp::DocumentAcp::Local,
+                        )
+                        .await
+                        .is_ok(),
                     Err(_) => false,
                 };
             case.check(initialized);
@@ -3006,6 +3068,108 @@ mod tests {
         assert_eq!(fs::read_to_string(home.join("retained")).unwrap(), "keep");
     }
 
+    fn refused_document_acp(
+        error: &anyhow::Error,
+    ) -> &gents_store::local::document_acp::DocumentAcpError {
+        error
+            .downcast_ref()
+            .unwrap_or_else(|| panic!("not a document access refusal: {error:#}"))
+    }
+
+    fn unfinished_init(home: &Path, document_acp: gents_store::local::document_acp::DocumentAcp) {
+        fs::create_dir_all(home).unwrap();
+        write_init_config(
+            home,
+            &StoredInitConfig {
+                home: home.to_string_lossy().into_owned(),
+                node_name: "test-agent".into(),
+                node_did: "did:key:unfinished".into(),
+                key_path: None,
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: Some(ToolPackageArg::Readonly),
+                tool_ceiling: tool_ceiling_for_package(ToolPackageArg::Readonly),
+                tool_root: None,
+                store_encryption: None,
+                document_acp,
+            },
+        )
+        .unwrap();
+    }
+
+    fn refuses_an_embedded_vera_home(error: &anyhow::Error) -> bool {
+        use gents_store::local::document_acp::DocumentAcpError;
+        match refused_document_acp(error) {
+            DocumentAcpError::NotYetUsable => cfg!(feature = "vera"),
+            DocumentAcpError::Unavailable => !cfg!(feature = "vera"),
+            _ => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_embedded_vera_home_is_refused_before_anything_is_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let mut args = init_args();
+        args.home = Some(home.clone());
+        args.document_acp = Some(DocumentAcpArg::Vera);
+        let error = init_home(args).await.unwrap_err();
+        assert!(refuses_an_embedded_vera_home(&error), "{error:#}");
+        assert!(!home.exists());
+    }
+
+    #[tokio::test]
+    async fn a_node_key_that_cannot_sign_for_vera_is_refused_before_anything_is_written() {
+        use gents_store::local::document_acp::DocumentAcpError;
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let mut args = init_args();
+        args.home = Some(home.clone());
+        args.document_acp = Some(DocumentAcpArg::Vera);
+        args.identity_backend = IdentityBackendArg::MacosSecureEnclave;
+        args.secure_enclave_label = Some("unused".into());
+        let error = init_home(args).await.unwrap_err();
+        assert!(matches!(
+            refused_document_acp(&error),
+            DocumentAcpError::Unavailable | DocumentAcpError::NodeKeyCannotSign { .. }
+        ));
+        assert!(!home.exists());
+    }
+
+    #[tokio::test]
+    async fn a_rerun_on_a_home_that_recorded_embedded_vera_is_refused_before_its_store_is_made() {
+        use gents_store::local::document_acp::DocumentAcp;
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        unfinished_init(&home, DocumentAcp::Vera);
+        let mut args = init_args();
+        args.home = Some(home.clone());
+        let error = init_home(args).await.unwrap_err();
+        assert!(refuses_an_embedded_vera_home(&error), "{error:#}");
+        assert!(!default_data_dir(&home).exists());
+    }
+
+    #[tokio::test]
+    async fn a_rerun_cannot_switch_the_choice_an_unfinished_init_recorded() {
+        use gents_store::local::document_acp::{DocumentAcp, DocumentAcpError};
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        unfinished_init(&home, DocumentAcp::Local);
+        let mut args = init_args();
+        args.home = Some(home.clone());
+        args.document_acp = Some(DocumentAcpArg::Vera);
+        let error = init_home(args).await.unwrap_err();
+        assert!(matches!(
+            refused_document_acp(&error),
+            DocumentAcpError::Switch {
+                recorded: DocumentAcp::Local,
+                requested: DocumentAcp::Vera,
+            }
+        ));
+        assert!(!default_data_dir(&home).exists());
+    }
+
     fn init_args() -> InitArgs {
         InitArgs {
             picked_connection: None,
@@ -3020,6 +3184,7 @@ mod tests {
             keychain_label: None,
             secure_enclave_label: None,
             store_key_custody: Some(gents_host::args::StoreKeyCustodyArg::File),
+            document_acp: None,
             inference_endpoint: None,
             backend_id: None,
             backend_name: None,

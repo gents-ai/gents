@@ -61,6 +61,21 @@ pub(crate) struct ProvisionArgs {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum DocumentAcpArg {
+    Local,
+    Vera,
+}
+
+impl From<DocumentAcpArg> for gents_store::local::document_acp::DocumentAcp {
+    fn from(arg: DocumentAcpArg) -> Self {
+        match arg {
+            DocumentAcpArg::Local => Self::Local,
+            DocumentAcpArg::Vera => Self::Vera,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum IdentityBackendArg {
     File,
     MacosKeychain,
@@ -122,6 +137,8 @@ pub(crate) struct InitArgs {
 
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
+    #[arg(long, value_enum, hide = true, conflicts_with = "identity_only")]
+    pub(crate) document_acp: Option<DocumentAcpArg>,
     #[arg(
         long = "inference-url",
         value_name = "INFERENCE_URL",

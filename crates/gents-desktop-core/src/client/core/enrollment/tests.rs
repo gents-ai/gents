@@ -70,19 +70,39 @@ async fn managed_enrollment_discovers_restarted_endpoint_without_changing_author
         let server = MockServer::start().await;
         let graphql = format!("{}/api/v0/graphql", server.uri());
         let new_address = format!("127.0.0.1:56001/p2p/{address_peer}");
-        for (route, body) in [
-            (
-                "/status",
-                json!({"node_did": live_owner, "lifecycle": "ready"}),
-            ),
-            (
-                "/api/v0/p2p/shareable-address",
-                json!({"address": new_address}),
-            ),
-            ("/api/v0/node/identity", json!({"peer_id": live_peer})),
-        ] {
+        let admin =
+            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("offer.key"), None)
+                .unwrap();
+        let mut offer = gents_protocol::enrollment::EnrollmentOfferRecord {
+            version: ENROLLMENT_PROTOCOL_VERSION,
+            offer_id: "discovery-offer".into(),
+            challenge: "discovery-challenge".into(),
+            network_id: "network".into(),
+            admin_did: admin.did().into(),
+            server_peer: live_peer.into(),
+            server_ticket: new_address.clone(),
+            owner_node_did: live_owner.into(),
+            profile: "client".into(),
+            schema_fingerprint: enrollment_schema_fingerprint(),
+            live_schema_digest: format!("sha256:{}", "a".repeat(64)),
+            issued_at: "2026-11-15T00:00:00Z".into(),
+            expires_at: "2026-11-15T00:05:00Z".into(),
+            admin_sig: Vec::new(),
+        };
+        offer.admin_sig = admin.sign(&offer.signing_payload()).await.unwrap();
+        let token = gents_protocol::enrollment::encode_offer(&offer).unwrap();
+        Mock::given(path("/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "node_did": live_owner, "lifecycle": "ready",
+                "enrollment": {"status": "available", "token": token},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for route in ["/api/v0/p2p/shareable-address", "/api/v0/node/identity"] {
             Mock::given(path(route))
-                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .respond_with(ResponseTemplate::new(401))
+                .expect(0)
                 .mount(&server)
                 .await;
         }
@@ -2904,11 +2924,30 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
             })
         })
         .await?;
-    assert!(gents_protocol::graphql::graphql_rows_from_response(
-        &client.execute(&query).await?,
-        "NetworkEnrollmentDecision"
-    )
-    .is_empty());
+    // The client is its own store's node key: document ACP no longer grants it
+    // the decision, and it reads it as the hosting key
+    // (Lean `Conformance.ClientTransport.revokedReader`).
+    use gents_lean_vocab::families::client_transport_revoked_reader::RevokedReaderOutput;
+    let mut revoked_reads = std::collections::BTreeMap::new();
+    revoked_reads.insert(
+        false,
+        RevokedReaderOutput {
+            document_acp: acp
+                .check_doc_access(
+                    &AcpIdentity::Authenticated(client_did.clone()),
+                    DocumentPermission::Read,
+                    policy,
+                    "enrollment_records",
+                    &doc,
+                )
+                .await?,
+            host_read: !gents_protocol::graphql::graphql_rows_from_response(
+                &client.execute(&query).await?,
+                "NetworkEnrollmentDecision",
+            )
+            .is_empty(),
+        },
+    );
     drop(acp);
     drop(client);
     receiver.shutdown().await?;
@@ -2921,12 +2960,34 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
         .await?,
     );
     assert_eq!(reopened.node_identity().did(), client_did.as_str());
-    let reopened_access = ConfigAccess::local_as(reopened.node_arc(), client_did);
-    assert!(gents_protocol::graphql::graphql_rows_from_response(
-        &reopened_access.execute(&query).await?,
-        "NetworkEnrollmentDecision"
-    )
-    .is_empty());
+    let reopened_access = ConfigAccess::local_as(reopened.node_arc(), client_did.clone());
+    revoked_reads.insert(
+        true,
+        RevokedReaderOutput {
+            document_acp: reopened
+                .node
+                .document_acp()
+                .check_doc_access(
+                    &AcpIdentity::Authenticated(client_did),
+                    DocumentPermission::Read,
+                    policy,
+                    "enrollment_records",
+                    &doc,
+                )
+                .await?,
+            host_read: !gents_protocol::graphql::graphql_rows_from_response(
+                &reopened_access.execute(&query).await?,
+                "NetworkEnrollmentDecision",
+            )
+            .is_empty(),
+        },
+    );
+    for case in gents_lean_vocab::families::client_transport_revoked_reader::cases() {
+        let observed = revoked_reads
+            .remove(&case.input.reopened)
+            .ok_or_else(|| anyhow::anyhow!("the revoked reader was not observed"))?;
+        case.check(observed);
+    }
     assert_eq!(
         reopened
             .node

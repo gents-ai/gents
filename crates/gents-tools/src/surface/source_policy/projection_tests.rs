@@ -127,7 +127,7 @@ async fn observe_plugin_permission(
 }
 
 #[tokio::test]
-async fn selected_datastore_query_grants_collection_access_until_removed() -> anyhow::Result<()> {
+async fn live_agents_read_collections_whatever_their_datastore_tools() -> anyhow::Result<()> {
     let (_directory, runtime, node) = projection_node().await?;
     let binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let sibling_binding = gents_store::identity::provision_agent_identity(&runtime)?;
@@ -205,10 +205,13 @@ async fn selected_datastore_query_grants_collection_access_until_removed() -> an
             .check_permission(&agent, NodePermission::CollectionGet)
             .await?,
     );
-    assert!(access.collection_version("Node").await.is_err());
+    let disabled_reads = access.collection_version("Node").await.is_ok();
     for case in gents_lean_vocab::families::household_tool_operation_collection_get::cases() {
         let observed = granted[case.input.step.as_str()];
         case.check(observed);
+        if case.input.step == "agent-disabled" {
+            case.check(disabled_reads);
+        }
     }
     node.shutdown().await?;
     Ok(())
@@ -2133,9 +2136,26 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
             )).await?,
             "AgentContext",
         )?;
-        owner.write("test.tool_group.agent", &format!(
-            r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"context",enabled:true}}) {{_docID}} }}"#
-        )).await?;
+        let agent_doc = gents_store::graphql::created_doc_id(
+            &owner.write("test.tool_group.agent", &format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"context",enabled:true}}) {{_docID}} }}"#
+            )).await?,
+            "Agent",
+        )?;
+        let grant_set_sources: Vec<String> =
+            gents_store::identity::GrantSet::for_recipient(gents_store::identity::Recipient::Agent)
+                .projected
+                .iter()
+                .map(|set| {
+                    gents_store::local::tool_permission_projection::tool_source(
+                        runtime.did(),
+                        &agent_doc,
+                        "",
+                        agent.as_str(),
+                        set.name(),
+                    )
+                })
+                .collect();
         let enable = input.enable;
         let update = format!(
             r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:{enable}}}}}) {{_docID}} }}"#
@@ -2178,7 +2198,7 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
         for source in &input.sources {
             let permission = schema_permission(&source.permission)?;
             for (projected, held) in &granted {
-                if *held != permission {
+                if *held != permission || grant_set_sources.contains(projected) {
                     continue;
                 }
                 let attributed = production.iter().find(|candidate| {

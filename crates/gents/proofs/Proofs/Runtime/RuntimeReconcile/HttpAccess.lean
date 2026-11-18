@@ -82,4 +82,27 @@ theorem anonymous_bootstrap_never_reads_as_node (authorityMatches : Bool) :
     decide authorityMatches .bootstrap .anonymous ≠ .operator := by
   cases authorityMatches <;> simp [decide]
 
+/-- The reader of an MCP `query` call. The tool holds no principal of its own:
+it forwards the bearer its caller presented to the served node's document
+endpoint, so native node and document ACP decide the read for that caller. A
+call without a bearer is refused before any read.
+
+External premise: the pinned DefraDB checks node ACP at its HTTP edge, so an
+unsigned document read is refused there; the tool never substitutes the served
+node's principal to make such a read succeed. -/
+def mcpQueryReadsAs (identity : Identity) : Option Identity :=
+  match identity with
+  | .anonymous => none
+  | caller => some caller
+
+theorem anonymous_mcp_query_never_reads : mcpQueryReadsAs .anonymous = none := rfl
+
+theorem mcp_query_runs_as_its_caller (identity reader : Identity)
+    (h : mcpQueryReadsAs identity = some reader) : reader = identity := by
+  cases identity <;> simp_all [mcpQueryReadsAs]
+
+theorem mcp_query_never_borrows_the_node (identity : Identity) (h : identity ≠ .operator) :
+    mcpQueryReadsAs identity ≠ some .operator := by
+  cases identity <;> simp_all [mcpQueryReadsAs]
+
 end RuntimeReconcile.HttpAccess

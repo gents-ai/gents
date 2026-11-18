@@ -586,7 +586,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
             .await
             .expect_err("anonymous HTTP writes must be refused");
         assert!(
-            refused.to_string().contains("not authorized"),
+            refused.is_permission_denied(),
             "{phase}: unexpected refusal: {refused:#}"
         );
         gents_store::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
@@ -601,16 +601,13 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         )
         .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
-        let anonymous_rows = gents_store::config_client::ConfigAccess::graphql(graphql.clone())
+        let anonymous_read = gents_store::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
             .await
-            .with_context(|| format!("{phase}: anonymous HTTP read"))?;
+            .expect_err("anonymous HTTP reads must be refused");
         assert!(
-            anonymous_rows
-                .pointer("/data/CompactionEntry")
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty),
-            "{phase}: anonymous HTTP read exposed the owner's row: {anonymous_rows}"
+            anonymous_read.is_permission_denied(),
+            "{phase}: unexpected read refusal: {anonymous_read:#}"
         );
         let owner_rows = gents_store::config_client::ConfigAccess::Graphql(
             support::graphql::served_endpoint(&graphql),
@@ -2736,9 +2733,13 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
 
     let trace = ["utils", "debug", "trace", "timeline", "--graphql", &graphql];
     let request = ["--request-id", "home-trace-req"];
-    // Every CLI caller holds its own User key: another User sees no such row.
+    // Every CLI caller holds its own User key: the served node admits only its own.
     let foreign = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
-    assert!(foreign.contains("home-trace-req not found"), "{foreign}");
+    assert!(
+        foreign.contains("does not admit this identity"),
+        "{foreign}"
+    );
+    assert!(!foreign.contains("gents init"), "{foreign}");
 
     let served_home = home_dir.join(".gents");
     let served_home = served_home.to_str().context("home path is not UTF-8")?;
@@ -2747,7 +2748,8 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
         &caller_dir,
         &[&trace[..], &["--home", served_home], &request[..]].concat(),
     )?;
-    assert!(named.contains("home-trace-req not found"), "{named}");
+    assert!(named.contains("does not admit this identity"), "{named}");
+    assert!(!named.contains("gents init"), "{named}");
     let timeline = run_cli_json(
         &home_dir,
         &[&trace[..], &["--home", served_home], &request[..]].concat(),
@@ -2825,29 +2827,21 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
             .collect::<Vec<_>>()
     );
 
-    let args = serde_json::json!({
+    let fields = serde_json::json!({
         "argv": ["fields"], "collection": "AgentToolCall"
     });
-    let params =
-        CallToolRequestParams::new("query").with_arguments(args.as_object().unwrap().clone());
-    let result = mcp
+    let unsigned_fields = mcp
         .peer()
-        .call_tool(params)
-        .await
-        .context("call_tool defra_query fields")?;
-    let text = result
-        .content
-        .iter()
-        .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
-        .collect::<Vec<_>>()
-        .join("");
-    let payload: Value = serde_json::from_str(&text).context("MCP field inventory is JSON")?;
-    assert_eq!(payload["discovery"], true, "{payload}");
+        .call_tool(
+            CallToolRequestParams::new("query").with_arguments(fields.as_object().unwrap().clone()),
+        )
+        .await;
     assert!(
-        payload["fields"]
-            .as_array()
-            .is_some_and(|fields| fields.iter().any(|field| field["name"] == "tool_name")),
-        "public schema introspection should list AgentToolCall fields: {payload}"
+        match unsigned_fields {
+            Err(_) => true,
+            Ok(result) => result.is_error == Some(true),
+        },
+        "anonymous MCP query must fail"
     );
 
     let protected_args = serde_json::json!({
@@ -2929,6 +2923,27 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
             config,
         ))
         .await?;
+    let result = authenticated
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("query").with_arguments(fields.as_object().unwrap().clone()),
+        )
+        .await
+        .context("call_tool defra_query fields")?;
+    let text = result
+        .content
+        .iter()
+        .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
+        .collect::<Vec<_>>()
+        .join("");
+    let payload: Value = serde_json::from_str(&text).context("MCP field inventory is JSON")?;
+    assert_eq!(payload["discovery"], true, "{payload}");
+    assert!(
+        payload["fields"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field["name"] == "tool_name")),
+        "a signed caller's schema introspection should list AgentToolCall fields: {payload}"
+    );
     for command in [
         preview,
         serde_json::json!({"argv":["preview","update"],"collection":"McpParcel","options":{"filter":{"reference":{"_eq":"MCP-7"}},"max_targets":1,"input":{"status":"delivered"}}}),

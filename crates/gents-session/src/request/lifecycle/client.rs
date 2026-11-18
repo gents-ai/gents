@@ -1905,7 +1905,7 @@ mod tests {
             (&access, 1),
             (&agent_access, 1),
             (&sibling_access, 0),
-            (&runtime_access, 0),
+            (&runtime_access, 1),
         ] {
             let result = reader.execute(session_query).await.unwrap();
             assert_eq!(
@@ -2006,7 +2006,8 @@ mod tests {
         let unattended = user_sessions["data"]["AgentSession"][0]["_docID"]
             .as_str()
             .unwrap();
-        let hidden = runtime_access
+        let hidden = gents_store::test_support::unrelated_document_reader(&node)
+            .await
             .execute("{ AgentSession(filter:{session_id:{_eq:\"unattended\"}}) { _docID } }")
             .await
             .unwrap();

@@ -25,10 +25,13 @@ fn bs58_sig(signature: &[u8]) -> String {
 pub async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let p2p = node.p2p().expect("p2p enabled");
-        let peer_id = p2p.local_peer_id().await.ok();
-        let shareable = p2p.shareable_address().await.ok().flatten();
-        if let (Some(peer_id), Some(address)) = (peer_id, shareable) {
+        let p2p = gents_store::identity::node_p2p(node).expect("node-authenticated P2P");
+        let peer_id = p2p.local_peer_id().await.expect("local peer identity");
+        let shareable = p2p
+            .shareable_address()
+            .await
+            .expect("shareable peer address");
+        if let Some(address) = shareable {
             if !peer_id.trim().is_empty() && !address.trim().is_empty() {
                 return (peer_id, address);
             }
@@ -116,7 +119,7 @@ pub async fn signed_enrollment_offer(
         response.errors
     );
 
-    let p2p = node.p2p().expect("p2p enabled");
+    let p2p = gents_store::identity::node_p2p(node).expect("node-authenticated P2P");
     let server_peer = p2p.local_peer_id().await.expect("server peer id");
     let server_ticket = p2p
         .shareable_address()

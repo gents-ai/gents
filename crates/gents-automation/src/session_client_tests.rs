@@ -279,7 +279,12 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         sibling.agent_did.as_str(),
         other_user.did(),
     ] {
-        for relation in ["read-document", "update-document", "add-dac-relation"] {
+        for relation in [
+            "read-document",
+            "update-document",
+            "add-dac-relation",
+            "get-collection",
+        ] {
             let response = node_endpoint
                 .authorize(
                     client
@@ -527,7 +532,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         (&agent_access, agent.agent_did.as_str(), 1),
         (&sibling_access, sibling.agent_did.as_str(), 0),
         (&other_access, other_user.did(), 0),
-        (&runtime_access, runtime.did(), 0),
+        (&runtime_access, runtime.did(), 1),
     ] {
         let result = reader.execute(query).await.unwrap();
         assert_eq!(

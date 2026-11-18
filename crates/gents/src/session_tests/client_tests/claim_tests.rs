@@ -25,7 +25,6 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &first).unwrap();
     let second_signer =
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &second).unwrap();
-    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     let owner = db.client_access(&user);
     seed_owned_agent(&owner, runtime.did(), &first).await;
     let parent = owner.execute("{ Node { _docID } }").await.unwrap()["data"]["Node"][0]["_docID"]
@@ -131,7 +130,9 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     .await
     .unwrap();
     assert_eq!(hook.session_id().await.as_deref(), Some("first-session"));
-    for actor in [runtime.did(), second.agent_did.as_str()] {
+    let reader = gents_store::test_support::unrelated_document_reader(&node).await;
+    let reader_did = reader.actor_did().unwrap();
+    for actor in [reader_did.as_str(), second.agent_did.as_str()] {
         assert!(
             gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
                 node.clone(),
@@ -146,14 +147,14 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
             "an unrelated actor cannot resume a private session"
         );
     }
-    let root_rows = admin
+    let root_rows = reader
         .execute("{ AgentRequest { request_id } }")
         .await
         .unwrap();
     assert_eq!(
         root_rows["data"]["AgentRequest"],
         serde_json::json!([]),
-        "runtime identity does not inherit private requests"
+        "unrelated reader does not inherit private requests"
     );
     let first_rows = ConfigAccess::local_as(node.clone(), first.agent_did.parse().unwrap())
         .execute("{ AgentRequest { request_id } }")
@@ -344,6 +345,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         binding.agent_did.as_str(),
     ] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,

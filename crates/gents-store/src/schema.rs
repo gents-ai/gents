@@ -177,16 +177,24 @@ mod legacy_backend_tests {
             }
             let key = crate::local::store_key::StoreKey::from_host(&[5; 32])?;
             let identity_path = home.join("node.key");
-            let did = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-                Ok(
-                    crate::identity::KeyIdentity::load_or_create(identity_path, None)?
-                        .did()
-                        .to_owned(),
-                )
-            })
+            let runtime = tokio::task::spawn_blocking(
+                move || -> anyhow::Result<std::sync::Arc<dyn NodeIdentity>> {
+                    Ok(std::sync::Arc::new(
+                        crate::identity::KeyIdentity::load_or_create(identity_path, None)?,
+                    ))
+                },
+            )
             .await??;
+            let did = runtime.did().to_owned();
             let initialized = match FreshBackendStore::observe(&data, &lock).await {
-                Ok(fresh) => fresh.initialize(&key, Some(&did)).await.is_ok(),
+                Ok(fresh) => fresh
+                    .initialize(
+                        &key,
+                        &runtime,
+                        crate::local::document_acp::DocumentAcp::Local,
+                    )
+                    .await
+                    .is_ok(),
                 Err(_) => false,
             };
             let admitted = if initialized {

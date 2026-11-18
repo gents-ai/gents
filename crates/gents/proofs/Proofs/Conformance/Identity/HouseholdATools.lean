@@ -85,6 +85,12 @@ structure OperationStep where
 def grantsPermission (permission : String) (i : OperationStep) : Bool :=
   (toolOperationSources i.operation).any fun source => source.permission == permission
 
+/-- Whether the live Agent holds `permission` at this step: its baseline and
+the step's tool sources (`GrantSets.agentEffective`). -/
+def liveAgentHolds (permission : String) (i : OperationStep) : Bool :=
+  GrantSets.agentEffective ⟨true, true, true⟩
+    ((toolOperationSources i.operation).map (·.permission)) [] permission
+
 structure SourceChangeInput where
   step : String
   present : Bool
@@ -243,7 +249,7 @@ def toolOperationCollectionGet : Family OperationStep Bool where
     ⟨"sibling", operation "none" false false false false false false "none"⟩,
     ⟨"agent-schema", operation "schema" true false false false false false "none"⟩,
     ⟨"agent-disabled", operation "none" false false false false false false "none"⟩]
-  model := grantsPermission "get-collection"
+  model := liveAgentHolds "get-collection"
 
 /-- The delete-source scenario edits one Agent's self-config categories and
 pack installation in this order; the last step follows the revocation of an
