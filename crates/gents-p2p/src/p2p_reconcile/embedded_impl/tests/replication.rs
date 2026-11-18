@@ -1,6 +1,6 @@
 use super::fixtures::{
-    collection_id, collection_values, runtime_test_node, signed_p2p_node_without_schemas,
-    test_node, wait_for_active_peer, wait_for_peer_info,
+    collection_id, collection_values, runtime_test_node, signed_p2p_node_with_projector,
+    signed_p2p_node_without_schemas, test_node, wait_for_active_peer, wait_for_peer_info,
 };
 use super::seeding::{seed_agent_request, seed_agent_tool_call};
 use super::*;
@@ -46,7 +46,12 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let admin_address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
     let candidate_test =
         signed_p2p_node_without_schemas(&candidate, candidate_key, candidate_address).await;
-    let admin_test = signed_p2p_node_without_schemas(&admin, admin_key, admin_address).await;
+    let admin_test = signed_p2p_node_with_projector(
+        Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
+        admin_key,
+        admin_address,
+    )
+    .await;
     let candidate_node = &candidate_test.node;
     let admin_node = &admin_test.node;
     let schema = gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST;
@@ -86,12 +91,15 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         }
     }
     for actor in [&user, &candidate] {
-        admin_local
-            .grant_node_permission(
-                &identity::Did::new(actor.did())?,
-                NodePermission::DocumentUpdate,
-            )
-            .await?;
+        for permission in [
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            admin_local
+                .grant_node_permission(&identity::Did::new(actor.did())?, permission)
+                .await?;
+        }
     }
     let mut replica_reads = std::collections::BTreeMap::new();
     let reader = identity::Did::new(admin.did())?;
@@ -299,20 +307,14 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         );
         document_read_grant(admin_node, &reader, "NetworkEnrollmentRequest", &doc_b).await?
     };
-    {
-        let txn = admin_node.database().new_txn(false).await?;
-        let view = txn.datastore()?;
-        gents_store::config_client::transport_publication::project_transport_document(
-            &view,
-            admin_node.document_acp().as_ref(),
-            &reader,
-            "NetworkEnrollmentRequest",
-            &doc,
-        )
+    let reproject_request = format!(
+        r#"mutation {{ update_NetworkEnrollmentRequest(docID:"{}",input:{{offer_token:"{}"}}) {{_docID}} }}"#,
+        escape_graphql_string(&doc),
+        escape_graphql_string(&offer.token)
+    );
+    http(admin_address, &candidate)?
+        .write("test.transport.publish_request", &reproject_request)
         .await?;
-        drop(view);
-        txn.commit().await?;
-    }
     let granted_delivered = {
         let http_sees = count(&http(admin_address, &admin)?.execute(&query).await?) != 0;
         let embedded_sees = count(&admin_local.execute(&query).await?) != 0;
@@ -361,18 +363,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         )
         .await?;
     let parent = gents_protocol::graphql::extract_mutation_doc_id(&node, "Node")?;
-    {
-        let txn = admin_node.database().new_txn(false).await?;
-        let view = txn.datastore()?;
-        gents_store::config_client::transport_publication::reconcile_transport_documents(
-            &view,
-            admin_node.document_acp().as_ref(),
-            &reader,
-        )
+    http(admin_address, &candidate)?
+        .write("test.transport.link_request", &reproject_request)
         .await?;
-        drop(view);
-        txn.commit().await?;
-    }
     replica_reads.insert(
         "linked",
         gents_lean_vocab::families::identity_operations_replica_grant_reads::ReplicaReads {
@@ -410,37 +403,12 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         admin_local.execute(&query).await?["data"]["NetworkEnrollmentRequest"][0]["offer_token"],
         offer.token
     );
-    {
-        let txn = admin_node.database().new_txn(false).await?;
-        let view = txn.datastore()?;
-        admin_node
-            .document_acp()
-            .change_node_admin_relationship(
-                view.sibling(storage::namespace::Namespace::Acpstore),
-                &reader,
-                acp::Subject::entity_set("nodes", parent, ""),
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
-                "enrollment_records",
-                &doc,
-                "parent",
-                true,
-            )
-            .await?;
-        drop(view);
-        txn.commit().await?;
-    }
-    {
-        let txn = admin_node.database().new_txn(false).await?;
-        let view = txn.datastore()?;
-        gents_store::config_client::transport_publication::reconcile_transport_documents(
-            &view,
-            admin_node.document_acp().as_ref(),
-            &reader,
-        )
+    http(admin_address, &candidate)?
+        .delete_resource_relationship("NetworkEnrollmentRequest", &doc, "parent", "nodes", &parent)
         .await?;
-        drop(view);
-        txn.commit().await?;
-    }
+    http(admin_address, &candidate)?
+        .write("test.transport.revisit_request", &reproject_request)
+        .await?;
     let repaired_user_read = count(&http(admin_address, &user)?.execute(&query).await?) != 0;
     let repaired_runtime_read =
         document_read_grant(admin_node, &reader, "NetworkEnrollmentRequest", &doc).await?;
@@ -509,20 +477,12 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     tokio::time::timeout(Duration::from_secs(20), public_arrivals.recv())
         .await?
         .context("replicated public registry notification closed")?;
-    {
-        let txn = admin_node.database().new_txn(false).await?;
-        let view = txn.datastore()?;
-        gents_store::config_client::transport_publication::project_transport_document(
-            &view,
-            admin_node.document_acp().as_ref(),
-            &reader,
-            "PeerRegistry",
-            &public_doc,
+    http(admin_address, &candidate)?
+        .write(
+            "test.transport.publish_registry",
+            &format!(r#"mutation {{ update_PeerRegistry(docID:"{}",input:{{status:"published"}}) {{_docID}} }}"#, escape_graphql_string(&public_doc)),
         )
         .await?;
-        drop(view);
-        txn.commit().await?;
-    }
     let public_query = format!(
         r#"{{ PeerRegistry(filter: {{_docID: {{_eq: "{}"}}}}) {{peer_id addresses}} }}"#,
         escape_graphql_string(&public_doc)
@@ -555,20 +515,6 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     ).await?;
     let runtime_registry =
         gents_protocol::graphql::extract_mutation_doc_id(&runtime_registry, "PeerRegistry")?;
-    {
-        let txn = admin_node.database().new_txn(false).await?;
-        let view = txn.datastore()?;
-        gents_store::config_client::transport_publication::project_transport_document(
-            &view,
-            admin_node.document_acp().as_ref(),
-            &reader,
-            "PeerRegistry",
-            &runtime_registry,
-        )
-        .await?;
-        drop(view);
-        txn.commit().await?;
-    }
     let registry_mutation = |id: &str| {
         format!(
             r#"mutation {{ update_PeerRegistry(docID:"{}",input:{{status:"updated"}}) {{_docID}} }}"#,
@@ -593,20 +539,6 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     ).await?;
     let user_registry =
         gents_protocol::graphql::extract_mutation_doc_id(&user_registry, "PeerRegistry")?;
-    {
-        let txn = admin_node.database().new_txn(false).await?;
-        let view = txn.datastore()?;
-        gents_store::config_client::transport_publication::project_transport_document(
-            &view,
-            admin_node.document_acp().as_ref(),
-            &reader,
-            "PeerRegistry",
-            &user_registry,
-        )
-        .await?;
-        drop(view);
-        txn.commit().await?;
-    }
     let runtime_write = admin_local
         .write(
             "test.transport.runtime_registry_update",
@@ -649,33 +581,20 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
         }),
     );
-    {
-        let txn = admin_node.database().new_txn(false).await?;
-        let view = txn.datastore()?;
-        admin_node
-            .document_acp()
-            .change_node_admin_relationship(
-                view.sibling(storage::namespace::Namespace::Acpstore),
-                &reader,
-                acp::Subject::entity(identity::Did::new(user.did())?),
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
-                "discovery",
-                &runtime_registry,
-                "writer",
-                true,
-            )
-            .await?;
-        gents_store::config_client::transport_publication::project_transport_document(
-            &view,
-            admin_node.document_acp().as_ref(),
-            &reader,
+    admin_local
+        .delete_actor_relationship(
             "PeerRegistry",
             &runtime_registry,
+            "writer",
+            &identity::Did::new(user.did())?,
         )
         .await?;
-        drop(view);
-        txn.commit().await?;
-    }
+    admin_local
+        .write(
+            "test.transport.revisit_registry",
+            &registry_mutation(&runtime_registry),
+        )
+        .await?;
     let revoked_write = http(admin_address, &user)?
         .write(
             "test.transport.revoked_registry_update",
@@ -718,22 +637,14 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             .with_node_identity_did(admin.did())
             .with_signing_key(defra_node::SigningKey::Ed25519(reopened_key))
             .with_node_acp_enabled()
+            .with_document_projector(gents_store::local::document_projector(
+                Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
+                super::fixtures::no_tool_sources(),
+            )?)
             .with_http(defra_node::HttpConfig::with_addr(reopened_address))
             .build()
             .await?,
     );
-    {
-        let txn = reopened.database().new_txn(false).await?;
-        let view = txn.datastore()?;
-        gents_store::config_client::transport_publication::reconcile_transport_documents(
-            &view,
-            reopened.document_acp().as_ref(),
-            &reader,
-        )
-        .await?;
-        drop(view);
-        txn.commit().await?;
-    }
     assert_eq!(
         document_read_grant(&reopened, &reader, "NetworkEnrollmentRequest", &doc).await?,
         repaired_runtime_read,

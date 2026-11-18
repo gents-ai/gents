@@ -555,11 +555,11 @@ structure ReplicaInput where
   deriving ToJson
 
 def replicaPending : State :=
-  replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime" "local-node" "user"
+  replicaGrant privateReplicaFixture "foreign" "enrollment_records" "remote" "runtime" "local-node" "user"
     true true true false false
 
 def replicaLinked : State :=
-  replicaLinkPending replicaPending "enrollment_records" "remote" "runtime" "local-node" "user"
+  replicaLinkPending replicaPending "foreign" "enrollment_records" "remote" "runtime" "local-node" "user"
     true true true
 
 def replicaRevoked : State :=
@@ -569,7 +569,7 @@ def replicaState : String → State
   | "pending" => replicaPending
   | "linked" => replicaLinked
   | "revoked" => replicaRevoked
-  | "after-repair" => replicaLinkPending replicaRevoked "enrollment_records" "remote" "runtime"
+  | "after-repair" => replicaLinkPending replicaRevoked "foreign" "enrollment_records" "remote" "runtime"
       "local-node" "user" true true true
   | _ => privateReplicaFixture
 

@@ -277,14 +277,9 @@ pub async fn grant_enrollment_authority(
     }
     let mut held = Vec::new();
     let administration = owner
-        .list_document_relationships("Node", node_doc_id)
+        .observe_actor_relationship("Node", node_doc_id, NODE_ADMINISTRATOR_RELATION, member)
         .await
-        .map_err(EnrollmentGrantError::Observe)?
-        .iter()
-        .any(|relationship| {
-            relationship.relation == NODE_ADMINISTRATOR_RELATION
-                && relationship.subject == member.as_str()
-        });
+        .map_err(EnrollmentGrantError::Observe)?;
     if administration {
         held.push(EnrollmentGrantTuple::NodeAdministrator);
     }

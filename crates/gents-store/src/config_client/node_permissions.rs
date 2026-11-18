@@ -138,6 +138,67 @@ impl ConfigAccess {
         }
     }
 
+    pub async fn observe_actor_relationship(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        relation: &str,
+        target: &identity::Did,
+    ) -> Result<bool, ConfigClientError> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        match self {
+            Self::Local(local) => {
+                local.require_actor_signer()?;
+                let context = local.request_context();
+                let (collection, doc_id, relation, target) = (
+                    collection.to_owned(),
+                    doc_id.to_owned(),
+                    relation.to_owned(),
+                    target.to_string(),
+                );
+                local
+                    .run_owned(move |node| async move {
+                        Ok::<_, ConfigClientError>(
+                            node.observe_dac_actor_relationship_as(
+                                &context,
+                                &collection,
+                                &doc_id,
+                                &relation,
+                                &target,
+                            )
+                            .await?,
+                        )
+                    })
+                    .await
+            }
+            Self::Graphql(endpoint) => {
+                let url = format!(
+                    "{}/acp/document/relationship",
+                    graphql_api_base(endpoint.url())?
+                );
+                let client = graphql::http_client().await?;
+                let response = endpoint
+                    .authorize(client.get(url).query(&[
+                        ("collection", collection),
+                        ("docID", doc_id),
+                        ("relation", relation),
+                        ("targetActor", target.as_str()),
+                    ]))
+                    .await?
+                    .send()
+                    .await?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(ConfigClientError::HttpOperationStatus {
+                        operation: "observe document actor relationship",
+                        status,
+                    });
+                }
+                Ok(response.json().await?)
+            }
+        }
+    }
+
     /// Every relationship on a document, for an actor that owns it or holds a
     /// relation managing its resource. Native DefraDB decides the gate.
     pub async fn list_document_relationships(

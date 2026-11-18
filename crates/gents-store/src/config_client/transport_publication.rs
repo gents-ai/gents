@@ -1,5 +1,5 @@
 use acp::{DocumentACP, Subject, ZanzibarStore};
-use db::DocumentMutationView;
+use db::{DocumentMutationContext, DocumentMutationView};
 use document::DocID;
 use identity::Did;
 use storage::corekv::{Error, Result};
@@ -78,26 +78,15 @@ async fn local_node(
 }
 
 struct PublicationGrant<'a> {
-    view: &'a DocumentMutationView,
-    provider: &'a dyn DocumentACP,
-    runtime: &'a Did,
-    resource: &'a str,
+    context: &'a DocumentMutationContext<'a>,
+    collection: &'a str,
     doc: &'a str,
 }
 
 impl PublicationGrant<'_> {
     async fn change(&self, relation: &str, target: Subject, delete: bool) -> Result<bool> {
-        self.provider
-            .change_node_admin_relationship(
-                self.view.sibling(Namespace::Acpstore),
-                self.runtime,
-                target,
-                AGENT_OWNERSHIP_POLICY_ID,
-                self.resource,
-                self.doc,
-                relation,
-                delete,
-            )
+        self.context
+            .change_projected_relationship(self.collection, self.doc, relation, target, delete)
             .await
             .map_err(failure)
     }
@@ -106,12 +95,13 @@ impl PublicationGrant<'_> {
 /// Stage the receiving runtime's document-scoped native grants in the accepted
 /// row's transaction. A completed marker never restores a revoked grant.
 pub async fn project_transport_document(
-    view: &DocumentMutationView,
-    provider: &dyn DocumentACP,
-    runtime: &Did,
+    context: &DocumentMutationContext<'_>,
     collection_name: &str,
     doc_id: &str,
 ) -> Result<bool> {
+    let view = context.view;
+    let provider = context.document_acp;
+    let runtime = context.node_did;
     let Some(resource) = transport_resource(collection_name) else {
         return Ok(false);
     };
@@ -155,13 +145,20 @@ pub async fn project_transport_document(
     {
         return Err(failure("transport document has no verified native owner"));
     }
+    let owner = scoped
+        .get_doc_owner(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
+        .await
+        .map_err(failure)?
+        .ok_or_else(|| failure("transport document has no verified native owner"))?;
+    let actor = Did::new(view.projection_actor().unwrap_or(runtime.as_str())).map_err(failure)?;
+    if scoped.canonical_actor(&owner) != scoped.canonical_actor(&actor) {
+        return Ok(false);
+    }
     let tuples = acp::zanzibar::store::TransactionZanzibarStore::new(acp_view);
     let mut changed = false;
     let grant = PublicationGrant {
-        view,
-        provider,
-        runtime,
-        resource,
+        context,
+        collection: collection_name,
         doc: doc_id,
     };
     let actor = Subject::entity(runtime.clone());
@@ -235,10 +232,9 @@ pub async fn project_transport_document(
 /// Called on startup and local Node publication to complete only outstanding
 /// native parent links. Validated scans keep concurrent inserts in the decision.
 pub async fn reconcile_transport_documents(
-    view: &DocumentMutationView,
-    provider: &dyn DocumentACP,
-    runtime: &Did,
+    context: &DocumentMutationContext<'_>,
 ) -> Result<Vec<(String, String)>> {
+    let view = context.view;
     let system = view.sibling(Namespace::Systemstore);
     let mut changed = Vec::new();
     for name in gents_protocol::schemas::BRANCHABLE_AGENT_COLLECTION_NAMES {
@@ -258,7 +254,7 @@ pub async fn reconcile_transport_documents(
                 .id()
                 .ok_or_else(|| failure("transport row has no document ID"))?
                 .to_string();
-            if project_transport_document(view, provider, runtime, name, &doc).await? {
+            if project_transport_document(context, name, &doc).await? {
                 changed.push(((*name).to_owned(), doc));
             }
         }
