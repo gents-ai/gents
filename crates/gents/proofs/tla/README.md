@@ -450,6 +450,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   every ephemeral range; `PerRunnerSpread` shows
   why separate directories rarely collided while one process per binary
   spread its cursor.
+- `OfflineAccessRouting` — a CLI command against a home another process
+  holds: a server claims the store, binds its port and publishes
+  `runtime.json` only once ready; the command routes to a published runtime
+  and otherwise tries the store lock, which `StoreHandoff.decide` refuses
+  while the holder serves. `AssertionHolds`: the outcome is the one the test
+  expects. Green waits for the publication and expects the server's answer,
+  or holds the store itself and expects the refusal. RED: `PortWait` and
+  `PortWaitAnswered` wait only for the port, where both outcomes are
+  reachable (the `cli_session` fork test on CI).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
