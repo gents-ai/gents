@@ -525,10 +525,11 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         case.check(result.is_ok());
     }
     user_access
-        .transact_write("test.agent_creator.revoke_catalog", |txn| {
+        .transact_write("test.agent_creator.revoke_node_administration", |txn| {
             let (runtime, creator) = (&runtime, &creator);
             Box::pin(async move {
-                gents_documents::revoke_agent_catalog(txn, runtime.did(), &creator.agent_did).await
+                gents_documents::revoke_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
             })
         })
         .await?;
@@ -544,10 +545,11 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .await
         .is_err());
     user_access
-        .transact_write("test.agent_creator.restore_catalog", |txn| {
+        .transact_write("test.agent_creator.restore_node_administration", |txn| {
             let (runtime, creator) = (&runtime, &creator);
             Box::pin(async move {
-                gents_documents::grant_agent_catalog(txn, runtime.did(), &creator.agent_did).await
+                gents_documents::grant_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
             })
         })
         .await?;
