@@ -452,7 +452,10 @@ the read's own snapshot. The NAC owner holds every node permission, and Gents
 enables NAC with the node key as owner (`with_node_acp_enabled` on a node
 built with that identity), so the hosting runtime's node key reads every
 document on its own node. A native admin (`GrantSets.householdOwner`) holds
-`bypass-dac` too.
+`bypass-dac` too, but every request Gents makes as a managed Agent denies
+itself the bypass (defradb.rs #3024, `RequestContext::with_dac_bypass_denied`),
+so an Agent that is a native admin still reads only what document ACP grants
+(`Configuration.toolSessionReadAllowed`).
 
 Decision (maintainer, 2026-11-13, gents#3747): accepted and modeled as it is.
 `allowed` remains the document policy's own answer and still decides every
