@@ -11,6 +11,29 @@ use gents_protocol::client_authentication::ClientAuthentication;
 use identity::{FullIdentity as _, RawIdentity};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+struct NoToolSources;
+
+impl crate::local::ToolSourcePolicy for NoToolSources {
+    fn node_operation_sources(
+        &self,
+        _: &serde_json::Value,
+        _: &[serde_json::Value],
+    ) -> anyhow::Result<Vec<crate::local::ProjectedOperationSource>> {
+        Ok(Vec::new())
+    }
+
+    fn plugin_refs(
+        &self,
+        _: &serde_json::Value,
+    ) -> anyhow::Result<Vec<crate::local::ProjectedPluginRef>> {
+        Ok(Vec::new())
+    }
+
+    fn selected_tools(&self, _: &str, _: &serde_json::Value) -> Option<String> {
+        None
+    }
+}
+
 fn held_client() -> anyhow::Result<(RawIdentity, ClientSigningCapability)> {
     let key = RawIdentity::from_private_key(crypto::generate_ed25519()?)?;
     let capability = ClientSigningCapability::from_ed25519_key(&key.private_key_bytes())?;
@@ -62,6 +85,10 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
     )?);
     let node = Arc::new(
         defra_node::Node::builder()
+            .with_document_projector(crate::local::document_projector(
+                runtime.clone(),
+                Arc::new(NoToolSources),
+            )?)
             .with_node_acp_owner(runtime.did())
             .with_signing_key(defra_node::SigningKey::Ed25519(
                 runtime.identity.private_key_bytes(),
@@ -112,6 +139,7 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
         gents_protocol::schemas::NODE,
         gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT,
         gents_protocol::schemas::CLIENT_RUNTIME_ACCESS_REQUEST,
+        gents_protocol::schemas::PEER_REGISTRY,
     ] {
         runtime_access.add_collection(schema).await?;
     }
@@ -132,6 +160,44 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
     owner_access
         .add_actor_relationship("Node", &node_doc, "runtime_reader", &runtime.did().parse()?)
         .await?;
+    let registry = runtime_access
+        .write(
+            "test.transport.runtime_registry",
+            &format!(
+                r#"mutation {{ create_PeerRegistry(input: {{peer_id:"runtime-owned",node_did:"{}",addresses:["local"]}}) {{_docID}} }}"#,
+                runtime.did()
+            ),
+        )
+        .await?;
+    let registry = crate::graphql::created_doc_id(&registry, "PeerRegistry")?;
+    assert!(
+        runtime_access
+            .observe_actor_relationship(
+                "PeerRegistry",
+                &registry,
+                "reader",
+                &runtime.did().parse()?
+            )
+            .await?
+    );
+    runtime_access
+        .write(
+            "test.transport.update_registry",
+            &format!(
+                r#"mutation {{ update_PeerRegistry(docID:"{registry}",input:{{status:"updated"}}) {{_docID}} }}"#
+            ),
+        )
+        .await?;
+    assert!(
+        !runtime_access
+            .observe_actor_relationship(
+                "PeerRegistry",
+                &registry,
+                "pending_parent",
+                &runtime.did().parse()?
+            )
+            .await?
+    );
     let candidate_endpoints = RuntimeEndpoints::new(candidate.clone());
     let candidate_endpoint = candidate_endpoints.endpoint(runtime.did(), &url)?;
     let candidate_access = ConfigAccess::Graphql(candidate_endpoint.clone());

@@ -1,5 +1,5 @@
-use acp::{DocumentACP, Subject, ZanzibarStore};
-use db::{DocumentMutationContext, DocumentMutationView};
+use acp::Subject;
+use db::DocumentMutationContext;
 use document::DocID;
 use identity::Did;
 use storage::corekv::{Error, Result};
@@ -23,10 +23,10 @@ fn transport_resource(collection: &str) -> Option<&'static str> {
 }
 
 async fn local_node(
-    view: &DocumentMutationView,
-    provider: &dyn DocumentACP,
+    context: &DocumentMutationContext<'_>,
     runtime: &Did,
 ) -> Result<Option<(String, Did)>> {
+    let view = context.view;
     let system = view.sibling(Namespace::Systemstore);
     let Some(collection) =
         db::collection::loader::load_collection_from_systemstore(&system, NODE_NAME)
@@ -66,13 +66,9 @@ async fn local_node(
         .id()
         .ok_or_else(|| failure("local Node has no document ID"))?
         .to_string();
-    let scoped = provider
-        .bind_transaction(view.sibling(Namespace::Acpstore))
-        .ok_or_else(|| failure("transaction-bound document ACP is unavailable"))?;
-    let owner = scoped
-        .get_doc_owner(AGENT_OWNERSHIP_POLICY_ID, "nodes", &doc)
-        .await
-        .map_err(failure)?
+    let owner = context
+        .projected_owner(AGENT_OWNERSHIP_POLICY_ID, "nodes", &doc)
+        .await?
         .ok_or_else(|| failure("local Node has no registered owner"))?;
     Ok(Some((doc, owner)))
 }
@@ -88,7 +84,6 @@ impl PublicationGrant<'_> {
         self.context
             .change_projected_relationship(self.collection, self.doc, relation, target, delete)
             .await
-            .map_err(failure)
     }
 }
 
@@ -134,27 +129,14 @@ pub async fn project_transport_document(
     else {
         return Ok(false);
     };
-    let acp_view = view.sibling(Namespace::Acpstore);
-    let scoped = provider
-        .bind_transaction(acp_view.clone())
-        .ok_or_else(|| failure("transaction-bound document ACP is unavailable"))?;
-    if !scoped
-        .is_doc_registered(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
-        .await
-        .map_err(failure)?
-    {
-        return Err(failure("transport document has no verified native owner"));
-    }
-    let owner = scoped
-        .get_doc_owner(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
-        .await
-        .map_err(failure)?
+    let owner = context
+        .projected_owner(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
+        .await?
         .ok_or_else(|| failure("transport document has no verified native owner"))?;
     let actor = Did::new(view.projection_actor().unwrap_or(runtime.as_str())).map_err(failure)?;
-    if scoped.canonical_actor(&owner) != scoped.canonical_actor(&actor) {
+    if provider.canonical_actor(&owner) != provider.canonical_actor(&actor) {
         return Ok(false);
     }
-    let tuples = acp::zanzibar::store::TransactionZanzibarStore::new(acp_view);
     let mut changed = false;
     let grant = PublicationGrant {
         context,
@@ -162,17 +144,23 @@ pub async fn project_transport_document(
         doc: doc_id,
     };
     let actor = Subject::entity(runtime.clone());
-    let marked = tuples
-        .has_relationship(
+    let marked = context
+        .projected_actor_relationship(
             AGENT_OWNERSHIP_POLICY_ID,
             resource,
             doc_id,
             "local_publication",
-            &actor,
+            runtime,
         )
-        .await
-        .map_err(failure)?;
+        .await?;
     if !marked {
+        if !provider.supports_transactions()
+            && !context
+                .registration_pending(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
+                .await?
+        {
+            return Ok(false);
+        }
         changed |= grant.change("reader", actor.clone(), false).await?;
         if collection_name == PEER_REGISTRY_NAME {
             changed |= grant.change("reader", Subject::Wildcard, false).await?;
@@ -182,20 +170,19 @@ pub async fn project_transport_document(
             .await?;
         changed |= grant.change("pending_parent", actor.clone(), false).await?;
     }
-    let pending = tuples
-        .has_relationship(
+    let pending = context
+        .projected_actor_relationship(
             AGENT_OWNERSHIP_POLICY_ID,
             resource,
             doc_id,
             "pending_parent",
-            &actor,
+            runtime,
         )
-        .await
-        .map_err(failure)?;
+        .await?;
     if !pending {
         return Ok(changed);
     }
-    let Some((node, owner)) = local_node(view, provider, runtime).await? else {
+    let Some((node, owner)) = local_node(context, runtime).await? else {
         return Ok(changed);
     };
     changed |= grant
@@ -204,10 +191,9 @@ pub async fn project_transport_document(
     if collection_name == PEER_REGISTRY_NAME
         && document.get("node_did").and_then(|value| value.as_str()) == Some(runtime.as_str())
     {
-        let creator = scoped
-            .get_doc_owner(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
-            .await
-            .map_err(failure)?
+        let creator = context
+            .projected_owner(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
+            .await?
             .ok_or_else(|| failure("registry document has no native owner"))?;
         let writer = if creator == *runtime {
             Some(owner.clone())
