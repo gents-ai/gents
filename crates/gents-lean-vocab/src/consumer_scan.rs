@@ -38,28 +38,65 @@ const FAMILY_CALL_SPELLINGS: &[&str] = &[
 /// per declaration and is not also counted through its uses.
 const CONVENTIONAL_ALIAS: &str = "family";
 
+/// The language a scanned file is written in: `.rs` and `.ts` differ in what a
+/// string means to this scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceLanguage {
+    Rust,
+    TypeScript,
+}
+
+impl SourceLanguage {
+    fn of(path: &std::path::Path) -> Self {
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("ts" | "tsx") => SourceLanguage::TypeScript,
+            _ => SourceLanguage::Rust,
+        }
+    }
+}
+
 /// Strip `//` line comments, `/* … */` blocks and string/char/raw-string literals.
 ///
 /// The scan is a source-text heuristic, so a commented-out `use … as wire;` or a
 /// doc-comment example would otherwise read as a declaration, and text inside a
 /// string as a call. Replaced with a space of the same length so byte offsets and
 /// word boundaries stay meaningful.
-fn strip_comments_and_strings(source: &str) -> String {
+/// The offset of the `r` and the hash count of a Rust raw string at `i`.
+///
+/// `r"…"`, `r#"…"#`, `br##"…"##`. Three conditions, each of which an earlier
+/// version missed: the `r` must begin a token (`r#type`, `r#try` and `r#fn` are
+/// identifiers); the hashes must be followed by the opening `"` (those
+/// identifiers have none); and the hash count is read from the `r`, not from the
+/// token start, where a `b` prefix would shift it by one.
+fn raw_string_opening(bytes: &[u8], i: usize) -> Option<(usize, usize)> {
+    if i > 0 && is_identifier(bytes[i - 1]) {
+        return None;
+    }
+    let mut at = i;
+    if bytes.get(at) == Some(&b'b') {
+        if bytes.get(at + 1) != Some(&b'r') {
+            return None;
+        }
+        at += 1;
+    } else if bytes.get(at) != Some(&b'r') {
+        return None;
+    }
+    let mut j = at + 1;
+    let hashes = bytes[j..].iter().take_while(|byte| **byte == b'#').count();
+    j += hashes;
+    (bytes.get(j) == Some(&b'"')).then_some((at, hashes))
+}
+
+fn strip_comments_and_strings(source: &str, language: SourceLanguage) -> String {
+    let _ = language;
     let bytes = source.as_bytes();
     let mut out = String::with_capacity(source.len());
     let mut i = 0;
     while i < bytes.len() {
-        // A raw string, r"…" / r#"…"# / br#"…"#.
-        let raw_start = {
-            let mut j = i;
-            if bytes[j] == b'b' && j + 1 < bytes.len() && bytes[j + 1] == b'r' {
-                j += 1;
-            }
-            (bytes[j] == b'r' && bytes.get(j + 1).is_some_and(|b| *b == b'"' || *b == b'#'))
-                .then_some(j)
-        };
-        if let Some(j) = raw_start {
-            let hashes = bytes[j + 1..].iter().take_while(|b| **b == b'#').count();
+        // A raw string, r"…" / r#"…"# / br#"…"#. `raw_string_opening` requires the
+        // `r` to begin a token, the hashes to be followed by `"`, and it reports
+        // the hash count from the `r` rather than from the token start.
+        if let Some((j, hashes)) = raw_string_opening(bytes, i) {
             let opening = j + 1 + hashes;
             let closer = format!("\"{}", "#".repeat(hashes));
             out.push(' ');
@@ -109,20 +146,35 @@ fn strip_comments_and_strings(source: &str) -> String {
                 out.extend(std::iter::repeat_n(' ', j - i));
                 i = j;
             }
-            // A char literal, `'\''`, vs a lifetime `'a`: only the former closes.
+            // A char literal, `'\''` / `'a'`, vs a lifetime `'a` or a stray
+            // apostrophe in prose. A literal is one character or one escape and
+            // nothing else; the old six-byte lookahead closed on a *later*
+            // apostrophe and blanked everything between, so a `"the user's"`
+            // in a `format!` string swallowed the `families::` path 70 bytes on.
             (b'\'', _) => {
-                let mut j = i + 1;
                 let mut closed = None;
-                while j < bytes.len() && j < i + 6 {
-                    if bytes[j] == b'\\' {
-                        j += 2;
-                        continue;
+                let mut j = i + 1;
+                if bytes.get(j) == Some(&b'\\') {
+                    j += 2;
+                    while j < bytes.len() && j <= i + 12 {
+                        match bytes[j] {
+                            b'\'' => {
+                                closed = Some(j + 1);
+                                break;
+                            }
+                            b'\n' => break,
+                            _ => j += 1,
+                        }
                     }
-                    if bytes[j] == b'\'' {
-                        closed = Some(j + 1);
-                        break;
+                } else if let Ok(rest) = std::str::from_utf8(&bytes[j..]) {
+                    if let Some(ch) = rest.chars().next() {
+                        if ch != '\'' && ch != '\n' {
+                            j += ch.len_utf8();
+                            if bytes.get(j) == Some(&b'\'') {
+                                closed = Some(j + 1);
+                            }
+                        }
                     }
-                    j += 1;
                 }
                 match closed {
                     Some(end) => {
@@ -141,6 +193,70 @@ fn strip_comments_and_strings(source: &str) -> String {
                 i += ch.len_utf8();
             }
         }
+    }
+    out
+}
+
+/// Strip `//` and `/* */` comments and keep string literals.
+///
+/// A `.ts` conformance table names its reader inside a string
+/// (`"families::<key>::cases()"`), so for those files only comments go.
+/// The offset just past the closing delimiter of a quoted run starting at `i`.
+///
+/// An escaped delimiter inside does not close it. An **unmatched** delimiter
+/// stops at the end of its line rather than swallowing the rest of the file: a
+/// stray quote is a local mistake, and blanking the remainder would hide every
+/// reader after it.
+fn quoted_end(source: &str, i: usize, delimiter: u8) -> usize {
+    let bytes = source.as_bytes();
+    let mut j = i + 1;
+    while j < bytes.len() {
+        match bytes[j] {
+            b'\\' => j += 2,
+            byte if byte == delimiter => return j + 1,
+            b'\n' => return j,
+            _ => j += 1,
+        }
+    }
+    source.len()
+}
+
+fn strip_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // A quoted run first, so `//` inside a string is not a comment and a
+        // template literal is copied through whole. A template's contents are a
+        // string, so a spelling inside one must not count.
+        let delimiter = match bytes[i] {
+            b'"' | b'`' | b'\'' => Some(bytes[i]),
+            _ => None,
+        };
+        if let Some(delimiter) = delimiter {
+            let end = quoted_end(source, i, delimiter);
+            out.push_str(&source[i..end]);
+            i = end;
+            continue;
+        }
+        if bytes[i..].starts_with(b"//") {
+            let end = source[i..]
+                .find('\n')
+                .map_or(source.len(), |found| i + found);
+            out.extend(std::iter::repeat_n(' ', end - i));
+            i = end;
+            continue;
+        }
+        if bytes[i..].starts_with(b"/*") {
+            let end = source[i + 2..]
+                .find("*/")
+                .map_or(source.len(), |found| i + 2 + found + 2);
+            out.extend(std::iter::repeat_n(' ', end - i));
+            i = end;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
     }
     out
 }
@@ -247,8 +363,20 @@ fn alias_use_count(source: &str, alias: &str) -> usize {
 /// Returns `Err` when one alias names two families in this file: the uses cannot
 /// say which is meant, and crediting both would let a family nobody replays be
 /// satisfied by a sibling's call.
+#[cfg(test)]
 fn reader_count(source: &str, key: &str, families: &BTreeSet<String>) -> Result<usize, String> {
-    reader_count_prepared(&prepare(source, families), key)
+    reader_count_in(source, key, families, SourceLanguage::Rust)
+}
+
+/// As [`reader_count`], for a file of a given language.
+#[cfg(test)]
+fn reader_count_in(
+    source: &str,
+    key: &str,
+    families: &BTreeSet<String>,
+    language: SourceLanguage,
+) -> Result<usize, String> {
+    reader_count_prepared(&prepare(source, families, language), key)
 }
 
 /// The per-file work `reader_count` needs, done once however many families are
@@ -260,12 +388,15 @@ fn reader_count(source: &str, key: &str, families: &BTreeSet<String>) -> Result<
 struct PreparedSource {
     /// The source with comments, strings and char literals blanked.
     stripped: String,
+    /// The text canonical spellings are counted in: `stripped` for Rust, a
+    /// comments-only copy for TypeScript.
+    spellings: String,
     /// Each alias in the file, the families it names, and its use count.
     aliases: Vec<(String, BTreeSet<String>, usize)>,
 }
 
-fn prepare(source: &str, families: &BTreeSet<String>) -> PreparedSource {
-    let stripped = strip_comments_and_strings(source);
+fn prepare(source: &str, families: &BTreeSet<String>, language: SourceLanguage) -> PreparedSource {
+    let stripped = strip_comments_and_strings(source, language);
     let aliases = alias_declarations(&stripped, families)
         .into_iter()
         .map(|(alias, keys)| {
@@ -273,17 +404,31 @@ fn prepare(source: &str, families: &BTreeSet<String>) -> PreparedSource {
             (alias, keys, uses)
         })
         .collect();
-    PreparedSource { stripped, aliases }
+    // The review's rule, exactly: `.ts`/`.tsx` count canonical spellings in a
+    // comments-stripped, strings-kept copy, because a conformance table names its
+    // reader in a string. `.rs` counts in `stripped`, so a Rust string — a panic
+    // message, a fixture source — is not a reader. Nothing is "restored" from a
+    // difference against the raw text, which previously undid the stripping for
+    // comments as well.
+    let spellings = match language {
+        SourceLanguage::TypeScript => strip_comments(source),
+        SourceLanguage::Rust => stripped.clone(),
+    };
+    PreparedSource {
+        stripped,
+        spellings,
+        aliases,
+    }
 }
 
 fn reader_count_prepared(prepared: &PreparedSource, key: &str) -> Result<usize, String> {
-    let stripped = &prepared.stripped;
+    let spellings = &prepared.spellings;
     let mut count: usize = FAMILY_CALL_SPELLINGS
         .iter()
-        .map(|site| stripped.matches(&format!("families::{key}{site}")).count())
+        .map(|site| spellings.matches(&format!("families::{key}{site}")).count())
         .sum();
     // The conventional alias, per declaration. Its uses are not counted too.
-    count += stripped
+    count += spellings
         .matches(&format!("families::{key} as {CONVENTIONAL_ALIAS};"))
         .count();
 
@@ -305,27 +450,6 @@ fn reader_count_prepared(prepared: &PreparedSource, key: &str) -> Result<usize, 
         }
     }
     Ok(count)
-}
-
-/// How many readers this file spells *inside string literals*.
-///
-/// Not every source file is Rust: `source_files` also walks `.ts`/`.tsx`, where
-/// a conformance table names its family as a string —
-/// `("families::<key>::cases()")`. `strip_comments_and_strings` blanks exactly
-/// that text, so the quoted spellings are counted here as the difference between
-/// the raw occurrence count and the stripped one. A bare spelling is therefore
-/// still counted once, not twice.
-fn quoted_reader_count(source: &str, key: &str, stripped: &str) -> usize {
-    FAMILY_CALL_SPELLINGS
-        .iter()
-        .map(|site| {
-            let needle = format!("families::{key}{site}");
-            source
-                .matches(&needle)
-                .count()
-                .saturating_sub(stripped.matches(&needle).count())
-        })
-        .sum()
 }
 
 /// Whether `alias` is actually replayed or enumerated, as `<alias>::replay(`.
@@ -617,7 +741,8 @@ pub fn consumer_sites(
             continue;
         }
         let prefix = format!("{DERIVED_FAMILIES}/");
-        let prepared = prepare(&source, families);
+        let language = SourceLanguage::of(&path);
+        let prepared = prepare(&source, families, language);
         for (family, key) in sites
             .keys()
             .filter_map(|family| {
@@ -635,11 +760,11 @@ pub fn consumer_sites(
             // path still counts: a loader call is a replay, and the per-key
             // count is zero only when nothing spells it out.
             // Quoted spellings count too: a `.ts` conformance table names a
-            // reader as a string literal, "families::<key>::cases()", and
-            // stripping string contents would erase it.
+            // reader as a string literal, "families::<key>::cases()". The
+            // language decides which text `prepare` counted in, so nothing is
+            // added back here.
             let calls = reader_count_prepared(&prepared, key)
-                .unwrap_or_else(|error| panic!("{relative}: {error}"))
-                + quoted_reader_count(&source, key, &prepared.stripped);
+                .unwrap_or_else(|error| panic!("{relative}: {error}"));
             // A zero spelling count does not mean no reader: `families_read`
             // above may have recorded this file already, through a loader.
             found.extend((1..=calls).map(|call| format!("{relative}#{call}")));
@@ -677,6 +802,12 @@ mod tests {
     fn count(source: &str, key: &str) -> usize {
         let families = scan_families();
         reader_count(source, key, &families).expect("no ambiguous alias")
+    }
+
+    fn ts_count(source: &str, key: &str) -> usize {
+        let families = scan_families();
+        reader_count_in(source, key, &families, SourceLanguage::TypeScript)
+            .expect("no ambiguous alias")
     }
 
     /// An alias that is replayed or enumerated is a reader of that family.
@@ -871,6 +1002,147 @@ mod tests {
                 "prose parentheses balance: {line}"
             );
         }
+    }
+
+    /// **Blocker.** A `.ts` conformance table names its reader in a string, so the
+    /// quoted spelling counts for a TypeScript file.
+    #[test]
+    fn a_typescript_table_string_counts_as_a_reader() {
+        let source = "export const CASES = [\n\
+                      \x20 ('families::alpha_family::cases()'),\n\
+                      \x20 ('families::alpha_family::replay(input)'),\n\
+                      ];\n";
+        assert_eq!(
+            ts_count(source, "alpha_family"),
+            2,
+            "two quoted spellings are two readers"
+        );
+    }
+
+    /// A commented-out spelling in a TypeScript file is not a reader.
+    #[test]
+    fn a_typescript_comment_does_not_count() {
+        for source in [
+            "// ('families::alpha_family::cases()')\nexport const X = 1;\n",
+            "/* ('families::alpha_family::cases()') */\nexport const X = 1;\n",
+        ] {
+            assert_eq!(ts_count(source, "alpha_family"), 0, "a comment: {source}");
+        }
+    }
+
+    /// **Blocker.** A `.rs` string restores nothing: a quoted spelling there is a
+    /// panic message or a fixture source, not a reader.
+    #[test]
+    fn a_rust_string_does_not_count() {
+        let source = "fn t() { panic!(\"families::alpha_family::cases()\"); }\n\
+                      const FIXTURE: &str = \"families::alpha_family::replay(x)\";\n";
+        assert_eq!(
+            count(source, "alpha_family"),
+            0,
+            "a Rust string is not a reader"
+        );
+    }
+
+    /// And a commented-out spelling in a Rust file is not a reader either.
+    #[test]
+    fn a_rust_comment_does_not_count() {
+        for source in [
+            "// families::alpha_family::cases()\nfn t() {}\n",
+            "/* families::alpha_family::cases() */\nfn t() {}\n",
+            "/// families::alpha_family::replay(x)\nfn t() {}\n",
+        ] {
+            assert_eq!(count(source, "alpha_family"), 0, "{source}");
+        }
+    }
+
+    /// A raw string needs `r`, zero or more `#`, then `"`. `r#type` and `r#try`
+    /// are identifiers, and the hash count must come from the `r`, not the token
+    /// start: `br#"…"#` once looked for `"##` and blanked the rest of the file.
+    #[test]
+    fn a_raw_hash_identifier_is_not_a_string() {
+        let source = "fn t(r#type: &str) { gents_lean_vocab::families::alpha_family::cases(); }\n\
+                      fn u(r#try: u8) {}\n";
+        assert_eq!(
+            count(source, "alpha_family"),
+            1,
+            "a raw identifier is not a string"
+        );
+
+        let raw = "const S: &str = r#\"families::alpha_family::cases()\"#;\nfn t() {}\n";
+        assert_eq!(count(raw, "alpha_family"), 0, "a raw string is blanked");
+
+        // A byte raw string is blanked, and a reader after it survives: the hash
+        // count is one, so the closer is `"#`, not `"##`.
+        let byte_raw = "let p = format!(br#\"{}\"#, 1);\n\
+                        fn t() { gents_lean_vocab::families::alpha_family::cases(); }\n";
+        assert_eq!(
+            count(byte_raw, "alpha_family"),
+            1,
+            "br#\"…\"# closes at `\"#`, so the reader after it counts"
+        );
+    }
+
+    /// Lifetimes are not char literals: `&'a T, &'b U` must not blank the body,
+    /// and neither must an apostrophe in prose.
+    #[test]
+    fn lifetimes_are_not_char_literals() {
+        let source = "fn t<'a, 'b>(x: &'a T, y: &'b U) {\n\
+                      \x20 gents_lean_vocab::families::alpha_family::cases();\n\
+                      }\n";
+        assert_eq!(count(source, "alpha_family"), 1, "lifetimes blank nothing");
+
+        let prose = "fn t() {\n\
+                     \x20 let m = format!(\"the user's build\");\n\
+                     \x20 gents_lean_vocab::families::alpha_family::cases();\n\
+                     }\n";
+        assert_eq!(
+            count(prose, "alpha_family"),
+            1,
+            "an apostrophe in a string must not swallow the reader after it"
+        );
+
+        let ch =
+            "const C: char = 'x';\nfn t() { gents_lean_vocab::families::alpha_family::cases(); }\n";
+        assert_eq!(count(ch, "alpha_family"), 1, "a char literal is blanked");
+    }
+
+    /// A TypeScript template literal spans lines. It is a string, and a `.ts`
+    /// spelling is counted with strings kept, so its contents count like any
+    /// other string's — and, crucially, the template terminates rather than
+    /// swallowing the file.
+    #[test]
+    fn a_typescript_template_literal_spans_lines_and_terminates() {
+        let source = "const q = `\n\
+                      families::alpha_family::cases()\n\
+                      `;\n\
+                      export const X = ('families::alpha_family::replay(i)');\n";
+        assert_eq!(
+            ts_count(source, "alpha_family"),
+            2,
+            "the template's spelling and the table's both count: {source}"
+        );
+        // And a comment after it is still blanked, so the template did not
+        // swallow the rest of the file.
+        let after_comment = "const q = `x`;\n\
+                             // families::alpha_family::cases()\n\
+                             export const X = ('families::alpha_family::replay(i)');\n";
+        assert_eq!(
+            ts_count(after_comment, "alpha_family"),
+            1,
+            "a comment after a template is still a comment: {after_comment}"
+        );
+    }
+
+    /// An unmatched quote stops at its line rather than swallowing the file.
+    #[test]
+    fn an_unmatched_quote_stops_at_the_end_of_its_line() {
+        let source = "const broken = 'no closing quote\n\
+                      export const X = ('families::alpha_family::cases()');\n";
+        assert_eq!(
+            ts_count(source, "alpha_family"),
+            1,
+            "a stray quote must not swallow the readers after it: {source}"
+        );
     }
 
     #[test]
