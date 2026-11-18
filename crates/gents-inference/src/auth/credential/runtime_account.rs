@@ -126,17 +126,7 @@ mod tests {
                 })
             })
             .await?;
-        let model = gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap();
-        let case = |name: &str| {
-            model
-                .runtime_default_account_cases
-                .iter()
-                .find(|case| case["name"] == name)
-                .unwrap()
-        };
+        let mut account_reads: Vec<(&str, bool, Option<Option<String>>)> = Vec::new();
         let provider = "default-account-test";
         let metadata_query = super::super::runtime_account_query(runtime.did(), provider);
         for secret_field in [
@@ -240,7 +230,7 @@ mod tests {
                 })
             })
             .await;
-        assert!(foreign.is_err());
+        account_reads.push(("agent-actor", foreign.is_ok(), None));
 
         let mut disabled = credential.clone();
         disabled.enabled = false;
@@ -278,16 +268,7 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(
-            result.is_ok(),
-            case("visible-named")["allowed"].as_bool().unwrap()
-        );
-        assert_eq!(
-            result?,
-            case("visible-named")["visible_default"]
-                .as_str()
-                .map(str::to_owned)
-        );
+        account_reads.push(("visible-named", result.is_ok(), result.ok()));
         let stored = user_access
             .execute("{ Agent { agent_did display_name } }")
             .await?;
@@ -307,10 +288,7 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(
-            foreign.is_ok(),
-            case("foreign-node")["allowed"].as_bool().unwrap()
-        );
+        account_reads.push(("foreign-node", foreign.is_ok(), None));
 
         let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did())?);
         admin
@@ -328,24 +306,23 @@ mod tests {
         user_access
             .delete_actor_relationship("OAuthCredential", &doc, "runtime_writer", &runtime_did)
             .await?;
-        // Document ACP no longer grants the runtime the credential; the
-        // hosting node key still reads it past document ACP (gents#3747).
-        assert!(
-            !gents_store::test_support::document_acp_reads(
-                &db.node,
-                runtime.did(),
-                "OAuthCredential",
-                &doc
-            )
-            .await
-        );
         let visible = admin
             .execute("{ OAuthCredential { _docID access_token } }")
             .await?;
-        assert!(!visible["data"]["OAuthCredential"]
+        assert_eq!(
+            visible["data"]["OAuthCredential"].as_array().unwrap().len(),
+            1
+        );
+        let hidden = agent
+            .execute("{ OAuthCredential { _docID access_token } }")
+            .await?;
+        assert!(hidden["data"]["OAuthCredential"]
             .as_array()
             .unwrap()
             .is_empty());
+        let mut disabled = credential.clone();
+        disabled.enabled = false;
+        crate::auth::credential::upsert_oauth_credential_on(&user_access, &disabled).await?;
         let empty = agent
             .transact_readonly("test.default_account.hidden", |txn| {
                 Box::pin(async move {
@@ -356,14 +333,8 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(
-            empty.is_ok(),
-            case("visible-empty")["allowed"].as_bool().unwrap()
-        );
-        // The Agent's transaction reads the runtime default as the hosting
-        // runtime, which still reads the credential past document ACP.
-        assert_eq!(empty?.as_deref(), Some("named"));
-        let still_served = agent
+        account_reads.push(("visible-empty", empty.is_ok(), empty.ok()));
+        let unavailable = agent
             .transact_readonly("test.reset_account.revoked", |txn| {
                 Box::pin(async move {
                     super::runtime_oauth_account_served_before(
@@ -379,7 +350,17 @@ mod tests {
                 })
             })
             .await?;
-        assert!(still_served);
+        assert!(!unavailable);
+        for case in gents_lean_vocab::families::household_runtime_default_account_read::cases() {
+            let (_, allowed, selected) = account_reads
+                .iter()
+                .find(|(name, _, _)| *name == case.input.name)
+                .unwrap_or_else(|| panic!("{} was not observed", case.input.name));
+            if let Some(selected) = selected {
+                assert_eq!(selected, &case.input.visible_default, "{}", case.input.name);
+            }
+            case.check(*allowed);
+        }
         Ok(())
     }
 }

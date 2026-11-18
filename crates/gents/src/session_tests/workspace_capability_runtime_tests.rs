@@ -612,7 +612,7 @@ async fn overlapping_native_workspace_fences_conflict(
     for handle in [&first, &second] {
         let response = node
             .execute_request_in_txn(
-                signer.native().attach(
+                signer.attach(
                     defra_node::QueryRequest::new(&query)
                         .with_identity(Some(writer.did().parse()?)),
                 ),
@@ -645,7 +645,7 @@ async fn overlapping_native_workspace_fences_conflict(
         );
         let response = node
             .execute_request_in_txn(
-                signer.native().attach(
+                signer.attach(
                     defra_node::QueryRequest::new(&fence)
                         .with_identity(Some(writer.did().parse()?)),
                 ),
@@ -671,7 +671,7 @@ async fn overlapping_native_workspace_fences_conflict(
         let mutation = workspace_binding_upsert_mutation(&document);
         let response = node
             .execute_request_in_txn(
-                signer.native().attach(
+                signer.attach(
                     defra_node::QueryRequest::new(&mutation)
                         .with_identity(Some(writer.did().parse()?)),
                 ),

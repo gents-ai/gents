@@ -1,8 +1,5 @@
 use anyhow::Context;
 use gents_automation::goal::{load_canonical_goal_in_txn, seed_goal_from_access};
-use gents_lean_vocab::{
-    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
-};
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use gents_protocol::tool_call::AwaitMode;
@@ -93,8 +90,8 @@ async fn create_failed_wake(admission: &PublishedAdmission, mutation: &str) {
         .expect("publish failed wake with Agent relationships");
 }
 
-fn goal_status(case: &LeanR6BackgroundingCase) -> Option<GoalStatus> {
-    case.goal_status.as_deref().map(|status| match status {
+fn goal_status(status: Option<&str>) -> Option<GoalStatus> {
+    status.map(|status| match status {
         "active" => GoalStatus::Active,
         "paused" => GoalStatus::Paused,
         "blocked" => GoalStatus::Blocked,
@@ -105,12 +102,8 @@ fn goal_status(case: &LeanR6BackgroundingCase) -> Option<GoalStatus> {
     })
 }
 
-async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> PublishedAdmission {
-    let redrive = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
-    let name = format!(
-        "completion-owner-parent-{}-{branch}",
-        redrive.pre_parent_request_id.unwrap()
-    );
+async fn admitted_parent(goal: Option<GoalStatus>, branch: &str) -> PublishedAdmission {
+    let name = format!("completion-owner-parent-{branch}");
     let admission = published_admission(PublishedAdmissionOptions {
         name,
         real_identity: true,
@@ -133,7 +126,7 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
     )
     .await;
     let session = admission.tool.session_id.as_str();
-    if let Some(status) = goal_status(case) {
+    if let Some(status) = goal {
         seed_goal_from_access(
             &admission.tool.access().unwrap(),
             &admission.node_did,
@@ -196,8 +189,14 @@ fn recovery_identities(
     )]
 }
 
-async fn drive_notification(case: &LeanR6BackgroundingCase) {
-    let mut admission = admitted_parent(case, "notification").await;
+struct NotificationObservation {
+    notification_persisted: bool,
+    wake_created: bool,
+    tool_state: String,
+}
+
+async fn drive_notification(name: &str, goal: Option<GoalStatus>) -> NotificationObservation {
+    let mut admission = admitted_parent(goal, "notification").await;
     let node = &admission.node;
     let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
@@ -223,10 +222,10 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
         .unwrap());
     let pending = rows(&access, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state request_doc_id }} }}"#,
         escape_graphql_string(&tool_doc)), "AgentToolCall").await;
-    assert_eq!(pending.len(), 1, "{}", case.name);
-    assert_eq!(pending[0]["status"], "completionPending", "{}", case.name);
-    assert_eq!(pending[0]["lifecycle_state"], "completed", "{}", case.name);
-    assert_eq!(pending[0]["request_doc_id"], parent_doc, "{}", case.name);
+    assert_eq!(pending.len(), 1, "{name}");
+    assert_eq!(pending[0]["status"], "completionPending", "{name}");
+    assert_eq!(pending[0]["lifecycle_state"], "completed", "{name}");
+    assert_eq!(pending[0]["request_doc_id"], parent_doc, "{name}");
 
     let first = ToolCallLifecycle::reconcile_background_completion_side_effects(
         node,
@@ -235,7 +234,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
     )
     .await
     .expect("redrive durable native completion side effects");
-    assert_eq!(first.side_effects_converged, 1, "{}: {first:?}", case.name);
+    assert_eq!(first.side_effects_converged, 1, "{name}: {first:?}");
     let second = ToolCallLifecycle::reconcile_background_completion_side_effects(
         node,
         did,
@@ -243,35 +242,24 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
     )
     .await
     .expect("replay completion side effects");
-    assert!(second.is_noop(), "{}: {second:?}", case.name);
+    assert!(second.is_noop(), "{name}: {second:?}");
 
     let notifications = notification_texts(&admission).await;
-    assert_eq!(
-        !notifications.is_empty(),
-        case.notification_persisted.unwrap(),
-        "{}",
-        case.name
-    );
+    let notification_persisted = !notifications.is_empty();
     assert_eq!(
         notifications.len(),
         1,
-        "{}: replay duplicated notification",
-        case.name
+        "{name}: replay duplicated notification"
     );
     assert!(
         notifications[0].1.contains("durable native output"),
-        "{}",
-        case.name
+        "{name}"
     );
     let requests = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state execution_origin input }} }}"#,
         escape_graphql_string(&session)), "AgentRequest").await;
-    assert_eq!(
-        requests.len(),
-        1 + usize::from(case.wake_created.unwrap()),
-        "{}",
-        case.name
-    );
-    let consumer = if case.wake_created.unwrap() {
+    assert!(matches!(requests.len(), 1 | 2), "{name}: {requests:?}");
+    let wake_created = requests.len() == 2;
+    let consumer = if wake_created {
         requests
             .iter()
             .find(|row| row["request_id"] != parent)
@@ -284,39 +272,34 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
     };
     assert_eq!(
         notifications[0].0["request_doc_id"], consumer["_docID"],
-        "{}",
-        case.name
+        "{name}"
     );
-    if case.wake_created.unwrap() {
-        assert_eq!(consumer["execution_origin"], "scheduled", "{}", case.name);
+    if wake_created {
+        assert_eq!(consumer["execution_origin"], "scheduled", "{name}");
         assert_eq!(
             consumer["input"]["queue"]["source"], "background_completion",
-            "{}",
-            case.name
+            "{name}"
         );
         assert_eq!(
             consumer["input"]["queue"]["key"],
             format!("background_completion:{session}"),
-            "{}",
-            case.name
+            "{name}"
         );
     }
     let tool = rows(&access, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state completion_notification_delivered_at }} }}"#,
         escape_graphql_string(&tool_doc)), "AgentToolCall").await;
     assert_eq!(tool.len(), 1);
-    assert_eq!(tool[0]["status"], "completed", "{}", case.name);
-    assert_eq!(tool[0]["lifecycle_state"], "completed", "{}", case.name);
+    assert_eq!(tool[0]["status"], "completed", "{name}");
+    let tool_state = tool[0]["lifecycle_state"].as_str().unwrap().to_owned();
     assert!(
         tool[0]["completion_notification_delivered_at"].is_string(),
-        "{}",
-        case.name
+        "{name}"
     );
     let after = canonical_goal(&access, did, &session).await;
     assert_eq!(
         json!(before),
         json!(after),
-        "{}: completion changed Goal",
-        case.name
+        "{name}: completion changed Goal"
     );
     admission
         .node
@@ -324,6 +307,11 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
         .await
         .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
+    NotificationObservation {
+        notification_persisted,
+        wake_created,
+        tool_state,
+    }
 }
 
 async fn seed_session_head(access: &ConfigAccess, session: &str, request: &Value) {
@@ -351,8 +339,29 @@ async fn seed_session_head(access: &ConfigAccess, session: &str, request: &Value
     );
 }
 
-async fn drive_redrive(case: &LeanR6BackgroundingCase) {
-    let admission = admitted_parent(case, "redrive").await;
+/// A failed wake the scenario publishes on the completed parent's session;
+/// a newer interactive request makes it no longer the session's head.
+struct FailedWakeFixture {
+    request_id: u64,
+    retry_count: u64,
+    max_retries: u64,
+    depth: u64,
+    deadline: Option<u64>,
+    source: QueueSource,
+    latest: bool,
+}
+
+struct RedriveObservation {
+    redriven: bool,
+    successor: Option<Value>,
+}
+
+async fn drive_redrive(
+    name: &str,
+    goal: Option<GoalStatus>,
+    wake: FailedWakeFixture,
+) -> RedriveObservation {
+    let admission = admitted_parent(goal, "redrive").await;
     let node = &admission.node;
     let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
@@ -370,27 +379,23 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     .await;
     assert_eq!(parent_row.len(), 1);
     let parent = parent_row[0]["request_id"].as_str().unwrap();
-    let model = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
-    assert_eq!(
-        model.post_parent_request_id,
-        model.redrive_source_request_id
-    );
-    let failed_wake = format!("failed-wake-{}", model.redrive_source_request_id.unwrap());
-    let source_depth = model.pre_depth.unwrap();
-    let source_retry_count = model.retry_count.unwrap();
-    let max_retries = model.max_retries.unwrap();
-    let source_deadline =
-        chrono::DateTime::from_timestamp(model.pre_execution_deadline.unwrap() as i64, 0)
+    let failed_wake = format!("failed-wake-{}", wake.request_id);
+    let source_depth = wake.depth;
+    let source_retry_count = wake.retry_count;
+    let max_retries = wake.max_retries;
+    let source_deadline = wake.deadline.map(|deadline| {
+        chrono::DateTime::from_timestamp(deadline as i64, 0)
             .unwrap()
-            .to_rfc3339();
+            .to_rfc3339()
+    });
     let before = canonical_goal(&access, did, session).await;
     let input = RequestInput {
         queue: Some(RequestQueue {
             delivery: Default::default(),
             position: None,
-            source: QueueSource::BackgroundCompletion,
+            source: wake.source,
             policy: QueuePolicy::Coalesce,
-            key: Some(format!("background_completion:{session}")),
+            key: Some(wake.source.queue_key(session)),
             queued_after_request_id: Some(parent.to_owned()),
             interrupted_request_id: None,
             background_completion_wake_version: Some(1),
@@ -400,6 +405,10 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     let input =
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
+    let deadline = source_deadline
+        .as_deref()
+        .map(|deadline| format!(r#"deadline: "{}","#, escape_graphql_string(deadline)))
+        .unwrap_or_default();
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{agent_did}",
@@ -408,7 +417,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",
         created_at: "2026-07-15T00:00:00Z", retry_count: {source_retry_count}, max_retries: {max_retries},
         retry_root_request: "{}", terminal_redrive_attempts: 0,
-        request_hop: {source_depth}, deadline: "{}",
+        request_hop: {source_depth}, {deadline}
         caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}"
     }}) {{ _docID }} }}"#,
         escape_graphql_string(&failed_wake),
@@ -416,7 +425,6 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         escape_graphql_string(admission.requester_identity.did()),
         escape_graphql_string(session),
         escape_graphql_string(&failed_wake),
-        escape_graphql_string(&source_deadline),
         escape_graphql_string(parent),
         escape_graphql_string(parent_doc)
     );
@@ -425,6 +433,21 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         escape_graphql_string(&failed_wake)), "AgentRequest").await;
     assert_eq!(source.len(), 1);
     seed_session_head(&access, session, &source[0]).await;
+    if !wake.latest {
+        let newer = format!(
+            r#"mutation {{ create_AgentRequest(input: {{
+            request_id: "newer-interactive", purpose: "normal", node_did: "{}", requester_did: "{}",
+            agent_did: "{agent_did}", session_id: "{}", content: "newer input",
+            execution_origin: "interactive", lifecycle_state: "processing",
+            created_at: "2026-07-15T00:00:01Z", retry_count: 0, max_retries: {max_retries},
+            retry_root_request: "newer-interactive", terminal_redrive_attempts: 0, request_hop: 0
+        }}) {{ _docID }} }}"#,
+            escape_graphql_string(did),
+            escape_graphql_string(admission.requester_identity.did()),
+            escape_graphql_string(session),
+        );
+        create_failed_wake(&admission, &newer).await;
+    }
 
     let first = gents_session::request::lifecycle::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
         node,
@@ -433,13 +456,8 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     )
     .await
     .unwrap();
-    assert_eq!(
-        first.redriven > 0,
-        case.redrive_allowed.unwrap(),
-        "{}: {first:?}",
-        case.name
-    );
-    assert_eq!(first.failed, 0, "{}: {first:?}", case.name);
+    let redriven = first.redriven > 0;
+    assert_eq!(first.failed, 0, "{name}: {first:?}");
     let second = gents_session::request::lifecycle::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
         node,
         did,
@@ -447,7 +465,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     )
     .await
     .unwrap();
-    assert_eq!(second.redriven, 0, "{}: replay added successor", case.name);
+    assert_eq!(second.redriven, 0, "{name}: replay added successor");
     let requests = rows(
         &access,
         &format!(
@@ -463,80 +481,151 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     .await;
     assert_eq!(
         requests.len(),
-        2 + usize::from(case.redrive_allowed.unwrap()),
-        "{}",
-        case.name
+        2 + usize::from(!wake.latest) + usize::from(redriven),
+        "{name}"
     );
-    if case.redrive_allowed.unwrap() {
-        let source = requests
-            .iter()
-            .find(|row| row["request_id"] == failed_wake)
-            .unwrap();
-        let successor = requests
-            .iter()
-            .find(|row| row["request_id"] != parent && row["request_id"] != failed_wake)
-            .unwrap();
-        assert_eq!(source["lifecycle_state"], "failed", "{}", case.name);
-        assert_eq!(source["request_hop"].as_u64(), Some(source_depth));
-        assert_eq!(source["deadline"].as_str(), Some(source_deadline.as_str()));
-        assert_eq!(source["caused_by_parent_request_id"], parent);
-        assert_eq!(source["caused_by_parent_request_doc_id"], parent_doc);
-        assert_eq!(
-            source["retry_count"].as_u64(),
-            model.retry_count.map(|v| v as u64)
-        );
-        assert_eq!(successor["caused_by_parent_request_id"], failed_wake);
+    let source = requests
+        .iter()
+        .find(|row| row["request_id"] == failed_wake)
+        .unwrap();
+    assert_eq!(source["lifecycle_state"], "failed", "{name}");
+    assert_eq!(source["request_hop"].as_u64(), Some(source_depth));
+    assert_eq!(source["deadline"].as_str(), source_deadline.as_deref());
+    assert_eq!(source["caused_by_parent_request_id"], parent);
+    assert_eq!(source["caused_by_parent_request_doc_id"], parent_doc);
+    assert_eq!(source["retry_count"].as_u64(), Some(source_retry_count));
+    let successor = requests
+        .iter()
+        .find(|row| {
+            row["request_id"] != parent
+                && row["request_id"] != failed_wake
+                && row["request_id"] != "newer-interactive"
+        })
+        .cloned();
+    if let Some(successor) = &successor {
         assert_eq!(
             successor["caused_by_parent_request_doc_id"],
             source["_docID"]
         );
         assert_eq!(successor["retry_parent_request"], failed_wake);
         assert_eq!(successor["retry_parent_request_doc_id"], source["_docID"]);
-        assert_eq!(successor["request_hop"].as_u64(), model.post_depth);
-        assert_eq!(
-            successor["retry_count"].as_u64(),
-            model.post_retry_count.map(|v| v as u64)
-        );
         assert_eq!(successor["max_retries"], max_retries);
-        assert!(successor["backend_id"].is_null(), "{}", case.name);
-        assert!(successor["deadline"].is_null(), "{}", case.name);
+        assert!(successor["backend_id"].is_null(), "{name}");
     }
     let after = canonical_goal(&access, did, session).await;
-    assert_eq!(
-        json!(before),
-        json!(after),
-        "{}: redrive changed Goal",
-        case.name
-    );
+    assert_eq!(json!(before), json!(after), "{name}: redrive changed Goal");
     admission
         .node
         .shutdown()
         .await
         .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
+    RedriveObservation {
+        redriven,
+        successor,
+    }
+}
+
+fn successor_request_id(successor: &Value) -> Option<u64> {
+    successor["caused_by_parent_request_id"]
+        .as_str()?
+        .strip_prefix("failed-wake-")?
+        .parse()
+        .ok()
 }
 
 #[tokio::test]
 async fn generated_r6_completion_owner_cases_use_accepted_native_output() {
-    let cases = lean_r6_backgrounding_cases();
-    let cases: Vec<_> = cases
-        .iter()
-        .filter(|case| case.group == "completion_continuation_owner")
-        .collect();
-    assert_eq!(cases.len(), 7, "Lean completion-owner family drifted");
-    for case in cases {
-        assert_eq!(
-            case.action, "notify_and_select_continuation_owner",
-            "{}",
-            case.name
+    for case in gents_lean_vocab::families::contracts_r6_goal_owner_side_effects::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
+        let goal = goal_status(input.goal_status.as_deref());
+        let notified = drive_notification(name, goal).await;
+        let redrive = drive_redrive(
+            name,
+            goal,
+            FailedWakeFixture {
+                request_id: input.wake_request_id,
+                retry_count: input.wake_retry_count,
+                max_retries: input.wake_max_retries,
+                depth: input.wake_depth,
+                deadline: input.wake_deadline,
+                source: QueueSource::BackgroundCompletion,
+                latest: true,
+            },
+        )
+        .await;
+        if let Some(successor) = &redrive.successor {
+            assert_eq!(successor_request_id(successor), Some(input.wake_request_id));
+            assert!(successor["deadline"].is_null(), "{name}");
+        }
+        case.check(
+            gents_lean_vocab::families::contracts_r6_goal_owner_side_effects::GoalOwnerOutput {
+                legal: notified.notification_persisted,
+                terminal_state: notified.tool_state,
+                notification_persisted: notified.notification_persisted,
+                wake_created: notified.wake_created,
+                redrive_allowed: redrive.redriven,
+                successor_retry_count: redrive
+                    .successor
+                    .as_ref()
+                    .and_then(|successor| successor["retry_count"].as_u64()),
+                successor_depth: redrive
+                    .successor
+                    .as_ref()
+                    .and_then(|successor| successor["request_hop"].as_u64()),
+            },
         );
-        assert!(
-            case.legal && case.notification_persisted == Some(true),
-            "{}",
-            case.name
+    }
+}
+
+/// Each failed wake is published on its own completed parent; the successor's
+/// parent is the failed wake it retries, named by its modeled request id.
+#[tokio::test]
+async fn generated_r6_failed_wakes_redrive_through_the_recovery_owner() {
+    for case in gents_lean_vocab::families::contracts_r6_redrive::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
+        assert_eq!(input.terminal_state, "failed", "{name}");
+        let source: QueueSource =
+            serde_json::from_value(json!(input.queue_source)).expect("modeled queue source");
+        let redrive = drive_redrive(
+            name,
+            None,
+            FailedWakeFixture {
+                request_id: input.redrive_source_request_id,
+                retry_count: input.retry_count,
+                max_retries: input.max_retries,
+                depth: input.pre_depth,
+                deadline: input.pre_execution_deadline,
+                source,
+                latest: input.is_latest,
+            },
+        )
+        .await;
+        let legal = redrive.redriven;
+        let successor = redrive.successor.as_ref();
+        case.check(
+            gents_lean_vocab::families::contracts_r6_redrive::RedriveOutput {
+                legal,
+                post_retry_count: successor.and_then(|successor| successor["retry_count"].as_u64()),
+                post_depth: successor.and_then(|successor| successor["request_hop"].as_u64()),
+                post_parent_request_id: successor.and_then(successor_request_id),
+                post_execution_deadline: successor
+                    .and_then(|successor| successor["deadline"].as_str())
+                    .map(|deadline| {
+                        chrono::DateTime::parse_from_rfc3339(deadline)
+                            .unwrap()
+                            .timestamp() as u64
+                    }),
+                retry_delay_seconds: legal.then(|| {
+                    gents_session::request::lifecycle::background_wake_retry_delay(
+                        input.retry_count as i64,
+                    )
+                    .num_seconds() as u64
+                }),
+            },
         );
-        drive_notification(case).await;
-        drive_redrive(case).await;
     }
 }
 
@@ -545,14 +634,7 @@ async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity;
 
-    let cases = lean_r6_backgrounding_cases();
-    let case = cases
-        .iter()
-        .find(|case| {
-            case.group == "completion_continuation_owner" && case.wake_created == Some(true)
-        })
-        .expect("modeled completion with a fresh wake");
-    let mut admission = admitted_parent(case, "user-visible-wake").await;
+    let mut admission = admitted_parent(None, "user-visible-wake").await;
     assert!(admission
         .tool
         .complete_owned("durable native output", None)
@@ -716,6 +798,8 @@ pub struct SelectedBackgroundWake {
     pub admission: PublishedAdmission,
     pub wake: gents_protocol::row::AgentRequest,
     pub notification_text: String,
+    wait_precedes_notification: bool,
+    queue: RequestQueue,
     wait_header: String,
     wait_native: gents_protocol::message::Message,
     notifications: Vec<(Value, String)>,
@@ -737,19 +821,6 @@ pub async fn selected_background_wake_with_successor(
         published_session_message_with_owner,
     };
     use std::time::Duration;
-
-    let case =
-        lean_r6_backgrounding_case("terminal_completion_message_precedes_claimed_continuation");
-    assert!(case.legal);
-    assert_eq!(case.action, "terminalize_append_notification_enqueue_claim");
-    assert_eq!(
-        case.result.as_deref(),
-        Some("assistant_wait_precedes_notification")
-    );
-    assert_eq!(case.reason.as_deref(), Some("continuation_claimed"));
-    assert_eq!(case.terminal_state, "completed");
-    assert_eq!(case.queue_source.as_deref(), Some("background_completion"));
-    assert_eq!(case.queue_key.as_deref(), Some("background_completion:900"));
 
     let (message, mut owner) = published_session_message_with_owner(PublishedAdmissionOptions {
         name: "completion-order".into(),
@@ -852,7 +923,7 @@ pub async fn selected_background_wake_with_successor(
     .unwrap();
     assert!(matches!(wait_native, Message::Assistant { ref content, .. }
         if content.iter().any(|part| matches!(part, AssistantContent::ToolCall(call) if call.function.name == gents_protocol::tool_names::LIST_PROCESSES_TOOL_NAME))));
-    assert!(wait_record.sequence < notification_record.sequence);
+    let wait_precedes_notification = wait_record.sequence < notification_record.sequence;
     assert!(notifications[0].1.contains("<tool-completion"));
     assert!(notifications[0].1.contains("durable native output"));
 
@@ -878,7 +949,7 @@ pub async fn selected_background_wake_with_successor(
         wake.lifecycle_state,
         Some(gents_protocol::request_lifecycle::RequestLifecycleState::Pending)
     );
-    let queue = wake.input.as_ref().unwrap().queue.as_ref().unwrap();
+    let queue = wake.input.as_ref().unwrap().queue.clone().unwrap();
     assert_eq!(queue.policy, QueuePolicy::Coalesce);
     assert_eq!(wake.request_hop, Some(0));
     assert_eq!(
@@ -933,6 +1004,8 @@ pub async fn selected_background_wake_with_successor(
             admission,
             wake: selected,
             notification_text: notifications[0].1.clone(),
+            wait_precedes_notification,
+            queue,
             wait_header,
             wait_native,
             notifications,
@@ -941,16 +1014,40 @@ pub async fn selected_background_wake_with_successor(
     )
 }
 
+/// The continuation's queue key names the runtime's session id; the model
+/// names it by the input's key.
 #[tokio::test]
 async fn generated_r6_notification_precedes_continuation_claim() {
+    for case in gents_lean_vocab::families::contracts_r6_continuation::cases() {
+        let observed = claim_selected_continuation(&case.input.session_key).await;
+        case.check(observed);
+    }
+}
+
+async fn claim_selected_continuation(
+    session_key: &str,
+) -> gents_lean_vocab::families::contracts_r6_continuation::ContinuationOutput {
     let SelectedBackgroundWake {
         admission,
         wake: selected,
         notification_text: _,
+        wait_precedes_notification,
+        queue,
         wait_header,
         wait_native,
         notifications,
     } = selected_background_wake().await;
+    let session = admission.tool.session_id.clone();
+    let tool = rows(
+        &admission.tool.access().unwrap(),
+        &format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+            escape_graphql_string(admission.tool.doc_id().unwrap())
+        ),
+        "AgentToolCall",
+    )
+    .await;
+    assert_eq!(tool.len(), 1);
     let node = &admission.node;
     let did = &admission.node_did;
     let mut continuation = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
@@ -965,11 +1062,8 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         .managed_agent_signer()
         .unwrap();
     continuation.bind_managed_agent(&signer).unwrap();
-    assert_eq!(
-        continuation.claim_with_identity().await.unwrap(),
-        gents_session::request::lifecycle::ClaimOutcome::Claimed,
-        "the selected wake must claim through the real lifecycle owner"
-    );
+    let claimed = continuation.claim_with_identity().await.unwrap()
+        == gents_session::request::lifecycle::ClaimOutcome::Claimed;
     let after = notification_texts(&admission).await;
     assert_eq!(
         after, notifications,
@@ -990,12 +1084,25 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     drop(continuation);
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
+    gents_lean_vocab::families::contracts_r6_continuation::ContinuationOutput {
+        terminal_state: tool[0]["lifecycle_state"].as_str().unwrap().to_owned(),
+        wait_precedes_notification,
+        continuation_claimed: claimed,
+        queue_source: serde_json::to_value(queue.source)
+            .unwrap()
+            .as_str()
+            .map(str::to_owned),
+        queue_key: queue
+            .key
+            .as_deref()
+            .and_then(|key| key.strip_suffix(session.as_str()))
+            .map(|prefix| format!("{prefix}{session_key}")),
+    }
 }
 
 #[tokio::test]
 async fn a_retried_over_bound_wake_is_refused_again() {
-    let case = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
-    let admission = admitted_parent(case, "over-bound-redrive").await;
+    let admission = admitted_parent(None, "over-bound-redrive").await;
     let node = &admission.node;
     let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();

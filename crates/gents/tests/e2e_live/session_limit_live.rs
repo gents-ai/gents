@@ -96,7 +96,6 @@ async fn live_child_without_an_execution_limit_completes_a_six_step_read() {
             agents: Some(AgentTools {
                 enabled: Some(true),
                 target_ids: vec!["chain-worker".into()],
-                ..Default::default()
             }),
             ..Default::default()
         },

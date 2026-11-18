@@ -70,19 +70,39 @@ async fn managed_enrollment_discovers_restarted_endpoint_without_changing_author
         let server = MockServer::start().await;
         let graphql = format!("{}/api/v0/graphql", server.uri());
         let new_address = format!("127.0.0.1:56001/p2p/{address_peer}");
-        for (route, body) in [
-            (
-                "/status",
-                json!({"node_did": live_owner, "lifecycle": "ready"}),
-            ),
-            (
-                "/api/v0/p2p/shareable-address",
-                json!({"address": new_address}),
-            ),
-            ("/api/v0/node/identity", json!({"peer_id": live_peer})),
-        ] {
+        let admin =
+            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("offer.key"), None)
+                .unwrap();
+        let mut offer = gents_protocol::enrollment::EnrollmentOfferRecord {
+            version: ENROLLMENT_PROTOCOL_VERSION,
+            offer_id: "discovery-offer".into(),
+            challenge: "discovery-challenge".into(),
+            network_id: "network".into(),
+            admin_did: admin.did().into(),
+            server_peer: live_peer.into(),
+            server_ticket: new_address.clone(),
+            owner_node_did: live_owner.into(),
+            profile: "client".into(),
+            schema_fingerprint: enrollment_schema_fingerprint(),
+            live_schema_digest: format!("sha256:{}", "a".repeat(64)),
+            issued_at: "2026-11-15T00:00:00Z".into(),
+            expires_at: "2026-11-15T00:05:00Z".into(),
+            admin_sig: Vec::new(),
+        };
+        offer.admin_sig = admin.sign(&offer.signing_payload()).await.unwrap();
+        let token = gents_protocol::enrollment::encode_offer(&offer).unwrap();
+        Mock::given(path("/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "node_did": live_owner, "lifecycle": "ready",
+                "enrollment": {"status": "available", "token": token},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for route in ["/api/v0/p2p/shareable-address", "/api/v0/node/identity"] {
             Mock::given(path(route))
-                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .respond_with(ResponseTemplate::new(401))
+                .expect(0)
                 .mount(&server)
                 .await;
         }

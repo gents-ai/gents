@@ -474,68 +474,41 @@ mod input_reissuance_tests {
     use super::*;
 
     #[test]
-    fn generated_edit_inputs_replace_authored_fields() {
-        for case in &gents_lean_vocab::lean_contract_snapshot().request_input_cases {
-            let source: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
-            let input: RequestInput =
-                serde_json::from_value(case["edit_authored_input"].clone()).unwrap();
+    fn generated_edits_keep_the_execution_directory() {
+        gents_lean_vocab::families::request_input_contracts_edit_directory::replay(|case| {
+            let source: RequestInput = gents_lean_vocab::production_request_input(&case.input);
+            let authored: RequestInput =
+                gents_lean_vocab::production_request_input(&case.edit_authored_input);
             let authored = gents_protocol::request_input::AuthoredRequestInput {
-                selected_skill_ids: input.selected_skill_ids,
-                captured_context: input.captured_context,
-                attachments: input.attachments,
+                selected_skill_ids: authored.selected_skill_ids,
+                captured_context: authored.captured_context,
+                attachments: authored.attachments,
             };
-            let queue: RequestQueue = serde_json::from_value(case["edit_queue"].clone()).unwrap();
-            let expected: RequestInput =
-                serde_json::from_value(case["expected_edited_input"].clone()).unwrap();
-            assert_eq!(
-                super::super::position::same_execution_directory(&source, &expected),
-                case["expected_edit_directory_same"].as_bool().unwrap(),
-                "{}",
-                case["name"]
-            );
+            let queue: RequestQueue = gents_lean_vocab::family::recode(&case.edit_queue);
             let mut changed_directory = source.clone();
             changed_directory.cwd = Some("/gents-edit-different".into());
-            assert_eq!(
-                super::super::position::same_execution_directory(&source, &changed_directory),
-                case["expected_edit_directory_changed"].as_bool().unwrap(),
-                "{}",
-                case["name"]
-            );
-            assert_eq!(
-                source.edited(&authored, "physical:parent", queue.clone()),
-                expected,
-                "{}",
-                case["name"]
-            );
-            let authored = gents_protocol::request_input::AuthoredRequestInput {
-                selected_skill_ids: source.selected_skill_ids,
-                captured_context: source.captured_context,
-                attachments: source.attachments,
-            };
-            let expected: RequestInput =
-                serde_json::from_value(case["expected_edited_from_empty"].clone()).unwrap();
-            assert_eq!(
-                RequestInput::default().edited(&authored, "physical:parent", queue),
-                expected,
-                "{}",
-                case["name"]
-            );
-        }
+            gents_lean_vocab::families::request_input_contracts_edit_directory::EditDirectory {
+                edit_directory_same: super::super::position::same_execution_directory(
+                    &source,
+                    &source.edited(&authored, "physical:parent", queue),
+                ),
+                edit_directory_changed: super::super::position::same_execution_directory(
+                    &source,
+                    &changed_directory,
+                ),
+            }
+        });
     }
 
     #[tokio::test]
-    async fn generated_reissued_inputs_keep_reordered_messages_goal_and_captures() {
+    async fn generated_replacements_keep_reordered_messages_goal_and_captures() {
         let temp = tempfile::tempdir().unwrap();
         let signer =
             gents_store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
                 .unwrap();
-        let cases = &gents_lean_vocab::lean_contract_snapshot().request_input_cases;
-        let mut exercised = 0;
-        for case in cases
-            .iter()
-            .filter(|case| !case["input"]["goal_assignment"].is_null())
-        {
-            let mut input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        for case in gents_lean_vocab::families::request_input_contracts_replacement::cases() {
+            let mut input: RequestInput =
+                gents_lean_vocab::production_request_input(&case.input.input);
             input.queue = Some(RequestQueue {
                 source: QueueSource::User,
                 policy: QueuePolicy::Append,
@@ -547,7 +520,7 @@ mod input_reissuance_tests {
                 background_completion_wake_version: None,
             });
             let source = AgentRequestRow {
-                doc_id: Some(case["reissued_source_doc_id"].as_str().unwrap().into()),
+                doc_id: Some(case.input.reissued_source_doc_id.clone()),
                 request_id: "source-message".into(),
                 agent_did: Some("coding".into()),
                 input: Some(input.clone()),
@@ -578,30 +551,46 @@ mod input_reissuance_tests {
                 },
             )
             .unwrap();
-            let create = crate::request::lifecycle::build_signed_request(
+            let Ok(create) = crate::request::lifecycle::build_signed_request(
                 spec,
                 RequestSigner::Identity(&signer),
             )
             .await
-            .unwrap();
+            else {
+                case.check(
+                    gents_lean_vocab::families::request_input_contracts_replacement::Replacement {
+                        replacement_input: None,
+                    },
+                );
+                continue;
+            };
             assert!(gents_store::identity::verify_did_signature(
                 signer.did(),
                 &create.signing_payload(),
                 &create.admission.signature,
             )
             .unwrap());
-            let mut expected: RequestInput =
-                serde_json::from_value(case["expected_reissued_input"].clone()).unwrap();
-            expected.initial_title = None;
-            expected.queue = create.input.queue.clone();
-            assert_eq!(create.input, expected, "{}", case["name"]);
-            let position = create.input.queue.unwrap().position.unwrap();
+            let position = create
+                .input
+                .queue
+                .as_ref()
+                .unwrap()
+                .position
+                .clone()
+                .unwrap();
             assert_eq!(position.slot_request_doc_id, slot.doc_id.clone().unwrap());
             assert_eq!(position.replaces_request_doc_id, slot.doc_id.unwrap());
             assert_eq!(source.input, Some(input), "source input remains immutable");
-            exercised += 1;
+            let mut replacement_input = create.input;
+            replacement_input.queue = None;
+            case.check(
+                gents_lean_vocab::families::request_input_contracts_replacement::Replacement {
+                    replacement_input: Some(gents_lean_vocab::request_input_wire(
+                        &replacement_input,
+                    )),
+                },
+            );
         }
-        assert_eq!(exercised, 6);
     }
 }
 

@@ -9,13 +9,10 @@ structure SweepActorInput where
   actor : String
   deriving ToJson
 
-/-- Each actor's own read of an item filed by the held Agent: the Agent, a
-sibling Agent under document ACP, and the hosting runtime, which reads it past
-document ACP (`sweepRead`). -/
 @[conformance_family]
 def sweepActors : Family SweepActorInput Bool where
-  inputs := ["agent", "other", hostingRuntime].map fun actor => { actor }
-  model := fun i => sweepRead i.actor "agent"
+  inputs := ["agent", "other", "node"].map fun actor => { actor }
+  model := fun i => nativeSweepRead (i.actor == "node") i.actor "agent"
 
 structure NativeInput where
   actors : List String

@@ -154,16 +154,6 @@ fn remote_context(node: Arc<defra_node::Node>, pool: crate::mcp::pool::McpPool) 
 
 #[tokio::test]
 async fn service_enablement_at_use_matches_model() {
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .expect("MCP use model")
-            .mcp_service_use_cases
-            .clone()
-    })
-    .await
-    .unwrap();
     let (node, _runtime) = remote_node().await;
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
@@ -178,49 +168,33 @@ async fn service_enablement_at_use_matches_model() {
         .unwrap();
     let doc_id = gents_store::graphql::escape_graphql_string(doc_id);
     let ctx = remote_context(node.clone(), crate::mcp::pool::McpPool::new());
-    for case in cases.iter().filter(|case| {
-        [
-            "same_actor",
-            "same_chain",
-            "same_selection",
-            "selected",
-            "service_visible",
-        ]
-        .iter()
-        .all(|key| case[*key] == true)
-    }) {
-        let enabled = case["enabled"].as_bool().unwrap();
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::household_mcp_service_lookup::cases()
+    })
+    .await
+    .unwrap();
+    for case in cases {
+        let enabled = case.input.enabled;
         access.write("test.mcp.enablement", &format!(r#"mutation {{ update_ToolServiceRegistry(docID: "{doc_id}", input: {{ enabled: {enabled} }}) {{ _docID }} }}"#)).await.unwrap();
-        let actual = super::shared::lookup_service(&ctx, "shared").await.is_ok();
-        assert_eq!(actual, case["allowed"].as_bool().unwrap(), "{case}");
+        let mut current = ctx.clone();
+        if !case.input.selected {
+            current.allowed_mcp_service_ids.clear();
+        }
+        if !case.input.same_actor {
+            current.configuration = gents_inference::resolved::ResolvedConfiguration::Documents(
+                gents_inference::resolved::SelectedConfiguration::new(
+                    node.clone(),
+                    identity::Did::new(crate::test_support::test_agent_did()).unwrap(),
+                    vec![],
+                ),
+            );
+        }
+        case.check(
+            super::shared::lookup_service(&current, "shared")
+                .await
+                .is_ok(),
+        );
     }
-    let selected_case = cases.iter().find(|case| case["selected"] == false).unwrap();
-    let mut unselected = ctx.clone();
-    unselected.allowed_mcp_service_ids.clear();
-    assert_eq!(
-        super::shared::lookup_service(&unselected, "shared")
-            .await
-            .is_ok(),
-        selected_case["allowed"].as_bool().unwrap()
-    );
-    let actor_case = cases
-        .iter()
-        .find(|case| case["same_actor"] == false)
-        .unwrap();
-    let mut wrong_actor = ctx.clone();
-    wrong_actor.configuration = gents_inference::resolved::ResolvedConfiguration::Documents(
-        gents_inference::resolved::SelectedConfiguration::new(
-            node.clone(),
-            identity::Did::new(crate::test_support::test_agent_did()).unwrap(),
-            vec![],
-        ),
-    );
-    assert_eq!(
-        super::shared::lookup_service(&wrong_actor, "shared")
-            .await
-            .is_ok(),
-        actor_case["allowed"].as_bool().unwrap()
-    );
     node.shutdown().await.unwrap();
 }
 

@@ -1396,24 +1396,15 @@ mod lifecycle_tests {
             .unwrap()
             .is_some()
         );
-        // Document ACP gives the Node no read of the Agent's request; the
-        // hosting node key still observes it past document ACP (gents#3747).
         assert!(
-            !gents_store::test_support::document_acp_reads(
-                &fixture.node,
-                &fixture.node_did,
-                "AgentRequest",
-                &request.request().doc_id
+            gents_session::request::binding::load_agent_request_with_access(
+                &gents_store::test_support::unrelated_document_reader(&fixture.node).await,
+                &request.request().request_id,
             )
             .await
+            .unwrap()
+            .is_none()
         );
-        assert!(gents_session::request::binding::load_agent_request(
-            &fixture.node,
-            &request.request().request_id,
-        )
-        .await
-        .unwrap()
-        .is_some());
         teardown(fixture.node, fixture.path).await;
     }
 

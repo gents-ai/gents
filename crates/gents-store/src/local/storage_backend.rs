@@ -6,7 +6,7 @@ use gents_protocol::error_chain::{as_owner, find_map_source};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageBackendError {
-    #[error(transparent)]
+    #[error("{0}")]
     Incompatible(#[from] IncompatibleStore),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -164,12 +164,21 @@ pub fn incompatible_store(
             data_path: key.path.clone(),
         });
     }
-    if matches!(
-        super::backend_protection::BackendProtectionError::in_chain(error),
-        Some(super::backend_protection::BackendProtectionError::MissingProvenance)
-    ) {
+    let protection =
+        super::backend_protection::BackendProtectionError::in_chain(error).and_then(|error| {
+            match error {
+                super::backend_protection::BackendProtectionError::MissingProvenance => {
+                    Some(IncompatibleStoreKind::UnknownLineage)
+                }
+                super::backend_protection::BackendProtectionError::DocumentAcp(refused) => {
+                    refused.refusal()
+                }
+                _ => None,
+            }
+        });
+    if let Some(kind) = protection {
         return Some(IncompatibleStore {
-            kind: IncompatibleStoreKind::UnknownLineage,
+            kind,
             data_path: data_path.to_path_buf(),
         });
     }
@@ -198,7 +207,6 @@ pub(crate) fn find_incompatible<'a>(
 ) -> Option<&'a IncompatibleStore> {
     find_map_source(error, |cause| {
         IncompatibleStore::of(cause)
-            .or_else(|| as_owner::<StorageBackendError>(cause)?.incompatible())
             .or_else(|| as_owner::<crate::local::store_key::StoreKeyError>(cause)?.incompatible())
             .or_else(|| {
                 as_owner::<crate::local::store_key::upgrade::UpgradeError>(cause)?.incompatible()

@@ -982,7 +982,6 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         let selected = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
         for permission in [
-            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
@@ -1323,7 +1322,6 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         .unwrap();
         let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
         for permission in [
-            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,

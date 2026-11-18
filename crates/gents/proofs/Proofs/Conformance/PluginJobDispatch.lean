@@ -218,37 +218,25 @@ private def laterContext (l : LaterStep) : StepContext :=
   { context with
     maxHop := CausalHop.observedHopBound (if l.capReadable then some l.cap else none) }
 
-def laterObserved (l : LaterStep) : LaterObserved :=
-  match admitStepGuarded (laterContext l) ownJob (laterOutput l.spawn) with
-  | .ok j =>
-    { code := none, rowState := rowStateWire j.state
-    , spawnedLater := j.children.any (·.key.slot == "later") }
-  | .error r =>
-    { code := r.code
-    , rowState := rowStateWire (settleStepGuarded (laterContext l) ownJob (laterOutput l.spawn)
-        observation).1.state
-    , spawnedLater := false }
-
 @[conformance_family]
 def laterStep : Conformance.Family LaterStep LaterObserved where
   inputs :=
     [ { capReadable := true, cap := none, spawn := true }
     , { capReadable := true, cap := some 0, spawn := true }
     , { capReadable := true, cap := some 1, spawn := true }
+    , { capReadable := false, cap := none, spawn := true }
+    , { capReadable := false, cap := none, spawn := false }
     , { capReadable := true, cap := some 0, spawn := false } ]
-  model := laterObserved
-
-/-- model-production-gap: the runtime reads its Node with the hosting node key,
-which holds `bypass-dac` (gents#3747, `Identity.Household.readObserved`), so
-revoking `runtime_reader` no longer hides the Node from it and no served
-fixture builds a Node the runtime cannot read. The model still bounds such a
-step at hop 0. -/
-@[conformance_family]
-def laterStepUnreached : Conformance.Family LaterStep LaterObserved where
-  inputs :=
-    [ { capReadable := false, cap := none, spawn := true }
-    , { capReadable := false, cap := none, spawn := false } ]
-  model := laterObserved
+  model := fun l =>
+    match admitStepGuarded (laterContext l) ownJob (laterOutput l.spawn) with
+    | .ok j =>
+      { code := none, rowState := rowStateWire j.state
+      , spawnedLater := j.children.any (·.key.slot == "later") }
+    | .error r =>
+      { code := r.code
+      , rowState := rowStateWire (settleStepGuarded (laterContext l) ownJob (laterOutput l.spawn)
+          observation).1.state
+      , spawnedLater := false }
 
 theorem later_step_hop_cap_ignores_agent_node_visibility_and_fails_closed :
     (admitStepGuarded (laterContext ⟨true, none, true⟩) ownJob (laterOutput true)).toOption.isSome ∧

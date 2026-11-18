@@ -813,7 +813,6 @@ mod tests {
             RecoveryOutcome::TaskDeleted => "taskDeleted",
             RecoveryOutcome::SessionStopped => "sessionStopped",
         };
-        let mut checked = 0;
         for case in
             gents_lean_vocab::families::contracts_restart_classification::cases::<String, String>()
         {
@@ -831,56 +830,32 @@ mod tests {
                         .map(|outcome| outcome.notification_reason().to_owned()),
                 },
             );
-            checked += 1;
         }
-        for case in gents_lean_vocab::lean_recovery_sweep_cases() {
-            let (Some(process), Some(false), Some(task_deleted)) = (
-                case.process_outcome.as_deref(),
-                case.execution_registered,
-                case.owner_task_deleted,
-            ) else {
-                continue;
-            };
-            if case.parent_live != Some(true)
-                && case.parent_interrupted != Some(true)
-                && case.parent_terminal != Some(true)
-            {
-                continue;
-            }
+        for case in gents_lean_vocab::families::recovery_sweeps_orphan_classified::cases() {
+            let input = &case.input;
             let outcome = classify_orphaned_background_tool(
-                &row(case.deadline_expired == Some(true)),
-                verdict(process),
-                task_deleted,
-                case.owner_session_stopped == Some(true),
+                &row(input.deadline_expired),
+                verdict(&input.process_outcome),
+                input.owner_task_deleted,
+                input.owner_session_stopped,
                 Utc::now(),
             );
-            assert_eq!(
-                outcome.map(lean_cause),
-                case.recovery_cause.as_deref(),
-                "{}",
-                case.name
+            case.check(
+                gents_lean_vocab::families::recovery_sweeps_orphan_classified::OrphanCause {
+                    recovery_cause: outcome.map(lean_cause).map(str::to_owned),
+                },
             );
-            checked += 1;
         }
-        let mut registered_session_stop_cases = 0;
-        for case in gents_lean_vocab::lean_recovery_sweep_cases() {
-            if case.execution_registered != Some(true) || case.owner_session_stopped != Some(true) {
-                continue;
-            }
-            let Some(process) = case.process_outcome.as_deref() else {
-                continue;
-            };
-            let outcome = classify_registered_session_stop(verdict(process));
-            assert_eq!(
-                outcome.map(lean_cause),
-                case.recovery_cause.as_deref(),
-                "{}",
-                case.name
+        for case in
+            gents_lean_vocab::families::recovery_sweeps_orphan_registered_session_stop::cases()
+        {
+            let outcome = classify_registered_session_stop(verdict(&case.input.process_outcome));
+            case.check(
+                gents_lean_vocab::families::recovery_sweeps_orphan_registered_session_stop::OrphanCause {
+                    recovery_cause: outcome.map(lean_cause).map(str::to_owned),
+                },
             );
-            registered_session_stop_cases += 1;
         }
-        assert_eq!(registered_session_stop_cases, 2);
-        assert!(checked >= 12, "only {checked} generated native witnesses");
     }
 
     /// The persisted `completionPending:<reason>` suffix is the replay
@@ -1748,32 +1723,14 @@ mod actor_read_tests {
             escape_graphql_string(&doc_id),
             escape_graphql_string(&parent.request().doc_id),
         );
-        // Document ACP gives the Node no read of the User-owned tool call or
-        // its parent; the hosting node key still observes both past document
-        // ACP (gents#3747), so recovery discovers them as the selected Agent.
-        let node_did = node.node_identity_did().unwrap().to_owned();
-        for (collection, doc) in [
-            ("AgentToolCall", doc_id.as_str()),
-            ("AgentRequest", parent.request().doc_id.as_str()),
-        ] {
-            assert!(
-                !gents_store::test_support::document_acp_reads(&node, &node_did, collection, doc)
-                    .await,
-                "{collection}"
-            );
-        }
-        let response = gents_store::config_client::ConfigAccess::local(node.clone())
-            .execute(&query)
+        let node_view = gents_store::test_support::unrelated_document_reader(&node)
             .await
-            .unwrap();
-        assert_eq!(
-            response["data"]["AgentToolCall"].as_array().map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            response["data"]["AgentRequest"].as_array().map(Vec::len),
-            Some(1)
-        );
+            .execute(&query)
+            .await;
+        if let Ok(response) = node_view {
+            assert_eq!(response["data"]["AgentToolCall"], serde_json::json!([]));
+            assert_eq!(response["data"]["AgentRequest"], serde_json::json!([]));
+        }
 
         let identities: Vec<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> =
             vec![std::sync::Arc::new(

@@ -30,8 +30,8 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
         let subject = ::identity::Did::new(binding.agent_did.as_str()).unwrap();
         for permission in [
-            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
         ] {
@@ -194,23 +194,15 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 lifecycle.begin_owned_execution(&writer).await.unwrap();
                 lifecycle.validate_owned_execution().await.unwrap();
             }
-            // The runtime can see the Agent configuration but does not own this
-            // request: document ACP gives it no read, and the hosting node key
-            // observes it only past document ACP (gents#3747).
-            assert!(
-                !gents_store::test_support::document_acp_reads(
-                    &node,
-                    runtime.did(),
-                    "AgentRequest",
-                    &lifecycle.request().doc_id
-                )
+            let node_view = gents_store::test_support::unrelated_document_reader(&node)
                 .await
-            );
-            let node_view = admin.execute("{ AgentRequest { _docID } }").await.unwrap();
-            assert_eq!(
-                node_view["data"]["AgentRequest"].as_array().map(Vec::len),
-                Some(1)
-            );
+                .execute("{ AgentRequest { _docID } }")
+                .await
+                .unwrap();
+            assert!(node_view["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty());
             let doc_id = gents_store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
             agent_access
                 .write(
@@ -362,8 +354,8 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     for did in [collaborator.did(), agent.did()] {
         for permission in [
-            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
         ] {

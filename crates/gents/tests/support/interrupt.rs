@@ -18,7 +18,6 @@ use super::snapshots::{fetch_request_snapshot, SnapshotReader};
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
 pub const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
-pub const REQUEST_TERMINAL_PUBLICATION_MARGIN: Duration = Duration::from_secs(60);
 
 pub struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -446,10 +445,9 @@ where
     }
 }
 
-/// `budget` must cover the request's own timing envelope plus
-/// [`REQUEST_TERMINAL_PUBLICATION_MARGIN`]; terminal publication is
-/// scheduler-bound on a loaded host, so a short fixed bound flakes under the
-/// full parallel suite.
+/// `budget` is a hang ceiling (`STALL_CEILING`), never a latency bound:
+/// terminal publication is scheduler-bound on a loaded host, so a fixed
+/// window fails a correct owner (`WallClockBound` `FixedWindow`).
 pub async fn wait_for_request_terminal_state<R>(
     node: &R,
     request_doc_id: &str,

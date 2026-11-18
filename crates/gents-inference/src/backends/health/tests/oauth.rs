@@ -52,7 +52,7 @@ fn oauth_backend(
 }
 
 #[tokio::test]
-async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
+async fn scheduled_probe_requires_the_held_node_and_a_present_backend() {
     use gents_store::identity::NodeIdentity;
     // No default agent: its fixture backend is also enabled on this node and
     // would make the runtime listing non-singular.
@@ -152,11 +152,6 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
         )
         .await
         .unwrap();
-    // Document ACP withdraws the runtime's read with `runtime_reader`; the
-    // hosting node key still reads the Node and its backends past document
-    // ACP (gents#3747, `Identity.Household.readObserved`), and its writes stay
-    // under document ACP.
-    assert!(!gents_store::test_support::document_acp_reads(&node, did, "Node", parent).await);
     assert_eq!(
         crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
             .await
@@ -164,35 +159,45 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             .len(),
         1
     );
-    // The probe's write is to the runtime's own observation document, which
-    // document ACP lets its creator update whatever the Node grants.
-    let observation = user_access
-        .execute("{ InferenceBackendObservation { _docID } }")
-        .await
-        .unwrap();
-    let observation = observation["data"]["InferenceBackendObservation"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(
-        gents_store::test_support::document_acp_allows(
-            &node,
-            did,
-            "InferenceBackendObservation",
-            &observation,
-            defra_node::DocumentPermission::Update,
+    gents_store::config_client::ConfigAccess::local_as(node.clone(), did.parse().unwrap())
+        .grant_node_permission(
+            &user.did().parse().unwrap(),
+            gents_store::config_client::NodePermission::DocumentDelete,
         )
         .await
+        .unwrap();
+    user_access
+        .transact_write("test.probe.remove_backend", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.delete_configuration_document("InferenceBackendMetadata", doc)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(
+        crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
+            .await
+            .unwrap()
+            .is_empty()
     );
-    crate::backends::registry::set_backend_probe_status_for_connection(
-        &node,
-        &configured,
-        &doc,
-        "healthy",
-        Utc::now(),
-    )
-    .await
-    .unwrap();
+    assert!(
+        crate::backends::registry::capture_backend_document(&node, &configured)
+            .await
+            .is_err()
+    );
+    assert!(
+        crate::backends::registry::set_backend_probe_status_for_connection(
+            &node,
+            &configured,
+            &doc,
+            "healthy",
+            Utc::now(),
+        )
+        .await
+        .is_err()
+    );
     models.shutdown().await;
 }
 

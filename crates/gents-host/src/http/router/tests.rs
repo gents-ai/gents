@@ -509,7 +509,6 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
         identity::Did::new(owner).unwrap(),
     );
     for permission in [
-        gents_store::config_client::NodePermission::CollectionGet,
         gents_store::config_client::NodePermission::DocumentRead,
         gents_store::config_client::NodePermission::DocumentUpdate,
     ] {
