@@ -204,12 +204,123 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
     assert_eq!(replayed.state, ClientAccessState::Revoked);
     request.request_id = uuid::Uuid::new_v4().to_string();
     request.signature = candidate_key.sign(&request.signing_payload()?)?;
+    owner_access
+        .add_actor_relationship(
+            "Node",
+            &node_doc,
+            "administrator",
+            &candidate.did().parse()?,
+        )
+        .await?;
     assert_eq!(
         service
-            .request(credential(&candidate_endpoint, &candidate).await?, request)
+            .request(
+                credential(&candidate_endpoint, &candidate).await?,
+                request.clone(),
+            )
             .await?
             .state,
         ClientAccessState::Pending
+    );
+    let decision = DecideClientAccess {
+        node_did: runtime.did().into(),
+        request_id: request.request_id.clone(),
+        decision: ClientAccessDecision::Approve,
+    };
+    service
+        .decide(credential(&owner_endpoint, &owner).await?, decision.clone())
+        .await?;
+    service
+        .decide(
+            credential(&owner_endpoint, &owner).await?,
+            DecideClientAccess {
+                decision: ClientAccessDecision::Revoke,
+                ..decision
+            },
+        )
+        .await?;
+    assert!(
+        node.document_acp()
+            .check_named_permission(
+                &candidate.did().parse()?,
+                "administrator",
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                "nodes",
+                &node_doc,
+            )
+            .await?
+    );
+    owner_access
+        .delete_actor_relationship(
+            "Node",
+            &node_doc,
+            "administrator",
+            &candidate.did().parse()?,
+        )
+        .await?;
+    owner_access
+        .add_actor_relationship(
+            "Node",
+            &node_doc,
+            "administrator",
+            &identity::Did::wildcard(),
+        )
+        .await?;
+    request.request_id = uuid::Uuid::new_v4().to_string();
+    request.signature = candidate_key.sign(&request.signing_payload()?)?;
+    service
+        .request(
+            credential(&candidate_endpoint, &candidate).await?,
+            request.clone(),
+        )
+        .await?;
+    let decision = DecideClientAccess {
+        node_did: runtime.did().into(),
+        request_id: request.request_id.clone(),
+        decision: ClientAccessDecision::Approve,
+    };
+    service
+        .decide(credential(&owner_endpoint, &owner).await?, decision.clone())
+        .await?;
+    owner_access
+        .delete_actor_relationship(
+            "Node",
+            &node_doc,
+            "administrator",
+            &identity::Did::wildcard(),
+        )
+        .await?;
+    assert!(
+        node.document_acp()
+            .check_named_permission(
+                &candidate.did().parse()?,
+                "administrator",
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                "nodes",
+                &node_doc,
+            )
+            .await?
+    );
+    service
+        .decide(
+            credential(&owner_endpoint, &owner).await?,
+            DecideClientAccess {
+                decision: ClientAccessDecision::Revoke,
+                ..decision
+            },
+        )
+        .await?;
+    assert!(
+        !node
+            .document_acp()
+            .check_named_permission(
+                &candidate.did().parse()?,
+                "administrator",
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                "nodes",
+                &node_doc,
+            )
+            .await?
     );
     assert!(defra_core::signing::get_identity(owner.did()).is_none());
     assert!(defra_core::signing::get_identity(candidate.did()).is_none());

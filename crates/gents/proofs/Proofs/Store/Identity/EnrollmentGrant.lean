@@ -405,6 +405,52 @@ def grantAdmitted (standing : Standing) : Bool :=
   Household.mayManage (standingState standing) "approver"
     ⟨"nodes", "node", "administrator", .actor "member"⟩
 
+/-- A named relation does not include the authority implied by ownership. -/
+def holdsAdministratorRelation (state : Household.State) (member : String) : Bool :=
+  Household.allowed 5 state member "nodes" "node" "administrator"
+
+theorem administrator_observation_distinguishes_owner_from_direct_grant :
+    holdsAdministratorRelation (standingState .owner) "approver" = false ∧
+    holdsAdministratorRelation (standingState .administrator) "approver" = true ∧
+    holdsAdministratorRelation (standingState .agentManager) "approver" = false ∧
+    holdsAdministratorRelation (standingState .runtimeReader) "approver" = false := by
+  native_decide
+
+/-- A wildcard relation satisfies a named permission check without proving a
+direct member tuple. A receipt must preserve the exact native tuple. -/
+theorem wildcard_is_not_evidence_of_a_direct_administrator_tuple :
+    let state : Household.State :=
+      { objects := [⟨"nodes", "node", "owner"⟩]
+        relations := [⟨"nodes", "node", "administrator", .wildcard⟩]
+        enrolled := [] }
+    (holdsAdministratorRelation state "member",
+     state.relations.contains ⟨"nodes", "node", "administrator", .actor "member"⟩) =
+      (true, false) := by native_decide
+
+/-- Only an actor who can manage the administrator relation may observe a
+member's exact administrator relationship. -/
+def observeAdministrator (state : Household.State) (approver member : String) : Option Bool :=
+  if Household.mayManage state approver
+      ⟨"nodes", "node", "administrator", .actor member⟩ then
+    some (state.relations.contains ⟨"nodes", "node", "administrator", .actor member⟩)
+  else none
+
+theorem administrator_observation_requires_native_management_authority :
+    observeAdministrator (standingState .owner) "approver" "member" = some false ∧
+    observeAdministrator (standingState .administrator) "approver" "approver" = some true ∧
+    observeAdministrator (standingState .agentManager) "approver" "approver" = none ∧
+    observeAdministrator (standingState .runtimeReader) "approver" "approver" = none ∧
+    observeAdministrator (standingState .unrelated) "approver" "approver" = none := by
+  native_decide
+
+theorem exact_administrator_observation_excludes_wildcard :
+    let state : Household.State :=
+      { objects := [⟨"nodes", "node", "owner"⟩]
+        relations := [⟨"nodes", "node", "administrator", .wildcard⟩]
+        enrolled := [] }
+    observeAdministrator state "owner" "member" = some false := by
+  native_decide
+
 /-- What an approval does once its grant has run as the approver. -/
 inductive ApprovalStep where
   | approve
