@@ -51,22 +51,9 @@ async fn test_node() -> gents_inference::test_support::TestDb {
 #[tokio::test]
 async fn runtime_status_publication_preserves_native_ownership_and_revocation() -> anyhow::Result<()>
 {
-    use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
     use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
     use gents_store::identity::NodeIdentity;
 
-    let model = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "operations-parent-publication")
-        .context("missing operations model")?;
-    let expected: Vec<_> = model
-        .actions
-        .iter()
-        .filter_map(|action| match action {
-            LeanIdentityAction::Check { expected, .. } => Some(*expected),
-            _ => None,
-        })
-        .collect();
     let dir = tempfile::tempdir()?;
     let user = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
     let runtime =
@@ -163,7 +150,7 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
             gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeRuntime").is_ok()
         })
     };
-    let actual = [
+    let mut observed = vec![
         visible(&user_view),
         affected(user_updated.map_err(Into::into)),
         affected(runtime_updated.map_err(Into::into)),
@@ -176,25 +163,38 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
                 .map_err(Into::into),
         ),
     ];
-    assert_eq!(
-        actual,
-        [
-            expected[2],
-            expected[4],
-            expected[5],
-            expected[6],
-            expected[7],
-            expected[8]
-        ]
-    );
     runtime_access
         .delete_resource_relationship("NodeRuntime", doc, "parent", "nodes", &parent)
         .await?;
     row.reconcile_phase = "idle".to_owned();
     let republished = upsert_runtime_status(&node, &row).await;
-    assert_eq!(republished.is_ok(), expected[10]);
+    observed.push(republished.is_ok());
     republished?;
-    assert_eq!(visible(&user_access.execute(query).await?), expected[9]);
+    observed.push(visible(&user_access.execute(query).await?));
+    let checks = gents_lean_vocab::families::household_operations_runtime_status::cases();
+    anyhow::ensure!(
+        checks
+            .iter()
+            .map(|check| (
+                check.input.phase.as_str(),
+                check.input.role.as_str(),
+                check.input.permission.as_str()
+            ))
+            .eq([
+                ("attached", "user", "read"),
+                ("attached", "user", "update"),
+                ("attached", "runtime", "update"),
+                ("attached", "agent", "read"),
+                ("attached", "sibling", "read"),
+                ("attached", "outsider", "update"),
+                ("detached", "runtime", "update"),
+                ("detached", "user", "read"),
+            ]),
+        "runtime status observes the modeled checks in order"
+    );
+    for (check, allowed) in checks.iter().zip(observed) {
+        check.check(allowed);
+    }
     drop(user_access);
     drop(runtime_access);
     node.shutdown().await?;

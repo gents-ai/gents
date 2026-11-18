@@ -146,10 +146,15 @@ human owner `gents init` creates, whose one client key desktop, CLI and shims
 share, or an evaluation trial's evaluator, which creates and owns its
 throwaway trial node. An enrolled User is admitted by verified enrollment. The
 default Agent is the Agent init publishes, or the subject Agent a trial selects
-as its node's default. -/
+as its node's default. The authoring operator is the operator's client an
+eval authoring scratch home admits so it can install and read back a drafted
+definition pack through the home's client-signed endpoint, as any User write
+does; it neither creates nor owns that home, so it is not an init User, and it
+is admitted by the authoring owner rather than by enrollment. -/
 inductive Recipient where
   | initUser
   | enrolledUser
+  | authoringOperator
   | defaultAgent
   | agent
   deriving BEq, DecidableEq, Repr
@@ -157,18 +162,20 @@ inductive Recipient where
 def Recipient.name : Recipient → String
   | .initUser => "init-user"
   | .enrolledUser => "enrolled-user"
+  | .authoringOperator => "authoring-operator"
   | .defaultAgent => "default-agent"
   | .agent => "agent"
 
 /-- Direct grants, issued once by the admission that creates the recipient:
 init (or trial installation) for the init User and the default Agent,
-enrollment for an enrolled User. Each is issued as the NAC owner
-(`NodeProvisioning.nacOwner`), the only actor native admits for the admin
-relation and the admin-class permissions they include. They persist until an
-explicit revocation. -/
+enrollment for an enrolled User, eval authoring for its scratch home's
+operator. Each is issued as the NAC owner (`NodeProvisioning.nacOwner`),
+the only actor native admits for the admin relation and admin-class
+permissions. They persist until an explicit revocation. -/
 def directSets : Recipient → List GrantSet
   | .initUser => [.householdOwner]
   | .enrolledUser => [.operatorUser]
+  | .authoringOperator => [.operatorUser]
   | .defaultAgent => [.policyDelegate]
   | .agent => []
 
@@ -279,12 +286,18 @@ theorem node_runtime_cannot_grant_admin :
 theorem recipients_receive_expected_sets :
     receives .initUser = [.householdOwner] ∧
     receives .enrolledUser = [.operatorUser] ∧
+    receives .authoringOperator = [.operatorUser] ∧
     receives .defaultAgent = [.policyDelegate, .agentBaseline] ∧
     receives .agent = [.agentBaseline] := by decide
 
 theorem only_init_user_is_admin :
-    [Recipient.initUser, .enrolledUser, .defaultAgent, .agent].map
-      (fun r => (holderOf (receives r)).admin) = [true, false, false, false] := by decide
+    [Recipient.initUser, .enrolledUser, .authoringOperator, .defaultAgent, .agent].map
+      (fun r => (holderOf (receives r)).admin) = [true, false, false, false, false] := by decide
+
+/-- The authoring operator holds exactly what an enrolled User holds, so the
+scratch home grants it no authority an enrolled operator would lack. -/
+theorem authoring_operator_holds_enrolled_user_authority :
+    holderOf (receives .authoringOperator) = holderOf (receives .enrolledUser) := by decide
 
 /-- The schema change permissions. `get-collection` is the read half of
 `schemaPermissions` and is deliberately not among them: it reads collection

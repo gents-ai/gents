@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 
 use gents::defra_node::Node as EmbeddedNode;
 use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
 use gents_store::graphql::escape_graphql_string;
 
+use crate::support::live_inference::STALL_CEILING;
 use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db;
 use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
@@ -137,20 +137,18 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
 
     install_replicator(&client.node, &home.node).await;
 
-    let deadline = Instant::now() + Duration::from_secs(30);
     let mut changes = home.node.subscribe_changes("PeerRegistry").await;
     loop {
         let docs = scan_endpoints(&home.node).await;
         if docs.len() == 2 {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "home never persisted the conflicting endpoint; scan={docs:?}"
-        );
-        tokio::time::timeout_at(deadline, changes.recv())
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
             .await
-            .expect("conflicting endpoint notification deadline");
+            .is_err()
+        {
+            panic!("home never persisted the conflicting endpoint; PeerRegistry stalled for {STALL_CEILING:?}; scan={docs:?}");
+        }
     }
 
     let winner = std::cmp::min(home_doc.clone(), client_doc.clone());

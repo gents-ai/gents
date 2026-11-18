@@ -10,7 +10,7 @@ use tokio::io::AsyncWriteExt;
 use super::{home::StoreLock, store_key::StoreKey};
 
 const MARKER: &str = ".gents-private-backend-v1";
-pub(crate) const PROVENANCE_MARKER: &str = MARKER;
+pub const PROVENANCE_MARKER: &str = MARKER;
 const DOMAIN: &[u8] = b"gents private backend fresh store v1\0";
 type MarkerMac = Hmac<Sha256>;
 

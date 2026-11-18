@@ -82,23 +82,18 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     let doc = crate::backends::registry::capture_backend_document(&node, &configured)
         .await
         .unwrap();
-    let modeled = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
     let publication_allowed = |native_read: bool| {
-        modeled
-            .backend_probe_cases
-            .iter()
+        gents_lean_vocab::families::household_backend_probe::cases()
+            .into_iter()
             .find(|case| {
-                case["native_read"] == native_read
-                    && case["same_doc"] == true
-                    && case["same_connection"] == true
-                    && case["committed"] == true
+                case.input.native_read == native_read
+                    && case.input.same_doc
+                    && case.input.same_connection
+                    && case.input.committed
             })
-            .unwrap()["published"]
-            .as_bool()
             .unwrap()
+            .check(native_read);
+        native_read
     };
     assert_eq!(
         crate::backends::registry::set_backend_probe_status_for_connection(
