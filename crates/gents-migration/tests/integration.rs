@@ -4,6 +4,8 @@ mod common;
 mod backend_lineage;
 #[path = "baseline_ensure.rs"]
 mod baseline_ensure;
+#[path = "command_task_columns.rs"]
+mod command_task_columns;
 #[path = "fresh_apply_parity.rs"]
 mod fresh_apply_parity;
 #[path = "inference_usage.rs"]

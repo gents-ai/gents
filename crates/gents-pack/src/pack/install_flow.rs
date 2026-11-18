@@ -428,6 +428,27 @@ pub async fn install_documents_pack_resolved_inner(
         Err(refusal) => return Err(refusal),
     };
     ResolvedPack::record_graph_sources(&mut prepared, pack, &dependencies);
+    if !args.preview && !args.grant_authority {
+        let configs = std::iter::once(&prepared.config)
+            .chain(
+                prepared
+                    .dependencies
+                    .iter()
+                    .map(|dependency| &dependency.config),
+            )
+            .collect::<Vec<_>>();
+        let unapproved =
+            crate::pack::command_authority::unapproved_command_tasks(access, owner, &configs)
+                .await?;
+        if !unapproved.is_empty() {
+            let coordinate = format!(
+                "{}/{}",
+                pack.manifest().metadata.namespace,
+                pack.manifest().name
+            );
+            return Err(crate::pack::command_authority::refusal(&coordinate, &unapproved).into());
+        }
+    }
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
     // The agents this install runs under its installer's root, from its own

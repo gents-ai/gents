@@ -22,6 +22,25 @@ macro_rules! handoff_route_patch {
     };
 }
 
+/// A command Task's host command (gents-ai/gents#3951); existing rows read null.
+const TASK_COMMAND_PATCH: &str =
+    r#"[{"op":"add","path":"/Task/Fields/-","value":{"Name":"command","Kind":"JSON"}}]"#;
+
+/// The last run of a command Task a Trigger fired; existing rows read null.
+const TRIGGER_LAST_RUN_PATCH: &str =
+    r#"[{"op":"add","path":"/Trigger/Fields/-","value":{"Name":"last_run","Kind":"JSON"}}]"#;
+
+/// A collection, its source and destination versions, the step id, its patch and the
+/// fields the destination must have.
+type Upgrade = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+);
+
 /// DefraDB field positions are persistent identifiers, so a store an earlier build of
 /// this lineage registered appends fields through versioned patches; a fresh store
 /// registers the current SDL. Only these exact source and destination versions qualify.
@@ -48,7 +67,7 @@ pub(crate) fn include_existing_by_version(
     baseline: &mut [BaselineCollection<'static>],
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {
-    for (name, root, target, id, patch, fields) in [
+    let upgrades: &[Upgrade] = &[
         (
             "Task",
             "bafyreieh67b32auhf33bkdltep2gh6gmrb5wgs2sd7vxexmqxno45jnmdm",
@@ -56,6 +75,22 @@ pub(crate) fn include_existing_by_version(
             "task-add-declared-outcome-readers",
             r#"[{"op":"add","path":"/Task/Fields/-","value":{"Name":"outcome_readers","Kind":"JSON"}}]"#,
             &["outcome_readers"][..],
+        ),
+        (
+            "Task",
+            "bafyreifpyagnw5qkrsko323nlukdzoixgmzalbzcf5nn3urrmxtouopr6e",
+            "bafyreibmskcylyd6nphbjfn4ecfw67c64tcajn6t7yjtwwacphbpnd3svi",
+            "task-add-command",
+            TASK_COMMAND_PATCH,
+            &["command"][..],
+        ),
+        (
+            "Task",
+            "bafyreifoxyabazkzdh6rvkvhx4524dq4z2nyewnro2dfjrtnemcjyizl5a",
+            "bafyreidkk5cwi6ckjusgnkgqddcqs273kkyjfqm34eje32e2srsxdgj6iq",
+            "task-add-command",
+            TASK_COMMAND_PATCH,
+            &["command"][..],
         ),
         (
             "RepositoryPlacement",
@@ -113,24 +148,66 @@ pub(crate) fn include_existing_by_version(
             r#"[{"op":"add","path":"/Trigger/Fields/-","value":{"Name":"create_session","Kind":"Boolean"}},{"op":"add","path":"/Trigger/Fields/-","value":{"Name":"max_fires_per_hour","Kind":"Int"}}]"#,
             &["create_session", "max_fires_per_hour"][..],
         ),
-    ] {
+        (
+            "Trigger",
+            "bafyreicvfje3ivdjbxuxd6gbne5skoruiws3hm2vz5pngehfhsr4so4nuq",
+            "bafyreiafysif5uf5kpq6cilcsgk6on4gp7l5nvgun2ip2fovvb5c2nrbui",
+            "trigger-add-last-run",
+            TRIGGER_LAST_RUN_PATCH,
+            &["last_run"][..],
+        ),
+        (
+            "Trigger",
+            "bafyreiaof6tzfe5u3qt3sqc7in6isxl5b4nztukemi7yhmqa7kbgsdrwju",
+            "bafyreib42wjbg2ofdj6t4z3hamptdligfx7greiyrckxhhzadj44qtnjgi",
+            "trigger-add-last-run",
+            TRIGGER_LAST_RUN_PATCH,
+            &["last_run"][..],
+        ),
+    ];
+    let mut seen = Vec::new();
+    for &(name, ..) in upgrades {
+        if seen.contains(&name) {
+            continue;
+        }
+        seen.push(name);
         let Some(current) = get_version(name)? else {
             continue;
         };
-        if current != root && current != target {
+        let entries = upgrades
+            .iter()
+            .filter(|entry| entry.0 == name)
+            .collect::<Vec<_>>();
+        let Some(at) = entries
+            .iter()
+            .position(|entry| current == entry.1 || current == entry.2)
+        else {
             continue;
+        };
+        // A store takes the whole chain of patches its version is on, each
+        // destination the next step's source, so every version it passed
+        // through stays a known pin.
+        let mut start = at;
+        while start > 0 && entries[start - 1].2 == entries[start].1 {
+            start -= 1;
+        }
+        let mut end = at;
+        while end + 1 < entries.len() && entries[end + 1].1 == entries[end].2 {
+            end += 1;
         }
         if let Some(entry) = baseline.iter_mut().find(|entry| entry.name == name) {
-            entry.expected_version = Some(root);
-            steps.push(MigrationStep::PatchVersioned {
-                id,
-                collection: name,
-                patch,
-                lens: None,
-                expected_version: Some(target),
-                expected_transform: None,
-                expected_state: CollectionExpectation::fields(fields),
-            });
+            entry.expected_version = Some(entries[start].1);
+            for &&(_, _, target, id, patch, fields) in &entries[start..=end] {
+                steps.push(MigrationStep::PatchVersioned {
+                    id,
+                    collection: name,
+                    patch,
+                    lens: None,
+                    expected_version: Some(target),
+                    expected_transform: None,
+                    expected_state: CollectionExpectation::fields(fields),
+                });
+            }
         }
     }
     Ok(())

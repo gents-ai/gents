@@ -79,7 +79,8 @@ pub use root_admission::{
     refuse_too_broad_root, TooBroadRoot, WorkspaceRootDocument, WorkspaceRootPolicy,
 };
 pub use root_admission::{
-    agent_tool_root_reader, agents_tool_root_readers, tool_root_reader, ToolRootReader,
+    agent_tool_root_reader, agents_tool_root_readers, node_command_root, tool_root_reader,
+    ToolRootReader,
 };
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,

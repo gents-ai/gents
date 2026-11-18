@@ -95,6 +95,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
         goal_token_budget: None,
         output_schema_ref: None,
         hooks: Vec::new(),
+        command: None,
     };
     let with_schedule = base.clone().with_automation(ResolvedAutomation {
         schedules: RapidHashMap::from_iter([(

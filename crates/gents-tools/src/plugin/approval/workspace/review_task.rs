@@ -39,6 +39,7 @@ pub fn review_task_is_eligible(task: &Task, node: &str, task_id: &str, agent: &s
         prompt_template,
         enabled,
         hooks,
+        command,
         emit_outcome,
         outcome_readers: _,
         goal_objective_template,
@@ -56,6 +57,7 @@ pub fn review_task_is_eligible(task: &Task, node: &str, task_id: &str, agent: &s
         && !prompt_template.trim().is_empty()
         && *enabled
         && hooks.is_empty()
+        && command.is_none()
         && !*emit_outcome
         && goal_objective_template.is_none()
         && goal_token_budget.is_none()
@@ -98,6 +100,7 @@ pub fn default_review_task(node: &str, agent: &str) -> Task {
         goal_objective_template: None,
         goal_token_budget: None,
         hooks: Vec::new(),
+        command: None,
         enabled: true,
         output_schema_ref: None,
         created_at: None,

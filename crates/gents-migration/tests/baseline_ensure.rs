@@ -783,7 +783,7 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
             schemas::TASK_NAME,
             schemas::TASK,
             r#"mutation {create_Task(input: {task_id: "retained", node_did: "owner"}) {_docID}}"#,
-            &[("outcome_readers", false)][..],
+            &[("outcome_readers", false), ("command", false)][..],
         ),
         (
             schemas::REPOSITORY_PLACEMENT_NAME,
@@ -805,7 +805,11 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
             schemas::TRIGGER_NAME,
             schemas::TRIGGER,
             r#"mutation {create_Trigger(input: {trigger_id: "retained", node_did: "owner"}) {_docID}}"#,
-            &[("create_session", false), ("max_fires_per_hour", false)][..],
+            &[
+                ("create_session", false),
+                ("max_fires_per_hour", false),
+                ("last_run", false),
+            ][..],
         ),
     ] {
         let node = fresh_node().await;

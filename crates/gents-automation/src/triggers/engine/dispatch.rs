@@ -64,6 +64,10 @@ impl TriggerEngine {
             return result;
         }
 
+        if let Some(command) = intent.task.command.clone() {
+            return self.dispatch_command(intent, command).await;
+        }
+
         if let Some(request_id) = intent.pre_materialized_request_id.clone() {
             let result = FireResult::Fired { request_id };
             (intent.on_result)(result.clone());

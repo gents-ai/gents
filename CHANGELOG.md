@@ -6,6 +6,19 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A Task can run a host command instead of an agent: `command: {argv,
+  timeout_secs}` in place of `agent_did` and `prompt_template` (a Task with
+  both, or neither, is refused). Each fire of its schedule Trigger runs the
+  command on the node, in the operator's tool root, through the task-hook
+  runner (120 s default timeout, capped output), with no AgentRequest and no
+  model turn. `max_fires_per_hour` and the Trigger's concurrency hold:
+  `serial` skips a fire while the command runs, `latest_only` interrupts it,
+  `queued_serial` is refused. Each run's state, exit status and output tail
+  land in the Trigger's new `last_run`, which `gents automation task show`
+  lists. Event Triggers and `gents automation task run` do not run command
+  Tasks yet: an event source reads documents as the Task's agent, and a
+  manual run writes a request for one. A pack that ships a command Task, or
+  changes one's command, installs only with `--grant-authority` (#3951).
 - An application pairing no longer reinstalls its collections on authority
   read before its author lost the P2P mutation grant: each install re-reads
   the author's authority after the operations before it, and a change to the

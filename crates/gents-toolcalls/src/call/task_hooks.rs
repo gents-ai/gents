@@ -100,6 +100,13 @@ pub struct HookAttempt {
     pub(crate) detail: String,
 }
 
+impl HookAttempt {
+    /// The end of the captured output, bounded like a failure reason.
+    pub fn output_tail(&self) -> String {
+        failure_reason_tail(&self.detail)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookPrimaryError {
     Hook(String),
@@ -326,7 +333,7 @@ impl Default for TaskHookCancellation {
 }
 
 impl TaskHookCancellation {
-    pub(crate) fn under(shutdown: &CancellationToken) -> Self {
+    pub fn under(shutdown: &CancellationToken) -> Self {
         let shutdown = shutdown.child_token();
         let interrupt = shutdown.child_token();
         Self {

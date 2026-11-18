@@ -62,7 +62,7 @@ pub(crate) fn fire_budget_exhausted(budget: u32, admitted_in_window: usize) -> b
 /// A stopped Trigger keeps its arrival cursor, so re-enabling resumes exactly the
 /// undelivered documents. Requests admitted before the stop are unaffected;
 /// gents-ai/gents#3548 owns stopping an accepted backlog.
-fn budget_stop_reason(trigger_id: &str, budget: u32) -> String {
+pub(crate) fn budget_stop_reason(trigger_id: &str, budget: u32) -> String {
     format!(
         "Trigger {trigger_id} admitted its budget of {budget} fires within one hour, so it was disabled. Find out why it fires this often with trigger explain; a Task writing its own event-source collection is the usual cause. Then raise max_fires_per_hour, or wait for the hour to pass, and set enabled to true."
     )

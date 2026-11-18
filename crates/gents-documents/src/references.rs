@@ -680,7 +680,9 @@ pub fn references_of(
         }
         Collection::Task => {
             let doc: Task = decode(value)?;
-            push(Collection::Agent, &doc.agent_did, "agent_did");
+            if doc.command.is_none() {
+                push(Collection::Agent, &doc.agent_did, "agent_did");
+            }
             for reader in &doc.outcome_readers {
                 push(
                     Collection::Agent,

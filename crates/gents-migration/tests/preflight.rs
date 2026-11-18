@@ -6,7 +6,9 @@ use gents_protocol::schemas;
 #[tokio::test]
 async fn preflight_accepts_the_same_legacy_lineage_without_mutating_it() {
     let node = fresh_node().await;
-    let previous = schemas::TASK.replace("    outcome_readers: JSON\n", "");
+    let previous = schemas::TASK
+        .replace("    outcome_readers: JSON\n", "")
+        .replace("    command: JSON\n", "");
     assert_ne!(previous, schemas::TASK);
     node.add_collection(&previous).await.unwrap();
     let before = node.get_all_collection_versions().await.unwrap();

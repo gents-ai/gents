@@ -74,6 +74,14 @@ async fn observe(
     };
     let trigger: crate::Trigger = serde_json::from_value(value)?;
     let selected = match read_record(txn, Collection::Task, owner, &trigger.task_id).await? {
+        // A command Task has no Agent to read an event source as.
+        Some((_, task))
+            if task
+                .get("command")
+                .is_some_and(|command| !command.is_null()) =>
+        {
+            None
+        }
         Some((_, task)) => {
             let task: crate::Task = serde_json::from_value(task)?;
             let source = match trigger.source {

@@ -2334,3 +2334,79 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
 }
 
 use gents_inference::test_support::document_fixtures::*;
+
+/// A command Task resolves on its schedule with no Agent document, and an
+/// event Trigger of it stays unavailable: an event source reads as an Agent.
+#[tokio::test]
+async fn resolve_schedules_a_command_task_without_an_agent_and_holds_its_event_trigger() {
+    let (db, _user, access, _binding) =
+        crate::test_support::root::signed_test_node("document-view-resolve-command-task").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let node_did = identity.did();
+    seed_automation(
+        &access,
+        vec![(
+            gents_store::collection::Collection::Task,
+            serde_json::json!({
+                "node_did": node_did,
+                "task_id": "task-command",
+                "command": {"argv": ["true"], "timeout_secs": 30},
+            }),
+        )],
+    )
+    .await;
+    create_schedule_with_concurrency(
+        &access,
+        node_did,
+        "trigger-command-schedule",
+        "task-command",
+        "schedule-command",
+        60,
+        "serial",
+    )
+    .await;
+    create_event_trigger(
+        &access,
+        node_did,
+        "trigger-command-event",
+        "task-command",
+        "CustomerSignup",
+        "created",
+        "serial",
+    )
+    .await;
+
+    let resolve_context = DocumentResolveContext::for_tests(
+        identity.clone(),
+        ToolCeiling::readonly(),
+        gents_inference::backends::health::BackendHealthMap::new(),
+    );
+    let view = load_document_runtime_view(&node, node_did)
+        .await
+        .expect("document view should load");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("resolve should succeed");
+
+    let resolved = snapshot
+        .active_schedules
+        .get("trigger-command-schedule")
+        .expect("the command Task's schedule is active");
+    assert_eq!(
+        resolved.task.command,
+        Some(gents_documents::TaskCommand {
+            argv: vec!["true".into()],
+            timeout_secs: Some(30),
+        })
+    );
+    assert!(resolved.task.agent_did.is_empty());
+    assert!(snapshot.active_event_triggers.is_empty());
+    assert!(
+        snapshot
+            .unavailable_event_triggers
+            .contains("trigger-command-event"),
+        "{:?}",
+        snapshot.unavailable_event_triggers
+    );
+}

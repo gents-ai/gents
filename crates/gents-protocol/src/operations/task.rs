@@ -32,6 +32,7 @@ pub enum TaskRunDecision {
     TaskDisabled,
     AgentMissing,
     AgentDisabled,
+    CommandTask,
 }
 
 /// Lean `Triggers.ManualRun.Matches`.
@@ -83,6 +84,8 @@ pub enum TaskOperationError {
     AgentMissing { agent_did: String, node_did: String },
     #[error("Agent {0} is disabled")]
     AgentDisabled(String),
+    #[error("Task {0} runs a command, which runs on the node from its Trigger; a manual run needs an Agent to answer it. Give the Trigger a schedule to run the command")]
+    CommandTask(String),
     #[error("task args must be a JSON object (got: {0})")]
     ArgsNotObject(serde_json::Value),
     #[error("Task {0} declares a durable goal; pass --session-id with a stable invocation identity so retries converge")]
@@ -117,6 +120,9 @@ impl TaskOperationError {
         match self {
             Self::TaskMissing { .. } => NextCall::List { resource: "task" },
             Self::TaskDisabled(_) => NextCall::Inspect { resource: "task" },
+            Self::CommandTask(_) => NextCall::List {
+                resource: "trigger",
+            },
             Self::AgentMissing { .. } | Self::AgentDisabled(_) => {
                 NextCall::Inspect { resource: "agent" }
             }
