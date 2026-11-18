@@ -1,5 +1,6 @@
 import Proofs.Conformance.Identity.Conformance
 import Proofs.Conformance.Family
+import Proofs.Store.Identity.GrantSets
 
 namespace Conformance.HouseholdA
 
@@ -243,7 +244,8 @@ def toolOperationCollectionGet : Family OperationStep Bool where
     ⟨"sibling", operation "none" false false false false false false "none"⟩,
     ⟨"agent-schema", operation "schema" true false false false false false "none"⟩,
     ⟨"agent-disabled", operation "none" false false false false false false "none"⟩]
-  model := grantsPermission "get-collection"
+  model := fun i => Identity.GrantSets.GrantSet.agentBaseline.permissions.contains "get-collection" ||
+    grantsPermission "get-collection" i
 
 @[conformance_family]
 def toolOperationCollectionPatch : Family OperationStep Bool where

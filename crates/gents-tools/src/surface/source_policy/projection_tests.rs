@@ -178,6 +178,19 @@ async fn selected_schema_tool_controls_changes_and_preserves_baseline_reads() ->
         agent_signer.as_ref(),
     )?;
     let mut granted = std::collections::BTreeMap::new();
+    let mut baseline = std::collections::BTreeMap::new();
+    baseline.insert(
+        "agent-query",
+        node.nac_manager()
+            .check_permission(&agent, NodePermission::CollectionGet)
+            .await?,
+    );
+    baseline.insert(
+        "sibling",
+        node.nac_manager()
+            .check_permission(&sibling, NodePermission::CollectionGet)
+            .await?,
+    );
     granted.insert(
         "agent-query",
         node.nac_manager()
@@ -199,6 +212,12 @@ async fn selected_schema_tool_controls_changes_and_preserves_baseline_reads() ->
             .check_permission(&agent, NodePermission::CollectionPatch)
             .await?,
     );
+    baseline.insert(
+        "agent-schema",
+        node.nac_manager()
+            .check_permission(&agent, NodePermission::CollectionGet)
+            .await?,
+    );
     owner.write("test.tool_projection.schema_disable", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#)).await?;
     granted.insert(
         "agent-disabled",
@@ -206,10 +225,19 @@ async fn selected_schema_tool_controls_changes_and_preserves_baseline_reads() ->
             .check_permission(&agent, NodePermission::CollectionPatch)
             .await?,
     );
+    baseline.insert(
+        "agent-disabled",
+        node.nac_manager()
+            .check_permission(&agent, NodePermission::CollectionGet)
+            .await?,
+    );
     assert!(access.collection_version("Node").await?.is_some());
     for case in gents_lean_vocab::families::household_tool_operation_collection_patch::cases() {
         let observed = granted[case.input.step.as_str()];
         case.check(observed);
+    }
+    for case in gents_lean_vocab::families::household_tool_operation_collection_get::cases() {
+        case.check(baseline[case.input.step.as_str()]);
     }
     node.shutdown().await?;
     Ok(())
