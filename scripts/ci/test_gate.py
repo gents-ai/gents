@@ -1263,17 +1263,20 @@ class TlaRecordedOutcomes(unittest.TestCase):
 
 
 class ContractBuilds(unittest.TestCase):
-    def test_the_policy_example_builds_in_the_test_builds_profile(self):
-        """Under `dev` it rebuilt the whole defradb tree that `cargo test` had just built."""
+    def test_the_policy_example_reuses_the_vocab_test_build(self):
+        """Under `dev`, or in gents-lean-contract (whose dev-dependencies hold the
+        native DefraDB node), it compiled the defradb tree (38 and 46 minutes)."""
         selection = {"contract": {"ratchets": False, "ts_lean": False, "tla": []}}
         for profile, expected in (("", ["--profile", "test"]), ("fast-dev", ["--profile", "fast-dev"])):
             with mock.patch.object(gate, "sh", return_value=True) as sh, \
-                    mock.patch.object(gate, "cargo_test", return_value=True), \
+                    mock.patch.object(gate, "cargo_test", return_value=True) as cargo_test, \
                     mock.patch.dict(os.environ, {"PROFILE": profile}):
                 gate.run_contract(selection)
             example = next(call.args[0] for call in sh.call_args_list
                            if isinstance(call.args[0], list) and "regenerate_household_policy" in call.args[0])
-            self.assertEqual(example[2:4], expected, profile)
+            self.assertEqual(example[2:6], [*expected, "-p", "gents-lean-vocab"], profile)
+            tested = [call.args for call in cargo_test.call_args_list if call.args[0] == "gents-lean-vocab"]
+            self.assertEqual(tested, [("gents-lean-vocab", ["-p", "gents-lean-vocab"])])
 
 
 class TlaStructure(unittest.TestCase):

@@ -977,9 +977,9 @@ def run_contract(selection):
     sh("python3 .github/scripts/test-lean-rust-decoders.py && python3 .github/scripts/check-lean-rust-decoders.py")
     # Generated decoders, the family schema and the one-consumer-per-family scan.
     cargo_test("gents-lean-vocab", ["-p", "gents-lean-vocab"])
-    # `cargo test`'s profile, so the example links against the test builds'
-    # dependencies instead of building the defradb tree again under `dev`.
-    sh(["cargo", "run", *(profile_flags() or ["--profile", "test"]), "-p", "gents-lean-contract", "--example",
+    # The `cargo test` above already built this example; under `dev` it would
+    # build its dependencies again.
+    sh(["cargo", "run", *(profile_flags() or ["--profile", "test"]), "-p", "gents-lean-vocab", "--example",
         "regenerate_household_policy", "--", "--check"])
     if selection["contract"]["ratchets"]:
         cargo_test("gents write_owner_structure", ["-p", "gents", "--test", "write_owner_structure"])
