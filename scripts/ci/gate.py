@@ -209,7 +209,7 @@ TEST_CACHE_MODEL_PATHS = (
 TS_PATHS = (
     "apps/", "packages/", "package.json", "package-lock.json", "scripts/check-desktop-package-boundaries.mjs",
     "scripts/clean-desktop-package-dist.mjs", "scripts/pack-desktop-packages.sh",
-    "scripts/packed-desktop-consumer/",
+    "scripts/packed-desktop-consumer/", ".github/scripts/install-browser-deps.sh",
 )
 CORE_PACK_PATHS = ("core-packs/", "crates/gents-core-packs/", "crates/gents-pack/")
 # Checked by the hosted control jobs, which run on every pull request.
