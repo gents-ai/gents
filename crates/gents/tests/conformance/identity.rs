@@ -1,4 +1,5 @@
 use acp::{DocumentPermission, Identity};
+use gents_store::identity::NodeIdentity;
 use identity::Did;
 
 #[tokio::test]
@@ -61,26 +62,27 @@ async fn live_agent_session_and_delegation_access_match_the_model() -> anyhow::R
         .access
         .delete_actor_relationship("Agent", &sibling.agent_doc, "session_writer", &caller_did)
         .await?;
-    let invoke = caller
-        .fixture
-        .access
-        .transact_readonly("test.live_agent.invoke", |txn| {
-            let (target, actor) = (&sibling.agent_doc, &caller_did);
-            Box::pin(async move {
-                txn.observe_document_access(
-                    actor,
-                    "Agent",
-                    std::slice::from_ref(target),
-                    gents::defra_node::DocumentAccessMode::Named {
-                        permission: "invoke".into(),
-                        node_permission: gents_store::config_client::NodePermission::DocumentUpdate,
-                    },
-                )
-                .await
-                .map_err(anyhow::Error::from)
-            })
+    let invoke = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        Did::new(caller.fixture.user.did())?,
+    )
+    .transact_readonly("test.live_agent.invoke", |txn| {
+        let (target, actor) = (&sibling.agent_doc, &caller_did);
+        Box::pin(async move {
+            txn.observe_document_access(
+                actor,
+                "Agent",
+                std::slice::from_ref(target),
+                gents::defra_node::DocumentAccessMode::Named {
+                    permission: "invoke".into(),
+                    node_permission: gents_store::config_client::NodePermission::DocumentUpdate,
+                },
+            )
+            .await
+            .map_err(anyhow::Error::from)
         })
-        .await?;
+    })
+    .await?;
     for case in gents_lean_vocab::families::household_agent_manager_invoke_live::cases() {
         case.check(matches!(
             invoke.as_slice(),
