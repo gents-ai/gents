@@ -2162,9 +2162,12 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
             )).await?,
             "AgentContext",
         )?;
-        owner.write("test.tool_group.agent", &format!(
-            r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"context",enabled:true}}) {{_docID}} }}"#
-        )).await?;
+        let agent_doc = gents_store::graphql::created_doc_id(
+            &owner.write("test.tool_group.agent", &format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"context",enabled:true}}) {{_docID}} }}"#
+            )).await?,
+            "Agent",
+        )?;
         let enable = input.enable;
         let update = format!(
             r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:{enable}}}}}) {{_docID}} }}"#
@@ -2204,10 +2207,24 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
         }
         let mut grants = Vec::new();
         let granted = tool_source_grants(&node, &agent).await?;
+        let baseline = gents_store::local::tool_permission_projection::tool_source(
+            runtime.did(),
+            &agent_doc,
+            "",
+            agent.as_str(),
+            gents_store::identity::GrantSet::AgentBaseline.name(),
+        );
+        anyhow::ensure!(
+            granted
+                .iter()
+                .any(|(source, permission)| source == &baseline
+                    && *permission == NodePermission::CollectionGet),
+            "live Agent is missing its baseline collection grant"
+        );
         for source in &input.sources {
             let permission = schema_permission(&source.permission)?;
             for (projected, held) in &granted {
-                if *held != permission {
+                if *held != permission || projected == &baseline {
                     continue;
                 }
                 let attributed = production.iter().find(|candidate| {

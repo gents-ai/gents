@@ -1,5 +1,6 @@
 import Proofs.Conformance.Identity.Conformance
 import Proofs.Conformance.Family
+import Proofs.Store.Identity.GrantSets
 
 namespace Conformance.HouseholdC
 
@@ -134,7 +135,8 @@ def groupOutput (i : GroupInput) : GroupOutput :=
     i.enable i.authorized i.committed
   { enabled := result.enabled.map .ofModel, grants := result.grants.map .ofModel,
     permissions := Configuration.schemaToolPermissions.map fun permission =>
-      ⟨permission, Configuration.toolGrantEffective result agentDid permission⟩ }
+      ⟨permission, Identity.GrantSets.GrantSet.agentBaseline.permissions.contains permission ||
+        Configuration.toolGrantEffective result agentDid permission⟩ }
 
 /-- Only the schema purpose projects `patch-collection`, so an initial state
 that also holds an `other` purpose source for it cannot be built; one Tools

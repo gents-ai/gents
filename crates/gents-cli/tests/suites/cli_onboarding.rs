@@ -493,12 +493,19 @@ async fn observe_identity(case: &IdentityCase, command: &[&str]) -> Result<&'sta
         "This machine has no Gents client identity for {}",
         home.display()
     ));
-    Ok(match (held, after) {
+    let outcome = match (held, after) {
         (Some(before), Some(after)) if before == after && !refused => "load",
         (None, Some(_)) => "create",
         (None, None) if refused => "refuse",
         _ => "neither",
-    })
+    };
+    anyhow::ensure!(
+        outcome != "neither",
+        "{command:?} with {:?} left the client identity in an unexpected state (exit {:?}):\n{stderr}",
+        case.selection,
+        output.status.code()
+    );
+    Ok(outcome)
 }
 
 #[tokio::test]
