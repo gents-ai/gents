@@ -14,7 +14,6 @@ use gents_protocol::enrollment::{
 use serde::Deserialize;
 
 pub const STATUS_ENROLLMENT_QUERY: &str = r#"{
-  NetworkAdminPin { network_id admin_did }
   NetworkEnrollmentRequest {
     _docID protocol_version request_id request_digest offer_id offer_token challenge network_id
     admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket owner_node_did profile
