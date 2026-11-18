@@ -67,8 +67,7 @@ async fn capture_scripted_request(
             |error| CompletionError::ProviderError(error.to_string()),
         )?))
         .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
-    let _response = transport
-        .send_streaming(outbound)
+    let _response = gents_loop::rig_compat::http::Transport::send_streaming(&transport, outbound)
         .await
         .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
     assert_eq!(
