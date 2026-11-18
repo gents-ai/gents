@@ -3,8 +3,8 @@ use crate::{enrollment::canonical_domain_payload, request_admission::AgentReques
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const SESSION_INPUT_EDIT_VERSION: u8 = 2;
-pub const AUTHORED_QUEUE_EDIT_VERSION: u64 = 2;
+pub const SESSION_INPUT_EDIT_VERSION: u8 = 3;
+pub const AUTHORED_QUEUE_EDIT_VERSION: u64 = 3;
 pub const STATUS_AUTHORED_QUEUE_EDIT_FIELD: &str = "authored_queue_edit_version";
 
 #[derive(Debug, thiserror::Error)]
