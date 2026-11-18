@@ -768,8 +768,9 @@ jobs:
     name: desktop-ui (${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.browser }}
     # On two Playwright workers the browser journeys take 24 to 37 minutes on
-    # a hosted four-core runner (#3786); each third takes about 9 to 12.
-    timeout-minutes: 30
+    # a hosted four-core runner (#3786); each third takes about 9 to 12. The
+    # job allows a cold browser install (12) plus the suite (25).
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -798,7 +799,30 @@ jobs:
       # A hosted runner is a fresh machine: install the browsers' system
       # libraries as root. A self-hosted browser runner has them installed
       # once by its operator (`npx playwright install-deps chromium webkit`)
-      # and keeps the browsers in its account's cache.
+      # and keeps the browsers in its account's cache. On a hosted runner the
+      # apt download alone took 27 minutes from a slow Ubuntu mirror (run
+      # 44319819879), so the packages and the browsers are cached, keyed by
+      # the runner image, the Playwright version and the browsers a lane needs.
+      - name: Select the browsers and their cache key
+        id: browsers
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          set -euo pipefail
+          if [[ "${SUITE}" == browser ]]; then browsers="chromium webkit"; else browsers="chromium"; fi
+          version="$(jq -r '.packages["node_modules/playwright"].version' package-lock.json)"
+          echo "list=${browsers}" >> "${GITHUB_OUTPUT}"
+          echo "key=${ImageOS:-self}-${ImageVersion:-self}-playwright-${version}-${browsers// /-}" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore the browser packages and browsers
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/apt-browser-archives
+          key: browsers-${{ steps.browsers.outputs.key }}
+
       - name: Use the Ubuntu archive for browser system dependencies
         if: runner.environment == 'github-hosted'
         run: |
@@ -821,23 +845,36 @@ jobs:
                   path.write_text(updated, encoding='utf-8')
                   print(f'Using the Ubuntu archive in {path}')
           PYTHON
+          # Downloaded packages go to the cached directory, and a stalled
+          # mirror fails a request instead of holding the step.
+          mkdir -p "${HOME}/.cache/apt-browser-archives/partial"
+          printf '%s\n' \
+            "Dir::Cache::Archives \"${HOME}/.cache/apt-browser-archives\";" \
+            'APT::Keep-Downloaded-Packages "true";' \
+            'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' 'Acquire::Retries "3";' \
+            | sudo tee /etc/apt/apt.conf.d/90browser-dependencies >/dev/null
 
       # The unit lane's interaction budgets drive Chromium; the journeys
-      # also need WebKit.
+      # also need WebKit. Its own timeout keeps a slow install from spending
+      # the suite's time.
       - name: Install Playwright browsers
         working-directory: apps/gents-desktop
+        timeout-minutes: 12
         env:
           HOSTED: ${{ runner.environment == 'github-hosted' }}
-          BROWSERS: ${{ matrix.suite == 'browser' && 'chromium webkit' || 'chromium' }}
+          BROWSERS: ${{ steps.browsers.outputs.list }}
         run: |
           read -ra browsers <<< "${BROWSERS}"
           if [[ "${HOSTED}" == true ]]; then
             npx playwright install --with-deps "${browsers[@]}"
+            # The cache step saves as this user; apt wrote the packages as root.
+            sudo chown -R "$(id -u):$(id -g)" "${HOME}/.cache/apt-browser-archives"
           else
             npx playwright install "${browsers[@]}"
           fi
 
       - name: Run the desktop ${{ matrix.suite }} suite
+        timeout-minutes: 25
         run: make gate-run JOB="ts-${{ matrix.suite }}"
 
       - name: Upload desktop UI artifacts
