@@ -518,6 +518,12 @@ where
                     .map_err(StreamProcessorError::writer)?;
                 Ok(StreamAction::Continue)
             }
+            Ok(LoopStreamItem::RetryWake) => {
+                self.validate_execution()
+                    .await
+                    .map_err(StreamProcessorError::lifecycle)?;
+                Ok(StreamAction::Continue)
+            }
             Ok(LoopStreamItem::AttemptFailed {
                 turn,
                 attempt,
