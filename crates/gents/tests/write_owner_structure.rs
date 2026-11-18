@@ -2531,6 +2531,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-tools/src/builtin/self_config/command.rs", &["CommandGuidance::in_error"]),
     ("crates/gents-tools/src/builtin/self_config/command/crud.rs", &["BatchFailure::in_error"]),
     ("crates/gents-tools/src/builtin/self_config/ops.rs", &["MissingAgent::in_error", "MissingConfigDocument::in_error"]),
+    ("crates/gents-tools/src/guided_failure.rs", &["GuidedFailure::or_help"]),
     ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["auth_refusal_of"]),
     ("crates/gents/src/eval/documents.rs", &["already_completed", "already_invalidated", "feedback_off_train"]),
     ("crates/gents/src/runtime/agent/daemon.rs", &["ShutdownDrainFailure::occurs_in"]),
@@ -2546,10 +2547,6 @@ const CHAIN_WALKER: &str = "crates/gents-protocol/src/error_chain.rs";
 /// docstring names the external premise. This list only shrinks.
 #[rustfmt::skip]
 const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    // in P2pTool::call
-    ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    // in SessionHistoryTool::call
-    ("crates/gents-tools/src/native/session_history.rs", 1),
 ];
 
 /// Adapter-boundary classifiers: functions that decide on error text, or ask
