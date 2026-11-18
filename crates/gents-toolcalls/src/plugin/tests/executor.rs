@@ -2433,16 +2433,16 @@ async fn agent_facing_plugin_tool_preserves_the_complete_failure_chain_once() {
     let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
     let tool = PluginTool::resolve(executor.clone(), &tool_ref(None), None).unwrap();
     // Resolution was successful, but publication becomes busy before invocation.
-    // This traverses PluginAttemptError -> PluginResolutionError::Published ->
+    // This traverses the preflight PluginResolutionError::Published ->
     // PublishedPluginReadError, then the real tool's agent-facing text boundary.
+    // Preflight correctly returns before an execution attempt is made.
     let _guard = store::try_lock_store(home.path()).unwrap();
     let dispatched = tool.call_with_receipt("{}".into()).await;
     let error = dispatched.result.unwrap_err();
     let gents_loop::tool::ToolError::ToolCallError(message) = &error else {
         panic!("expected agent-facing plugin error: {error}");
     };
-    let expected =
-        "executing plugin team/plugin: resolving plugin team/plugin: plugin store is busy; retry this pack operation";
+    let expected = "resolving plugin team/plugin: plugin store is busy; retry this pack operation";
     assert_eq!(message.to_string(), expected);
     assert_eq!(format!("{message:#}"), expected);
     assert_eq!(expected.matches("plugin store is busy").count(), 1);
@@ -2453,4 +2453,37 @@ async fn agent_facing_plugin_tool_preserves_the_complete_failure_chain_once() {
         "resolving plugin team/plugin: plugin store is busy; retry this pack operation"
     );
     assert!(store::PublishedPluginReadError::error_chain_is_busy(&typed));
+}
+
+#[tokio::test]
+async fn agent_facing_plugin_attempt_preserves_the_complete_failure_chain_once() {
+    let (home, mut record) = installed_echo();
+    record.granted = None;
+    record.declaration.limits = Some(gents_pack::pack::PluginLimits {
+        max_output_mib: Some(2),
+        ..Default::default()
+    });
+    store::write_record(home.path(), &record).unwrap();
+    let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
+    let tool = PluginTool::resolve(executor, &tool_ref(None), None).unwrap();
+    let dispatched = tool.call_with_receipt("{}".into()).await;
+    let error = dispatched.result.unwrap_err();
+    let gents_loop::tool::ToolError::ToolCallError(message) = &error else {
+        panic!("expected agent-facing plugin error: {error}");
+    };
+    let expected = "executing plugin team/plugin: plugin resource limits have no recorded consent; reinstall with --grant-authority";
+    assert_eq!(message.to_string(), expected);
+    assert_eq!(format!("{message:#}"), expected);
+    assert_eq!(
+        expected
+            .matches("plugin resource limits have no recorded consent")
+            .count(),
+        1
+    );
+    let receipt = dispatched.plugin_receipt.unwrap();
+    assert_eq!(receipt.coordinate, "team/plugin");
+    assert_eq!(
+        receipt.verdict,
+        gents_protocol::plugin::PluginExecutionVerdict::Refused
+    );
 }
