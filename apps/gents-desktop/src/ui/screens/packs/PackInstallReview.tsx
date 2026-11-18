@@ -18,6 +18,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@gents/ui/components/radio-group";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
+import { packInstallRefusal } from "@source-inc/gents-desktop-client";
 import type {
   InstalledPack,
   PackEditedChoice,
@@ -60,7 +61,7 @@ import { docRef, previewTree, requestedName, type SetAsideReview } from "./previ
 type Read =
   | { state: "reading" }
   | { state: "read"; report: PackInstallReport }
-  | { state: "unread"; error: string };
+  | { state: "unread"; error: string; cause?: unknown };
 
 /** The `NAME=PROFILE` bindings an install request carries, in a stable order. */
 const slotBindings = (chosen: Record<string, string>) =>
@@ -155,6 +156,9 @@ export function PackInstallReview({
   const [edited, setEdited] = useState<PackEditedChoice>(resume?.edited ?? "keep");
   const [installing, setInstalling] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [refusalKind, setRefusalKind] = useState<
+    "authority" | "edited" | "changed" | null
+  >(null);
 
   useEffect(() => {
     if (!request) return;
@@ -183,7 +187,7 @@ export function PackInstallReview({
       })
       .then(
         (report) => settle({ state: "read", report }),
-        (error) => settle({ state: "unread", error: errorText(error) }),
+        (error) => settle({ state: "unread", error: errorText(error), cause: error }),
       );
     return () => {
       current = false;
@@ -229,7 +233,7 @@ export function PackInstallReview({
   const version = report?.version ?? null;
   const asks = report?.authority ?? [];
   const already = installed?.find((p) => p.pack === pack) ?? null;
-  const why = refusal ? refusalOf(refusal) : null;
+  const why = refusal ? refusalKind : null;
   const choosesEdits = already !== null || why === "edited";
   const folder = folderAccessOf(report);
   /* the published folder an allowed install lets its agents into: the same
@@ -302,7 +306,7 @@ export function PackInstallReview({
     if (fromRegistry) void readPackInfo(actions, pack);
   }, [actions, fromRegistry, pack]);
   const linkMismatch =
-    read.state === "unread" && request?.digest && refusalOf(read.error) === "changed";
+    read.state === "unread" && request?.digest && refusalOf(read.cause) === "changed";
   const ready = read.state === "read" && unbound.length === 0;
 
   /* the review steps aside, keeping what it showed and what was chosen */
@@ -335,7 +339,8 @@ export function PackInstallReview({
           .map((slot) => `${slot.name}=${slot.profile}`),
       });
     } catch (error) {
-      setRefusal(errorText(error));
+      setRefusalKind(refusalOf(error));
+      setRefusal(packInstallRefusal(error)?.sentence ?? errorText(error));
     } finally {
       setInstalling(false);
     }

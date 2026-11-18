@@ -1,3 +1,4 @@
+import { packInstallRefusal } from "@source-inc/gents-desktop-client";
 import type {
   PackFolderAccess,
   PackInstallReport,
@@ -127,12 +128,16 @@ export function readFailure(error: string): string {
 
 /** Why an install stopped, as the review asks about it: the pack needs
     authority the person hasn't allowed, documents it would replace were
-    edited, or the pack is not the one reviewed. Read from the error's words,
-    since the install reports no typed refusal: replace with typed errors
-    from core. */
-export function refusalOf(text: string): "authority" | "edited" | "changed" | null {
-  if (text.includes("--grant-authority")) return "authority";
-  if (text.includes("--overwrite")) return "edited";
-  if (text.includes("not the expected")) return "changed";
-  return null;
+    edited, or the pack is not the one reviewed. Read only the typed bridge refusal, never its display text. */
+export function refusalOf(error: unknown): "authority" | "edited" | "changed" | null {
+  switch (packInstallRefusal(error)?.class) {
+    case "authority_required":
+      return "authority";
+    case "documents_edited":
+      return "edited";
+    case "digest_changed":
+      return "changed";
+    default:
+      return null;
+  }
 }

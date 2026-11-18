@@ -4854,3 +4854,45 @@ fn a_recorded_document_carries_the_installer_root_mark_only_when_set() {
 
 #[path = "tests/host_roots.rs"]
 mod root_preservation;
+
+#[test]
+fn counted_document_refusals_are_formatted_by_the_owner_for_each_surface() {
+    for (names, rest, listed) in [
+        (vec![], 3, "installed. "),
+        (
+            vec!["Tools/current".to_owned()],
+            1,
+            ": Tools/current and 1 other. ",
+        ),
+        (
+            vec!["Tools/current".to_owned()],
+            4,
+            ": Tools/current and 4 others. ",
+        ),
+    ] {
+        for surface in [
+            PackChangeSurface::Local,
+            PackChangeSurface::Hosted,
+            PackChangeSurface::Desktop,
+        ] {
+            let text = document_change_message("fixture/root", &names, rest, true, surface);
+            assert!(
+                text.starts_with(&format!(
+                    "{} of fixture/root's documents",
+                    names.len() + rest
+                )),
+                "{text}"
+            );
+            assert!(text.contains(listed), "{text}");
+            assert!(text.contains("overwrite replaces them with the pack's versions; keep leaves them as they are"), "{text}");
+            if matches!(surface, PackChangeSurface::Desktop) {
+                assert!(
+                    text.ends_with("Choose Overwrite or Keep in this install review"),
+                    "{text}"
+                );
+                assert!(!text.contains("--"), "{text}");
+                assert!(!text.contains("gents config"), "{text}");
+            }
+        }
+    }
+}

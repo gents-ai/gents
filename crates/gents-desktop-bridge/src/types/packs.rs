@@ -422,3 +422,29 @@ pub struct DynamicWorkflowView {
     pub script: String,
     pub promoted_as: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PackInstallRefusalClass {
+    DocumentsEdited,
+    AuthorityRequired,
+    DigestChanged,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackInstallRefusal {
+    pub class: PackInstallRefusalClass,
+    pub coordinate: Option<String>,
+    pub named: Vec<String>,
+    pub unnamed: usize,
+    pub sentence: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PackInstallError {
+    #[serde(flatten)]
+    pub error: Box<crate::error::BridgeError>,
+    pub pack_refusal: Option<Box<PackInstallRefusal>>,
+}

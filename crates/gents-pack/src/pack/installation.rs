@@ -1147,6 +1147,21 @@ impl gents_store::config_client::TransactionFailure for PluginStoreChangeError {
 pub enum PackChangeSurface {
     Local,
     Hosted,
+    Desktop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EditedDocumentRefusal {
+    pub coordinate: String,
+    pub named: Vec<String>,
+    pub unnamed: usize,
+}
+
+impl EditedDocumentRefusal {
+    pub fn message_for_surface(&self, surface: PackChangeSurface) -> String {
+        document_change_message(&self.coordinate, &self.named, self.unnamed, true, surface)
+    }
 }
 
 pub fn document_change_message(
@@ -1181,12 +1196,22 @@ pub fn document_change_message(
         PackChangeSurface::Local if edited => "Decide with --overwrite or --keep on `gents config pack install`, `gents config pack update` or `gents config pack remove`, or options.edited on the agent pack command (a removal deletes overwritten documents)",
         PackChangeSurface::Local => "Decide with --overwrite or --keep on `gents config pack install`, or options.edited on the agent pack command",
         PackChangeSurface::Hosted => "Retry the same install with --overwrite or --keep; in the desktop choose overwrite or keep in the install review",
+        PackChangeSurface::Desktop => "Choose Overwrite or Keep in this install review",
     });
     message
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum PackChangeError {
+    #[error("the runtime refused the install ({outcome}, {class}): {reason}")]
+    RuntimeRefused {
+        class: String,
+        outcome: String,
+        reason: String,
+        documents: Option<Box<EditedDocumentRefusal>>,
+    },
+    #[error(transparent)]
+    Operation(#[from] gents_protocol::operations::pack::PackOperationError),
     #[error(
         "{}",
         document_change_message(coordinate, edited, 0, true, PackChangeSurface::Local)
@@ -1243,12 +1268,6 @@ impl PackChangeError {
     }
 }
 
-impl From<gents_protocol::operations::pack::PackOperationError> for PackChangeError {
-    fn from(error: gents_protocol::operations::pack::PackOperationError) -> Self {
-        Self::Other(anyhow::Error::new(error))
-    }
-}
-
 impl From<PackRemovalError> for PackChangeError {
     fn from(error: PackRemovalError) -> Self {
         Self::Other(error.into())
@@ -1264,7 +1283,9 @@ impl From<gents_store::config_client::ConfigClientError> for PackChangeError {
 impl gents_store::config_client::TransactionFailure for PackChangeError {
     fn config_client_error(&self) -> Option<&gents_store::config_client::ConfigClientError> {
         match self {
-            Self::Edited { .. }
+            Self::RuntimeRefused { .. }
+            | Self::Operation(_)
+            | Self::Edited { .. }
             | Self::Differing { .. }
             | Self::Grant(GrantError::Ungranted { .. })
             | Self::Slots(super::SlotBindingError::Unbound { .. })

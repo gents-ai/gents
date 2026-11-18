@@ -149,8 +149,7 @@ async fn install_documents_pack_inner(
                 explicit,
                 crate::current_build(),
             )
-            .await
-            .map_err(Into::into);
+            .await;
         }
     }
     install_documents_pack_resolved_inner(
@@ -400,7 +399,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
         args.expect_digest.as_deref(),
         pack.digest(),
     )
-    .map_err(|error| super::refusal(PackOperation::Install, &args.package, error))?;
+    .map_err(PackChangeError::Operation)?;
     check_wire_target(pack.manifest(), &args.wire)?;
     args.output.ensure_supported(
         "config pack install",

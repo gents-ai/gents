@@ -20,6 +20,7 @@ export {
   BridgeInvokeError,
   asBridgeErrorPayload,
   normalizeInvokeError,
+  packInstallRefusal,
   type BridgeErrorPayload,
 } from "./errors.js";
 export { createDesktopApiAdapter } from "./api/adapter.js";
@@ -66,3 +67,6 @@ export * from "./capturedContext.js";
 export { parseMailboxQuestion } from "./mailboxQuestion.js";
 
 export * from "./enrollmentActivation.js";
+
+export type { PackInstallRefusal } from "./generated/PackInstallRefusal.js";
+export type { PackInstallError } from "./generated/PackInstallError.js";

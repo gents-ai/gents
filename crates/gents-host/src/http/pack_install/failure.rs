@@ -258,17 +258,18 @@ impl RefusalIdentifiers {
             .filter(|name| self.literal && self.shipped.contains(*name))
             .cloned()
             .collect();
-        SessionFailure::shown(
+        let documents = gents_pack::pack::EditedDocumentRefusal {
+            coordinate: coordinate.to_owned(),
+            unnamed: edited.len() - named.len(),
+            named,
+        };
+        let mut failure = SessionFailure::shown(
             PackSessionFailureClass::DocumentsEdited,
-            gents_pack::pack::document_change_message(
-                coordinate,
-                &named,
-                edited.len() - named.len(),
-                true,
-                gents_pack::pack::PackChangeSurface::Hosted,
-            ),
+            documents.message_for_surface(gents_pack::pack::PackChangeSurface::Hosted),
             "not_installed",
-        )
+        );
+        failure.documents = Some(documents);
+        failure
     }
 }
 
@@ -280,6 +281,7 @@ pub(crate) struct SessionFailure {
     /// the runtime holds that refusal and its class shows runtime text.
     shown: Option<String>,
     pub outcome: &'static str,
+    documents: Option<gents_pack::pack::EditedDocumentRefusal>,
 }
 
 impl SessionFailure {
@@ -289,6 +291,7 @@ impl SessionFailure {
         move |_chain| Self {
             class,
             shown: None,
+            documents: None,
             outcome: "not_installed",
         }
     }
@@ -298,6 +301,7 @@ impl SessionFailure {
         move |_chain| Self {
             class,
             shown: None,
+            documents: None,
             outcome: "unconfirmed",
         }
     }
@@ -308,6 +312,7 @@ impl SessionFailure {
         Self {
             class,
             shown: class.shows_runtime_text().then_some(text),
+            documents: None,
             outcome,
         }
     }
@@ -369,6 +374,7 @@ impl SessionFailure {
             "error": self.shown.as_deref().unwrap_or_else(|| self.class.description()),
             "outcome": self.outcome,
             "class": self.class,
+            "documents": self.documents,
         })
     }
 }
@@ -682,14 +688,11 @@ mod tests {
             assert_eq!(failure.class, PackSessionFailureClass::DocumentsEdited);
             assert_eq!(failure.outcome, "not_installed");
             let body = failure.message();
-            assert_eq!(
-                    body["error"],
-                    "4 of fixture/root's documents were edited since it was installed: \
-                     Tools/literal-tools, Tools/second-tools and 2 others. \
-                     overwrite replaces them with the pack's versions; keep leaves them as they are. \
-                     Retry the same install with --overwrite or --keep; in the desktop choose overwrite or keep in the install review",
-                    "{body}"
-                );
+            let expected = "4 of fixture/root's documents were edited since it was installed: \
+                Tools/literal-tools, Tools/second-tools and 2 others. \
+                overwrite replaces them with the pack's versions; keep leaves them as they are. \
+                Retry the same install with --overwrite or --keep; in the desktop choose overwrite or keep in the install review";
+            assert_eq!(body["error"], expected, "{body}");
             assert_eq!(body["class"], "documents_edited", "{body}");
             for withheld in [prior, "stale-tools"] {
                 assert!(!body.to_string().contains(withheld), "{body}");

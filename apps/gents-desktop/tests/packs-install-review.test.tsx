@@ -1,4 +1,10 @@
 import {
+  BridgeInvokeError,
+  packInstallRefusal,
+  type PackInstallRefusal,
+} from "@source-inc/gents-desktop-client";
+import { refusalOf } from "../src/ui/screens/packs/review";
+import {
   act,
   cleanup,
   fireEvent,
@@ -26,6 +32,27 @@ import {
 } from "../src/ui/screens/packs/preview";
 import { renderRouted, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
+
+function installRefused(
+  className: PackInstallRefusal["class"],
+  sentence: string,
+  named: string[] = [],
+  unnamed = 0,
+) {
+  return new BridgeInvokeError({
+    code: "unknown",
+    message: sentence,
+    retryable: false,
+    endpoint: null,
+    packRefusal: {
+      class: className,
+      coordinate: "acme/docs",
+      named,
+      unnamed,
+      sentence,
+    },
+  });
+}
 
 const shell = vi.hoisted(() => ({
   picked: null as string | null,
@@ -445,8 +472,9 @@ describe("the install review", () => {
     const installPack = bridge(undefined, () => {
       if (!refused) {
         refused = true;
-        throw new Error(
-          "plugin fetch asks for HTTP; install it with --grant-authority",
+        throw installRefused(
+          "authority_required",
+          "Allow the requested access in this install review.",
         );
       }
       return { pack: "docs", digest: DIGEST, source: "registry" };
@@ -491,16 +519,28 @@ describe("the install review", () => {
   });
 
   it("asks about edits there when the install finds some", async () => {
-    const refusal =
-      "the runtime refused the install (not_installed, documents_edited): " +
+    const sentence =
       "3 of acme/docs's documents were edited since it was installed: Tools/literal-tools and 2 others. " +
       "overwrite replaces them with the pack's versions; keep leaves them as they are. " +
-      "Retry the same install with --overwrite or --keep; in the desktop choose overwrite or keep in the install review";
+      "Choose Overwrite or Keep in this install review";
+    const refusal = installRefused(
+      "documents_edited",
+      sentence,
+      ["Tools/literal-tools"],
+      2,
+    );
+    expect(packInstallRefusal(refusal)).toEqual({
+      class: "documents_edited",
+      coordinate: "acme/docs",
+      named: ["Tools/literal-tools"],
+      unnamed: 2,
+      sentence,
+    });
     let refused = false;
     const installPack = bridge(undefined, () => {
       if (!refused) {
         refused = true;
-        throw new Error(refusal);
+        throw refusal;
       }
       return { pack: "docs", digest: DIGEST, source: "registry" };
     });
@@ -509,7 +549,10 @@ describe("the install review", () => {
     await waitFor(() => expect(installButton(review)).toBeEnabled());
     await user.click(installButton(review));
     const edits = await within(review).findByRole("region", { name: "Your edits" });
-    expect(within(review).getByRole("alert")).toHaveTextContent(refusal);
+    expect(within(review).getByRole("alert")).toHaveTextContent(sentence);
+    expect(within(review).getByRole("alert").textContent).not.toMatch(
+      /--overwrite|gents config|the runtime refused/,
+    );
     expect(within(edits).getByRole("radio", { name: "Keep my edits" })).toBeChecked();
     await user.click(installButton(review));
     await waitFor(() => expect(installs(installPack)).toHaveLength(2));
@@ -594,8 +637,9 @@ describe("the install review", () => {
 
   it("refuses a pack that changed since it was reviewed, and reviews it again", async () => {
     const installPack = bridge(undefined, () => {
-      throw new Error(
-        `the pack's digest is sha256:${"f".repeat(64)}, not the expected ${DIGEST}. Nothing was installed.`,
+      throw installRefused(
+        "digest_changed",
+        "The pack changed since it was reviewed. Review it again.",
       );
     });
     show(installPack);
@@ -851,8 +895,9 @@ describe("a pack link", () => {
   it("says when the pack isn't the one the link names, and offers no install", async () => {
     const linked = `sha256:${"1".repeat(64)}`;
     const installPack = bridge(() => {
-      throw new Error(
-        `the pack's digest is ${DIGEST}, not the expected ${linked}. Nothing was installed.`,
+      throw installRefused(
+        "digest_changed",
+        "The pack changed since it was reviewed. Review it again.",
       );
     });
     show(installPack, { package: "acme/docs", source: "link", digest: linked });
@@ -1058,5 +1103,21 @@ describe("coming back to the Packs list", () => {
     expect(search.mock.calls.length).toBe(searches);
     expect(scroller.scrollTop).toBe(480);
     expect(screen.queryByTestId("pack-install-review")).toBeNull();
+  });
+});
+
+describe("typed install refusals", () => {
+  it("classifies by fields, never by CLI flag text", () => {
+    expect(refusalOf(new Error("--overwrite documents_edited"))).toBeNull();
+    const failure = installRefused(
+      "documents_edited",
+      "Edited. Choose Overwrite or Keep.",
+      ["Tools/a"],
+      1,
+    );
+    expect(refusalOf(failure)).toBe("edited");
+    expect(packInstallRefusal(failure)?.named).toEqual(["Tools/a"]);
+    expect(packInstallRefusal(failure)?.unnamed).toBe(1);
+    expect(failure.message).not.toContain("--");
   });
 });

@@ -61,6 +61,8 @@ enum ServerMessage {
         /// runtime, whose text is then shown by length only.
         #[serde(default)]
         class: Option<String>,
+        #[serde(default)]
+        documents: Option<gents_pack::pack::EditedDocumentRefusal>,
     },
 }
 
@@ -154,9 +156,15 @@ async fn first_reply(
                 error,
                 outcome,
                 class,
+                documents,
             },
             _,
-        )) => Err(runtime_failure(&error, outcome, class.as_deref())),
+        )) => Err(runtime_failure_with_documents(
+            &error,
+            outcome,
+            class.as_deref(),
+            documents,
+        )),
         Ok(sized) => Ok(sized),
         // Only the decode error means "unreadable handshake". A closed or lost
         // connection is its own case and must not be reported as a build
@@ -198,12 +206,27 @@ fn check_runtime_build(
 /// A `failed` message as an error the client can show: the runtime's text only
 /// for a class that allows it, otherwise the class's own description. An
 /// unclassified message (an older runtime) is shown by length only.
+#[cfg(test)]
 fn runtime_failure(error: &str, outcome: String, class: Option<&str>) -> PackInstallHandshakeError {
+    runtime_failure_with_documents(error, outcome, class, None)
+}
+
+fn runtime_failure_with_documents(
+    error: &str,
+    outcome: String,
+    class: Option<&str>,
+    documents: Option<gents_pack::pack::EditedDocumentRefusal>,
+) -> PackInstallHandshakeError {
     use super::pack_install::failure::PackSessionFailureClass;
     match class.and_then(PackSessionFailureClass::from_wire) {
         Some(known) => PackInstallHandshakeError::RuntimeFailed {
             outcome,
             class: class.unwrap_or_default().to_owned(),
+            documents: if known == PackSessionFailureClass::DocumentsEdited {
+                documents.map(Box::new)
+            } else {
+                None
+            },
             reason: if known.shows_runtime_text() {
                 error.to_owned()
             } else {
@@ -213,6 +236,7 @@ fn runtime_failure(error: &str, outcome: String, class: Option<&str>) -> PackIns
         None => PackInstallHandshakeError::RuntimeFailed {
             outcome,
             class: "unclassified".to_owned(),
+            documents: None,
             reason: format!(
                 "the runtime did not classify this failure, so its {} bytes of detail are not \
                  shown, since they can quote install values",
@@ -234,6 +258,7 @@ pub struct PackInstallSession {
     /// after the install, so the desktop and library callers see it as well as
     /// the CLI.
     warnings: Vec<PackInstallWarning>,
+    failure: Option<PackInstallHandshakeError>,
 }
 
 impl PackInstallSession {
@@ -243,38 +268,44 @@ impl PackInstallSession {
         node_did: &str,
         pack_digests: &[String],
         client_build: &gents_protocol::build_info::BuildInfo,
-    ) -> Result<Self> {
+    ) -> Result<Self, gents_pack::pack::PackChangeError> {
         let (mut socket, actor) = open_session(endpoint, request).await?;
-        let (scope, preparation, runtime_build) =
-            match first_reply(&mut socket, client_build).await? {
-                (
-                    ServerMessage::Ready {
-                        scope,
-                        preparation,
-                        build,
-                    },
-                    _,
-                ) => (scope, preparation, build),
-                (other, bytes) => {
-                    return Err(PackInstallHandshakeError::UnexpectedMessage {
-                        kind: other.kind(),
-                        detail_bytes: bytes,
-                    }
-                    .into())
+        let (scope, preparation, runtime_build) = match first_reply(&mut socket, client_build)
+            .await
+            .map_err(PackInstallHandshakeError::into_change)?
+        {
+            (
+                ServerMessage::Ready {
+                    scope,
+                    preparation,
+                    build,
+                },
+                _,
+            ) => (scope, preparation, build),
+            (other, bytes) => {
+                return Err(PackInstallHandshakeError::UnexpectedMessage {
+                    kind: other.kind(),
+                    detail_bytes: bytes,
                 }
-            };
+                .into_change())
+            }
+        };
         // The handshake is where a build mismatch is refused: a plan prepared by
         // two different builds is not the same plan, whatever it contains, and
         // finding that out after planning is too late to say so usefully. Two
         // dirty builds of one commit agree, and that is recorded as a typed
         // warning the desktop and library callers see, not printed here.
-        let warnings = check_runtime_build(client_build, &runtime_build)?;
-        ensure!(
-            scope.node_did == node_did
-                && scope.pack_digests == pack_digests
-                && !scope.nonce.is_empty(),
-            "remote pack install scope does not match the reviewed artifacts and node"
-        );
+        let warnings = check_runtime_build(client_build, &runtime_build)
+            .map_err(PackInstallHandshakeError::into_change)?;
+        if scope.node_did != node_did
+            || scope.pack_digests != pack_digests
+            || scope.nonce.is_empty()
+        {
+            return Err(anyhow::anyhow!(
+                "remote pack install scope does not match the reviewed artifacts and node"
+            )
+            .into());
+        }
         Ok(Self {
             socket,
             actor,
@@ -283,11 +314,24 @@ impl PackInstallSession {
             pending: None,
             next_id: 1,
             warnings,
+            failure: None,
         })
     }
 
     /// What the handshake accepted on a weaker guarantee, for the caller to show
     /// or log. Empty on an ordinary install.
+    fn refused(
+        &mut self,
+        error: &str,
+        outcome: String,
+        class: Option<&str>,
+        documents: Option<gents_pack::pack::EditedDocumentRefusal>,
+    ) -> PackInstallHandshakeError {
+        let failure = runtime_failure_with_documents(error, outcome, class, documents);
+        self.failure = Some(failure.clone());
+        failure
+    }
+
     pub fn warnings(&self) -> &[PackInstallWarning] {
         &self.warnings
     }
@@ -324,7 +368,12 @@ impl PackInstallSession {
                     error,
                     outcome,
                     class,
-                } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
+                    documents,
+                } => {
+                    return Err(self
+                        .refused(&error, outcome, class.as_deref(), documents)
+                        .into())
+                }
                 _ => bail!("unexpected remote pack install response to read"),
             }
         }
@@ -348,7 +397,12 @@ impl PackInstallSession {
                 error,
                 outcome,
                 class,
-            } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
+                documents,
+            } => {
+                return Err(self
+                    .refused(&error, outcome, class.as_deref(), documents)
+                    .into())
+            }
             ServerMessage::ApproveGraph { mutation, .. } => {
                 // A differing build is refused at the handshake, so both sides
                 // here are the same build and the difference is in the plan.
@@ -380,7 +434,12 @@ impl PackInstallSession {
                 error,
                 outcome,
                 class,
-            } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
+                documents,
+            } => {
+                return Err(self
+                    .refused(&error, outcome, class.as_deref(), documents)
+                    .into())
+            }
             ServerMessage::ApproveRelationship { relationship, .. } => bail!(
                 "runtime pack relationship differs from the client's installation plan: {}",
                 describe_relationship_disagreement(expected, &relationship)?
@@ -408,7 +467,10 @@ impl PackInstallSession {
                 error,
                 outcome,
                 class,
-            } => Err(runtime_failure(&error, outcome, class.as_deref()).into()),
+                documents,
+            } => Err(self
+                .refused(&error, outcome, class.as_deref(), documents)
+                .into()),
             _ => bail!("unexpected remote pack install effect response"),
         }
     }
@@ -420,7 +482,12 @@ impl PackInstallSession {
                 error,
                 outcome,
                 class,
-            } => return Err(runtime_failure(&error, outcome, class.as_deref()).into()),
+                documents,
+            } => {
+                return Err(self
+                    .refused(&error, outcome, class.as_deref(), documents)
+                    .into())
+            }
             _ => bail!("runtime pack timestamp differs from the client installation plan"),
         };
         let value = gents_store::config_client::mint_recreate_identity_timestamp();
@@ -444,7 +511,10 @@ impl PackInstallSession {
                 error,
                 outcome,
                 class,
-            } => Err(runtime_failure(&error, outcome, class.as_deref()).into()),
+                documents,
+            } => Err(self
+                .refused(&error, outcome, class.as_deref(), documents)
+                .into()),
             _ => bail!("unexpected remote pack install completion response"),
         }
     }
@@ -522,6 +592,19 @@ pub struct PackReplaySession {
 struct PackReplayState {
     session: Option<PackInstallSession>,
     result: Option<Value>,
+    failure: Option<PackInstallHandshakeError>,
+}
+
+impl PackReplayState {
+    fn transport_error(&mut self, error: anyhow::Error) -> PackApprovalError {
+        if self.failure.is_none() {
+            self.failure = self
+                .session
+                .as_mut()
+                .and_then(|session| session.failure.take());
+        }
+        transport_error(error)
+    }
 }
 
 impl PackReplaySession {
@@ -533,6 +616,7 @@ impl PackReplaySession {
             inner: tokio::sync::Mutex::new(PackReplayState {
                 session: Some(session),
                 result: None,
+                failure: None,
             }),
             warnings,
         }
@@ -572,7 +656,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .read(document, variables)
             .await
-            .map_err(transport_error)
+            .map_err(|error| state.transport_error(error))
     }
 
     async fn apply_graph(
@@ -587,7 +671,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .graph(mutation)
             .await
-            .map_err(transport_error)
+            .map_err(|error| state.transport_error(error))
     }
 
     async fn apply_relationship(
@@ -602,7 +686,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .relationship(relationship)
             .await
-            .map_err(transport_error)
+            .map_err(|error| state.transport_error(error))
     }
 
     async fn next_timestamp(
@@ -617,7 +701,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .timestamp(kind)
             .await
-            .map_err(transport_error)
+            .map_err(|error| state.transport_error(error))
     }
 
     async fn commit(&self) -> std::result::Result<(), PackApprovalError> {
@@ -629,7 +713,7 @@ impl PackReplayTransport for PackReplaySession {
             .map_err(transport_error)?
             .finish()
             .await
-            .map_err(transport_error)?;
+            .map_err(|error| state.transport_error(error))?;
         state.result = Some(result);
         state.session.take();
         Ok(())
@@ -640,7 +724,7 @@ impl PackReplayTransport for PackReplaySession {
         if let Some(mut session) = state.session.take() {
             send(&mut session.socket, json!({"type": "abort"}))
                 .await
-                .map_err(transport_error)?;
+                .map_err(|error| state.transport_error(error))?;
         }
         Ok(())
     }
@@ -660,8 +744,10 @@ pub async fn install_remote(
     args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
     explicit: bool,
     client_build: gents_protocol::build_info::BuildInfo,
-) -> Result<(Value, Vec<PackInstallWarning>)> {
-    ensure!(args.wire.is_empty(), "remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately on the owning node");
+) -> Result<(Value, Vec<PackInstallWarning>), gents_pack::pack::PackChangeError> {
+    if !args.wire.is_empty() {
+        return Err(anyhow::anyhow!("remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately on the owning node").into());
+    }
     let request = super::pack_install::encode_install_request(
         pack,
         dependencies,
@@ -728,7 +814,9 @@ pub async fn install_remote(
     })
     .await
     .context("reconstructing the reviewed pack graph")??;
-    let evidence = prepare_pack_schema_approval(&session.actor, &session.scope).await?;
+    let evidence = prepare_pack_schema_approval(&session.actor, &session.scope)
+        .await
+        .map_err(|error| gents_pack::pack::PackChangeError::Other(error.into()))?;
     send(
         &mut session.socket,
         json!({"type": "schemas_ready", "evidence": evidence}),
@@ -739,7 +827,7 @@ pub async fn install_remote(
         endpoint.clone().with_pack_replay(replay.clone())?,
     );
     let policy = gents_pack::operations::pack::drift_policy(args.edited);
-    access
+    let applied = access
         .transact_write("pack.hosted_document_graph.replay", |txn| {
             let graph = &graph;
             Box::pin(async move {
@@ -755,7 +843,13 @@ pub async fn install_remote(
                 Ok::<_, anyhow::Error>(())
             })
         })
-        .await?;
+        .await;
+    if let Err(error) = applied {
+        if let Some(failure) = replay.inner.lock().await.failure.take() {
+            return Err(failure.into_change());
+        }
+        return Err(error.into());
+    }
     let result = replay.result().await?;
     Ok((result, replay.warnings().to_vec()))
 }
@@ -831,7 +925,7 @@ impl PackInstallWarning {
 /// it: a typed error whose variants each name the next step, because the
 /// difference between them is exactly what an operator has to do about it. No
 /// variant repeats text the runtime did not write from build facts alone.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum PackInstallHandshakeError {
     /// The class is known, the text is not shown: a decode error can quote the
     /// bytes it choked on, which on a runtime-side message means runtime
@@ -880,6 +974,7 @@ pub enum PackInstallHandshakeError {
         outcome: String,
         class: String,
         reason: String,
+        documents: Option<Box<gents_pack::pack::EditedDocumentRefusal>>,
     },
 
     #[error(
@@ -972,6 +1067,25 @@ fn describe_relationship_disagreement(
         &constructed,
         &proposed,
     ))
+}
+
+impl PackInstallHandshakeError {
+    pub fn into_change(self) -> gents_pack::pack::PackChangeError {
+        match self {
+            Self::RuntimeFailed {
+                class,
+                outcome,
+                reason,
+                documents,
+            } => gents_pack::pack::PackChangeError::RuntimeRefused {
+                class,
+                outcome,
+                reason,
+                documents,
+            },
+            other => gents_pack::pack::PackChangeError::Other(other.into()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1367,6 +1481,7 @@ mod tests {
             client,
         )
         .await
+        .map_err(gents_pack::pack::PackChangeError::into_anyhow)
     }
 
     /// Two dirty builds of one commit are accepted, and the acceptance is in
@@ -1554,6 +1669,7 @@ mod tests {
                         outcome,
                         class: code,
                         reason,
+                        ..
                     } = error
                     else {
                         panic!("structured runtime failure was misclassified");

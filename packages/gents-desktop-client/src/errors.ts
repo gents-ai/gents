@@ -1,3 +1,4 @@
+import type { PackInstallRefusal } from "./generated/PackInstallRefusal.js";
 import type { BridgeError as GeneratedBridgeError } from "./generated/BridgeError.js";
 import type { BridgeErrorCode } from "./generated/BridgeErrorCode.js";
 import type { BridgeNextCall } from "./generated/BridgeNextCall.js";
@@ -6,7 +7,29 @@ import type { BridgeNextCallKind } from "./generated/BridgeNextCallKind.js";
 type OperationFields = "operationCode" | "nextCall";
 
 export type BridgeErrorPayload = Omit<GeneratedBridgeError, OperationFields> &
-  Partial<Pick<GeneratedBridgeError, OperationFields>>;
+  Partial<Pick<GeneratedBridgeError, OperationFields>> & {
+    packRefusal?: PackInstallRefusal | null;
+  };
+
+export function packInstallRefusal(error: unknown): PackInstallRefusal | null {
+  if (!error || typeof error !== "object") return null;
+  const value = (error as { packRefusal?: unknown }).packRefusal;
+  if (!value || typeof value !== "object") return null;
+  const r = value as Record<string, unknown>;
+  if (
+    !["documents_edited", "authority_required", "digest_changed"].includes(
+      String(r.class),
+    ) ||
+    !(r.coordinate === null || typeof r.coordinate === "string") ||
+    !Array.isArray(r.named) ||
+    !r.named.every((name) => typeof name === "string") ||
+    !Number.isSafeInteger(r.unnamed) ||
+    (r.unnamed as number) < 0 ||
+    typeof r.sentence !== "string"
+  )
+    return null;
+  return value as PackInstallRefusal;
+}
 
 const NEXT_CALL_KINDS: Record<BridgeNextCallKind, true> = {
   verb: true,
@@ -63,6 +86,7 @@ const BRIDGE_ERROR_CODES: Record<BridgeErrorCode, true> = {
 };
 
 export class BridgeInvokeError extends Error {
+  readonly packRefusal: PackInstallRefusal | null;
   readonly code: BridgeErrorCode;
   readonly retryable: boolean;
   readonly endpoint: string | null;
@@ -72,6 +96,7 @@ export class BridgeInvokeError extends Error {
   constructor(payload: BridgeErrorPayload) {
     super(payload.message);
     this.name = "BridgeInvokeError";
+    this.packRefusal = packInstallRefusal(payload);
     this.code = payload.code;
     this.retryable = payload.retryable;
     this.endpoint = payload.endpoint;
@@ -99,6 +124,9 @@ export function asBridgeErrorPayload(
     (typeof candidate.endpoint === "string" || candidate.endpoint === null)
   ) {
     return {
+      ...(packInstallRefusal(candidate)
+        ? { packRefusal: packInstallRefusal(candidate) }
+        : {}),
       code: candidate.code as BridgeErrorCode,
       message: candidate.message,
       retryable: candidate.retryable,

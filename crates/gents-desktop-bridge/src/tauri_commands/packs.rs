@@ -24,6 +24,101 @@ fn failed(error: anyhow::Error) -> BridgeError {
     BridgeError::untyped(format!("{error:#}"))
 }
 
+fn install_failed(error: PackChangeError) -> PackInstallError {
+    use gents_pack::pack::{EditedDocumentRefusal, PackChangeSurface};
+    let edited = |documents: EditedDocumentRefusal| PackInstallRefusal {
+        class: PackInstallRefusalClass::DocumentsEdited,
+        sentence: documents.message_for_surface(PackChangeSurface::Desktop),
+        coordinate: Some(documents.coordinate),
+        named: documents.named,
+        unnamed: documents.unnamed,
+    };
+    let simple = |class, sentence: &str| PackInstallRefusal {
+        class,
+        coordinate: None,
+        named: Vec::new(),
+        unnamed: 0,
+        sentence: sentence.to_owned(),
+    };
+    let refusal = match &error {
+        PackChangeError::Edited {
+            coordinate,
+            edited: names,
+        } => Some(edited(EditedDocumentRefusal {
+            coordinate: coordinate.clone(),
+            named: names.clone(),
+            unnamed: 0,
+        })),
+        PackChangeError::RuntimeRefused {
+            class, documents, ..
+        } => match class.as_str() {
+            "documents_edited" => Some(documents.as_deref().cloned().map(edited).unwrap_or_else(
+                || {
+                    simple(
+                        PackInstallRefusalClass::DocumentsEdited,
+                        "Documents were edited. Choose Overwrite or Keep in this install review.",
+                    )
+                },
+            )),
+            "authority_required" => Some(simple(
+                PackInstallRefusalClass::AuthorityRequired,
+                "Allow the requested access in this install review.",
+            )),
+            _ => None,
+        },
+        PackChangeError::Grant(gents_pack::plugin::authority::GrantError::Ungranted { .. }) => {
+            Some(simple(
+                PackInstallRefusalClass::AuthorityRequired,
+                "Allow the requested access in this install review.",
+            ))
+        }
+        PackChangeError::Operation(
+            gents_protocol::operations::pack::PackOperationError::DigestChanged { .. },
+        ) => Some(simple(
+            PackInstallRefusalClass::DigestChanged,
+            "The pack changed since it was reviewed. Review it again.",
+        )),
+        _ => None,
+    };
+    let message = refusal
+        .as_ref()
+        .map(|r| r.sentence.clone())
+        .unwrap_or_else(|| format!("{error:#}"));
+    PackInstallError {
+        error: Box::new(BridgeError::untyped(message)),
+        pack_refusal: refusal.map(Box::new),
+    }
+}
+
+impl From<BridgeError> for PackInstallError {
+    fn from(error: BridgeError) -> Self {
+        Self {
+            error: Box::new(error),
+            pack_refusal: None,
+        }
+    }
+}
+
+async fn run_install_on<F, Fut>(
+    runtime: &tokio::runtime::Handle,
+    operation: F,
+) -> Result<PackInstallView, PackInstallError>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<Value, PackChangeError>>,
+{
+    let report = gents_store::local::storage_backend::drive_unsendable(runtime, operation)
+        .await
+        .map_err(|error| {
+            PackInstallError::from(BridgeError::untyped(format!(
+                "the pack operation stopped: {error}"
+            )))
+        })?
+        .map_err(install_failed)?;
+    serde_json::from_value(report)
+        .map_err(|error| BridgeError::untyped(format!("invalid pack report: {error}")).into())
+}
+
 /// Runs a pack operation on a blocking thread that drives it to completion:
 /// opening the local node holds state that must stay on one thread, which a
 /// command future may not. Commands use the runtime `install_runtime` registers.
@@ -153,10 +248,10 @@ pub struct PackInstallRequest {
 pub async fn desktop_pack_install(
     request: PackInstallRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<PackInstallView, BridgeError> {
+) -> Result<PackInstallView, PackInstallError> {
     {
         let home = home(&state)?;
-        run(move || {
+        run_install_on(tauri::async_runtime::handle().inner(), move || {
             packs::install(
                 home,
                 request.package,
@@ -168,7 +263,6 @@ pub async fn desktop_pack_install(
                 request.expect_digest,
                 request.root_agents,
             )
-            .map_err(PackChangeError::into_anyhow)
         })
         .await
     }
@@ -355,6 +449,57 @@ pub async fn desktop_workflow_promote(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn edited_install_errors_preserve_typed_local_and_hosted_refusals() {
+        use gents_host::http::pack_install_client::PackInstallHandshakeError;
+        use gents_pack::pack::{EditedDocumentRefusal, PackChangeSurface};
+        for hosted in [false, true] {
+            let documents = EditedDocumentRefusal {
+                coordinate: "fixture/root".into(),
+                named: vec!["Tools/literal-tools".into()],
+                unnamed: if hosted { 2 } else { 0 },
+            };
+            let expected = documents.message_for_surface(PackChangeSurface::Desktop);
+            let input: PackChangeError = if hosted {
+                PackInstallHandshakeError::RuntimeFailed {
+                    class: "documents_edited".into(),
+                    outcome: "not_installed".into(),
+                    reason: documents.message_for_surface(PackChangeSurface::Hosted),
+                    documents: Some(Box::new(documents.clone())),
+                }
+                .into_change()
+            } else {
+                PackChangeError::Edited {
+                    coordinate: documents.coordinate.clone(),
+                    edited: documents.named.clone(),
+                }
+            };
+            let failure = run_install_on(&runtime_handle(), move || async { Err(input) })
+                .await
+                .unwrap_err();
+            let refusal = failure.pack_refusal.as_ref().unwrap();
+            assert_eq!(refusal.class, PackInstallRefusalClass::DocumentsEdited);
+            assert_eq!(refusal.named, documents.named);
+            assert_eq!(refusal.unnamed, documents.unnamed);
+            assert_eq!(refusal.sentence, expected);
+            assert_eq!(failure.error.message, expected);
+            for cli in ["--overwrite", "gents config", "the runtime refused"] {
+                assert!(!expected.contains(cli), "{expected}");
+            }
+            let json = serde_json::to_value(&failure).unwrap();
+            assert_eq!(json["packRefusal"]["class"], "documents_edited");
+            assert_eq!(json["packRefusal"]["named"][0], "Tools/literal-tools");
+        }
+    }
+
+    #[test]
+    fn edited_bridge_classification_does_not_match_error_text() {
+        let failure = install_failed(PackChangeError::Other(anyhow::anyhow!(
+            "--overwrite documents_edited"
+        )));
+        assert!(failure.pack_refusal.is_none());
+    }
+
     use super::*;
     use crate::tests::support::runtime_handle;
 

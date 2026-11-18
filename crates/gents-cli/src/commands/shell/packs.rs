@@ -494,6 +494,8 @@ pub(super) fn installed(
             error @ (PackChangeError::Grant(GrantError::Other(_))
             | PackChangeError::Slots(SlotBindingError::Other(_))
             | PackChangeError::PluginReference(_)
+            | PackChangeError::RuntimeRefused { .. }
+            | PackChangeError::Operation(_)
             | PackChangeError::Other(_)),
         ) => Update::Notice(format!("{error:#}")),
     }
@@ -521,6 +523,8 @@ pub(super) fn updated(pack: String, done: Result<Value, PackChangeError>) -> Upd
             | PackChangeError::Grant(_)
             | PackChangeError::Slots(_)
             | PackChangeError::PluginReference(_)
+            | PackChangeError::RuntimeRefused { .. }
+            | PackChangeError::Operation(_)
             | PackChangeError::Other(_)),
         ) => Update::Notice(format!("{error:#}")),
     }

@@ -1467,7 +1467,7 @@ async fn a_hosted_install_over_differing_documents_names_them_and_no_values() {
     )
     .await
     .expect_err("the install refuses the differing document");
-    check(install, "install");
+    check(install.into_anyhow(), "install");
 
     assert_eq!(
         home.access.execute(query).await.unwrap(),
@@ -1597,6 +1597,17 @@ async fn an_edited_refusal_names_the_literal_document_shipped_by_the_reinstall()
     .await
     .expect_err("reinstall refuses the operator edit");
     let text = format!("{error:#}");
+    let gents_pack::pack::PackChangeError::RuntimeRefused {
+        documents: Some(documents),
+        class,
+        ..
+    } = &error
+    else {
+        panic!("runtime must preserve typed document details");
+    };
+    assert_eq!(class, "documents_edited");
+    assert_eq!(documents.named, ["Tools/literal-tools"]);
+    assert_eq!(documents.unnamed, 0);
     let reason = gents_pack::pack::document_change_message(
         "fixture/differ",
         &["Tools/literal-tools".into()],

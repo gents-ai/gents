@@ -4,6 +4,7 @@ import {
   asBridgeErrorPayload,
   BridgeInvokeError,
   normalizeInvokeError,
+  packInstallRefusal,
 } from "./errors.js";
 
 describe("confirmed Goal-control rejection", () => {
@@ -56,5 +57,31 @@ describe("confirmed Goal-control rejection", () => {
       nextCall: null,
     });
     expect(asBridgeErrorPayload(transport)?.code).toBe("endpointUnreachable");
+  });
+});
+
+describe("typed pack install refusals", () => {
+  it("preserves fields through Tauri normalization without reading error text", () => {
+    const packRefusal = {
+      class: "documents_edited",
+      coordinate: "acme/docs",
+      named: ["Tools/literal"],
+      unnamed: 2,
+      sentence: "Desktop-specific sentence.",
+    };
+    const payload = {
+      code: "unknown",
+      message: "unrelated --overwrite lookalike",
+      retryable: false,
+      endpoint: null,
+      packRefusal,
+    };
+    const error = normalizeInvokeError(payload);
+    expect(packInstallRefusal(error)).toEqual(packRefusal);
+    expect(asBridgeErrorPayload(error)?.packRefusal).toEqual(packRefusal);
+    expect(packInstallRefusal(new Error(payload.message))).toBeNull();
+    expect(
+      packInstallRefusal({ packRefusal: { ...packRefusal, unnamed: -1 } }),
+    ).toBeNull();
   });
 });
