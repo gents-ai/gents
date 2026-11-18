@@ -175,18 +175,20 @@ mod tests {
 mod conformance {
     use super::caller_endpoint;
 
-    #[test]
-    fn mcp_query_reader_matches_lean() {
+    #[tokio::test]
+    async fn mcp_query_reader_matches_lean() {
         use gents_lean_vocab::families::runtime_reconcile_http_access_mcp_query_reads_as as family;
-        family::replay(|input: &family::Input<String>| {
-            let presented =
-                (input.identity != "anonymous").then(|| format!("Bearer {}", input.identity));
+        for case in family::cases::<String>() {
+            let identity = &case.input.identity;
+            let presented = (identity != "anonymous").then(|| format!("Bearer {identity}"));
             let forwarded =
-                caller_endpoint("http://127.0.0.1:1/api/v0/graphql", presented.as_deref())?
-                    .unwrap()
-                    .authorization()
-                    .unwrap()?;
-            forwarded.strip_prefix("Bearer ").map(str::to_owned)
-        });
+                match caller_endpoint("http://127.0.0.1:1/api/v0/graphql", presented.as_deref()) {
+                    Some(endpoint) => endpoint.unwrap().authorization().await.unwrap(),
+                    None => None,
+                };
+            case.check(
+                forwarded.and_then(|header| header.strip_prefix("Bearer ").map(str::to_owned)),
+            );
+        }
     }
 }
