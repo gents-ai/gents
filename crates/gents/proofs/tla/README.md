@@ -476,6 +476,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   server's commit as unconfirmed (the change-unit CI failure);
   `Wedged` drops the premise that the server answers every commit it works
   on. Green waits for the answer or the connection reset.
+- `OfflineAccessRouting` — a CLI command against a home another process
+  holds: a server claims the store, binds its port and publishes
+  `runtime.json` only once ready; the command routes to a published runtime
+  and otherwise tries the store lock, which `StoreHandoff.decide` refuses
+  while the holder serves. `AssertionHolds`: the outcome is the one the test
+  expects. Green waits for the publication and expects the server's answer,
+  or holds the store itself and expects the refusal. RED: `PortWait` and
+  `PortWaitAnswered` wait only for the port, where both outcomes are
+  reachable (the `cli_session` fork test on CI).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
