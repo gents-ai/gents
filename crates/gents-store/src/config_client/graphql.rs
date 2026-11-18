@@ -563,28 +563,44 @@ mod tests {
 
     /// A loaded server may take any time to answer a commit; the client's
     /// verdict is the server's, not its own clock's
-    /// (`tla/CommitResponseWait.tla`, `ClientWindow`). The paused clock jumps
-    /// to the next timer whenever both sides wait, so a client timer of any
-    /// length would fire before the server's hour.
-    #[tokio::test(start_paused = true)]
+    /// (`tla/CommitResponseWait.tla`, `ClientWindow`). Once the connection is
+    /// up the clock is paused, and a paused clock jumps to the next timer
+    /// whenever both sides wait, so a client timer of any length would fire
+    /// before the server's hour.
+    #[tokio::test]
     async fn a_commit_the_server_answers_late_is_confirmed() {
-        use axum::{routing::post, Router};
+        use axum::{
+            routing::{get, post},
+            Router,
+        };
 
-        let app = Router::new().route(
-            "/api/v0/tx/{id}",
-            post(|| async {
-                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-                ""
-            }),
-        );
+        let app = Router::new()
+            .route("/api/v0/version", get(|| async { "" }))
+            .route(
+                "/api/v0/tx/{id}",
+                post(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    ""
+                }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let client = http_client().await.unwrap().clone();
+        let version = endpoint.replace("/graphql", "/version");
+        client.get(version).send().await.unwrap();
+        tokio::time::pause();
         let started = tokio::time::Instant::now();
         let result = txn_commit(&GraphqlEndpoint::anonymous(endpoint), "17", &client).await;
         server.abort();
-        assert!(matches!(result, Ok(())), "the server's commit is confirmed");
+        if let Err(
+            TxnCommitError::CleanupRequired(error)
+            | TxnCommitError::TransactionConsumed(error)
+            | TxnCommitError::ConfirmedConflict(error),
+        ) = result
+        {
+            panic!("the server's commit is confirmed: {error:?}");
+        }
         assert!(started.elapsed() >= std::time::Duration::from_secs(3600));
     }
 }
