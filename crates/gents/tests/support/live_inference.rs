@@ -198,7 +198,14 @@ where
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{
-                request_id lifecycle_state failure_reason
+                _docID lifecycle_state execution_generation execution_lease_expires_at
+                terminal_output failure_reason
+            }}
+            InferenceCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 10) {{
+                call_id call_state failure_reason started_at ended_at
+            }}
+            AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 10) {{
+                _docID tool_name lifecycle_state started_at completed_at
             }}
         }}"#
     );
@@ -246,34 +253,6 @@ where
         {
             panic!("{collection} stalled for {STALL_CEILING:?}: {rows}");
         }
-    }
-}
-
-pub async fn wait_for_rows<R, F>(
-    reader: &R,
-    collection: &str,
-    query: &str,
-    timeout: Duration,
-    predicate: F,
-) -> serde_json::Value
-where
-    R: SnapshotReader + ?Sized,
-    F: Fn(&serde_json::Value) -> bool,
-{
-    let last = std::sync::Mutex::new(serde_json::Value::Null);
-    let observed = rows_when(reader, collection, query, |rows| {
-        let holds = predicate(rows);
-        if !holds {
-            *last.lock().expect("last rows") = rows.clone();
-        }
-        holds
-    });
-    match tokio::time::timeout(timeout, observed).await {
-        Ok(rows) => rows,
-        Err(_) => panic!(
-            "deadline waiting for {collection}: {}",
-            last.lock().expect("last rows")
-        ),
     }
 }
 

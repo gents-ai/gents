@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents::DocumentRuntimeOptions;
 use gents_protocol::job::JobResultRequest;
 use gents_store::graphql::escape_graphql_string;
@@ -11,7 +9,7 @@ use serde_json::json;
 use super::plugin_goal_live::{completed_live_job, submit_with_cwd, LiveJobHarness};
 use super::plugin_job_support::PLUGIN;
 use crate::support::live_inference::{
-    boot_live_agent_with_options, wait_for_request_terminal, wait_for_rows,
+    boot_live_agent_with_options, rows_when, wait_for_request_terminal,
 };
 
 fn caller(h: &LiveJobHarness, session_id: &str) -> JobCaller {
@@ -50,20 +48,14 @@ async fn notification(h: &LiveJobHarness) -> Notification {
         r#"{{AgentMessage(filter: {{session_id: {{_eq: "{}"}}}}) {{_docID publication}}}}"#,
         escape_graphql_string(&h.session_id),
     );
-    let messages = wait_for_rows(
-        &h.live.access,
-        "AgentMessage",
-        &query,
-        Duration::from_secs(120),
-        |data| {
-            data["AgentMessage"].as_array().is_some_and(|rows| {
-                rows.iter().any(|row| {
-                    row["publication"]["kind"] == "tool_delivery"
-                        && row["publication"]["tool_call_doc_id"] == row_doc_id
-                })
+    let messages = rows_when(&h.live.access, "AgentMessage", &query, |data| {
+        data["AgentMessage"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row["publication"]["kind"] == "tool_delivery"
+                    && row["publication"]["tool_call_doc_id"] == row_doc_id
             })
-        },
-    )
+        })
+    })
     .await;
     let row = messages["AgentMessage"]
         .as_array()

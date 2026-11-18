@@ -25,7 +25,7 @@ use super::plugin_job_support::{
 };
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    boot_live_agent_with_options, live_target, wait_for_request_terminal, wait_for_rows, LiveUser,
+    boot_live_agent_with_options, live_target, rows_when, wait_for_request_terminal, LiveUser,
 };
 use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
@@ -243,17 +243,11 @@ impl LiveJobs {
                 r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash"}}}}) {{lifecycle_state}} }}"#,
                 escape_graphql_string(child["request_id"].as_str().unwrap())
             );
-            wait_for_rows(
-                &self.live.access,
-                "AgentToolCall",
-                &query,
-                Duration::from_secs(120),
-                |data| {
-                    data["AgentToolCall"].as_array().is_some_and(|rows| {
-                        rows.iter().any(|row| row["lifecycle_state"] == "running")
-                    })
-                },
-            )
+            rows_when(&self.live.access, "AgentToolCall", &query, |data| {
+                data["AgentToolCall"]
+                    .as_array()
+                    .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
+            })
             .await;
         }
     }
@@ -534,20 +528,14 @@ async fn operator_cancel_and_non_job_stop_each_end_the_row_cancelled() {
             r#"{{ AgentMessage(filter: {{session_id: {{_eq: "{}"}}}}) {{publication}} }}"#,
             escape_graphql_string(name)
         );
-        wait_for_rows(
-            &h.live.access,
-            "AgentMessage",
-            &query,
-            Duration::from_secs(120),
-            |data| {
-                data["AgentMessage"].as_array().is_some_and(|rows| {
-                    rows.iter().any(|message| {
-                        message["publication"]["kind"] == "tool_delivery"
-                            && message["publication"]["tool_call_doc_id"] == row["_docID"]
-                    })
+        rows_when(&h.live.access, "AgentMessage", &query, |data| {
+            data["AgentMessage"].as_array().is_some_and(|rows| {
+                rows.iter().any(|message| {
+                    message["publication"]["kind"] == "tool_delivery"
+                        && message["publication"]["tool_call_doc_id"] == row["_docID"]
                 })
-            },
-        )
+            })
+        })
         .await;
         h.runtime.shutdown().await;
     }

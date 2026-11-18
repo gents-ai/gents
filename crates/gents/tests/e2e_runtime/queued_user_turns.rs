@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use gents_protocol::request_input::QueueDelivery;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -82,9 +81,7 @@ async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
         .await
         .unwrap();
     let runtime = spawn_runtime(&db, agent).await;
-    backend
-        .wait_for_request(&markers[0], Duration::from_secs(60))
-        .await;
+    backend.wait_for_request(&markers[0]).await;
     for (entry, marker) in entries.iter().zip(&markers).skip(1) {
         assert_eq!(entry.delivery, "queue");
         let doc = submit_user_request(
@@ -139,9 +136,7 @@ async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
                 .await,
             "completed"
         );
-        backend
-            .wait_for_request(marker, Duration::from_secs(60))
-            .await;
+        backend.wait_for_request(marker).await;
     }
     let ids = documents
         .values()

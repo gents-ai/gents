@@ -14,8 +14,7 @@ use crate::support::agent_requests::{submit_user_request, RequestActors};
 use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_ceiling, live_target, wait_for_request_terminal,
-    wait_for_rows,
+    bind_target, boot_live_agent_with_ceiling, live_target, rows_when, wait_for_request_terminal,
 };
 use crate::support::snapshots::{
     fetch_message_snapshots_for_session_as, fetch_tool_call_snapshots_for_session, SnapshotReader,
@@ -94,11 +93,10 @@ impl Recovery {
             escape_graphql_string(request),
             escape_graphql_string(state)
         );
-        wait_for_rows(
+        rows_when(
             &self.actors.fixture.access,
             "AgentToolCall",
             &query,
-            WAIT,
             |rows| {
                 rows["AgentToolCall"]
                     .as_array()

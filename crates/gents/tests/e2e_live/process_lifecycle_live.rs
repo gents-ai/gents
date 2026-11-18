@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::support::fixtures::configure_agent_tools;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
-    live_target, wait_for_request_terminal, wait_for_rows, LiveAgentSpec, LiveUser,
+    live_target, rows_when, wait_for_request_terminal, LiveAgentSpec, LiveUser,
 };
 use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
@@ -161,7 +161,7 @@ impl Processes {
 
     async fn running_call(&self, request: &str, tool: &str) -> Value {
         let query = Self::call_query(request, tool);
-        let data = wait_for_rows(&self.live, "AgentToolCall", &query, WAIT, |data| {
+        let data = rows_when(&self.live, "AgentToolCall", &query, |data| {
             data["AgentToolCall"]
                 .as_array()
                 .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
@@ -178,7 +178,7 @@ impl Processes {
 
     async fn call(&self, request: &str, tool: &str) -> Value {
         let query = Self::call_query(request, tool);
-        wait_for_rows(&self.live, "AgentToolCall", &query, WAIT, |data| {
+        rows_when(&self.live, "AgentToolCall", &query, |data| {
             let found = data["AgentToolCall"]
                 .as_array()
                 .is_some_and(|rows| !rows.is_empty());
@@ -200,7 +200,7 @@ impl Processes {
             r#"{{ AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID lifecycle_state cancel_cause completion_notification_delivered_at}} }}"#,
             escape_graphql_string(call["_docID"].as_str().unwrap())
         );
-        wait_for_rows(&self.live, "AgentToolCall", &query, WAIT, |data| {
+        rows_when(&self.live, "AgentToolCall", &query, |data| {
             data["AgentToolCall"][0]["lifecycle_state"] == expected
         })
         .await["AgentToolCall"][0]

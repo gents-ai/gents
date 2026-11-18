@@ -1,7 +1,7 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
+
 use gents_documents::apply_desired_state_plan;
 use gents_documents::mailbox_write_decl::canonical_mailbox_write_decl;
 use gents_documents::DatastoreToolSurfaceDocument;
@@ -303,45 +303,4 @@ pub async fn prepare_signed_mailbox_turn(
     };
     turn.submit(create).await?;
     Ok((PreparedAcceptedTurn { backend }, turn))
-}
-
-pub async fn request_state_on(
-    access: &ConfigAccess,
-    request_id: &str,
-) -> anyhow::Result<Option<String>> {
-    let query = format!(
-        r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{lifecycle_state}}}}"#,
-        gents_store::graphql::escape_graphql_string(request_id)
-    );
-    let response = access.execute(&query).await?;
-    let rows = response["data"]["AgentRequest"]
-        .as_array()
-        .context("request state query omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "request state ambiguous");
-    Ok(rows
-        .first()
-        .and_then(|row| row["lifecycle_state"].as_str())
-        .map(str::to_owned))
-}
-
-pub async fn wait_for_request_terminal_on(
-    access: &ConfigAccess,
-    request_id: &str,
-    timeout: Duration,
-) -> anyhow::Result<String> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if let Some(state) = request_state_on(access, request_id).await? {
-            if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(Some(
-                &state,
-            )) {
-                return Ok(state);
-            }
-        }
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "request {request_id} did not terminalize"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
 }
