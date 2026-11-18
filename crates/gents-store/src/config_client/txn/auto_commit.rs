@@ -97,7 +97,7 @@ impl ConfigAccess {
         let variables = variables.cloned();
         let operation = operation.to_owned();
         let identity = local.identity().cloned();
-        let managed_agent = local.has_agent_signer();
+        let managed_agent = local.agent_signer().is_some();
         local
             .run_owned(move |node| async move {
                 Self::execute_local_read(
