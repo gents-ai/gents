@@ -108,14 +108,19 @@ impl RuntimeDocumentProjector {
 
 #[async_trait::async_trait]
 impl db::DocumentMutationProjector for RuntimeDocumentProjector {
-    fn genesis_reader_field(
+    fn genesis_read_access(
         &self,
         collection: &str,
         policy: &str,
         resource: &str,
-    ) -> Option<&'static str> {
-        (policy == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-            && resource == "enrollment_records"
+    ) -> Option<db::GenesisReadAccess> {
+        if policy != gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID {
+            return None;
+        }
+        if collection == gents_protocol::schemas::PEER_REGISTRY_NAME && resource == "discovery" {
+            return Some(db::GenesisReadAccess::Public);
+        }
+        (resource == "enrollment_records"
             && matches!(
                 collection,
                 "NetworkEnrollmentRequest"
@@ -125,7 +130,7 @@ impl db::DocumentMutationProjector for RuntimeDocumentProjector {
                     | "EnrollmentRenewalIntent"
                     | "EnrollmentRenewalOffer"
             ))
-        .then_some("initial_reader_did")
+        .then_some(db::GenesisReadAccess::AddressedBy("initial_reader_did"))
     }
 
     fn projection_rules(&self) -> &[acp::projection::Rule] {
