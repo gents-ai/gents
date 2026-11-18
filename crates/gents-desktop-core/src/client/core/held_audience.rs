@@ -70,7 +70,7 @@ impl super::ClientCore {
             return HeldAudienceChange::Unchanged;
         };
         let reported =
-            gents_protocol::delegation_audience::ReportedDelegationAudience::observe(status);
+            gents_protocol::delegation_audience::ReportedHome::of_home(status, node_did).audience;
         match self
             .sync_state
             .observe_delegation_audience(&saved, &reported)
@@ -149,6 +149,11 @@ mod tests {
             (
                 named(2),
                 HeldAudienceChange::Changed(audience(2)),
+                Some(audience(2)),
+            ),
+            (
+                json!({ "node_did": "did:key:other", "delegation_audience": audience(3) }),
+                HeldAudienceChange::Unchanged,
                 Some(audience(2)),
             ),
             (local, HeldAudienceChange::Forgotten, None),

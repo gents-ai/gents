@@ -6,6 +6,7 @@ pub const STATUS_DELEGATION_AUDIENCE_FIELD: &str = "delegation_audience";
 /// The status field naming the provider's time, in Unix seconds, that a
 /// client mints its delegations at (`Identity.UserDelegation.issueAt`).
 pub const STATUS_PROVIDER_TIME_FIELD: &str = "provider_time";
+pub const STATUS_NODE_DID_FIELD: &str = "node_did";
 
 /// External premise (defradb.rs#3006): the code DefraDB answers a verified
 /// write with when the delegation it carries does not hold at the provider's
@@ -76,6 +77,18 @@ impl ReportedHome {
                 .and_then(Value::as_u64),
         }
     }
+
+    /// What `status` reports for the home whose node is `node_did`
+    /// (`Identity.HeldAudience.reportedOfHome`): nothing, when another node
+    /// or none answers for it.
+    pub fn of_home(status: &Value, node_did: &str) -> Self {
+        let home = Self::observe(status);
+        let same_node = status.get(STATUS_NODE_DID_FIELD).and_then(Value::as_str) == Some(node_did);
+        Self {
+            audience: home.audience.of_home(same_node),
+            provider_time: home.provider_time.filter(|_| same_node),
+        }
+    }
 }
 
 /// The code the edge of a Vera home answers a User's identity token with
@@ -111,6 +124,15 @@ impl ReportedDelegationAudience {
             Some(reported) => {
                 serde_json::from_value(reported.clone()).map_or(Self::Unavailable, Self::Named)
             }
+        }
+    }
+
+    /// `Identity.HeldAudience.reportedOfHome`.
+    pub fn of_home(self, same_node: bool) -> Self {
+        if same_node {
+            self
+        } else {
+            Self::Unavailable
         }
     }
 

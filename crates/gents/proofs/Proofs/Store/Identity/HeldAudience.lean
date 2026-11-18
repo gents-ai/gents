@@ -56,6 +56,21 @@ def change (held : Held) (reported : Reported) (sameAudience clockMoved : Bool) 
   | .known, .absent => .forgotten
   | _, _ => .unchanged
 
+/-- Decision (gents#3831): a client reads a saved home's status, which names
+the node answering it. A status naming another node than the home's, or none,
+is not the home's: what it reports counts as unavailable, so the record keeps
+what it holds and the client never mints a delegation for another node's
+audience to send to this home's endpoint. External premise: the status is
+unsigned, so this binds an honest node's answer to its home; an endpoint that
+impersonates the home can still name any node. -/
+def reportedOfHome (sameNode : Bool) (reported : Reported) : Reported :=
+  if sameNode then reported else .unavailable
+
+theorem a_status_from_another_node_changes_no_record (held : Held) (reported : Reported)
+    (sameAudience clockMoved : Bool) :
+    change held (reportedOfHome false reported) sameAudience clockMoved = .unchanged := by
+  cases held <;> rfl
+
 /-- Decision (gents#3831): a client holding an audience that names no genesis
 identity reads the status again before it mints a request-bound delegation,
 since none can be minted for that audience

@@ -388,9 +388,9 @@ pub fn graphql_endpoint_for_desktop_access(
 pub async fn public_delegation_audience(
     record: &crate::client::PeerRecord,
 ) -> Result<Option<gents_protocol::delegation_audience::ReportedHome>> {
-    Ok(http::peer_status(record)
-        .await?
-        .map(|status| gents_protocol::delegation_audience::ReportedHome::observe(&status)))
+    Ok(http::peer_status(record).await?.map(|status| {
+        gents_protocol::delegation_audience::ReportedHome::of_home(&status, &record.node_did)
+    }))
 }
 
 pub fn augment_peer_status_payload_for_desktop(mut payload: Value, status_url: &str) -> Value {

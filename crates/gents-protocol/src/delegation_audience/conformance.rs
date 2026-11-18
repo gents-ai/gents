@@ -90,6 +90,38 @@ fn a_status_read_changes_the_held_audience_as_the_lean_model_does() {
 }
 
 #[test]
+fn a_status_from_another_node_reports_nothing_for_the_home_as_the_lean_model_says() {
+    gents_lean_vocab::families::identity_held_audience_reported_of_home::replay::<Reported>(
+        |input| {
+            let mut status = serde_json::json!({
+                super::STATUS_NODE_DID_FIELD: if input.same_node { "did:key:home" } else { "did:key:other" },
+                super::STATUS_PROVIDER_TIME_FIELD: 1_000,
+            });
+            match input.reported {
+                Reported::Absent => {}
+                Reported::Named => {
+                    status[super::STATUS_DELEGATION_AUDIENCE_FIELD] =
+                        serde_json::json!(audience(1));
+                }
+                Reported::Unavailable => {
+                    status[super::STATUS_DELEGATION_AUDIENCE_FIELD] = serde_json::Value::Null;
+                }
+            }
+            let home = super::ReportedHome::of_home(&status, "did:key:home");
+            assert_eq!(home.provider_time.is_some(), input.same_node);
+            match home.audience {
+                ReportedDelegationAudience::Absent => Reported::Absent,
+                ReportedDelegationAudience::Named(named) => {
+                    assert_eq!(named, audience(1));
+                    Reported::Named
+                }
+                ReportedDelegationAudience::Unavailable => Reported::Unavailable,
+            }
+        },
+    );
+}
+
+#[test]
 fn a_client_reads_the_status_again_before_a_request_bound_mint_as_the_lean_model_says() {
     gents_lean_vocab::families::identity_held_audience_reread_before_request_bound::replay::<Held>(
         |input| {
