@@ -1407,6 +1407,19 @@ class LeanContract:
         Path(self.log.name).unlink(missing_ok=True)
 
 
+# Packages whose tests run another package's binary from beside the test
+# binary when GENTS_TEST_BINARIES_PREBUILT is set: the archive must build that
+# package too, or a plan that tests only the first (a draft, a partition) finds
+# no helper (#3950).
+TEST_HELPER_PACKAGES = {"gents-tools": ("gents-fs-runner",)}
+
+
+def archive_packages(packages):
+    """The packages an archive builds: the tested ones and the helpers their tests run."""
+    helpers = [helper for package in packages for helper in TEST_HELPER_PACKAGES.get(package, ())]
+    return list(dict.fromkeys([*packages, *helpers]))
+
+
 def build_and_run(entry, name, lean):
     packages = entry["packages"].split()
     if not system_preflight():
@@ -1424,7 +1437,7 @@ def build_and_run(entry, name, lean):
     archive = output / f"{name}.tar.zst"
     features = [PACKAGE_FEATURES[package] for package in packages
                 if package in PACKAGE_FEATURES and package != "gents-desktop-bridge"]
-    arguments = ["archive", *[flag for package in packages for flag in ("-p", package)]]
+    arguments = ["archive", *[flag for package in archive_packages(packages) for flag in ("-p", package)]]
     if features:
         arguments += ["--features", ",".join(features)]
     arguments += ["--cargo-profile", os.environ.get("PROFILE") or ARCHIVE_PROFILE]

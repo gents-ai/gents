@@ -163,6 +163,15 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(select(path)["ios_check"])
 
+    def test_an_archive_builds_the_helpers_its_tests_run(self):
+        self.assertEqual(gate.archive_packages(["gents-tools"]), ["gents-tools", "gents-fs-runner"])
+        self.assertEqual(gate.archive_packages(["gents-fs-runner", "gents-tools"]), ["gents-fs-runner", "gents-tools"])
+        self.assertEqual(gate.archive_packages(["gents-store"]), ["gents-store"])
+        members = set(MEMBERS)
+        for package, helpers in gate.TEST_HELPER_PACKAGES.items():
+            self.assertIn(package, members)
+            self.assertTrue(set(helpers) <= members, helpers)
+
     def test_side_lint_builds_are_incremental_in_their_own_kept_trees(self):
         with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a"}):
             self.assertEqual(gate.side_tree_env("ios-check"), {"CARGO_TARGET_DIR": "/cache/runner-a/ios-check",
