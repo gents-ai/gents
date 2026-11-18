@@ -15,6 +15,12 @@ struct RootReadModel {
     provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
+impl gents_loop::provider_call::ForCall for RootReadModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl rig::completion::CompletionModel for RootReadModel {
     type Response = ();

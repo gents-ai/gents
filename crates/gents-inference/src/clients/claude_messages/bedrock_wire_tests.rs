@@ -155,6 +155,7 @@ fn bedrock_route(server: &Server, region: &str, backend: &str, signed: bool) -> 
 async fn run(route: &ClaudeRoute, model: &str) -> (Events, Option<String>) {
     let context = account().context(false);
     let stream = match stream_messages_routed(
+        &Default::default(),
         route,
         model,
         &echo_request(),

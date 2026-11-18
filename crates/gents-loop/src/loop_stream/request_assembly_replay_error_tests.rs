@@ -359,6 +359,12 @@ async fn a_seeded_lookup_serves_only_rows_for_the_requested_tags() {
 #[derive(Clone, Default)]
 struct AssemblyOnlyModel;
 
+impl crate::provider_call::ForCall for AssemblyOnlyModel {
+    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl rig::completion::CompletionModel for AssemblyOnlyModel {
     type Response = ();

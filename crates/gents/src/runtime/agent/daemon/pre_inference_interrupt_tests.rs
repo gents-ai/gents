@@ -120,6 +120,12 @@ impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
 #[derive(Clone)]
 struct ProviderCallCountingModel(Arc<AtomicUsize>);
 
+impl gents_loop::provider_call::ForCall for ProviderCallCountingModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for ProviderCallCountingModel {
     type Response = ();

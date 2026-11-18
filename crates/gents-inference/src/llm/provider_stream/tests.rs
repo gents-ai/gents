@@ -222,9 +222,12 @@ async fn provider_stream_guard_prevents_rig_synthesizing_success_at_raw_http_eof
         crate::rendered_request::RenderedRequestCapturingHttpClient::new(FakeProviderHttp {
             terminal: false,
         });
-    let error = first_rig_terminal(crate::llm::rig_compat::http::Lifted(guarded))
-        .await
-        .unwrap_err();
+    let error = first_rig_terminal(crate::llm::rig_compat::http::Lifted::new(
+        guarded,
+        Default::default(),
+    ))
+    .await
+    .unwrap_err();
     assert!(
         error.contains("without an explicit protocol terminal event"),
         "{error}"
@@ -234,8 +237,11 @@ async fn provider_stream_guard_prevents_rig_synthesizing_success_at_raw_http_eof
             terminal: true,
         });
     assert!(
-        first_rig_terminal(crate::llm::rig_compat::http::Lifted(guarded))
-            .await
-            .is_ok()
+        first_rig_terminal(crate::llm::rig_compat::http::Lifted::new(
+            guarded,
+            Default::default()
+        ))
+        .await
+        .is_ok()
     );
 }

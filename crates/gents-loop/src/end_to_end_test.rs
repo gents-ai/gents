@@ -32,6 +32,12 @@ impl ScriptedModel {
     }
 }
 
+impl crate::provider_call::ForCall for ScriptedModel {
+    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for ScriptedModel {
     type Response = ();
@@ -353,6 +359,12 @@ async fn cancelling_a_pending_provider_stream_drops_it() {
     }
     #[derive(Clone)]
     struct Model(Arc<AtomicBool>);
+    impl crate::provider_call::ForCall for Model {
+        fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+            self.clone()
+        }
+    }
+
     #[allow(refining_impl_trait)]
     impl CompletionModel for Model {
         type Response = ();
@@ -431,6 +443,12 @@ async fn a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent() {
         open: Arc<AtomicBool>,
         emitted: Arc<AtomicBool>,
     }
+    impl crate::provider_call::ForCall for Model {
+        fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+            self.clone()
+        }
+    }
+
     #[allow(refining_impl_trait)]
     impl CompletionModel for Model {
         type Response = ();
@@ -918,6 +936,12 @@ struct RequestIdModel {
     request_id: Option<String>,
 }
 
+impl crate::provider_call::ForCall for RequestIdModel {
+    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for RequestIdModel {
     type Response = ();
@@ -1155,6 +1179,12 @@ async fn empty_output_is_retried_through_the_owned_loop() {
 
 #[derive(Clone)]
 struct UnavailableModel;
+
+impl crate::provider_call::ForCall for UnavailableModel {
+    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
 
 #[allow(refining_impl_trait)]
 impl CompletionModel for UnavailableModel {

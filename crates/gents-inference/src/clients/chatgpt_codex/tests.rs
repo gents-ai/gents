@@ -8,29 +8,31 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[tokio::test]
 async fn routing_affinity_follows_the_lean_model() {
     use crate::auth::http::OAuthHttpPolicy;
-    use gents_loop::provider_input::routing_affinity::{scope, RoutingAffinity};
+    use gents_loop::provider_input::routing_affinity::RoutingAffinity;
     for case in gents_lean_vocab::families::contracts_routing_affinity::cases() {
         let input = &case.input;
-        let state =
-            RoutingAffinity::start(input.codex, input.main, input.execution_session.clone());
-        let req = scope(state.clone(), async {
-            for response in &input.responses {
-                let mut headers = HeaderMap::new();
-                if let Some(token) = response.as_deref() {
-                    headers.insert("x-codex-turn-state", HeaderValue::from_str(token).unwrap());
-                }
-                retain_turn_state(&headers);
+        let call = ProviderCall {
+            routing_affinity: RoutingAffinity::start(
+                input.codex,
+                input.main,
+                input.execution_session.clone(),
+            ),
+        };
+        for response in &input.responses {
+            let mut headers = HeaderMap::new();
+            if let Some(token) = response.as_deref() {
+                headers.insert("x-codex-turn-state", HeaderValue::from_str(token).unwrap());
             }
-            let req = Request::builder()
-                .uri("https://chatgpt.com/backend-api/codex/responses")
-                .header("session_id", "stale-session")
-                .header("x-client-request-id", "stale-session")
-                .header("x-codex-turn-state", "stale-token")
-                .body(Bytes::from_static(b"{}"))
-                .unwrap();
-            ChatGptCodexPolicy::default().patch_request_body(req)
-        })
-        .await;
+            retain_turn_state(&call, &headers);
+        }
+        let req = Request::builder()
+            .uri("https://chatgpt.com/backend-api/codex/responses")
+            .header("session_id", "stale-session")
+            .header("x-client-request-id", "stale-session")
+            .header("x-codex-turn-state", "stale-token")
+            .body(Bytes::from_static(b"{}"))
+            .unwrap();
+        let req = ChatGptCodexPolicy::default().patch_request_body(&call, req);
         let header = |name: &str| {
             req.headers()
                 .get(name)
@@ -49,41 +51,35 @@ async fn routing_affinity_follows_the_lean_model() {
 
 #[tokio::test]
 async fn routing_affinity_isolates_concurrent_executions_without_capture() {
-    use gents_loop::provider_input::routing_affinity::{current, scope, RoutingAffinity};
+    use gents_loop::provider_input::routing_affinity::RoutingAffinity;
     let first = RoutingAffinity::start(true, true, Some("same-session".into())).unwrap();
     let second = RoutingAffinity::start(true, true, Some("same-session".into())).unwrap();
     let run = |state: Arc<RoutingAffinity>, token: &'static str| async move {
-        scope(Some(state.clone()), async move {
-            assert!(crate::rendered_request::scope::current_scope().is_none());
-            let mut headers = HeaderMap::new();
-            headers.insert("x-codex-turn-state", HeaderValue::from_static(token));
-            retain_turn_state(&headers);
-            tokio::task::yield_now().await;
-            scope(None, async {
-                assert!(current().is_none());
-                retain_turn_state(&headers);
-            })
-            .await;
-            assert_eq!(current().unwrap().token(), Some(token));
-            use crate::auth::http::OAuthHttpPolicy;
-            let other = Request::builder()
-                .uri("https://api.x.ai/v1/responses")
-                .header("x-custom", "unchanged")
-                .body(Bytes::from_static(b"{}"))
-                .unwrap();
-            let original_headers = other.headers().clone();
-            let other = crate::clients::xai_grok::XaiGrokOAuthPolicy.patch_request_body(other);
-            assert_eq!(other.headers(), &original_headers);
+        let call = ProviderCall {
+            routing_affinity: Some(state.clone()),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("x-codex-turn-state", HeaderValue::from_static(token));
+        retain_turn_state(&call, &headers);
+        tokio::task::yield_now().await;
+        retain_turn_state(&ProviderCall::default(), &headers);
+        assert_eq!(state.token(), Some(token));
+        use crate::auth::http::OAuthHttpPolicy;
+        let other = Request::builder()
+            .uri("https://api.x.ai/v1/responses")
+            .header("x-custom", "unchanged")
+            .body(Bytes::from_static(b"{}"))
+            .unwrap();
+        let original_headers = other.headers().clone();
+        let other = crate::clients::xai_grok::XaiGrokOAuthPolicy.patch_request_body(&call, other);
+        assert_eq!(other.headers(), &original_headers);
 
-            let mut later = HeaderMap::new();
-            later.insert("x-codex-turn-state", HeaderValue::from_static("later"));
-            retain_turn_state(&later);
-            assert_eq!(state.token(), Some(token));
-        })
-        .await;
+        let mut later = HeaderMap::new();
+        later.insert("x-codex-turn-state", HeaderValue::from_static("later"));
+        retain_turn_state(&call, &later);
+        assert_eq!(state.token(), Some(token));
     };
     tokio::join!(run(first, "first"), run(second, "second"));
-    assert!(current().is_none());
     let next = RoutingAffinity::start(true, true, Some("same-session".into())).unwrap();
     assert_eq!(next.token(), None);
 }
@@ -249,7 +245,9 @@ async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized()
                 serde_json::to_vec(&assembled).expect("assembled body"),
             ))
             .expect("request");
-        let _ = Transport::send_streaming(&client, req).await.expect("send");
+        let _ = Transport::send_streaming(&client, &Default::default(), req)
+            .await
+            .expect("send");
     })
     .await;
 
@@ -295,7 +293,7 @@ async fn send_through(status: u16) -> Arc<CountingBearer> {
         .uri("https://example.com/v1/models")
         .body(Bytes::from_static(b"{}"))
         .unwrap();
-    let _ = Transport::send(&client, req).await;
+    let _ = Transport::send(&client, &Default::default(), req).await;
     bearer
 }
 

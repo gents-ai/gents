@@ -1086,6 +1086,7 @@ async fn transport_429_usage_cap_reports_reset_time() {
     .await;
     let bearer = crate::clients::claude_subscription::StaticBearer::new("access");
     let err = stream_messages_at(
+        &Default::default(),
         &url,
         "claude-sonnet-5",
         &echo_request(),
@@ -1140,6 +1141,7 @@ where
             )
             .await;
             let _ = stream_messages_at(
+                &Default::default(),
                 &url,
                 "claude-sonnet-5",
                 request,
@@ -1402,6 +1404,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
             .await;
             let bearer = crate::clients::claude_subscription::StaticBearer::new("access-TEST");
             let _ = stream_messages_at(
+                &Default::default(),
                 &url,
                 "claude-sonnet-5",
                 &echo_request(),

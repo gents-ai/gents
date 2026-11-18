@@ -14,6 +14,7 @@ use crate::llm::rig_compat::http::{
     Response, StreamingResponse, Transport,
 };
 use bytes::Bytes;
+use gents_loop::provider_call::ProviderCall;
 use reqwest::header::HeaderName;
 
 const SESSION_ID_HEADER: &str = "x-session-id";
@@ -66,28 +67,34 @@ where
 {
     fn send(
         &self,
+        call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
+        let call = call.clone();
         let req = self.normalize_json_body(req);
-        async move { Transport::send(&inner, req).await }
+        async move { Transport::send(&inner, &call, req).await }
     }
 
     fn send_multipart(
         &self,
+        call: &ProviderCall,
         req: Request<MultipartForm>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
-        async move { Transport::send_multipart(&inner, req).await }
+        let call = call.clone();
+        async move { Transport::send_multipart(&inner, &call, req).await }
     }
 
     fn send_streaming(
         &self,
+        call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.inner.clone();
+        let call = call.clone();
         let req = self.normalize_json_body(req);
-        async move { Transport::send_streaming(&inner, req).await }
+        async move { Transport::send_streaming(&inner, &call, req).await }
     }
 }
 
@@ -159,29 +166,35 @@ where
 {
     fn send(
         &self,
+        call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
+        let call = call.clone();
         let req = Self::tag(req);
-        async move { Transport::send(&inner, req).await }
+        async move { Transport::send(&inner, &call, req).await }
     }
 
     fn send_multipart(
         &self,
+        call: &ProviderCall,
         req: Request<MultipartForm>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
+        let call = call.clone();
         let req = Self::tag_multipart(req);
-        async move { Transport::send_multipart(&inner, req).await }
+        async move { Transport::send_multipart(&inner, &call, req).await }
     }
 
     fn send_streaming(
         &self,
+        call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.inner.clone();
+        let call = call.clone();
         let req = Self::tag(req);
-        async move { Transport::send_streaming(&inner, req).await }
+        async move { Transport::send_streaming(&inner, &call, req).await }
     }
 }
 
@@ -204,6 +217,7 @@ mod tests {
     impl Transport for CapturingHttpClient {
         fn send(
             &self,
+            _call: &ProviderCall,
             req: Request<Bytes>,
         ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
         {
@@ -221,6 +235,7 @@ mod tests {
 
         fn send_multipart(
             &self,
+            _call: &ProviderCall,
             req: Request<MultipartForm>,
         ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
         {
@@ -233,6 +248,7 @@ mod tests {
 
         fn send_streaming(
             &self,
+            _call: &ProviderCall,
             req: Request<Bytes>,
         ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
             let bodies = Arc::clone(&self.bodies);
@@ -260,7 +276,9 @@ mod tests {
             ))
             .expect("request");
 
-        let _ = Transport::send(&client, req).await.expect("send");
+        let _ = Transport::send(&client, &Default::default(), req)
+            .await
+            .expect("send");
 
         let bodies = inner.bodies();
         assert_eq!(bodies.len(), 1);
@@ -284,7 +302,7 @@ mod tests {
             ))
             .expect("request");
 
-        let _ = Transport::send_streaming(&client, req)
+        let _ = Transport::send_streaming(&client, &Default::default(), req)
             .await
             .expect("send streaming");
 
@@ -316,7 +334,9 @@ mod tests {
             ))
             .expect("request");
 
-        let _ = Transport::send(&client, req).await.expect("send");
+        let _ = Transport::send(&client, &Default::default(), req)
+            .await
+            .expect("send");
 
         assert_eq!(inner.bodies(), vec![original]);
     }

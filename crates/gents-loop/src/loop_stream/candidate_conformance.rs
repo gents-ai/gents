@@ -72,6 +72,12 @@ fn error(kind: &str) -> CompletionError {
     }.into())
 }
 
+impl crate::provider_call::ForCall for Model {
+    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for Model {
     type Response = Response;

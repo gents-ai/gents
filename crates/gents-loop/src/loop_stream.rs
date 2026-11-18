@@ -279,8 +279,7 @@ fn owned_loop_stream<M, H>(
     config: LoopConfig,
 ) -> impl Stream<Item = Result<OwnedLoopItem, LoopStreamError>>
 where
-    M: CompletionModel + 'static,
-    M::StreamingResponse: 'static,
+    M: rig_compat::ProviderModel,
     H: SessionHook + 'static,
 {
     try_stream! {
@@ -494,17 +493,15 @@ where
                     let advertised_tools = dispatch_request.tools.clone();
                     let dispatched_input_tokens =
                         prepared_dispatch.projection().estimated_input_tokens;
-                    let dispatch_model = Arc::clone(&model);
-                    let dispatch_affinity = routing_affinity.clone();
+                    let dispatch_model = model.for_call(&crate::provider_call::ProviderCall {
+                        routing_affinity: routing_affinity.clone(),
+                    });
                     let dispatch_activity = activity.clone();
                     let dispatch_idle_timeout = config.provider_idle_timeout;
                     let (reply, result) = tokio::sync::oneshot::channel();
                     yield OwnedLoopItem::ProviderWork(Box::pin(async move {
                         let dispatch = box_provider_call(move || async move {
-                            crate::provider_input::routing_affinity::scope(
-                                dispatch_affinity,
-                                dispatch_model.stream(dispatch_request),
-                            ).await
+                            dispatch_model.stream(dispatch_request).await
                         });
                         let outcome = within_provider_idle(
                             dispatch,
@@ -701,7 +698,6 @@ where
 
             loop {
                 let item = loop {
-                    let poll_affinity = routing_affinity.clone();
                     let poll_activity = activity.clone();
                     let poll_receiver = audit_receiver.clone();
                     let poll_idle_timeout = config.provider_idle_timeout;
@@ -711,7 +707,7 @@ where
                         let mut stream = stream;
                         let next = {
                             let next_item = within_provider_idle(
-                                crate::provider_input::routing_affinity::scope(poll_affinity, stream.next()),
+                                stream.next(),
                                 poll_idle_timeout,
                                 poll_activity.as_deref(),
                                 first_item,

@@ -34,6 +34,12 @@ struct ScriptedModel {
     hang: bool,
 }
 
+impl gents_loop::provider_call::ForCall for ScriptedModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for ScriptedModel {
     type Response = ();

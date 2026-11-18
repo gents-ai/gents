@@ -129,7 +129,11 @@ impl crate::auth::http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
         Ok(())
     }
 
-    fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
+    fn patch_request_body(
+        &self,
+        _call: &gents_loop::provider_call::ProviderCall,
+        req: Request<Bytes>,
+    ) -> Request<Bytes> {
         let (parts, body) = req.into_parts();
         let mut body = body;
         if parts.uri.path().ends_with("/responses") {
@@ -140,7 +144,11 @@ impl crate::auth::http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
         Request::from_parts(parts, body)
     }
 
-    fn patch_streaming(&self, response: StreamingResponse) -> StreamingResponse {
+    fn patch_streaming(
+        &self,
+        _call: &gents_loop::provider_call::ProviderCall,
+        response: StreamingResponse,
+    ) -> StreamingResponse {
         normalize_xai_usage_stream(response)
     }
 }
@@ -533,7 +541,12 @@ mod tests {
             .uri("https://cli-chat-proxy.grok.com/v1/files")
             .body(MultipartForm::default())
             .unwrap();
-        let _ = gents_loop::rig_compat::http::Transport::send_multipart(&client, req).await;
+        let _ = gents_loop::rig_compat::http::Transport::send_multipart(
+            &client,
+            &Default::default(),
+            req,
+        )
+        .await;
         let headers = captured
             .lock()
             .expect("capture lock")
@@ -681,9 +694,13 @@ mod tests {
                     .expect("assembled body"),
                 ))
                 .expect("request");
-            let _ = gents_loop::rig_compat::http::Transport::send_streaming(&client, req)
-                .await
-                .expect("send");
+            let _ = gents_loop::rig_compat::http::Transport::send_streaming(
+                &client,
+                &Default::default(),
+                req,
+            )
+            .await
+            .expect("send");
         })
         .await;
 

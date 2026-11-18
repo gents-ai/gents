@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use super::controller::PendingCallMetadata;
 use super::permit::AdmissionPermit;
 use super::AdmissionRegistry;
+use gents_loop::provider_call::{ForCall, ProviderCall};
 use gents_protocol::row::AgentRequest;
 
 const CANCELLED_BY_INTERRUPT_MSG: &str = "inference cancelled by request interrupt";
@@ -36,6 +37,23 @@ pub struct AdmittedCompletionModel<M> {
     pub(crate) profile_id: Option<String>,
     pub(crate) separate_reasoning: bool,
     pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+}
+
+impl<M> ForCall for AdmittedCompletionModel<M>
+where
+    M: ForCall,
+{
+    fn for_call(&self, call: &ProviderCall) -> Self {
+        Self {
+            inner: self.inner.for_call(call),
+            admission: self.admission.clone(),
+            connection: self.connection.clone(),
+            model_name: self.model_name.clone(),
+            profile_id: self.profile_id.clone(),
+            separate_reasoning: self.separate_reasoning,
+            agent_signer: self.agent_signer.clone(),
+        }
+    }
 }
 
 impl<M> AdmittedCompletionModel<M> {

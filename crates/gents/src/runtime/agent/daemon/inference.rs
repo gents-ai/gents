@@ -512,6 +512,12 @@ pub(super) mod tests {
     #[derive(Clone)]
     struct RoutedReplyModel;
 
+    impl gents_loop::provider_call::ForCall for RoutedReplyModel {
+        fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+            self.clone()
+        }
+    }
+
     #[allow(refining_impl_trait)]
     impl CompletionModel for RoutedReplyModel {
         type Response = ();
@@ -561,6 +567,12 @@ pub(super) mod tests {
         did: String,
         signer: gents_store::identity::ManagedAgentSigner,
         runtime: Arc<dyn NodeIdentity>,
+    }
+
+    impl gents_loop::provider_call::ForCall for WakeInputModel {
+        fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+            self.clone()
+        }
     }
 
     #[allow(refining_impl_trait)]
@@ -696,6 +708,12 @@ pub(super) mod tests {
 
     #[derive(Clone)]
     struct CountingReplyModel(Arc<AtomicUsize>);
+
+    impl gents_loop::provider_call::ForCall for CountingReplyModel {
+        fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+            self.clone()
+        }
+    }
 
     #[allow(refining_impl_trait)]
     impl CompletionModel for CountingReplyModel {

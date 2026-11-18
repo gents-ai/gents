@@ -19,6 +19,12 @@ struct ClaudeCheckpointModel {
     requests: Arc<Mutex<Vec<(bool, Value)>>>,
 }
 
+impl crate::provider_call::ForCall for ClaudeCheckpointModel {
+    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for ClaudeCheckpointModel {
     type Response = ();

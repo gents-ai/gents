@@ -58,6 +58,12 @@ impl MockSummaryModel {
     }
 }
 
+impl gents_loop::provider_call::ForCall for MockSummaryModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for MockSummaryModel {
     type Response = ();
@@ -199,6 +205,12 @@ impl ScriptedSummaryModel {
             ),
             RawStreamingChoice::FinalResponse(()),
         ]
+    }
+}
+
+impl gents_loop::provider_call::ForCall for ScriptedSummaryModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
     }
 }
 

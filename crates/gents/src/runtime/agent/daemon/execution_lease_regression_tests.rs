@@ -11,6 +11,12 @@ struct RecoveringProvider {
     fails_on_first_read: bool,
 }
 
+impl gents_loop::provider_call::ForCall for RecoveringProvider {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for RecoveringProvider {
     type Response = ();
@@ -209,6 +215,12 @@ struct LeaseLossProvider;
 #[derive(Clone)]
 struct BufferedReasoningShutdownProvider {
     processed_two: Arc<tokio::sync::Notify>,
+}
+
+impl gents_loop::provider_call::ForCall for BufferedReasoningShutdownProvider {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -595,6 +607,12 @@ async fn graceful_shutdown_after_lease_expiry_does_not_claim_lost_output() {
     graceful_shutdown_reasoning_case(false, Some("expired")).await;
 }
 
+impl gents_loop::provider_call::ForCall for LeaseLossProvider {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for LeaseLossProvider {
     type Response = ();
@@ -747,6 +765,12 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     assert_eq!(row["lifecycle_state"], "running");
     assert!(row["tool_failure_class"].is_null());
     assert!(row["cancel_cause"].is_null());
+}
+
+impl gents_loop::provider_call::ForCall for NonTerminalProvider {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
 }
 
 #[allow(refining_impl_trait)]

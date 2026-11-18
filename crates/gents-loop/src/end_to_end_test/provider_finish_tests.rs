@@ -108,14 +108,18 @@ async fn owned_loop_uses_each_turns_wire_finish_reason_for_tool_errors() {
             "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".into(),
         ].into())),
     };
-    let client = rig::providers::openai::CompletionsClient::builder()
-        .api_key("test")
-        .base_url("https://provider.invalid/v1")
-        .http_client(crate::rig_compat::http::Lifted(
-            RenderedRequestCapturingHttpClient::new(wire.clone()),
-        ))
-        .build()
-        .unwrap();
+    let transport = RenderedRequestCapturingHttpClient::new(wire.clone());
+    let client = crate::rig_compat::call::CallClient::new(move |call| {
+        rig::providers::openai::CompletionsClient::builder()
+            .api_key("test")
+            .base_url("https://provider.invalid/v1")
+            .http_client(crate::rig_compat::http::Lifted::new(
+                transport.clone(),
+                call.clone(),
+            ))
+            .build()
+    })
+    .unwrap();
     let calls = Arc::new(Mutex::new(Vec::new()));
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
         calls: calls.clone(),
@@ -351,14 +355,18 @@ async fn responses_outcomes(turns: Vec<String>) -> (Vec<String>, Vec<String>, Op
     let wire = ProviderWire {
         bodies: Arc::new(Mutex::new(turns.into())),
     };
-    let client = rig::providers::openai::Client::builder()
-        .api_key("test")
-        .base_url("https://provider.invalid/v1")
-        .http_client(crate::rig_compat::http::Lifted(
-            RenderedRequestCapturingHttpClient::new(wire),
-        ))
-        .build()
-        .unwrap();
+    let transport = RenderedRequestCapturingHttpClient::new(wire);
+    let client = crate::rig_compat::call::CallClient::new(move |call| {
+        rig::providers::openai::Client::builder()
+            .api_key("test")
+            .base_url("https://provider.invalid/v1")
+            .http_client(crate::rig_compat::http::Lifted::new(
+                transport.clone(),
+                call.clone(),
+            ))
+            .build()
+    })
+    .unwrap();
     let calls = Arc::new(Mutex::new(Vec::new()));
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(ResponsesTool(calls.clone()))]);
     let hook = RecordingHook::default();

@@ -63,6 +63,12 @@ struct ReviewProvider {
     pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
+impl gents_loop::provider_call::ForCall for ReviewProvider {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 impl CompletionModel for ReviewProvider {
     type Response = ();
     type StreamingResponse = ReviewUsage;
@@ -1168,6 +1174,12 @@ impl TitleProvider {
             error: None,
             panic_on_stream: false,
         }
+    }
+}
+
+impl gents_loop::provider_call::ForCall for TitleProvider {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
     }
 }
 

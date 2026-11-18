@@ -73,6 +73,7 @@ async fn send(
         &format!("http://127.0.0.1:{}/token", server.port),
     ));
     let stream = stream_messages_routed(
+        &Default::default(),
         route,
         MODEL,
         &echo_request(),

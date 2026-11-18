@@ -9,6 +9,7 @@ use crate::llm::rig_compat::http::{
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use defra_node::Node as EmbeddedNode;
+use gents_loop::provider_call::ProviderCall;
 
 use crate::auth::credential::{
     classify_oauth_auth_error, resolve_oauth_credential, shared_bearer, AccountPick, BearerSource,
@@ -26,12 +27,13 @@ pub trait OAuthHttpPolicy: Clone + Default + Send + Sync + 'static {
         Ok(())
     }
 
-    fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
+    fn patch_request_body(&self, _call: &ProviderCall, req: Request<Bytes>) -> Request<Bytes> {
         req
     }
 
     fn send_via<T>(
         &self,
+        call: &ProviderCall,
         inner: &T,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
@@ -39,10 +41,15 @@ pub trait OAuthHttpPolicy: Clone + Default + Send + Sync + 'static {
         T: Clone + Transport + 'static,
     {
         let inner = inner.clone();
-        async move { Transport::send(&inner, req).await }
+        let call = call.clone();
+        async move { Transport::send(&inner, &call, req).await }
     }
 
-    fn patch_streaming(&self, response: StreamingResponse) -> StreamingResponse {
+    fn patch_streaming(
+        &self,
+        _call: &ProviderCall,
+        response: StreamingResponse,
+    ) -> StreamingResponse {
         response
     }
 }
@@ -169,8 +176,12 @@ where
             .map_err(|error| http_client::Error::Instance(anyhow::Error::from(error).into()))
     }
 
-    async fn prepare(&self, req: Request<Bytes>) -> http_client::Result<Request<Bytes>> {
-        let req = self.policy.patch_request_body(req);
+    async fn prepare(
+        &self,
+        call: &ProviderCall,
+        req: Request<Bytes>,
+    ) -> http_client::Result<Request<Bytes>> {
+        let req = self.policy.patch_request_body(call, req);
         let value = self.fresh_auth_header().await?;
         let (mut parts, body) = req.into_parts();
         parts.headers.insert("authorization", value);
@@ -190,7 +201,7 @@ where
         &self,
         req: Request<Bytes>,
     ) -> http_client::Result<Request<Bytes>> {
-        self.prepare(req).await
+        self.prepare(&ProviderCall::default(), req).await
     }
 }
 
@@ -202,13 +213,15 @@ where
 {
     fn send(
         &self,
+        call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
         let this = self.clone();
+        let call = call.clone();
         async move {
-            let req = this.prepare(req).await?;
-            let result = this.policy.send_via(&inner, req).await;
+            let req = this.prepare(&call, req).await?;
+            let result = this.policy.send_via(&call, &inner, req).await;
             if let Some(bearer) = this.bearer_to_invalidate(&result) {
                 bearer.invalidate().await;
             }
@@ -218,17 +231,19 @@ where
 
     fn send_multipart(
         &self,
+        call: &ProviderCall,
         req: Request<MultipartForm>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
         let this = self.clone();
+        let call = call.clone();
         async move {
             let value = this.fresh_auth_header().await?;
             let (mut parts, body) = req.into_parts();
             parts.headers.insert("authorization", value);
             this.policy.merge_identity_headers(&mut parts.headers)?;
             let req = Request::from_parts(parts, body);
-            let result = Transport::send_multipart(&inner, req).await;
+            let result = Transport::send_multipart(&inner, &call, req).await;
             if let Some(bearer) = this.bearer_to_invalidate(&result) {
                 bearer.invalidate().await;
             }
@@ -238,19 +253,21 @@ where
 
     fn send_streaming(
         &self,
+        call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.inner.clone();
         let this = self.clone();
+        let call = call.clone();
         async move {
-            let req = this.prepare(req).await?;
-            let result = Transport::send_streaming(&inner, req).await;
+            let req = this.prepare(&call, req).await?;
+            let result = Transport::send_streaming(&inner, &call, req).await;
             if let Some(bearer) = this.bearer_to_invalidate(&result) {
                 bearer.invalidate().await;
             }
             let mut response = result?;
             ensure_event_stream_content_type(response.headers_mut());
-            Ok(this.policy.patch_streaming(response))
+            Ok(this.policy.patch_streaming(&call, response))
         }
     }
 }

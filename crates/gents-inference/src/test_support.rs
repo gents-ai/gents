@@ -34,9 +34,13 @@ pub async fn capture_scripted_provider_request(
             |error| rig::completion::CompletionError::ProviderError(error.to_string()),
         )?))
         .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    gents_loop::rig_compat::http::Transport::send_streaming(&transport, outbound)
-        .await
-        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+    gents_loop::rig_compat::http::Transport::send_streaming(
+        &transport,
+        &Default::default(),
+        outbound,
+    )
+    .await
+    .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
     assert_eq!(
         inner.send_count(),
         1,

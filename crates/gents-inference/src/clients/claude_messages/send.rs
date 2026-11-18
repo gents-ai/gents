@@ -16,6 +16,7 @@ use crate::llm::rig_compat::completion::{CompletionError, CompletionRequest, Raw
 use crate::llm::rig_compat::http::{self as http_client, Request};
 use crate::llm::rig_compat::model::StreamEnd;
 use bytes::Bytes;
+use gents_loop::provider_call::ProviderCall;
 use rapidhash::RapidHashSet;
 use reqwest::header::HeaderValue;
 
@@ -32,6 +33,7 @@ use gents_loop::claude_messages_body::{
 };
 
 pub async fn stream_messages<S>(
+    call: &ProviderCall,
     model: &str,
     request: &CompletionRequest,
     account: &ClaudeAccountContext,
@@ -46,6 +48,7 @@ where
     S: BearerSource,
 {
     stream_messages_routed(
+        call,
         &ClaudeRoute::first_party(MESSAGES_URI),
         model,
         request,
@@ -73,7 +76,9 @@ impl From<CompletionError> for MessagesOpenError {
 }
 
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_messages_at<S>(
+    call: &ProviderCall,
     uri: &str,
     model: &str,
     request: &CompletionRequest,
@@ -89,6 +94,7 @@ where
     S: BearerSource,
 {
     stream_messages_routed(
+        call,
         &ClaudeRoute::first_party(uri),
         model,
         request,
@@ -100,7 +106,9 @@ where
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_messages_routed<S>(
+    call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
@@ -115,7 +123,7 @@ pub(crate) async fn stream_messages_routed<S>(
 where
     S: BearerSource,
 {
-    open_messages_at(route, model, request, account, surface, bearer, usage)
+    open_messages_at(call, route, model, request, account, surface, bearer, usage)
         .await
         .map_err(|failure| failure.error)
 }
@@ -256,7 +264,9 @@ impl Replay {
 /// Sends the planned request as Claude Code 2.1.311 would: the typed body bytes, the header
 /// set in Claude Code's insertion order, and the [`ClaudeHttpClient`] that writes them with
 /// Bun's casing, order, defaults and gzip.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_messages_at<S>(
+    call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
@@ -275,12 +285,14 @@ where
     // replays) is a large state machine that would otherwise sit inline in every
     // caller's future, the agent loop's included.
     Box::pin(open_messages(
-        route, model, request, account, surface, bearer, usage,
+        call, route, model, request, account, surface, bearer, usage,
     ))
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn open_messages<S>(
+    call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
@@ -368,6 +380,7 @@ where
     let response = loop {
         let http_request = render_request(route, &plan, account, &token, &uri, &body)?;
         let send = send_capturing(
+            call,
             fixture.clone(),
             ClaudeHttpClient::new(usage.clone()),
             http_request,

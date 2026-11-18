@@ -228,6 +228,7 @@ async fn open(
     bearer: &ScriptedBearer,
 ) -> Result<(), CompletionError> {
     stream_messages_at(
+        &Default::default(),
         url,
         "claude-sonnet-5",
         &echo_request(),
@@ -369,7 +370,7 @@ async fn a_large_first_party_body_goes_gzipped_with_padding_after_capture() {
     let client = capturing(None, routed(&latch, server.port));
     let captured = with_capture(async {
         client
-            .send_streaming(first_party_request(server.port, &body))
+            .send_streaming(&Default::default(), first_party_request(server.port, &body))
             .await
             .expect("200");
     })
@@ -399,7 +400,7 @@ async fn a_small_first_party_body_goes_plain() {
     let server = Server::start(vec![reply("200 OK", SSE_DONE)]).await;
     let latch = Arc::new(AtomicBool::new(false));
     routed(&latch, server.port)
-        .send_streaming(first_party_request(server.port, &body))
+        .send_streaming(&Default::default(), first_party_request(server.port, &body))
         .await
         .expect("200");
     let wire = &server.requests()[0];
@@ -424,7 +425,7 @@ async fn a_gzip_rejection_latches_gzip_off_and_resends_plain_once() {
     let latch = Arc::new(AtomicBool::new(false));
     let client = routed(&latch, server.port);
     client
-        .send_streaming(first_party_request(server.port, &body))
+        .send_streaming(&Default::default(), first_party_request(server.port, &body))
         .await
         .expect("the plain resend succeeds");
     assert!(latch.load(Ordering::SeqCst));
@@ -436,7 +437,7 @@ async fn a_gzip_rejection_latches_gzip_off_and_resends_plain_once() {
     assert_eq!(seen[1].body, body.as_bytes());
 
     client
-        .send_streaming(first_party_request(server.port, &body))
+        .send_streaming(&Default::default(), first_party_request(server.port, &body))
         .await
         .expect("200");
     let third = &server.requests()[2];
@@ -576,7 +577,7 @@ async fn usage_headers_are_observed_on_success_and_on_error() {
         let client =
             ClaudeHttpClient::new(Some(reporter)).with_test_route(latch, "127.0.0.1", server.port);
         let _ = client
-            .send_streaming(first_party_request(server.port, "{}"))
+            .send_streaming(&Default::default(), first_party_request(server.port, "{}"))
             .await;
         let stored =
             crate::clients::provider_http::tests::stored_usage_eventually(&cache, &node, &account)
@@ -597,7 +598,7 @@ async fn multipart_is_a_typed_error() {
         .body(MultipartForm::new())
         .expect("request");
     let error = client
-        .send_multipart(request)
+        .send_multipart(&Default::default(), request)
         .await
         .err()
         .expect("multipart");

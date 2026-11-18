@@ -54,6 +54,7 @@ async fn exchange(
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
     let bearer = ApiKeyBearer::new(SECRET);
     let stream = stream_messages_routed(
+        &Default::default(),
         &route,
         MODEL,
         &echo_request(),
@@ -192,6 +193,7 @@ async fn a_signed_in_gateway_marks_its_attribution_from_the_jwt_it_sends() {
     );
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
     let stream = stream_messages_routed(
+        &Default::default(),
         &route,
         MODEL,
         &echo_request(),
@@ -305,6 +307,7 @@ async fn claude_platform_on_aws_sends_a_client_request_id_only_on_its_default_ur
     };
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
     let stream = stream_messages_routed(
+        &Default::default(),
         &local,
         MODEL,
         &echo_request(),
@@ -368,6 +371,7 @@ async fn a_rejected_credential_is_reported_without_a_second_send() {
     let route = route(BackendProviderKind::ClaudeGateway, &server, "", None);
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
     let error = stream_messages_routed(
+        &Default::default(),
         &route,
         MODEL,
         &echo_request(),

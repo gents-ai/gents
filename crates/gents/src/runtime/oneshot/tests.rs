@@ -66,9 +66,13 @@ async fn capture_scripted_request(
             |error| CompletionError::ProviderError(error.to_string()),
         )?))
         .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
-    let _response = gents_loop::rig_compat::http::Transport::send_streaming(&transport, outbound)
-        .await
-        .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
+    let _response = gents_loop::rig_compat::http::Transport::send_streaming(
+        &transport,
+        &Default::default(),
+        outbound,
+    )
+    .await
+    .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
     assert_eq!(
         inner.send_count(),
         1,
@@ -84,6 +88,12 @@ async fn capture_scripted_request(
 struct PartialThenEmptyProvider {
     observations: Arc<AtomicUsize>,
     eof: tokio_util::sync::CancellationToken,
+}
+
+impl gents_loop::provider_call::ForCall for PartialThenEmptyProvider {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -307,6 +317,12 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
 struct OutputObligationProvider {
     calls: Arc<AtomicUsize>,
     access: gents_store::config_client::ConfigAccess,
+}
+
+impl gents_loop::provider_call::ForCall for OutputObligationProvider {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -562,6 +578,12 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
 
 #[derive(Clone)]
 struct OneshotBashProvider(Arc<AtomicUsize>);
+
+impl gents_loop::provider_call::ForCall for OneshotBashProvider {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
 
 #[allow(refining_impl_trait)]
 impl CompletionModel for OneshotBashProvider {

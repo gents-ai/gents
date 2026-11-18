@@ -506,6 +506,12 @@ struct AdvancingFirstCheckpointModel {
     now: Arc<Mutex<chrono::DateTime<chrono::Utc>>>,
 }
 
+impl gents_loop::provider_call::ForCall for AdvancingFirstCheckpointModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for AdvancingFirstCheckpointModel {
     type Response = ();
@@ -561,6 +567,12 @@ impl SentinelCheckpointModel {
             "next_actions": ["Continue after rolling compaction."]
         })
         .to_string()
+    }
+}
+
+impl gents_loop::provider_call::ForCall for SentinelCheckpointModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
     }
 }
 
@@ -1107,6 +1119,12 @@ impl CountingFailModel {
 
     fn calls(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
         self.calls.clone()
+    }
+}
+
+impl gents_loop::provider_call::ForCall for CountingFailModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
     }
 }
 
@@ -2207,6 +2225,12 @@ impl OverflowingCheckpointModel {
             overflows: Arc::new(Mutex::new(overflows)),
             rejected: Arc::default(),
         }
+    }
+}
+
+impl gents_loop::provider_call::ForCall for OverflowingCheckpointModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
     }
 }
 

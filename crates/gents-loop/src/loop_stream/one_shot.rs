@@ -272,7 +272,7 @@ pub async fn run_loop_to_text<M>(
     config: LoopConfig,
 ) -> Result<String, OneShotError>
 where
-    M: CompletionModel + 'static,
+    M: crate::rig_compat::ProviderModel,
     M::StreamingResponse: 'static,
 {
     finish_one_shot_result(run_loop_to_text_inner(model, prompt, history, tools, config).await)
@@ -287,7 +287,7 @@ async fn run_loop_to_text_inner<M>(
     config: LoopConfig,
 ) -> Result<String, OneShotError>
 where
-    M: CompletionModel + 'static,
+    M: crate::rig_compat::ProviderModel,
     M::StreamingResponse: 'static,
 {
     let provider_profile = config.provider_input_counter.profile();
@@ -585,7 +585,7 @@ pub async fn run_loop_to_typed<M, T>(
     mut config: LoopConfig,
 ) -> Result<T, OneShotError>
 where
-    M: CompletionModel + 'static,
+    M: crate::rig_compat::ProviderModel,
     M::StreamingResponse: 'static,
     T: DeserializeOwned + schemars::JsonSchema + 'static,
 {
