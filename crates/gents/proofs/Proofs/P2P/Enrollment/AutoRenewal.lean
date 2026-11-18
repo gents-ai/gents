@@ -93,6 +93,37 @@ theorem expired_intent_cannot_request_offer (current : Generation) (intent : Int
     mayOffer current intent now window maxValidity = false := by
   simp [mayOffer, Nat.not_lt.mpr h]
 
+/-- A member asks for a renewal offer only from the admin its runtime's own
+pins name, and only while that admin is the network's only one. Two runtime
+pins naming the same admin are one pin; production writes at most one per
+network under a unique `pin_key`. -/
+def mayRequestOffer (runtime : Did) (pins : List OwnedPin) (networkId : String) (adminDid : Did) : Bool :=
+  decide (networkAdminPairPinned ({ adminPins := runtimePins runtime pins } : State) networkId adminDid)
+
+theorem no_pin_cannot_request_offer (runtime adminDid : Did) (networkId : String) :
+    mayRequestOffer runtime [] networkId adminDid = false := by
+  simp [mayRequestOffer, networkAdminPairPinned, runtimePins]
+
+theorem conflicting_pin_cannot_request_offer (runtime adminDid other : Did) (networkId : String)
+    (pins : List OwnedPin) (h : other ≠ adminDid) :
+    mayRequestOffer runtime (⟨runtime, ⟨networkId, other⟩⟩ :: pins) networkId adminDid = false := by
+  have hmem : (⟨networkId, other⟩ : NetworkAdminPin) ∈
+      runtimePins runtime (⟨runtime, ⟨networkId, other⟩⟩ :: pins) := by
+    simp [runtimePins]
+  simp only [mayRequestOffer, decide_eq_false_iff_not, networkAdminPairPinned]
+  rintro ⟨_, hall⟩
+  exact h (hall _ hmem rfl)
+
+theorem sole_pin_requests_offer (runtime adminDid : Did) (networkId : String) :
+    mayRequestOffer runtime [⟨runtime, ⟨networkId, adminDid⟩⟩] networkId adminDid = true := by
+  simp [mayRequestOffer, networkAdminPairPinned, runtimePins]
+
+theorem foreign_pin_cannot_stall_offer_request (runtime adminDid : Did) (networkId : String)
+    (pin : OwnedPin) (pins : List OwnedPin) (h : pin.owner ≠ runtime) :
+    mayRequestOffer runtime (pin :: pins) networkId adminDid =
+      mayRequestOffer runtime pins networkId adminDid := by
+  simp only [mayRequestOffer, foreign_pin_is_not_a_runtime_pin runtime pin pins h]
+
 /-- Automatic approval never replaces the member's signature or exceeds the
 operator's renewal limit. Expired or revoked generations require an operator. -/
 def allowed (current : Generation) (proposal : Proposal) (now window protocolMax : Nat) : Bool :=
@@ -200,6 +231,21 @@ theorem offer_boundaries :
       [true, false, false, false, false, false, false, false, false, false,
        false, false, false, false] := by
   rfl
+
+def offerRequestCases : List (String × List OwnedPin) :=
+  [ ("no_pin", [])
+  , ("sole_pin", [⟨"runtime", ⟨"network", "admin"⟩⟩])
+  , ("conflicting_pin", [⟨"runtime", ⟨"network", "admin"⟩⟩, ⟨"runtime", ⟨"network", "other"⟩⟩])
+  , ("other_network", [⟨"runtime", ⟨"network", "admin"⟩⟩, ⟨"runtime", ⟨"other", "other"⟩⟩])
+  , ("duplicate_pin", [⟨"runtime", ⟨"network", "admin"⟩⟩, ⟨"runtime", ⟨"network", "admin"⟩⟩])
+  , ("foreign_pin", [⟨"runtime", ⟨"network", "admin"⟩⟩, ⟨"user", ⟨"network", "other"⟩⟩])
+  , ("foreign_only", [⟨"user", ⟨"network", "admin"⟩⟩])
+  , ("other_network_only", [⟨"runtime", ⟨"other", "admin"⟩⟩]) ]
+
+theorem offer_request_boundaries :
+    offerRequestCases.map (fun (_, pins) => mayRequestOffer "runtime" pins "network" "admin") =
+      [false, true, false, true, true, true, false, false] := by
+  decide
 
 structure BoundaryCase where
   name : String

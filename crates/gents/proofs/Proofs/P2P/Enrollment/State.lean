@@ -330,6 +330,25 @@ instance (s : State) (networkId : String) (adminDid : Did) : Decidable
     (networkAdminPairPinned s networkId adminDid) := by
   unfold networkAdminPairPinned; infer_instance
 
+structure OwnedPin where
+  owner : Did
+  pin : NetworkAdminPin
+  deriving DecidableEq, Repr
+
+/-- The pins a member trusts are the ones its runtime owns, for renewal
+(`AutoRenewal.mayRequestOffer`), for confirming a pin, for its authority
+projection and for its enrollment listing. Another actor can parent a pin it
+owns to the runtime's Node, which makes it readable by the runtime without
+making it the runtime's
+(`Identity.Operations.foreign_pin_is_runtime_readable_not_owned`). -/
+def runtimePins (runtime : Did) (pins : List OwnedPin) : Finset NetworkAdminPin :=
+  ((pins.filter (·.owner == runtime)).map (·.pin)).toFinset
+
+theorem foreign_pin_is_not_a_runtime_pin (runtime : Did) (pin : OwnedPin)
+    (pins : List OwnedPin) (h : pin.owner ≠ runtime) :
+    runtimePins runtime (pin :: pins) = runtimePins runtime pins := by
+  simp [runtimePins, List.filter_cons, h]
+
 def requestMatchesOffer (o : Offer) (r : Request) : Prop :=
   r.offerId = o.offerId ∧ r.challenge = o.challenge ∧
   r.networkId = o.networkId ∧ r.adminDid = o.adminDid ∧
