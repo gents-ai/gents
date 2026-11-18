@@ -80,6 +80,17 @@ structure BootstrapObservation where
 def reservationConfirmed (created fileSynced directorySynced : Bool) : Bool :=
   created && fileSynced && directorySynced
 
+/-- Identity preparation precedes consuming the fresh home's one-shot marker.
+Once consumed, the marker still cannot be replayed after a later failure. -/
+def reservationAfterIdentity (alreadyReserved identityReady : Bool) : Bool :=
+  alreadyReserved || identityReady
+
+theorem identity_failure_keeps_fresh_reservation_available :
+    reservationAfterIdentity false false = false := by rfl
+
+theorem identity_failure_never_clears_a_consumed_reservation :
+    reservationAfterIdentity true false = true := by rfl
+
 theorem ambiguous_reservation_cannot_authorize (created fileSynced : Bool) :
     reservationConfirmed created fileSynced false = false := by
   cases created <;> cases fileSynced <;> rfl

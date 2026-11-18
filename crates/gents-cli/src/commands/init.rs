@@ -300,14 +300,6 @@ pub(crate) async fn init_home_with_core_packs(
     } else {
         gents_service::home_state::client_identity_for(&home_dir).await?
     };
-    if fresh_store {
-        reserve_fresh_bootstrap(&home_dir).await?;
-    }
-    let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
-    if installs_core_packs {
-        default_packs::record_installing(&home_dir)?;
-    }
-
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: &home_dir,
         node_name: &args.node_name,
@@ -322,6 +314,14 @@ pub(crate) async fn init_home_with_core_packs(
         .await
         .context("creating or loading node identity key")?;
     stage("identity_ready");
+
+    if fresh_store {
+        reserve_fresh_bootstrap(&home_dir).await?;
+    }
+    let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
+    if installs_core_packs {
+        default_packs::record_installing(&home_dir)?;
+    }
 
     gents_store::local::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
@@ -918,7 +918,6 @@ pub(crate) async fn write_identity_only_home_metadata(
             options.store_lock,
         )
         .await?;
-        reserve_fresh_bootstrap(options.home).await?;
         Some(fresh)
     } else {
         None
@@ -937,6 +936,10 @@ pub(crate) async fn write_identity_only_home_metadata(
         .sign(b"gents init identity")
         .await
         .context("creating or loading node identity key")?;
+
+    if fresh_backend.is_some() {
+        reserve_fresh_bootstrap(options.home).await?;
+    }
 
     let tool_ceiling = tool_ceiling_for_package(options.tool_package);
     let tool_root = resolve_tool_root_for_package(options.tool_package, options.tool_root)?
@@ -1924,6 +1927,48 @@ mod inference_seed_tests;
 mod tests {
     use super::*;
     use gents::runtime::embedded::EmbeddedHome;
+
+    #[tokio::test]
+    async fn identity_failure_does_not_consume_fresh_bootstrap() {
+        let temp = tempfile::tempdir().unwrap();
+        let owner = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+        let home = temp.path().join("home");
+        let data = default_data_dir(&home);
+        let (lock_home, lock_data) = (home.clone(), data.clone());
+        let lock =
+            tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
+                .await
+                .unwrap()
+                .unwrap();
+        let obstruction = temp.path().join("not-a-directory");
+        fs::write(&obstruction, b"file").unwrap();
+        let bad_key = obstruction.join("identity.key");
+        let options = || IdentityOnlyHomeOptions {
+            home: &home,
+            node_name: "identity-retry",
+            key_path: Some(&bad_key),
+            identity_backend: IdentityBackendArg::File,
+            keychain_label: None,
+            secure_enclave_label: None,
+            tool_package: ToolPackageArg::Readonly,
+            tool_root: None,
+            reset: false,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            store_lock: &lock,
+            owner: owner.did(),
+        };
+        assert!(write_identity_only_home_metadata(options()).await.is_err());
+        let reserved = home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists();
+        for case in gents_lean_vocab::families::node_provisioning_reservation::cases()
+            .into_iter()
+            .filter(|case| !case.input.created)
+        {
+            case.check(reserved);
+        }
+        fs::remove_file(&obstruction).unwrap();
+        write_identity_only_home_metadata(options()).await.unwrap();
+        assert!(home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
+    }
 
     #[tokio::test]
     async fn an_identity_only_home_protects_its_fresh_store_for_later_openers() {
