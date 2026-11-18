@@ -1269,7 +1269,6 @@ impl GraphqlEnrollmentStore {
         };
         receipt.admin_sig = self.identity.sign(&receipt.signing_payload()).await?;
         receipt.validate_against_approval(&active.request, &active.decision)?;
-        let mutation = route_receipt_mutation(&receipt);
         let recipient = if self.identity.did() == active.request.admin_did {
             &active.request.candidate_did
         } else {
@@ -1279,6 +1278,7 @@ impl GraphqlEnrollmentStore {
             );
             &active.request.admin_did
         };
+        let mutation = route_receipt_mutation(&receipt, recipient);
         let committed = self
             .publish_records(
                 "p2p.write_enrollment_route_receipt",
@@ -1946,12 +1946,13 @@ fn decision_mutation(
     let decision_sig = bs58::encode(&decision.admin_sig).into_string();
     let decision_input = format!(
         r#"{{
-          protocol_version: {}, decision_id: "{}", request_id: "{}",
+          initial_reader_did: "{}", protocol_version: {}, decision_id: "{}", request_id: "{}",
           request_digest: "{}", network_id: "{}", admin_did: "{}",
           candidate_did: "{}", candidate_peer: "{}", owner_node_did: "{}",
           decision: "{}", authorization_sequence: {}, authorization_expires_at: "{}", decided_at: "{}",
           signer_did: "{}", admin_sig: "{}"
         }}"#,
+        escaped(&decision.candidate_did),
         decision.protocol_version,
         escaped(&decision.decision_id),
         escaped(&decision.request_id),
@@ -1973,12 +1974,13 @@ fn decision_mutation(
         format!(
             r#"
               create_NetworkAuthorizationRevision(input: {{
-                protocol_version: {}, revision_id: "{}", request_id: "{}",
+                initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
                 request_digest: "{}", network_id: "{}", admin_did: "{}",
                 member_did: "{}", member_peer: "{}", owner_node_did: "{}",
                 sequence: {}, authorization_expires_at: "{}", kind: "{}", issued_at: "{}", signer_did: "{}",
                 admin_sig: "{}"
               }}) {{ _docID }}"#,
+            escaped(&revision.member_did),
             revision.protocol_version,
             escaped(&revision.revision_id),
             escaped(&revision.request_id),
@@ -2010,13 +2012,14 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
     format!(
         r#"mutation {{
           create_NetworkAuthorizationRevision(input: {{
-            protocol_version: {}, revision_id: "{}", request_id: "{}",
+            initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
             member_did: "{}", member_peer: "{}", owner_node_did: "{}",
             sequence: {}, authorization_expires_at: "{}", kind: "{}",
             issued_at: "{}", signer_did: "{}", admin_sig: "{}"
           }}) {{ _docID }}
         }}"#,
+        escaped(&revision.member_did),
         revision.protocol_version,
         escaped(&revision.revision_id),
         escaped(&revision.request_id),
@@ -2035,19 +2038,20 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
     )
 }
 
-fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord) -> String {
+fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord, recipient: &str) -> String {
     let escaped = |value: &str| gents_store::graphql::escape_graphql_string(value);
     let admin_sig = bs58::encode(&receipt.admin_sig).into_string();
     format!(
         r#"mutation {{
           create_NetworkEnrollmentRouteReceipt(input: {{
-            protocol_version: {}, receipt_id: "{}", request_id: "{}",
+            initial_reader_did: "{}", protocol_version: {}, receipt_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
             member_did: "{}", member_peer: "{}", server_peer: "{}",
             owner_node_did: "{}", authorization_sequence: {}, authorization_expires_at: "{}", direction: "{}",
             applied_at: "{}", signer_did: "{}", admin_sig: "{}"
           }}) {{ _docID }}
         }}"#,
+        escaped(recipient),
         receipt.protocol_version,
         escaped(&receipt.receipt_id),
         escaped(&receipt.request_id),

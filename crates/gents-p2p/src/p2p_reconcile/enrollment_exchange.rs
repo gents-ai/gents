@@ -285,8 +285,9 @@ pub(super) async fn respond_to_renewal_intent(
                 gents_protocol::enrollment::decode_offer(&issued.offer_token)?.expires_at;
             let mutation = format!(
                 r#"mutation {{ create_EnrollmentRenewalOffer(input: {{
-                intent_id: "{}", member_did: "{}", offer_token: "{}", expires_at: "{}", admin_did: "{}", admin_sig: "{}"
+                initial_reader_did: "{}", intent_id: "{}", member_did: "{}", offer_token: "{}", expires_at: "{}", admin_did: "{}", admin_sig: "{}"
             }}) {{ _docID }} }}"#,
+                f(&issued.member_did),
                 f(&issued.intent_id),
                 f(&issued.member_did),
                 f(&issued.offer_token),

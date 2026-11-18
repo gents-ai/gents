@@ -155,7 +155,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             .await?,
         "admin offer signature must be valid"
     );
-    let input = crate::p2p_reconcile::enrollment_candidate::enrollment_request_input(&request);
+    let input =
+        crate::p2p_reconcile::enrollment_candidate::enrollment_request_input(&request, None);
     let mutation =
         format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{_docID}} }}");
     let doc = candidate_local
@@ -261,7 +262,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         candidate_ticket.clone(),
     )
     .await?;
-    let input_b = crate::p2p_reconcile::enrollment_candidate::enrollment_request_input(&request_b);
+    let input_b =
+        crate::p2p_reconcile::enrollment_candidate::enrollment_request_input(&request_b, None);
     let mutation_b =
         format!("mutation {{ create_NetworkEnrollmentRequest(input: {input_b}) {{_docID}} }}");
     let doc_b = candidate_local

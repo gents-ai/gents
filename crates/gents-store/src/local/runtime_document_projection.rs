@@ -108,6 +108,26 @@ impl RuntimeDocumentProjector {
 
 #[async_trait::async_trait]
 impl db::DocumentMutationProjector for RuntimeDocumentProjector {
+    fn genesis_reader_field(
+        &self,
+        collection: &str,
+        policy: &str,
+        resource: &str,
+    ) -> Option<&'static str> {
+        (policy == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+            && resource == "enrollment_records"
+            && matches!(
+                collection,
+                "NetworkEnrollmentRequest"
+                    | "NetworkEnrollmentDecision"
+                    | "NetworkAuthorizationRevision"
+                    | "NetworkEnrollmentRouteReceipt"
+                    | "EnrollmentRenewalIntent"
+                    | "EnrollmentRenewalOffer"
+            ))
+        .then_some("initial_reader_did")
+    }
+
     fn projection_rules(&self) -> &[acp::projection::Rule] {
         &self.projection_rules
     }
