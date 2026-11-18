@@ -2077,10 +2077,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-degraded-model-{}", Uuid::new_v4().simple());
-    let warm_port = allocate_port()?;
-    let port = allocate_port()?;
     let agent_name = format!("cli-degraded-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
@@ -2100,8 +2097,8 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
         .to_string();
 
-    let mut warm_server = spawn_server(&home_dir, warm_port)?;
-    wait_for_port(warm_port, &mut warm_server)?;
+    let (mut warm_server, warm_port, _) =
+        spawn_server_with_ready_json_recovering(&home_dir, allocate_port()?, &[], &[])?;
     wait_for_runtime_ready(&graphql_url(warm_port), &node_did, Duration::from_secs(30)).await?;
     graphql_query(
         &graphql_url(warm_port),
@@ -2130,8 +2127,9 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         .wait()
         .context("waiting for warm server shutdown")?;
 
-    let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
-    wait_for_port(port, &mut serve)?;
+    let (_serve, port, readiness) =
+        spawn_server_with_ready_json_recovering(&home_dir, allocate_port()?, &[], &[])?;
+    let graphql = graphql_url(port);
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     assert_eq!(
@@ -2771,9 +2769,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
 
     let model_name = format!("mock-mcp-model-{}", Uuid::new_v4().simple());
     let mock_endpoint = MockModelEndpoint::start(&model_name)?;
-    let port = allocate_port()?;
     let agent_name = format!("cli-mcp-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
@@ -2788,13 +2784,13 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     )?;
     let node_did = node_did_from_init(&init)?;
 
-    let mut serve = spawn_server_with_env(
+    let (_serve, port, _) = spawn_server_with_ready_json_recovering(
         &home_dir,
-        port,
+        allocate_port()?,
         &["--enable-mcp", "--mcp-write-collection", "McpParcel"],
         &[],
     )?;
-    wait_for_port(port, &mut serve)?;
+    let graphql = graphql_url(port);
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     for mutation in [
