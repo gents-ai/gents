@@ -459,6 +459,12 @@ See `../README.md` for how this fits the broader formal-verification model.
   `NamedTempFile` held open until persist), `Unwaited` (the copy child not
   reaped). Green copies with a reaped `/bin/cp` child into a file the updater
   never opens for writing.
+- `CommitResponseWait` — a client transaction's commit over the runtime's
+  HTTP endpoint on a loaded host (`txn_commit`, e.g. the pack document
+  install). RED: `ClientWindow`, a total request timeout, reports a live
+  server's commit as unconfirmed (the change-unit CI failure);
+  `Wedged` drops the premise that the server answers every commit it works
+  on. Green waits for the answer or the connection reset.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
