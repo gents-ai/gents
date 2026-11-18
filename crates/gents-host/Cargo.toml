@@ -7,6 +7,7 @@ repository.workspace = true
 description = "The runtime host: serving, runtime preparation and the runtime's HTTP surface"
 
 [features]
+vera = ["gents/vera"]
 test-fixtures = ["gents-session/test-fixtures", "gents-service/test-home-guard"]
 
 [dependencies]

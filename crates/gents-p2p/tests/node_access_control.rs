@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use defra_node::{HttpConfig, Node as EmbeddedNode, StorageBackend};
@@ -26,9 +25,13 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
     let node = EmbeddedNode::builder()
         .data_path(data_dir)
         .with_storage_backend(StorageBackend::Regolith)
-        .with_http(HttpConfig::with_addr(address).with_extra_routes(
-            gents_store::test_support::local_authentication_route(principal),
-        ))
+        .with_http(
+            HttpConfig::with_listener(std::net::TcpListener::bind(address).unwrap())
+                .unwrap()
+                .with_extra_routes(gents_store::test_support::local_authentication_route(
+                    principal,
+                )),
+        )
         .with_p2p(gents_p2p::test_support::transport::test_p2p_config(
             &gents_p2p::test_support::transport::TestP2pAdmission::default(),
             data_dir,
@@ -38,23 +41,6 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
         .build()
         .await
         .expect("served home node");
-    let endpoint = format!("http://{address}/api/v0/graphql");
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !gents_protocol::graphql::graphql_endpoint_available(
-            &endpoint,
-            gents_protocol::graphql::GraphqlRequestOptions {
-                timeout: Duration::from_secs(1),
-                max_attempts: 1,
-                retry_backoff: Duration::ZERO,
-            },
-        )
-        .await
-        {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("served home HTTP listener");
     Arc::new(node)
 }
 
@@ -101,7 +87,7 @@ async fn assert_access_control(
         .await
         .expect_err("an anonymous HTTP schema change must be refused");
     assert!(
-        refused_schema.to_string().contains("401"),
+        refused_schema.is_permission_denied(),
         "unexpected schema refusal: {refused_schema:#}"
     );
 

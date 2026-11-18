@@ -302,6 +302,7 @@ mod tests {
                 tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
                 tool_root: None,
                 store_encryption: None,
+                document_acp: Default::default(),
             },
         )?;
         let served = gents_host::test_support::served_config(json!({

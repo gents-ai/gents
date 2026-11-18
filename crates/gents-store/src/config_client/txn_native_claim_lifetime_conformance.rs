@@ -92,7 +92,7 @@ async fn signed_claimed_access(
             signing_authorization: None,
         },
     )
-    .expect("register fixture signing identity");
+    .expect("the signing identity registers");
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(data)

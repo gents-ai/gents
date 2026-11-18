@@ -46,7 +46,8 @@ async fn background_request_observation_uses_selected_agent_authority() {
     let expected = hook.foreground_background_request(doc).await.unwrap();
     assert!(expected.is_some());
 
-    let node_view = gents_store::config_client::ConfigAccess::local(node.clone())
+    let node_view = gents_store::test_support::unrelated_document_reader(&node)
+        .await
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
             gents_store::graphql::escape_graphql_string(doc),

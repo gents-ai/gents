@@ -21,7 +21,7 @@ type UnrelatedDoc {
 
 const ADD_LABEL_PATCH: &str = r#"[
   {"op":"add","path":"/FixtureDoc/Fields/-","value":{"Name":"label","Kind":"String"}},
-  {"op":"replace","path":"/IsActive","value":false}
+  {"op":"replace","path":"/FixtureDoc/IsActive","value":false}
 ]"#;
 
 async fn discover_inactive_patch_pin(node: &EmbeddedNode) -> (String, String) {

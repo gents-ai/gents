@@ -102,6 +102,7 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
             &other
         };
         let audience = acp::DelegationAudience {
+            genesis_id: None,
             worker: if input.worker_matches {
                 worker.clone()
             } else {

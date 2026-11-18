@@ -127,8 +127,7 @@ async fn observe_plugin_permission(
 }
 
 #[tokio::test]
-async fn selected_schema_tool_controls_changes_and_preserves_baseline_reads() -> anyhow::Result<()>
-{
+async fn live_agents_read_collections_whatever_their_datastore_tools() -> anyhow::Result<()> {
     let (_directory, runtime, node) = projection_node().await?;
     let binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let sibling_binding = gents_store::identity::provision_agent_identity(&runtime)?;
@@ -231,10 +230,13 @@ async fn selected_schema_tool_controls_changes_and_preserves_baseline_reads() ->
             .check_permission(&agent, NodePermission::CollectionGet)
             .await?,
     );
-    assert!(access.collection_version("Node").await?.is_some());
-    for case in gents_lean_vocab::families::household_tool_operation_collection_patch::cases() {
+    let disabled_reads = access.collection_version("Node").await.is_ok();
+    for case in gents_lean_vocab::families::household_tool_operation_collection_get::cases() {
         let observed = granted[case.input.step.as_str()];
         case.check(observed);
+        if case.input.step == "agent-disabled" {
+            case.check(disabled_reads);
+        }
     }
     for case in gents_lean_vocab::families::household_tool_operation_collection_get::cases() {
         case.check(baseline[case.input.step.as_str()]);
@@ -2168,6 +2170,20 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
             )).await?,
             "Agent",
         )?;
+        let grant_set_sources: Vec<String> =
+            gents_store::identity::GrantSet::for_recipient(gents_store::identity::Recipient::Agent)
+                .projected
+                .iter()
+                .map(|set| {
+                    gents_store::local::tool_permission_projection::tool_source(
+                        runtime.did(),
+                        &agent_doc,
+                        "",
+                        agent.as_str(),
+                        set.name(),
+                    )
+                })
+                .collect();
         let enable = input.enable;
         let update = format!(
             r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:{enable}}}}}) {{_docID}} }}"#
@@ -2224,7 +2240,7 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
         for source in &input.sources {
             let permission = schema_permission(&source.permission)?;
             for (projected, held) in &granted {
-                if *held != permission || projected == &baseline {
+                if *held != permission || grant_set_sources.contains(projected) {
                     continue;
                 }
                 let attributed = production.iter().find(|candidate| {

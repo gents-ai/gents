@@ -117,7 +117,9 @@ async fn paired_model_settings_use_the_authenticated_client_endpoint() {
 }
 
 #[tokio::test]
-async fn private_snapshot_preserves_admin_readable_questions_without_ui_config_authority() {
+async fn private_snapshot_keeps_the_current_requesters_questions_without_config_authority() {
+    // A non-admin User observes mailbox items through recipient DAC; native
+    // admins bypass that policy, independently of the host surface grants.
     let served = crate::tests::support::served_desktop().await;
     let core = served.core.clone();
     core.stop_observer_for_test().await;
@@ -175,6 +177,15 @@ async fn private_snapshot_preserves_admin_readable_questions_without_ui_config_a
     )
     .await
     .unwrap();
+    let user = ::identity::Did::new(&requester).unwrap();
+    gents_store::identity::GrantSet::OperatorUser
+        .grant(&served.runtime.runtime_access(), &user)
+        .await
+        .unwrap();
+    gents_store::identity::GrantSet::HouseholdOwner
+        .revoke(&served.runtime.runtime_access(), &user)
+        .await
+        .unwrap();
     core.refresh_node(&node).await.unwrap();
     let host = ClientHost::new(core.clone());
     let result = host

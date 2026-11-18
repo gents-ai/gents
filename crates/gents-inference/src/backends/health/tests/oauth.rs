@@ -52,7 +52,7 @@ fn oauth_backend(
 }
 
 #[tokio::test]
-async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
+async fn scheduled_probe_requires_the_held_node_and_a_present_backend() {
     use gents_store::identity::NodeIdentity;
     // No default agent: its fixture backend is also enabled on this node and
     // would make the runtime listing non-singular.
@@ -166,6 +166,30 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             "runtime_reader",
             &identity::Did::new(did).unwrap(),
         )
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    gents_store::config_client::ConfigAccess::local_as(node.clone(), did.parse().unwrap())
+        .grant_node_permission(
+            &user.did().parse().unwrap(),
+            gents_store::config_client::NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
+    user_access
+        .transact_write("test.probe.remove_backend", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.delete_configuration_document("InferenceBackendMetadata", doc)
+                    .await
+            })
+        })
         .await
         .unwrap();
     assert!(

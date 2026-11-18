@@ -98,9 +98,18 @@ impl ConfigAccess {
         let variables = variables.cloned();
         let operation = operation.to_owned();
         let context = local.request_context();
+        let managed_agent = local.agent_signer().is_some();
         local
             .run_owned(move |node| async move {
-                Self::execute_local_read(&node, &document, variables, &operation, context).await
+                Self::execute_local_read(
+                    &node,
+                    &document,
+                    variables,
+                    &operation,
+                    context,
+                    managed_agent,
+                )
+                .await
             })
             .await
     }
@@ -147,6 +156,7 @@ impl ConfigAccess {
             variables.cloned(),
             operation,
             defra_core::RequestContext::default().with_bearer(None, None),
+            false,
         )
         .await
     }
@@ -157,6 +167,7 @@ impl ConfigAccess {
         variables: Option<Value>,
         operation: &str,
         context: defra_core::RequestContext,
+        managed_agent: bool,
     ) -> Result<defra_node::QueryResponse> {
         let started = Instant::now();
         let actor = context
@@ -169,6 +180,9 @@ impl ConfigAccess {
             .with_context(context);
         if let Some(variables) = variables {
             request = request.with_variables(variables);
+        }
+        if managed_agent {
+            request = crate::identity::ManagedAgentSigner::deny_dac_bypass(request);
         }
         let response = node.execute_request(request).await;
         let elapsed = started.elapsed();
@@ -494,7 +508,7 @@ impl ConfigAccess {
                     request = request.with_variables(variables);
                 }
                 let result = match signer {
-                    Some(signer) => node.execute_request(signer.native().attach(request)).await,
+                    Some(signer) => node.execute_request(signer.attach(request)).await,
                     None => node.execute_request(request).await,
                 };
                 let elapsed = started.elapsed();

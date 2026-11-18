@@ -85,12 +85,22 @@ impl ConfigApplyTxn<'_> {
             async move {
                 match graph {
                     VerifiedGraph::Create(graph) => {
-                        node.execute_verified_create_in_txn(request, &handle, &graph)
-                            .await
+                        node.execute_verified_create_in_txn(
+                            request,
+                            &handle,
+                            &graph,
+                            defra_node::SignerCredential::None,
+                        )
+                        .await
                     }
                     VerifiedGraph::Mutation(graph) => {
-                        node.execute_verified_mutation_in_txn(request, &handle, &graph)
-                            .await
+                        node.execute_verified_mutation_in_txn(
+                            request,
+                            &handle,
+                            &graph,
+                            defra_node::SignerCredential::None,
+                        )
+                        .await
                     }
                 }
             },

@@ -135,22 +135,20 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
         fixture
             .create_session(name, bound, case.input.visible.is_some())
             .await;
-        let node_view = ConfigAccess::local_as(
-            fixture.db.node.clone(),
-            fixture.runtime.did().parse().unwrap(),
-        )
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(name)
-        ))
-        .await
-        .unwrap();
+        let reader = gents_store::test_support::unrelated_document_reader(&fixture.db.node).await;
+        let node_view = reader
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(name)
+            ))
+            .await
+            .unwrap();
         assert!(
             node_view["data"]["AgentSession"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            "runtime must not read private session"
+            "unrelated reader must not read private session"
         );
         let result = resolve_agent_for_request(&fixture.db.node, &fixture.request(name, requested))
             .await

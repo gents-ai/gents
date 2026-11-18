@@ -530,8 +530,13 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let graphql = format!("http://{}", listener.local_addr().unwrap());
         let app = axum::Router::new().route(
-            "/",
-            axum::routing::post(|| async { axum::Json(json!({"data": {"__typename": "Query"}})) }),
+            "/status",
+            axum::routing::get(|| async {
+                axum::Json(json!({
+                    gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD:
+                        gents_protocol::serve_lifecycle::ServeLifecycle::Ready,
+                }))
+            }),
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let out = root.path().join("out").display().to_string();

@@ -288,3 +288,25 @@ pub fn local_authentication_route(node_did: impl Into<String>) -> axum::Router {
         }),
     )
 }
+
+pub async fn unrelated_document_reader(
+    node: &std::sync::Arc<defra_node::Node>,
+) -> crate::config_client::ConfigAccess {
+    use crate::identity::NodeIdentity as _;
+    let identity = tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir().unwrap();
+        crate::identity::KeyIdentity::load_or_create(directory.path().join("reader.key"), None)
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    let actor = identity.did().parse().unwrap();
+    crate::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    )
+    .grant_node_permission(&actor, crate::config_client::NodePermission::DocumentRead)
+    .await
+    .unwrap();
+    crate::config_client::ConfigAccess::local_as(node.clone(), actor)
+}

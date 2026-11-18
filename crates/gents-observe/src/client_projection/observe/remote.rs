@@ -165,7 +165,8 @@ pub(super) fn reconnect_attempt(attempts: u32, connected_for: Option<Duration>) 
 }
 
 impl Sources {
-    /// Publishes `event` for `node` and advances its reconnect schedule. An
+    /// Advances `node`'s reconnect schedule for `event`, then publishes it:
+    /// whoever sees the status also sees the reconnect it caused counted. An
     /// event that reconnects stops the source and schedules its restart at
     /// the same endpoint after `reconnect_delay` of its consecutive count; a
     /// snapshot that failed for a transport reason leaves the source armed.
@@ -189,13 +190,16 @@ impl Sources {
             }
             _ => {}
         }
-        stores.observe_runtime_connection(node, event);
         if event == RuntimeConnectionEvent::SnapshotSucceeded {
             self.connected_at.entry(node.to_owned()).or_insert(now);
         }
-        if !reconnects(origin, event) {
-            return;
+        if reconnects(origin, event) {
+            self.schedule_reconnect(node, now, metrics);
         }
+        stores.observe_runtime_connection(node, event);
+    }
+
+    fn schedule_reconnect(&mut self, node: &str, now: Instant, metrics: &ObserverMetrics) {
         let connected_for = self
             .connected_at
             .remove(node)

@@ -524,9 +524,13 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .await;
         case.check(result.is_ok());
     }
-    let runtime_actor = identity::Did::new(runtime.did())?;
     user_access
-        .delete_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
+        .transact_write("test.agent_creator.revoke_catalog", |txn| {
+            let (runtime, creator) = (&runtime, &creator);
+            Box::pin(async move {
+                gents_documents::revoke_agent_catalog(txn, runtime.did(), &creator.agent_did).await
+            })
+        })
         .await?;
     assert!(tool
         .call(
@@ -540,7 +544,12 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .await
         .is_err());
     user_access
-        .add_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
+        .transact_write("test.agent_creator.restore_catalog", |txn| {
+            let (runtime, creator) = (&runtime, &creator);
+            Box::pin(async move {
+                gents_documents::grant_agent_catalog(txn, runtime.did(), &creator.agent_did).await
+            })
+        })
         .await?;
     let create = ConfigureAgentParams {
         action: "create".into(),

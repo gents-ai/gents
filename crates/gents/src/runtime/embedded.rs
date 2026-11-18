@@ -189,7 +189,12 @@ impl EmbeddedHome {
                     .await?
                     .context("trial NAC owner identity")?;
             fresh_store
-                .initialize(&store_key, Some(&did), &::identity::Did::new(owner.did())?)
+                .initialize(
+                    &store_key,
+                    &identity,
+                    &::identity::Did::new(owner.did())?,
+                    gents_store::local::document_acp::DocumentAcp::Local,
+                )
                 .await?;
         }
         let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
@@ -198,7 +203,11 @@ impl EmbeddedHome {
             &store_lock,
         )
         .await?
-        .preflight(&store_key, Some(&did))
+        .preflight(
+            &store_key,
+            &identity,
+            gents_store::local::document_acp::DocumentAcp::Local,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
@@ -342,7 +351,11 @@ impl EmbeddedHome {
                 .context("trial store lock was released")?,
         )
         .await?
-        .preflight(&self.store_key, Some(&self.did))
+        .preflight(
+            &self.store_key,
+            &self.identity,
+            gents_store::local::document_acp::DocumentAcp::Local,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;

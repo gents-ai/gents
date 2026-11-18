@@ -1,0 +1,162 @@
+use std::sync::Arc;
+
+use identity::{Identity as _, RawIdentity};
+use serde::{Deserialize, Serialize};
+
+use super::{admit, enter, record, Deployment, DocumentAcp, DocumentAcpError};
+use crate::identity::{KeyIdentity, NodeIdentity, RegisteredIdentity};
+use crate::local::home::StoredInitConfig;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Record {
+    Fresh,
+    CreatedOnNodeStore,
+    CreatedOnEmbeddedVera,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Provider {
+    NodeStore,
+    EmbeddedVera,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Admission {
+    NodeStore,
+    EmbeddedVera,
+    SwitchRefused,
+    VeraUnavailable,
+    NodeKeyCannotSign,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Entry {
+    NodeStore,
+    EmbeddedVera,
+    SwitchRefused,
+    VeraUnavailable,
+    NodeKeyCannotSign,
+    NotYetUsable,
+}
+
+fn document_acp(provider: Provider) -> DocumentAcp {
+    match provider {
+        Provider::NodeStore => DocumentAcp::Local,
+        Provider::EmbeddedVera => DocumentAcp::Vera,
+    }
+}
+
+fn enclave_like_identity() -> Arc<dyn NodeIdentity> {
+    let raw = RawIdentity::from_secp256r1(crypto::generate_secp256r1().unwrap()).unwrap();
+    let did = raw.did().unwrap().to_string();
+    defra_core::signing::store_identity(
+        &did,
+        defra_core::signing::SigningConfig {
+            key_type: defra_core::signing::SigningKeyType::Secp256r1,
+            private_key_bytes: defra_core::signing::SigningConfig::private_key_bytes_from_vec(
+                raw.private_key_bytes(),
+            ),
+            public_key_bytes: raw.public_key_bytes(),
+            public_key_hex: String::new(),
+            remote_signer: None,
+            signing_authorization: None,
+        },
+    )
+    .unwrap();
+    Arc::new(RegisteredIdentity::from_registered_did(&did, None).unwrap())
+}
+
+#[test]
+fn admission_matches_the_lean_model() {
+    let keys = tempfile::tempdir().unwrap();
+    let signing: Arc<dyn NodeIdentity> =
+        Arc::new(KeyIdentity::load_or_create(keys.path().join("node.key"), None).unwrap());
+    let enclave_like = enclave_like_identity();
+    gents_lean_vocab::families::document_acp_choice_admit::replay::<Admission, Provider, Record>(
+        |input| {
+            let store = tempfile::tempdir().unwrap();
+            if matches!(input.store, Record::CreatedOnEmbeddedVera) {
+                record(
+                    store.path(),
+                    &Deployment {
+                        consensus_key: "recorded".into(),
+                    },
+                )
+                .unwrap();
+            }
+            let node = if input.node_key_signs {
+                &signing
+            } else {
+                &enclave_like
+            };
+            let admitted = admit(
+                store.path(),
+                matches!(input.store, Record::Fresh),
+                document_acp(input.requested),
+                node.as_ref(),
+                input.available,
+            );
+            match admitted {
+                Ok(DocumentAcp::Local) => Admission::NodeStore,
+                Ok(DocumentAcp::Vera) => Admission::EmbeddedVera,
+                Err(DocumentAcpError::Switch { .. }) => Admission::SwitchRefused,
+                Err(DocumentAcpError::Unavailable) => Admission::VeraUnavailable,
+                Err(DocumentAcpError::NodeKeyCannotSign { .. }) => Admission::NodeKeyCannotSign,
+                Err(error) => panic!("{input:?}: {error}"),
+            }
+        },
+    );
+}
+
+#[test]
+fn entering_a_home_matches_the_lean_model() {
+    gents_lean_vocab::families::document_acp_choice_enter::replay::<Entry, Provider, Record>(
+        |input| {
+            let recorded = match input.store {
+                Record::Fresh => None,
+                Record::CreatedOnNodeStore => Some(DocumentAcp::Local),
+                Record::CreatedOnEmbeddedVera => Some(DocumentAcp::Vera),
+            };
+            let entered = enter(
+                recorded,
+                document_acp(input.requested),
+                input.available,
+                input.node_key_signs,
+            );
+            match entered {
+                Ok(DocumentAcp::Local) => Entry::NodeStore,
+                Ok(DocumentAcp::Vera) => Entry::EmbeddedVera,
+                Err(DocumentAcpError::Switch { .. }) => Entry::SwitchRefused,
+                Err(DocumentAcpError::Unavailable) => Entry::VeraUnavailable,
+                Err(DocumentAcpError::NodeKeyCannotSign { .. }) => Entry::NodeKeyCannotSign,
+                Err(DocumentAcpError::NotYetUsable) => Entry::NotYetUsable,
+                Err(error) => panic!("{input:?}: {error}"),
+            }
+        },
+    );
+}
+
+#[test]
+fn the_choice_round_trips_through_the_init_config() {
+    let unrecorded = serde_json::json!({
+        "home": "/home",
+        "node_name": "node",
+        "node_did": "did:key:node",
+        "key_path": null,
+        "tool_ceiling": "meta-only",
+        "tool_root": null,
+    });
+    let config: StoredInitConfig = serde_json::from_value(unrecorded.clone()).unwrap();
+    assert_eq!(config.document_acp, DocumentAcp::Local);
+    assert_eq!(serde_json::to_value(&config).unwrap(), unrecorded);
+
+    let mut recorded = unrecorded;
+    recorded["document_acp"] = "vera".into();
+    let config: StoredInitConfig = serde_json::from_value(recorded.clone()).unwrap();
+    assert_eq!(config.document_acp, DocumentAcp::Vera);
+    assert_eq!(serde_json::to_value(&config).unwrap(), recorded);
+}

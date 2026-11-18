@@ -252,7 +252,7 @@ pub enum ConfigClientError {
     PermissionObservationMissing,
     #[error("runtime identity cannot act for agent document work")]
     RuntimeDocumentActor,
-    #[error("{source}\n{}", super::graphql_diagnostic_hint(endpoint))]
+    #[error("{source}\n{}", super::graphql_diagnostic_hint(endpoint, source.refused_by_runtime()))]
     HttpQuery {
         endpoint: String,
         #[source]
@@ -539,12 +539,22 @@ impl ConfigClientError {
             _ => {
                 self.database_failure().is_some_and(
                     gents_protocol::database_error::GraphqlFailure::is_permission_denied,
-                ) || self
-                    .transport_error()
-                    .and_then(reqwest::Error::status)
-                    .is_some_and(denied)
+                ) || self.refused_by_runtime()
             }
         }
+    }
+
+    /// The runtime answered with an HTTP authentication or node ACP refusal,
+    /// so it is serving and refused this caller before reading a document.
+    pub fn refused_by_runtime(&self) -> bool {
+        self.transport_error()
+            .and_then(reqwest::Error::status)
+            .is_some_and(|status| {
+                matches!(
+                    status,
+                    reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+                )
+            })
     }
 
     /// The HTTP transport source held by this typed access error, if any.

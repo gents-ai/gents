@@ -171,6 +171,7 @@ impl GraphqlEndpoint {
                             ConfigClientError::ClientDelegationSigner(Box::new(error))
                         })?;
                 let audience = acp::DelegationAudience {
+                    genesis_id: None,
                     worker: worker.clone(),
                     deployment: *deployment,
                 };

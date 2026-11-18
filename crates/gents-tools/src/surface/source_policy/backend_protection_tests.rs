@@ -87,17 +87,24 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
         let key = StoreKey::from_host(&[7; 32])?;
         let other_key = StoreKey::from_host(&[8; 32])?;
         let identity_path = directory.path().join("node.key");
-        let runtime = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            Ok(std::sync::Arc::new(
-                gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
-            ))
-        })
+        let runtime = tokio::task::spawn_blocking(
+            move || -> anyhow::Result<std::sync::Arc<dyn NodeIdentity>> {
+                Ok(std::sync::Arc::new(
+                    gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
+                ))
+            },
+        )
         .await??;
         let did = runtime.did().to_owned();
         if case.input.binding {
             FreshBackendStore::observe(&data, &lock)
                 .await?
-                .initialize(&key, Some(&did), &store_owner(directory.path()).await?)
+                .initialize(
+                    &key,
+                    &runtime,
+                    &store_owner(directory.path()).await?,
+                    gents_store::local::document_acp::DocumentAcp::Local,
+                )
                 .await?;
         } else {
             create_unbound_legacy_store(&data, &key, &did).await?;
@@ -106,7 +113,12 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
                 let (witness_data, witness_lock) = locked_home(&witness).await?;
                 FreshBackendStore::observe(&witness_data, &witness_lock)
                     .await?
-                    .initialize(&key, Some(&did), &store_owner(directory.path()).await?)
+                    .initialize(
+                        &key,
+                        &runtime,
+                        &store_owner(directory.path()).await?,
+                        gents_store::local::document_acp::DocumentAcp::Local,
+                    )
                     .await?;
                 tokio::fs::copy(
                     witness_data.join(gents_store::local::backend_protection::PROVENANCE_MARKER),
@@ -122,7 +134,14 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
         };
         let allowed = match ProtectedBackendStore::open(&data, open_key, &lock).await {
             Err(_) => false,
-            Ok(opened) => match opened.preflight(&key, Some(&did)).await {
+            Ok(opened) => match opened
+                .preflight(
+                    &key,
+                    &runtime,
+                    gents_store::local::document_acp::DocumentAcp::Local,
+                )
+                .await
+            {
                 Err(_) => false,
                 Ok(protected) => {
                     assert!(FreshBackendStore::observe(&data, &lock).await.is_err());
@@ -190,24 +209,35 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
         .await??;
         let key = StoreKey::from_host(&[9; 32])?;
         let identity_path = home.join("node.key");
-        let runtime = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            Ok(std::sync::Arc::new(
-                gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
-            ))
-        })
+        let runtime = tokio::task::spawn_blocking(
+            move || -> anyhow::Result<std::sync::Arc<dyn NodeIdentity>> {
+                Ok(std::sync::Arc::new(
+                    gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
+                ))
+            },
+        )
         .await??;
         let did = runtime.did().to_owned();
         FreshBackendStore::observe(&data, &lock)
             .await?
-            .initialize(&key, Some(&did), &store_owner(&home).await?)
+            .initialize(
+                &key,
+                &runtime,
+                &store_owner(&home).await?,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
             .await?;
         let (node, admission) = ProtectedBackendStore::open(&data, &key, &lock)
             .await?
-            .preflight(&key, Some(&did))
+            .preflight(
+                &key,
+                &runtime,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
             .await?
             .start_node_with_projection(
                 &key,
-                runtime,
+                runtime.clone(),
                 std::convert::identity,
                 std::sync::Arc::new(crate::surface::ToolCeiling::meta_only()),
                 Vec::new(),
@@ -243,7 +273,11 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
         drop(node);
         let restarted = match ProtectedBackendStore::open(&data, &key, &lock)
             .await?
-            .preflight(&key, Some(&did))
+            .preflight(
+                &key,
+                &runtime,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
             .await
         {
             Ok(_) => true,

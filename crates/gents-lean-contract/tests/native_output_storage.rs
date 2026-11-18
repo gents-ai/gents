@@ -27,7 +27,7 @@ fn node_identity() -> String {
             signing_authorization: None,
         },
     )
-    .expect("register the native fixture signer");
+    .expect("the signing identity registers");
     did
 }
 

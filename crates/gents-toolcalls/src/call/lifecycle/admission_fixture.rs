@@ -1396,13 +1396,15 @@ mod lifecycle_tests {
             .unwrap()
             .is_some()
         );
-        assert!(gents_session::request::binding::load_agent_request(
-            &fixture.node,
-            &request.request().request_id,
-        )
-        .await
-        .unwrap()
-        .is_none());
+        assert!(
+            gents_session::request::binding::load_agent_request_with_access(
+                &gents_store::test_support::unrelated_document_reader(&fixture.node).await,
+                &request.request().request_id,
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
         teardown(fixture.node, fixture.path).await;
     }
 

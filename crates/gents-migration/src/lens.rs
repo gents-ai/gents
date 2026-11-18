@@ -11,3 +11,24 @@ pub fn lens_config(spec: &LensSpec<'_>, source: &str, destination: &str) -> Lens
     }
     LensConfig::new(source, destination, module)
 }
+
+pub fn predict_transform_id(spec: &LensSpec<'_>) -> String {
+    let config = lens_config(spec, "", "");
+    let module = &config.lenses[0];
+    let mut arguments = module
+        .arguments
+        .as_ref()
+        .map(|value| value.as_object().expect("lens arguments must be named"))
+        .into_iter()
+        .flatten()
+        .map(|(key, value)| (key.clone(), defra_core::encode_lens_argument(value)))
+        .collect::<Vec<_>>();
+    arguments.sort_by(|a, b| a.0.cmp(&b.0));
+    let (cid, _) = defra_core::build_lens_ipld_blocks(&[defra_core::LensModuleParts {
+        wasm_bytes: spec.wasm,
+        inverse: module.inverse,
+        arguments: &arguments,
+    }])
+    .expect("encode canonical lens blocks");
+    cid.to_string()
+}

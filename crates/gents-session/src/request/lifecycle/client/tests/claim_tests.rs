@@ -32,6 +32,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         for permission in [
             NodePermission::CollectionGet,
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
         ] {
@@ -194,17 +195,15 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 lifecycle.begin_owned_execution(&writer).await.unwrap();
                 lifecycle.validate_owned_execution().await.unwrap();
             }
-            let permissions = gents_store::identity::observe_document_permissions(
-                &node,
-                runtime.did(),
-                &::identity::Did::new(runtime.did()).unwrap(),
-                Some(("AgentRequest", &lifecycle.request().doc_id)),
-                &["read".to_owned()],
-            )
-            .await
-            .unwrap()
-            .unwrap();
-            assert_eq!(permissions.held, [false]);
+            let node_view = gents_store::test_support::unrelated_document_reader(&node)
+                .await
+                .execute("{ AgentRequest { _docID } }")
+                .await
+                .unwrap();
+            assert!(node_view["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty());
             let doc_id = gents_store::graphql::escape_graphql_string(&lifecycle.request().doc_id);
             agent_access
                 .write(
@@ -358,6 +357,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         for permission in [
             NodePermission::CollectionGet,
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
         ] {
