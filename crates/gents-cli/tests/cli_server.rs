@@ -2885,6 +2885,32 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         "anonymous MCP query exposed a protected AgentToolCall row: {protected_text}"
     );
 
+    let user_bearer = support::graphql::served_endpoint(&graphql)
+        .authorization()
+        .await?
+        .context("served user authorization")?;
+    let user_config =
+        StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"))
+            .auth_header(user_bearer.strip_prefix("Bearer ").unwrap());
+    let user_mcp = ()
+        .serve(rmcp::transport::StreamableHttpClientTransport::from_config(
+            user_config,
+        ))
+        .await?;
+    let allowed = user_mcp
+        .peer()
+        .call_tool(
+            CallToolRequestParams::new("query")
+                .with_arguments(protected_args.as_object().unwrap().clone()),
+        )
+        .await?;
+    let allowed_text = allowed
+        .content
+        .iter()
+        .filter_map(|content| content.raw.as_text().map(|text| text.text.as_str()))
+        .collect::<String>();
+    assert!(allowed_text.contains("mcp-req"), "{allowed_text}");
+
     let denied_args = serde_json::json!({"argv":["find"], "collection": "InferenceBackend", "options":{"fields": ["auth"]} });
     let denied_params = CallToolRequestParams::new("query")
         .with_arguments(denied_args.as_object().unwrap().clone());
