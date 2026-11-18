@@ -134,7 +134,7 @@ async fn submit_prepared_edit(
         );
         replacement_evidence.push(evidence);
     }
-    let now = chrono::Utc::now();
+    let now = access.home_now().await;
     let mut command = SessionInputEdit {
         version: SESSION_INPUT_EDIT_VERSION,
         command_id: uuid::Uuid::new_v4().to_string(),

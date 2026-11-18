@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    resend, CredentialAnswer, CredentialRefusal, DelegationAudience, HeldAudienceChange,
-    PresentedCredential, ReportedDelegationAudience,
+    clock_moved, general_lifetime, issue_at, resend, CredentialAnswer, CredentialRefusal,
+    DelegationAudience, HeldAudienceChange, HomeClock, PresentedCredential,
+    ReportedDelegationAudience,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -26,6 +27,7 @@ enum Change {
     Unchanged,
     Learned,
     Changed,
+    Reclocked,
     Forgotten,
 }
 
@@ -34,6 +36,7 @@ enum Change {
 enum Refusal {
     DelegationRequired,
     DelegationRefused,
+    OutsideWindow,
     Other,
 }
 
@@ -50,6 +53,7 @@ fn token(change: &HeldAudienceChange) -> Change {
         HeldAudienceChange::Unchanged => Change::Unchanged,
         HeldAudienceChange::Learned(_) => Change::Learned,
         HeldAudienceChange::Changed(_) => Change::Changed,
+        HeldAudienceChange::Reclocked => Change::Reclocked,
         HeldAudienceChange::Forgotten => Change::Forgotten,
     }
 }
@@ -73,12 +77,12 @@ fn a_status_read_changes_the_held_audience_as_the_lean_model_does() {
                 Reported::Named => ReportedDelegationAudience::Named(named),
                 Reported::Unavailable => ReportedDelegationAudience::Unavailable,
             };
-            let change = reported.change_for(held.as_ref());
+            let change = reported.change_with_clock(held.as_ref(), input.clock_moved);
             let after = change.clone().held_after(held.clone());
             assert_eq!(
                 after == held,
-                token(&change) == Change::Unchanged,
-                "the record changes exactly when the change says so"
+                matches!(token(&change), Change::Unchanged | Change::Reclocked),
+                "the audience held changes exactly when the change names another"
             );
             token(&change)
         },
@@ -86,8 +90,8 @@ fn a_status_read_changes_the_held_audience_as_the_lean_model_does() {
 }
 
 #[test]
-fn a_client_reads_the_status_again_for_the_genesis_as_the_lean_model_says() {
-    gents_lean_vocab::families::identity_held_audience_reread_for_genesis::replay::<Held>(
+fn a_client_reads_the_status_again_before_a_request_bound_mint_as_the_lean_model_says() {
+    gents_lean_vocab::families::identity_held_audience_reread_before_request_bound::replay::<Held>(
         |input| {
             let named = DelegationAudience {
                 genesis_id: input
@@ -99,7 +103,7 @@ fn a_client_reads_the_status_again_for_the_genesis_as_the_lean_model_says() {
                 Held::Unknown => None,
                 Held::Known => Some(named),
             };
-            super::reread_for_genesis(held.as_ref())
+            super::reread_before_request_bound(held.as_ref(), input.clock_known)
         },
     );
 }
@@ -110,12 +114,14 @@ fn a_refused_request_is_sent_again_as_the_lean_model_says() {
         let refusal = match input.refusal {
             Refusal::DelegationRequired => CredentialRefusal::DelegationRequired,
             Refusal::DelegationRefused => CredentialRefusal::DelegationRefused,
+            Refusal::OutsideWindow => CredentialRefusal::OutsideWindow,
             Refusal::Other => CredentialRefusal::Other,
         };
         let record = match input.record {
             Change::Unchanged => HeldAudienceChange::Unchanged,
             Change::Learned => HeldAudienceChange::Learned(audience(1)),
             Change::Changed => HeldAudienceChange::Changed(audience(2)),
+            Change::Reclocked => HeldAudienceChange::Reclocked,
             Change::Forgotten => HeldAudienceChange::Forgotten,
         };
         resend(input.resent, refusal, &record)
@@ -127,6 +133,7 @@ fn a_refused_request_is_sent_again_as_the_lean_model_says() {
 enum Answer {
     Unauthorized,
     Forbidden,
+    OutsideWindow,
     Other,
 }
 
@@ -145,6 +152,7 @@ enum Credential {
 enum RefusalOut {
     DelegationRequired,
     DelegationRefused,
+    OutsideWindow,
     Other,
 }
 
@@ -155,11 +163,12 @@ fn a_refused_request_is_read_as_the_lean_model_reads_it() {
         Credential,
         RefusalOut,
     >(|input| {
-        let answer = CredentialAnswer::of_status(match input.answer {
-            Answer::Unauthorized => 401,
-            Answer::Forbidden => 403,
-            Answer::Other => 500,
-        });
+        let answer = match input.answer {
+            Answer::Unauthorized => CredentialAnswer::of_status(401),
+            Answer::Forbidden => CredentialAnswer::of_status(403),
+            Answer::OutsideWindow => CredentialAnswer::OutsideWindow,
+            Answer::Other => CredentialAnswer::of_status(500),
+        };
         let presented = match input.presented {
             Credential::IdentityToken => PresentedCredential::IdentityToken,
             Credential::Delegation => PresentedCredential::Delegation,
@@ -170,7 +179,37 @@ fn a_refused_request_is_read_as_the_lean_model_reads_it() {
         match CredentialRefusal::of(answer, presented) {
             CredentialRefusal::DelegationRequired => RefusalOut::DelegationRequired,
             CredentialRefusal::DelegationRefused => RefusalOut::DelegationRefused,
+            CredentialRefusal::OutsideWindow => RefusalOut::OutsideWindow,
             CredentialRefusal::Other => RefusalOut::Other,
         }
+    });
+}
+
+#[test]
+fn a_client_mints_at_the_home_clock_as_the_lean_model_says() {
+    gents_lean_vocab::families::identity_user_delegation_mint_times::replay(|input| {
+        let home = input.provider_at_read.map(|provider_at_read| HomeClock {
+            provider_at_read,
+            clock_at_read: input.clock_at_read,
+        });
+        gents_lean_vocab::families::identity_user_delegation_mint_times::MintTimeOutput {
+            issue_at: issue_at(home.as_ref(), input.clock),
+            general_lifetime: general_lifetime(home.as_ref(), input.clock),
+        }
+    });
+}
+
+#[test]
+fn a_home_clock_moves_as_the_lean_model_says() {
+    gents_lean_vocab::families::identity_held_audience_clock_moves::replay(|input| {
+        let clock = |reading: &Option<
+            gents_lean_vocab::families::identity_held_audience_clock_moves::ClockReading,
+        >| {
+            reading.as_ref().map(|reading| HomeClock {
+                provider_at_read: reading.provider_at_read,
+                clock_at_read: reading.clock_at_read,
+            })
+        };
+        clock_moved(clock(&input.held).as_ref(), clock(&input.read).as_ref())
     });
 }

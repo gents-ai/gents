@@ -258,6 +258,14 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
         let audience = state.activation_runtime.get().and_then(|runtime| {
             gents_store::local::document_acp::node_delegation_audience(runtime.observation_node())
         });
+        if let Some(provider_time) = state.activation_runtime.get().and_then(|runtime| {
+            gents_store::local::document_acp::node_provider_time(runtime.observation_node())
+        }) {
+            map.insert(
+                gents_protocol::delegation_audience::STATUS_PROVIDER_TIME_FIELD.to_owned(),
+                json!(provider_time),
+            );
+        }
         if let Some(reported) =
             gents_store::local::document_acp::status_reports(state.document_acp, audience)
                 .status_value()

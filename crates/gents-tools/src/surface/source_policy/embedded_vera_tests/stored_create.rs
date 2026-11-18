@@ -271,7 +271,7 @@ async fn a_stored_create_runs_under_the_request_bound_credentials_its_client_sig
         .request_bound_audience()
         .await?
         .expect("a Vera home names the audience a stored create is bound for");
-    assert!(audience.genesis_id.is_some());
+    assert!(audience.audience.genesis_id.is_some());
 
     let bare = prepare(&user, request(&home, &user, agent.did(), "bare").await?).await?;
     assert_eq!(
@@ -386,6 +386,99 @@ async fn a_stored_create_whose_credentials_lapse_before_it_is_sent_is_settled_by
         Some(identity::Did::new(user.did())?)
     );
     assert!(working_agent_reads(&node, agent.did(), &created).await?);
+    assert!(node.owed_acp_as(&caller, user.did()).await?.is_empty());
+
+    node.shutdown().await?;
+    Ok(())
+}
+
+/// What the runtime's public status reports of its node now.
+struct NodeStatus(Arc<defra_node::Node>);
+
+impl gents_store::config_client::ResolveAudience for NodeStatus {
+    fn resolve(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Option<gents_protocol::delegation_audience::ReportedHome>>
+    {
+        Box::pin(async {
+            Some(gents_protocol::delegation_audience::ReportedHome {
+                audience: gents_protocol::delegation_audience::ReportedDelegationAudience::Named(
+                    gents_store::local::document_acp::node_delegation_audience(&self.0)?,
+                ),
+                provider_time: gents_store::local::document_acp::node_provider_time(&self.0),
+            })
+        })
+    }
+}
+
+fn skewed(seconds: i64) -> Arc<dyn Fn() -> u64 + Send + Sync> {
+    Arc::new(move || {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("a clock after the epoch")
+            .as_secs();
+        now.saturating_add_signed(seconds)
+    })
+}
+
+#[tokio::test]
+async fn a_stored_create_from_a_device_whose_clock_is_minutes_off_is_admitted() -> anyhow::Result<()>
+{
+    let Fixture {
+        _directory,
+        home,
+        node,
+        user,
+        agent,
+        ..
+    } = fixture("stored-create-skew").await?;
+    for (name, skew) in [("ahead", 7 * 60), ("behind", -12 * 60)] {
+        let unread = ConfigAccess::Graphql(
+            endpoint_for(&node, &user.0)?.with_device_clock_for_test(skewed(skew)),
+        );
+        let on_its_own_clock = prepare(
+            &user,
+            request(&home, &user, agent.did(), &format!("{name}-own")).await?,
+        )
+        .await?;
+        let credentials = unread
+            .stored_create_credentials(&user, &on_its_own_clock.create, &on_its_own_clock.evidence)
+            .await?;
+        assert_eq!(
+            stage(
+                &node,
+                &agent,
+                &on_its_own_clock,
+                &credentials,
+                nothing_before_commit
+            )
+            .await?,
+            Err(UserWriteRefusal::DelegationRefused),
+            "a device {name} that mints on its own clock is refused"
+        );
+
+        let client = ConfigAccess::Graphql(
+            endpoint_for(&node, &user.0)?
+                .with_audience_resolver(Arc::new(NodeStatus(node.clone())))
+                .with_device_clock_for_test(skewed(skew)),
+        );
+        let signed = prepare(&user, request(&home, &user, agent.did(), name).await?).await?;
+        let credentials = client
+            .stored_create_credentials(&user, &signed.create, &signed.evidence)
+            .await?;
+        let created = stage(&node, &agent, &signed, &credentials, nothing_before_commit)
+            .await?
+            .unwrap_or_else(|refusal| {
+                panic!("a device {name} that mints at its home's clock is admitted: {refusal}")
+            });
+        assert_eq!(
+            owner(&node, &created).await?,
+            Some(identity::Did::new(user.did())?)
+        );
+        assert!(working_agent_reads(&node, agent.did(), &created).await?);
+    }
+    assert_eq!(requests(&node).await?.len(), 2);
+    let caller = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
     assert!(node.owed_acp_as(&caller, user.did()).await?.is_empty());
 
     node.shutdown().await?;

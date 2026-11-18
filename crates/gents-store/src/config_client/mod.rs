@@ -169,7 +169,9 @@ pub use txn::{
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub use delegation::mint_with_lifetime_for_test;
-pub use delegation::{DelegationError, VERA_DELEGATION_LIFETIME, VERA_REQUEST_BOUND_LIFETIME};
+pub use delegation::{
+    DelegationError, RequestBoundAudience, VERA_DELEGATION_LIFETIME, VERA_REQUEST_BOUND_LIFETIME,
+};
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
 pub use held_audience::ResolveAudience;
@@ -409,7 +411,13 @@ impl GraphqlEndpoint {
             return Err(ConfigClientError::ClientAgentSignerRequired);
         };
         let authorization = match &self.delegation_audience.get() {
-            Some(node) => format!("Bearer {}", delegation::mint(capability, node)?),
+            Some(node) => {
+                let (home, clock) = self.delegation_audience.minting_clock();
+                format!(
+                    "Bearer {}",
+                    delegation::mint(capability, node, home.as_ref(), clock)?
+                )
+            }
             None => crate::identity::defradb_bearer_authorization_with_config(
                 did,
                 &self.audience()?,

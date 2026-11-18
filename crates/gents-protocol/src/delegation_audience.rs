@@ -3,6 +3,81 @@ use serde_json::Value;
 
 pub const STATUS_DELEGATION_AUDIENCE_FIELD: &str = "delegation_audience";
 
+/// The status field naming the provider's time, in Unix seconds, that a
+/// client mints its delegations at (`Identity.UserDelegation.issueAt`).
+pub const STATUS_PROVIDER_TIME_FIELD: &str = "provider_time";
+
+/// External premise (defradb.rs#3006): the code DefraDB answers a verified
+/// write with when the delegation it carries does not hold at the provider's
+/// time.
+pub const DELEGATION_OUTSIDE_WINDOW_CODE: &str = "DELEGATION_OUTSIDE_WINDOW";
+
+/// `Identity.UserDelegation.backdateSeconds`.
+pub const CLOCK_SKEW_ALLOWANCE_SECS: u64 = 30;
+
+/// `Identity.UserDelegation.lifetimeSeconds`.
+pub const DELEGATION_LIFETIME_SECS: u64 = 120;
+
+/// What a client read of its home's clock (`Identity.UserDelegation.HomeClock`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HomeClock {
+    pub provider_at_read: u64,
+    pub clock_at_read: u64,
+}
+
+/// The provider's time a client issues at, on its own `clock`
+/// (`Identity.UserDelegation.issueAt`).
+pub fn issue_at(home: Option<&HomeClock>, clock: u64) -> u64 {
+    match home {
+        None => clock,
+        Some(home) => home
+            .provider_at_read
+            .saturating_add(clock.saturating_sub(home.clock_at_read)),
+    }
+}
+
+/// How long a general delegation minted on `clock` lasts
+/// (`Identity.UserDelegation.generalLifetime`).
+pub fn general_lifetime(home: Option<&HomeClock>, clock: u64) -> u64 {
+    DELEGATION_LIFETIME_SECS.saturating_add(issue_at(home, clock).saturating_sub(clock))
+}
+
+/// Whether a clock read again moved from the held one
+/// (`Identity.HeldAudience.clockMoved`).
+pub fn clock_moved(held: Option<&HomeClock>, read: Option<&HomeClock>) -> bool {
+    match (held, read) {
+        (None, Some(_)) => true,
+        (Some(kept), Some(now)) => {
+            let expected = issue_at(Some(kept), now.clock_at_read);
+            expected.saturating_add(CLOCK_SKEW_ALLOWANCE_SECS) < now.provider_at_read
+                || now
+                    .provider_at_read
+                    .saturating_add(CLOCK_SKEW_ALLOWANCE_SECS)
+                    < expected
+        }
+        (_, None) => false,
+    }
+}
+
+/// What a home's public status reports for a client to mint at: its
+/// delegation audience and the provider's time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedHome {
+    pub audience: ReportedDelegationAudience,
+    pub provider_time: Option<u64>,
+}
+
+impl ReportedHome {
+    pub fn observe(status: &Value) -> Self {
+        Self {
+            audience: ReportedDelegationAudience::observe(status),
+            provider_time: status
+                .get(STATUS_PROVIDER_TIME_FIELD)
+                .and_then(Value::as_u64),
+        }
+    }
+}
+
 /// The code the edge of a Vera home answers a User's identity token with
 /// (`Identity.UserDelegation.edge`).
 pub const DELEGATION_REQUIRED_CODE: &str = "delegationRequired";
@@ -56,15 +131,29 @@ pub enum HeldAudienceChange {
     Unchanged,
     Learned(DelegationAudience),
     Changed(DelegationAudience),
+    Reclocked,
     Forgotten,
 }
 
 impl ReportedDelegationAudience {
     pub fn change_for(&self, held: Option<&DelegationAudience>) -> HeldAudienceChange {
+        self.change_with_clock(held, false)
+    }
+
+    /// `Identity.HeldAudience.change`, with whether the home's clock moved.
+    pub fn change_with_clock(
+        &self,
+        held: Option<&DelegationAudience>,
+        clock_moved: bool,
+    ) -> HeldAudienceChange {
         match (held, self) {
             (None, Self::Named(audience)) => HeldAudienceChange::Learned(audience.clone()),
             (Some(kept), Self::Named(audience)) if kept == audience => {
-                HeldAudienceChange::Unchanged
+                if clock_moved {
+                    HeldAudienceChange::Reclocked
+                } else {
+                    HeldAudienceChange::Unchanged
+                }
             }
             (Some(_), Self::Named(audience)) => HeldAudienceChange::Changed(audience.clone()),
             (Some(_), Self::Absent) => HeldAudienceChange::Forgotten,
@@ -79,7 +168,7 @@ impl HeldAudienceChange {
     /// The record after the read (`Identity.HeldAudience.observe`).
     pub fn held_after(self, held: Option<DelegationAudience>) -> Option<DelegationAudience> {
         match self {
-            Self::Unchanged => held,
+            Self::Unchanged | Self::Reclocked => held,
             Self::Learned(audience) | Self::Changed(audience) => Some(audience),
             Self::Forgotten => None,
         }
@@ -87,9 +176,9 @@ impl HeldAudienceChange {
 }
 
 /// Whether a client reads its home's status again before it mints a
-/// request-bound delegation (`Identity.HeldAudience.rereadForGenesis`).
-pub fn reread_for_genesis(held: Option<&DelegationAudience>) -> bool {
-    held.is_some_and(|audience| audience.genesis_id.is_none())
+/// request-bound delegation (`Identity.HeldAudience.rereadBeforeRequestBound`).
+pub fn reread_before_request_bound(held: Option<&DelegationAudience>, clock_known: bool) -> bool {
+    held.is_some_and(|audience| audience.genesis_id.is_none() || !clock_known)
 }
 
 /// Why a node refused a client's request, as far as its credential goes
@@ -98,6 +187,7 @@ pub fn reread_for_genesis(held: Option<&DelegationAudience>) -> bool {
 pub enum CredentialRefusal {
     DelegationRequired,
     DelegationRefused,
+    OutsideWindow,
     Other,
 }
 
@@ -106,10 +196,12 @@ pub enum CredentialRefusal {
 pub fn resend(resent: bool, refusal: CredentialRefusal, record: &HeldAudienceChange) -> bool {
     !resent
         && refusal != CredentialRefusal::Other
-        && matches!(
+        && (matches!(
             record,
-            HeldAudienceChange::Learned(_) | HeldAudienceChange::Changed(_)
-        )
+            HeldAudienceChange::Learned(_)
+                | HeldAudienceChange::Changed(_)
+                | HeldAudienceChange::Reclocked
+        ) || refusal == CredentialRefusal::OutsideWindow)
 }
 
 /// What a node answered a request with, as far as its credential goes
@@ -118,6 +210,7 @@ pub fn resend(resent: bool, refusal: CredentialRefusal, record: &HeldAudienceCha
 pub enum CredentialAnswer {
     Unauthorized,
     Forbidden,
+    OutsideWindow,
     Other,
 }
 
@@ -144,6 +237,10 @@ impl CredentialRefusal {
     pub fn of(answer: CredentialAnswer, presented: PresentedCredential) -> Self {
         match (answer, presented) {
             (CredentialAnswer::Other, _) | (_, PresentedCredential::None) => Self::Other,
+            (CredentialAnswer::OutsideWindow, PresentedCredential::Delegation) => {
+                Self::OutsideWindow
+            }
+            (CredentialAnswer::OutsideWindow, _) => Self::Other,
             (_, PresentedCredential::IdentityToken) => Self::DelegationRequired,
             (_, PresentedCredential::Delegation) => Self::DelegationRefused,
         }

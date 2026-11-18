@@ -14,8 +14,13 @@ use super::{client_key, create_task, home, owner_on_vera, serve, tasks};
 struct PublicStatus(ReportedDelegationAudience);
 
 impl ResolveAudience for PublicStatus {
-    fn resolve(&self) -> BoxFuture<'_, Option<ReportedDelegationAudience>> {
-        Box::pin(async { Some(self.0.clone()) })
+    fn resolve(&self) -> BoxFuture<'_, Option<gents_protocol::delegation_audience::ReportedHome>> {
+        Box::pin(async {
+            Some(gents_protocol::delegation_audience::ReportedHome {
+                audience: self.0.clone(),
+                provider_time: None,
+            })
+        })
     }
 }
 

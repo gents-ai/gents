@@ -2,16 +2,32 @@ use std::sync::{Arc, RwLock};
 
 use futures::future::BoxFuture;
 use gents_protocol::delegation_audience::{
-    resend, CredentialAnswer, CredentialRefusal, DelegationAudience, HeldAudienceChange,
-    PresentedCredential, ReportedDelegationAudience,
+    resend, CredentialAnswer, CredentialRefusal, DelegationAudience, HeldAudienceChange, HomeClock,
+    PresentedCredential, ReportedHome,
 };
 
-use super::{ConfigClientError, GraphqlEndpoint};
+use super::{ConfigClientError, GraphqlEndpoint, RequestBoundAudience};
 
-/// Reads what an endpoint's home reports of its delegation audience now, and
-/// keeps it wherever its client keeps it (`Identity.HeldAudience`).
+/// Reads what an endpoint's home reports of its delegation audience and
+/// clock now, and keeps the audience wherever its client keeps it
+/// (`Identity.HeldAudience`).
 pub trait ResolveAudience: Send + Sync {
-    fn resolve(&self) -> BoxFuture<'_, Option<ReportedDelegationAudience>>;
+    fn resolve(&self) -> BoxFuture<'_, Option<ReportedHome>>;
+}
+
+/// The device clock a client mints on, in Unix seconds.
+#[derive(Clone, Default)]
+pub(super) struct DeviceClock(Option<Arc<dyn Fn() -> u64 + Send + Sync>>);
+
+impl DeviceClock {
+    pub(super) fn now(&self) -> u64 {
+        match &self.0 {
+            Some(clock) => clock(),
+            None => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs()),
+        }
+    }
 }
 
 /// The audience an endpoint mints for and how it reads it again, shared by
@@ -22,15 +38,64 @@ pub(super) struct HeldAudienceCell(Arc<Held>);
 #[derive(Default)]
 struct Held {
     audience: RwLock<Option<DelegationAudience>>,
+    clock: RwLock<Option<HomeClock>>,
     resolver: Option<Arc<dyn ResolveAudience>>,
+    device: DeviceClock,
 }
 
 impl HeldAudienceCell {
     pub(super) fn new(audience: Option<DelegationAudience>) -> Self {
         Self(Arc::new(Held {
             audience: RwLock::new(audience),
-            resolver: None,
+            ..Held::default()
         }))
+    }
+
+    /// What the endpoint mints a delegation at now: its home's clock as it
+    /// read it, and its device's clock.
+    pub(super) fn minting_clock(&self) -> (Option<HomeClock>, u64) {
+        (
+            *self
+                .0
+                .clock
+                .read()
+                .unwrap_or_else(|poison| poison.into_inner()),
+            self.0.device.now(),
+        )
+    }
+
+    fn set_clock(&self, clock: Option<HomeClock>) {
+        *self
+            .0
+            .clock
+            .write()
+            .unwrap_or_else(|poison| poison.into_inner()) = clock;
+    }
+
+    /// Keep what `reported` says, read now, and say what it changed
+    /// (`Identity.HeldAudience.observe`).
+    fn observe(&self, reported: ReportedHome) -> HeldAudienceChange {
+        let held = self.get();
+        let (held_clock, now) = self.minting_clock();
+        let read = reported.provider_time.map(|provider_at_read| HomeClock {
+            provider_at_read,
+            clock_at_read: now,
+        });
+        let moved =
+            gents_protocol::delegation_audience::clock_moved(held_clock.as_ref(), read.as_ref());
+        let change = reported.audience.change_with_clock(held.as_ref(), moved);
+        if matches!(
+            change,
+            HeldAudienceChange::Learned(_)
+                | HeldAudienceChange::Changed(_)
+                | HeldAudienceChange::Reclocked
+        ) {
+            self.set_clock(read);
+        } else if change == HeldAudienceChange::Forgotten {
+            self.set_clock(None);
+        }
+        self.set(change.clone().held_after(held));
+        change
     }
 
     pub(super) fn get(&self) -> Option<DelegationAudience> {
@@ -50,9 +115,23 @@ impl HeldAudienceCell {
     }
 
     fn resolving(&self, resolver: Arc<dyn ResolveAudience>) -> Self {
+        let (clock, _) = self.minting_clock();
         Self(Arc::new(Held {
             audience: RwLock::new(self.get()),
+            clock: RwLock::new(clock),
             resolver: Some(resolver),
+            device: self.0.device.clone(),
+        }))
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    fn on_device_clock(&self, device: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
+        let (clock, _) = self.minting_clock();
+        Self(Arc::new(Held {
+            audience: RwLock::new(self.get()),
+            clock: RwLock::new(clock),
+            resolver: self.0.resolver.clone(),
+            device: DeviceClock(Some(device)),
         }))
     }
 }
@@ -87,6 +166,27 @@ impl GraphqlEndpoint {
         self
     }
 
+    /// Mint on `device`, in Unix seconds, in place of this device's clock.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn with_device_clock_for_test(
+        mut self,
+        device: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
+        self.delegation_audience = self.delegation_audience.on_device_clock(device);
+        self
+    }
+
+    async fn read_status(&self) -> Option<ReportedHome> {
+        let resolver = self.delegation_audience.0.resolver.clone()?;
+        // A task of its own keeps a caller's future `Sync`, as a tool's
+        // definition future must be, whatever future the resolver returns.
+        tokio::spawn(async move { resolver.resolve().await })
+            .await
+            .ok()
+            .flatten()
+    }
+
     fn presented_credential(&self) -> PresentedCredential {
         if self.delegated_authorization.is_some()
             || self.principal_did.is_none()
@@ -101,70 +201,81 @@ impl GraphqlEndpoint {
     }
 
     /// Read the home's status again after its node answered a request this
-    /// endpoint sent with `status`, and keep the audience it reports. `None`
-    /// when the answer refuses no credential this endpoint presented
-    /// (`Identity.HeldAudience.refusalOf`) or no status could be read.
+    /// endpoint sent with `answer`, and keep the audience and clock it
+    /// reports. `None` when the answer refuses no credential this endpoint
+    /// presented (`Identity.HeldAudience.refusalOf`) or no status could be
+    /// read.
     pub(super) async fn reread_after_refusal(
         &self,
-        status: reqwest::StatusCode,
+        answer: CredentialAnswer,
     ) -> Option<(CredentialRefusal, HeldAudienceChange)> {
-        let refusal = CredentialRefusal::of(
-            CredentialAnswer::of_status(status.as_u16()),
-            self.presented_credential(),
-        );
+        let refusal = CredentialRefusal::of(answer, self.presented_credential());
         if refusal == CredentialRefusal::Other {
             return None;
         }
-        let resolver = self.delegation_audience.0.resolver.clone()?;
-        // A task of its own keeps a caller's future `Sync`, as a tool's
-        // definition future must be, whatever future the resolver returns.
-        let reported = tokio::spawn(async move { resolver.resolve().await })
-            .await
-            .ok()??;
-        let held = self.delegation_audience.get();
-        let change = reported.change_for(held.as_ref());
-        self.delegation_audience
-            .set(change.clone().held_after(held));
-        Some((refusal, change))
+        let reported = self.read_status().await?;
+        Some((refusal, self.delegation_audience.observe(reported)))
     }
 
     /// The audience this endpoint mints request-bound delegations for, with
-    /// the deployment's genesis identity; the home's status is read again
-    /// first when the held audience names none
-    /// (`Identity.HeldAudience.rereadForGenesis`). `None` when the endpoint
-    /// mints no delegations.
+    /// the deployment's genesis identity, and the provider's time it issues
+    /// them at; the home's status is read again first when the held audience
+    /// names no genesis or no clock of its home is held
+    /// (`Identity.HeldAudience.rereadBeforeRequestBound`). `None` when the
+    /// endpoint mints no delegations.
     pub(super) async fn request_bound_audience(
         &self,
-    ) -> Result<Option<DelegationAudience>, ConfigClientError> {
+    ) -> Result<Option<RequestBoundAudience>, ConfigClientError> {
         if !self.mints_delegations() {
             return Ok(None);
         }
         let held = self.delegation_audience.get();
-        if gents_protocol::delegation_audience::reread_for_genesis(held.as_ref()) {
-            if let Some(resolver) = self.delegation_audience.0.resolver.clone() {
-                let reported = tokio::spawn(async move { resolver.resolve().await })
-                    .await
-                    .ok()
-                    .flatten();
-                if let Some(reported) = reported {
-                    let change = reported.change_for(held.as_ref());
-                    self.delegation_audience.set(change.held_after(held));
-                }
+        let (clock, _) = self.delegation_audience.minting_clock();
+        if gents_protocol::delegation_audience::reread_before_request_bound(
+            held.as_ref(),
+            clock.is_some(),
+        ) {
+            if let Some(reported) = self.read_status().await {
+                self.delegation_audience.observe(reported);
             }
         }
+        let (clock, now) = self.delegation_audience.minting_clock();
         match self.delegation_audience.get() {
-            Some(audience) if audience.genesis_id.is_some() => Ok(Some(audience)),
+            Some(audience) if audience.genesis_id.is_some() => Ok(Some(RequestBoundAudience {
+                audience,
+                issued_at: gents_protocol::delegation_audience::issue_at(clock.as_ref(), now),
+            })),
             _ => Err(super::DelegationError::AudienceUnavailable.into()),
         }
     }
 
+    /// The provider's time a client dates what it signs at, in Unix seconds
+    /// (`Identity.UserDelegation.storedCommandWindow`); the home's status is
+    /// read first when this endpoint mints delegations and holds no clock of
+    /// its home.
+    pub(super) async fn home_time(&self) -> u64 {
+        if self.mints_delegations() && self.delegation_audience.minting_clock().0.is_none() {
+            if let Some(reported) = self.read_status().await {
+                self.delegation_audience.observe(reported);
+            }
+        }
+        let (clock, now) = self.delegation_audience.minting_clock();
+        gents_protocol::delegation_audience::issue_at(clock.as_ref(), now)
+    }
+
     /// Whether a request this endpoint sent and its node answered with
-    /// `status` is to be sent once more, after the home's status was read
-    /// again and the audience it reports kept.
-    pub async fn recovers_refusal(&self, status: reqwest::StatusCode) -> bool {
-        self.reread_after_refusal(status)
+    /// `answer` is to be sent once more, after the home's status was read
+    /// again and the audience and clock it reports kept.
+    pub async fn recovers(&self, answer: CredentialAnswer) -> bool {
+        self.reread_after_refusal(answer)
             .await
             .is_some_and(|(refusal, change)| resend(false, refusal, &change))
+    }
+
+    /// `recovers` for an answer's HTTP status.
+    pub async fn recovers_refusal(&self, status: reqwest::StatusCode) -> bool {
+        self.recovers(CredentialAnswer::of_status(status.as_u16()))
+            .await
     }
 
     /// Send the request `build` makes, and once more when its refusal is
@@ -176,12 +287,23 @@ impl GraphqlEndpoint {
     where
         F: Fn(&Self) -> Result<reqwest::RequestBuilder, ConfigClientError>,
     {
+        Ok(self.send_counting_resends(build).await?.0)
+    }
+
+    /// `send_resolving`, and whether the request was sent once more.
+    pub(super) async fn send_counting_resends<F>(
+        &self,
+        build: F,
+    ) -> Result<(Result<reqwest::Response, reqwest::Error>, bool), ConfigClientError>
+    where
+        F: Fn(&Self) -> Result<reqwest::RequestBuilder, ConfigClientError>,
+    {
         let response = build(self)?.send().await;
         match &response {
             Ok(answered) if self.recovers_refusal(answered.status()).await => {
-                Ok(build(self)?.send().await)
+                Ok((build(self)?.send().await, true))
             }
-            _ => Ok(response),
+            _ => Ok((response, false)),
         }
     }
 }
@@ -203,13 +325,21 @@ mod tests {
 
     struct Status {
         reports: ReportedDelegationAudience,
+        provider_time: Option<u64>,
         reads: AtomicUsize,
     }
 
     impl ResolveAudience for Status {
-        fn resolve(&self) -> BoxFuture<'_, Option<ReportedDelegationAudience>> {
+        fn resolve(
+            &self,
+        ) -> BoxFuture<'_, Option<gents_protocol::delegation_audience::ReportedHome>> {
             self.reads.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Some(self.reports.clone()) })
+            Box::pin(async {
+                Some(gents_protocol::delegation_audience::ReportedHome {
+                    audience: self.reports.clone(),
+                    provider_time: self.provider_time,
+                })
+            })
         }
     }
 
@@ -294,6 +424,7 @@ mod tests {
     fn status(reports: ReportedDelegationAudience) -> Arc<Status> {
         Arc::new(Status {
             reports,
+            provider_time: None,
             reads: AtomicUsize::new(0),
         })
     }
@@ -518,5 +649,85 @@ mod tests {
         .await;
         assert!(!query(&endpoint).await);
         assert_eq!(server.presented().len(), 2);
+    }
+
+    fn claim(headers: &HeaderMap, name: &str) -> Option<u64> {
+        let bearer = headers.get("authorization")?.to_str().ok()?;
+        let claims = bearer.strip_prefix("Bearer ")?.split('.').nth(1)?;
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(claims)
+                .ok()?,
+        )
+        .ok()?;
+        claims[name].as_u64()
+    }
+
+    /// A node whose clock is `provider_time`: it refuses a mutation whose
+    /// delegation does not hold then with DefraDB's window refusal, and
+    /// records each delegation's expiry.
+    async fn node_at(provider_time: u64) -> (String, Arc<Mutex<Vec<Option<u64>>>>) {
+        let expiries = Arc::new(Mutex::new(Vec::new()));
+        let seen = expiries.clone();
+        let router = axum::Router::new().fallback(move |headers: HeaderMap| {
+            let seen = seen.clone();
+            async move {
+                let expires = claim(&headers, "exp");
+                seen.lock().unwrap().push(expires);
+                let holds = claim(&headers, "nbf").is_some_and(|nbf| nbf <= provider_time)
+                    && expires.is_some_and(|exp| provider_time <= exp);
+                axum::Json(if holds {
+                    serde_json::json!({"data": {"create_Node": [{"_docID": "bae-1"}]}})
+                } else {
+                    serde_json::json!({"errors": [{
+                        "message": "verified write refused",
+                        "extensions": {
+                            "code": gents_protocol::delegation_audience::DELEGATION_OUTSIDE_WINDOW_CODE,
+                            "providerTime": provider_time,
+                        },
+                    }]})
+                })
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        (format!("http://{address}/api/v0/graphql"), expiries)
+    }
+
+    #[tokio::test]
+    async fn a_delegation_refused_for_its_window_is_minted_again_at_the_home_clock() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let provider_time = now + 600;
+        let (url, expiries) = node_at(provider_time).await;
+        let status = Arc::new(Status {
+            reports: ReportedDelegationAudience::Named(audience(1)),
+            provider_time: Some(provider_time),
+            reads: AtomicUsize::new(0),
+        });
+        let server = Node {
+            url,
+            presented: Arc::default(),
+        };
+        let endpoint = endpoint(
+            &server,
+            ReportedDelegationAudience::Named(audience(1)),
+            &status,
+        )
+        .await;
+        let created = super::super::graphql::auto_commit(
+            &endpoint,
+            "mutation { create_Node(input: {}) { _docID } }",
+            None,
+        )
+        .await;
+        assert!(created.is_ok(), "{created:?}");
+        assert_eq!(status.reads.load(Ordering::SeqCst), 1);
+        let expiries = expiries.lock().unwrap().clone();
+        assert_eq!(expiries.len(), 2);
+        assert!(expiries[1].unwrap() >= provider_time + 120, "{expiries:?}");
     }
 }

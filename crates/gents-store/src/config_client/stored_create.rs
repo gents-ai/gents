@@ -1,8 +1,7 @@
-use gents_protocol::delegation_audience::DelegationAudience;
 use gents_protocol::request_admission::AgentRequestCreate;
 
 use super::user_write::{Carried, Scope, Verdict};
-use super::{ClientSigningCapability, ConfigClientError, DelegationError};
+use super::{ClientSigningCapability, ConfigClientError, DelegationError, RequestBoundAudience};
 
 /// The relationships a User's request create writes on the request it
 /// creates, as that User: what a stored create sends besides its registration.
@@ -135,7 +134,7 @@ impl StoredCreateCommands {
     pub fn mint(
         &self,
         capability: &ClientSigningCapability,
-        audience: &DelegationAudience,
+        audience: &RequestBoundAudience,
     ) -> Result<Vec<String>, DelegationError> {
         self.mint_for(capability, audience, super::VERA_REQUEST_BOUND_LIFETIME)
     }
@@ -145,7 +144,7 @@ impl StoredCreateCommands {
     pub fn mint_with_lifetime_for_test(
         &self,
         capability: &ClientSigningCapability,
-        audience: &DelegationAudience,
+        audience: &RequestBoundAudience,
         lifetime: std::time::Duration,
     ) -> Result<Vec<String>, DelegationError> {
         self.mint_for(capability, audience, lifetime)
@@ -154,7 +153,7 @@ impl StoredCreateCommands {
     fn mint_for(
         &self,
         capability: &ClientSigningCapability,
-        audience: &DelegationAudience,
+        audience: &RequestBoundAudience,
         lifetime: std::time::Duration,
     ) -> Result<Vec<String>, DelegationError> {
         self.0
@@ -273,7 +272,7 @@ impl super::ConfigAccess {
     /// access in its own store.
     pub async fn request_bound_audience(
         &self,
-    ) -> Result<Option<DelegationAudience>, ConfigClientError> {
+    ) -> Result<Option<RequestBoundAudience>, ConfigClientError> {
         match self {
             Self::Graphql(endpoint) => endpoint.request_bound_audience().await,
             Self::Local(local) => match &local.client_endpoint {
@@ -283,11 +282,35 @@ impl super::ConfigAccess {
                     crate::local::document_acp::DocumentAcp::Vera => {
                         crate::local::document_acp::node_delegation_audience(&local.node)
                             .filter(|audience| audience.genesis_id.is_some())
-                            .map(Some)
+                            .map(|audience| {
+                                Some(RequestBoundAudience {
+                                    audience,
+                                    issued_at: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map_or(0, |elapsed| elapsed.as_secs()),
+                                })
+                            })
                             .ok_or(DelegationError::AudienceUnavailable.into())
                     }
                 },
             },
+        }
+    }
+
+    /// The time a stored command made through this access is dated at: the
+    /// provider's time as its client reads it on a Vera home, the device's
+    /// clock elsewhere (`Identity.UserDelegation.storedCommandWindow`).
+    pub async fn home_now(&self) -> chrono::DateTime<chrono::Utc> {
+        let endpoint = match self {
+            Self::Graphql(endpoint) => Some(endpoint),
+            Self::Local(local) => local.client_endpoint.as_ref(),
+        };
+        match endpoint {
+            Some(endpoint) => i64::try_from(endpoint.home_time().await)
+                .ok()
+                .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                .unwrap_or_else(chrono::Utc::now),
+            None => chrono::Utc::now(),
         }
     }
 

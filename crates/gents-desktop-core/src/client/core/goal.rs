@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::Utc;
 use gents_automation::goal::SessionGoalObservationState;
 use gents_protocol::goal_control::{
     GoalOperation, GoalRevision, SessionGoalControl, SessionGoalControlReceipt,
@@ -200,7 +199,7 @@ impl ClientCore {
                     && request.session_doc_id.as_deref() == Some(session.doc_id.as_str())),
             "goal request targets changed; refresh before starting its goal"
         );
-        let now = Utc::now();
+        let now = access.home_now().await;
         let command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
             command_id,

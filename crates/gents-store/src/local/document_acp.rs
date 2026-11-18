@@ -150,6 +150,22 @@ pub fn runtime_signs_with_held_user_key(provider: DocumentAcp) -> Result<()> {
     }
 }
 
+/// The provider's time `node`'s Vera access control reports, in Unix
+/// seconds, which a client mints its delegations at
+/// (`Identity.UserDelegation.issueAt`); none for a node that decides access in
+/// its own store or whose provider has verified no block.
+pub fn node_provider_time(node: &defra_node::Node) -> Option<u64> {
+    #[cfg(feature = "vera")]
+    {
+        embedded_vera::provider_time(node)
+    }
+    #[cfg(not(feature = "vera"))]
+    {
+        let _ = node;
+        None
+    }
+}
+
 /// The worker and deployment `node`'s Vera access control acts under a
 /// delegation for; none for a node that decides access in its own store.
 pub fn node_delegation_audience(node: &defra_node::Node) -> Option<DelegationAudience> {

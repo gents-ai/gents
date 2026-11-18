@@ -12,7 +12,7 @@ pub(super) async fn refresh_delegation_audience(
 ) -> (HeldAudienceChange, PeerRecord) {
     let unchanged = || (HeldAudienceChange::Unchanged, saved.clone());
     let reported = match crate::local_runtime::public_delegation_audience(saved).await {
-        Ok(Some(reported)) => reported,
+        Ok(Some(reported)) => reported.audience,
         Ok(None) => return unchanged(),
         Err(error) => {
             tracing::debug!(

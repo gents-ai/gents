@@ -1,13 +1,14 @@
 use std::time::Duration;
 
 use futures::FutureExt as _;
-use gents_protocol::delegation_audience::DelegationAudience;
+use gents_protocol::delegation_audience::{DelegationAudience, HomeClock};
 use vera::vera_rs::{DelegationSigner as _, Ed25519Signer};
 
 use super::ClientSigningCapability;
 
 /// `Identity.UserDelegation.lifetimeSeconds`.
-pub const VERA_DELEGATION_LIFETIME: Duration = Duration::from_secs(120);
+pub const VERA_DELEGATION_LIFETIME: Duration =
+    Duration::from_secs(gents_protocol::delegation_audience::DELEGATION_LIFETIME_SECS);
 
 /// `Identity.UserDelegation.requestBoundLifetimeSeconds`.
 pub const VERA_REQUEST_BOUND_LIFETIME: Duration = Duration::from_secs(570);
@@ -28,11 +29,22 @@ pub enum DelegationError {
     Command(#[source] vera::vera_rs::BearerError),
 }
 
+/// The general delegation `capability`'s User presents to `audience`, on a
+/// device whose clock reads `clock` and that read its home's clock as `home`
+/// (`Identity.UserDelegation.mint`).
 pub(super) fn mint(
     capability: &ClientSigningCapability,
     audience: &DelegationAudience,
+    home: Option<&HomeClock>,
+    clock: u64,
 ) -> Result<String, DelegationError> {
-    mint_for(capability, audience, VERA_DELEGATION_LIFETIME)
+    mint_for(
+        capability,
+        audience,
+        Duration::from_secs(gents_protocol::delegation_audience::general_lifetime(
+            home, clock,
+        )),
+    )
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -57,25 +69,33 @@ fn mint_for(
         .map_err(DelegationError::Mint)
 }
 
+/// The audience a request-bound delegation is minted for and the provider's
+/// time it is issued at (`Identity.UserDelegation.issueAt`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestBoundAudience {
+    pub audience: DelegationAudience,
+    pub issued_at: u64,
+}
+
 /// The delegation `capability`'s User binds to the one policy command
-/// `command` on `audience`'s deployment, at the one minting point
-/// (`Identity.UserDelegation.mint`). Refused while `audience` names no
+/// `command` on `bound`'s deployment, at the one minting point
+/// (`Identity.UserDelegation.mint`). Refused while its audience names no
 /// genesis identity.
 pub(crate) fn mint_request_bound(
     capability: &ClientSigningCapability,
-    audience: &DelegationAudience,
+    bound: &RequestBoundAudience,
     command: &vera::PolicyCommand<'_>,
     lifetime: Duration,
 ) -> Result<String, DelegationError> {
     let signer = signer_of(capability)?;
-    let audience = provider_audience(audience)?;
+    let audience = provider_audience(&bound.audience)?;
     if audience.genesis_id.is_none() {
         return Err(DelegationError::AudienceUnavailable);
     }
     let binding =
         vera::vera_rs::RequestBinding::for_command(&audience, command, rand::random::<[u8; 24]>())
             .map_err(DelegationError::Command)?;
-    vera::vera_rs::request_delegation(&signer, &audience, &binding, lifetime)
+    vera::vera_rs::request_delegation_at(&signer, &audience, &binding, lifetime, bound.issued_at)
         .now_or_never()
         .ok_or(DelegationError::Pending)?
         .map_err(DelegationError::Mint)

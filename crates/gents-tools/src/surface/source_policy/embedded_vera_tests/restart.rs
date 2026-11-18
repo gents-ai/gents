@@ -89,7 +89,7 @@ struct PublicStatus {
 }
 
 impl ResolveAudience for PublicStatus {
-    fn resolve(&self) -> BoxFuture<'_, Option<ReportedDelegationAudience>> {
+    fn resolve(&self) -> BoxFuture<'_, Option<gents_protocol::delegation_audience::ReportedHome>> {
         Box::pin(async move {
             let status = reqwest::get(&self.url)
                 .await
@@ -97,7 +97,9 @@ impl ResolveAudience for PublicStatus {
                 .json::<serde_json::Value>()
                 .await
                 .ok()?;
-            Some(ReportedDelegationAudience::observe(&status))
+            Some(gents_protocol::delegation_audience::ReportedHome::observe(
+                &status,
+            ))
         })
     }
 }

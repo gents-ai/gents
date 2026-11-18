@@ -338,9 +338,7 @@ impl gents_store::config_client::ResolveAudience for ServingStatusAudience {
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Option<
-                        gents_protocol::delegation_audience::ReportedDelegationAudience,
-                    >,
+                    Output = Option<gents_protocol::delegation_audience::ReportedHome>,
                 > + Send
                 + '_,
         >,
@@ -348,11 +346,7 @@ impl gents_store::config_client::ResolveAudience for ServingStatusAudience {
         Box::pin(async move {
             crate::repair::serving_status(&self.graphql)
                 .await
-                .map(|status| {
-                    gents_protocol::delegation_audience::ReportedDelegationAudience::observe(
-                        &status,
-                    )
-                })
+                .map(|status| gents_protocol::delegation_audience::ReportedHome::observe(&status))
         })
     }
 }

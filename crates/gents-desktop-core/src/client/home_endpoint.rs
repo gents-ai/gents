@@ -1,4 +1,6 @@
-use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
+use gents_protocol::delegation_audience::{
+    DelegationAudience, ReportedDelegationAudience, ReportedHome,
+};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -77,7 +79,7 @@ struct HomeStatus {
 }
 
 impl ResolveAudience for HomeStatus {
-    fn resolve(&self) -> BoxFuture<'_, Option<ReportedDelegationAudience>> {
+    fn resolve(&self) -> BoxFuture<'_, Option<ReportedHome>> {
         Box::pin(async move {
             let Some(saved) = &self.saved else {
                 return crate::local_runtime::public_delegation_audience(&self.record)
@@ -93,7 +95,10 @@ impl ResolveAudience for HomeStatus {
                 .await
                 .ok()
                 .flatten()?;
-            if let Err(error) = saved.observe_delegation_audience(&current, &reported).await {
+            if let Err(error) = saved
+                .observe_delegation_audience(&current, &reported.audience)
+                .await
+            {
                 tracing::warn!(
                     directory_peer_id = %current.peer_id,
                     error = %format!("{error:#}"),
@@ -120,7 +125,7 @@ pub async fn user_resolving(
     let reported = status
         .read()
         .await
-        .unwrap_or(ReportedDelegationAudience::Absent);
+        .map_or(ReportedDelegationAudience::Absent, |home| home.audience);
     Ok(GraphqlEndpoint::as_principal(url, capability.did())
         .with_client_signing_capability(capability.clone())?
         .with_reported_delegation_audience(reported)?
@@ -134,18 +139,18 @@ struct PublicStatus {
 }
 
 impl PublicStatus {
-    async fn read(&self) -> Option<ReportedDelegationAudience> {
+    async fn read(&self) -> Option<ReportedHome> {
         let response = self.client.get(&self.url).send().await.ok()?;
         if !response.status().is_success() {
             return None;
         }
         let status = response.json::<serde_json::Value>().await.ok()?;
-        Some(ReportedDelegationAudience::observe(&status))
+        Some(ReportedHome::observe(&status))
     }
 }
 
 impl ResolveAudience for PublicStatus {
-    fn resolve(&self) -> BoxFuture<'_, Option<ReportedDelegationAudience>> {
+    fn resolve(&self) -> BoxFuture<'_, Option<ReportedHome>> {
         Box::pin(self.read())
     }
 }

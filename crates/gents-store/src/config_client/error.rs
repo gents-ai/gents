@@ -573,6 +573,22 @@ impl ConfigClientError {
         }
     }
 
+    /// What a node answered this request with that may refuse the
+    /// credential it presented (`Identity.HeldAudience.refusalOf`): a 401 or
+    /// 403, or DefraDB refusing its delegation for its window.
+    pub(crate) fn credential_answer(
+        &self,
+    ) -> Option<gents_protocol::delegation_audience::CredentialAnswer> {
+        use gents_protocol::delegation_audience::CredentialAnswer;
+        if self.database_failure().is_some_and(
+            gents_protocol::database_error::GraphqlFailure::is_delegation_outside_window,
+        ) {
+            return Some(CredentialAnswer::OutsideWindow);
+        }
+        self.credential_refusal_status()
+            .map(|status| CredentialAnswer::of_status(status.as_u16()))
+    }
+
     /// The 401 or 403 a node answered this request with, which may refuse
     /// the credential it presented (`Identity.HeldAudience.refusalOf`).
     pub(crate) fn credential_refusal_status(&self) -> Option<reqwest::StatusCode> {

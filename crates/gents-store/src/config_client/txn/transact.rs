@@ -265,13 +265,13 @@ async fn refused_unit_runs_again(
     mode: TransactionMode,
     resent: bool,
 ) -> bool {
-    let (Some(endpoint), Some(status)) = (
+    let (Some(endpoint), Some(answer)) = (
         txn.http_endpoint(),
-        error.and_then(ConfigClientError::credential_refusal_status),
+        error.and_then(ConfigClientError::credential_answer),
     ) else {
         return false;
     };
-    let Some((refusal, record)) = endpoint.reread_after_refusal(status).await else {
+    let Some((refusal, record)) = endpoint.reread_after_refusal(answer).await else {
         return false;
     };
     resend_unit(
@@ -800,6 +800,7 @@ mod conformance {
     enum Refusal {
         DelegationRequired,
         DelegationRefused,
+        OutsideWindow,
         Other,
     }
 
@@ -809,6 +810,7 @@ mod conformance {
         Unchanged,
         Learned,
         Changed,
+        Reclocked,
         Forgotten,
     }
 
@@ -824,12 +826,14 @@ mod conformance {
                 let refusal = match i.refusal {
                     Refusal::DelegationRequired => CredentialRefusal::DelegationRequired,
                     Refusal::DelegationRefused => CredentialRefusal::DelegationRefused,
+                    Refusal::OutsideWindow => CredentialRefusal::OutsideWindow,
                     Refusal::Other => CredentialRefusal::Other,
                 };
                 let record = match i.record {
                     Change::Unchanged => HeldAudienceChange::Unchanged,
                     Change::Learned => HeldAudienceChange::Learned(audience.clone()),
                     Change::Changed => HeldAudienceChange::Changed(audience.clone()),
+                    Change::Reclocked => HeldAudienceChange::Reclocked,
                     Change::Forgotten => HeldAudienceChange::Forgotten,
                 };
                 resend_unit(
