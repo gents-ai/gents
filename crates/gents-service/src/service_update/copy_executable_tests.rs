@@ -58,7 +58,8 @@ fn stage_beside_a_sibling_forked_mid_copy(
         .stdin(Stdio::piped())
         .spawn()
         .unwrap();
-    created.read(&mut [0u8; 4096]).unwrap();
+    let event = created.read(&mut [0u8; 4096]).unwrap();
+    assert!(event > 0, "an inotify read returns whole events");
     let sibling = hold_sibling();
     feeder.stdin.take().unwrap().write_all(b"go\n").unwrap();
     assert!(feeder.wait().unwrap().success());
