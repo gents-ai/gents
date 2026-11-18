@@ -393,7 +393,6 @@ impl Tool for LspTool {
             None
         };
         actions::dispatch(
-            call,
             &context,
             lease.as_ref(),
             &self.pool,

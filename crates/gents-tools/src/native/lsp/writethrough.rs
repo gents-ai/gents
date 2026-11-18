@@ -73,6 +73,9 @@ impl LspWritethrough {
                     "textDocument": { "uri": uri },
                     "options": { "tabSize": 4, "insertSpaces": true }
                 }),
+                crate::runtime_context::tool_runtime_context(call)
+                    .map(|runtime| runtime.cancellation_token)
+                    .as_ref(),
             )
             .await
         {
@@ -137,6 +140,9 @@ impl LspWritethrough {
             .request(
                 "textDocument/diagnostic",
                 json!({ "textDocument": { "uri": uri } }),
+                crate::runtime_context::tool_runtime_context(call)
+                    .map(|runtime| runtime.cancellation_token)
+                    .as_ref(),
             )
             .await
             .ok()?;

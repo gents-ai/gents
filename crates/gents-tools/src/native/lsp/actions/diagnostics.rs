@@ -12,7 +12,6 @@ use super::{arg_invalid, language_id, ActionRequest, MAX_GLOB_TARGETS};
 use gents_documents::CatalogServer;
 
 pub(super) async fn glob_action(
-    call: &gents_loop::tool::ToolCallEnvelope,
     context: &ToolContext,
     client: &LspClient,
     config: &super::super::LspToolConfig,
@@ -21,6 +20,7 @@ pub(super) async fn glob_action(
     pattern: &str,
     timeout: std::time::Duration,
 ) -> Result<String, ToolError> {
+    let call = context.call();
     let action = req.action;
     if !matches!(action, LspAction::Diagnostics) {
         return Err(arg_invalid("globs are only valid for diagnostics"));
@@ -54,6 +54,9 @@ pub(super) async fn glob_action(
             .request(
                 "textDocument/diagnostic",
                 json!({ "textDocument": { "uri": uri } }),
+                crate::runtime_context::tool_runtime_context(call)
+                    .map(|runtime| runtime.cancellation_token)
+                    .as_ref(),
             )
             .await
             .unwrap_or(Value::Null);

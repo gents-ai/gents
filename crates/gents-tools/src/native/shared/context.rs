@@ -125,6 +125,11 @@ impl ToolContext {
         }
     }
 
+    /// The call this context serves.
+    pub(crate) fn call(&self) -> &gents_loop::tool::ToolCallEnvelope {
+        &self.call
+    }
+
     pub(crate) fn root(&self) -> PathBuf {
         self.effective_root()
     }

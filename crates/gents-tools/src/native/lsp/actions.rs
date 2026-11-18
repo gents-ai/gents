@@ -57,8 +57,8 @@ pub struct ActionRequest {
     pub limit: Option<u32>,
 }
 
+/// `context` is bound to the call it serves.
 pub async fn dispatch(
-    call: &gents_loop::tool::ToolCallEnvelope,
     context: &ToolContext,
     lease: Option<&LspLease>,
     pool: &super::pool::LspPool,
@@ -67,6 +67,7 @@ pub async fn dispatch(
     workspace: &Path,
     req: ActionRequest,
 ) -> Result<String, ToolError> {
+    let call = context.call();
     match req.action {
         LspAction::Status => {
             let session_id = crate::runtime_context::tool_runtime_context(call)
@@ -91,7 +92,15 @@ pub async fn dispatch(
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
             let retired = pool
-                .reload_snapshot(&session_id, &config.agent_did, workspace, &config.digest)
+                .reload_snapshot(
+                    &session_id,
+                    &config.agent_did,
+                    workspace,
+                    &config.digest,
+                    crate::runtime_context::tool_runtime_context(call)
+                        .map(|runtime| runtime.cancellation_token)
+                        .as_ref(),
+                )
                 .await;
             Ok(format!(
                 "retired {retired} language-server client(s) for the current snapshot"
@@ -103,13 +112,12 @@ pub async fn dispatch(
         }
         action => {
             let lease = lease.ok_or_else(|| unavailable_for_workspace(workspace, config))?;
-            run_file_action(call, context, lease.client(), config, servers, action, &req).await
+            run_file_action(context, lease.client(), config, servers, action, &req).await
         }
     }
 }
 
 async fn run_file_action(
-    call: &gents_loop::tool::ToolCallEnvelope,
     context: &ToolContext,
     client: &LspClient,
     config: &super::LspToolConfig,
@@ -117,19 +125,22 @@ async fn run_file_action(
     action: LspAction,
     req: &ActionRequest,
 ) -> Result<String, ToolError> {
+    let call = context.call();
+    let cancel = crate::runtime_context::tool_runtime_context(call)
+        .map(|runtime| runtime.cancellation_token);
+    let cancel = cancel.as_ref();
     if matches!(action, LspAction::RequestRead | LspAction::RequestWrite) {
-        return raw_request(context, client, req).await;
+        return raw_request(context, client, req, cancel).await;
     }
     let file = req
         .file
         .as_deref()
         .ok_or_else(|| arg_invalid("file parameter required"))?;
     if file == "*" {
-        return workspace_action(context, client, action, req).await;
+        return workspace_action(context, client, action, req, cancel).await;
     }
     if looks_like_glob(file) {
         return glob_action(
-            call,
             context,
             client,
             config,
@@ -240,6 +251,7 @@ async fn run_file_action(
         request_timeout(req),
         config.action_timeout.maximum,
         retry_empty,
+        cancel,
     )
     .await
     {
@@ -268,7 +280,7 @@ async fn run_file_action(
             return Err(policy("lsp apply is not authorized"));
         }
         let edit = if matches!(action, LspAction::CodeActionsApply) {
-            resolve_code_action_edit(client, &result, req.query.as_deref()).await?
+            resolve_code_action_edit(client, &result, req.query.as_deref(), cancel).await?
         } else {
             result.clone()
         };
@@ -310,6 +322,7 @@ async fn workspace_action(
     client: &LspClient,
     action: LspAction,
     req: &ActionRequest,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<String, ToolError> {
     match action {
         LspAction::Symbols => {
@@ -322,6 +335,7 @@ async fn workspace_action(
                     "workspace/symbol",
                     json!({ "query": query }),
                     request_timeout(req),
+                    cancel,
                 )
                 .await
                 .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
@@ -335,6 +349,7 @@ async fn workspace_action(
                     "workspace/diagnostic",
                     json!({ "identifier": "gents" }),
                     request_timeout(req),
+                    cancel,
                 )
                 .await
             {
@@ -357,6 +372,7 @@ async fn raw_request(
     context: &ToolContext,
     client: &LspClient,
     req: &ActionRequest,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<String, ToolError> {
     let method = req
         .query
@@ -364,7 +380,7 @@ async fn raw_request(
         .ok_or_else(|| arg_invalid("query (method) required for request"))?;
     let params = validate_raw_request(context, method, req.payload.as_deref())?;
     let result = client
-        .request_with_timeout(method, params, request_timeout(req))
+        .request_with_timeout(method, params, request_timeout(req), cancel)
         .await
         .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
     Ok(truncate_model_output(format_result_with_limit(

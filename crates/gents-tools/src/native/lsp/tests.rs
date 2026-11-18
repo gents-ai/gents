@@ -1139,8 +1139,8 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
     assert!(!std::ptr::eq(initial.client(), next.client()));
     drop(initial);
     drop(next);
-    pool.retire(&key).await;
-    pool.retire(&next_key).await;
+    pool.retire(&key, None).await;
+    pool.retire(&next_key, None).await;
 }
 
 #[cfg(target_os = "macos")]
@@ -1342,7 +1342,11 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         assert_eq!(
             initial
                 .client()
-                .request("fixture/readable", serde_json::json!({"path":private}))
+                .request(
+                    "fixture/readable",
+                    serde_json::json!({"path":private}),
+                    None
+                )
                 .await
                 .unwrap(),
             true,
@@ -1400,7 +1404,11 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         assert_eq!(
             guarded
                 .client()
-                .request("fixture/readable", serde_json::json!({"path":private}))
+                .request(
+                    "fixture/readable",
+                    serde_json::json!({"path":private}),
+                    None
+                )
                 .await
                 .unwrap(),
             false,
@@ -1408,7 +1416,11 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         assert_eq!(
             guarded
                 .client()
-                .request("fixture/readable", serde_json::json!({"path":ordinary}))
+                .request(
+                    "fixture/readable",
+                    serde_json::json!({"path":ordinary}),
+                    None
+                )
                 .await
                 .unwrap(),
             true,
@@ -1453,8 +1465,8 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         drop(cached);
         drop(initial);
         drop(guarded);
-        pool.retire(&key).await;
-        pool.retire(&guarded_key).await;
+        pool.retire(&key, None).await;
+        pool.retire(&guarded_key, None).await;
     })
     .await;
 }
@@ -1688,7 +1700,7 @@ while True:
         serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
         std::time::Duration::from_secs(2),
         std::time::Duration::from_secs(gents_documents::tool_limits::MAX_ACTION_TIMEOUT_SECS),
-        true,
+        true, None,
     )
     .await
     .expect("empty array should be retried");
@@ -1703,6 +1715,7 @@ while True:
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(gents_documents::tool_limits::MAX_ACTION_TIMEOUT_SECS),
             true,
+            None,
         ),
     )
     .await
@@ -1711,7 +1724,7 @@ while True:
     assert!(empty.is_null() || empty.as_array().is_some_and(Vec::is_empty));
     let counts = lease
         .client()
-        .request("fixture/retryCounts", serde_json::json!({}))
+        .request("fixture/retryCounts", serde_json::json!({}), None)
         .await
         .expect("fixture retry counts");
     assert_eq!(counts["documentSymbols"], 2);
@@ -1876,7 +1889,7 @@ async fn busy_fixture_symbols(
         serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
         std::time::Duration::from_secs(timeout_secs),
         std::time::Duration::from_secs(gents_documents::tool_limits::MAX_ACTION_TIMEOUT_SECS),
-        true,
+        true, None,
     )
     .await;
     Some((result, started.elapsed()))
@@ -2073,12 +2086,12 @@ async fn rust_analyzer_readiness_waits_for_workspace_and_quiescence() {
         .unwrap();
     let polls = lease
         .client()
-        .request("fixture/statusPolls", serde_json::json!({}))
+        .request("fixture/statusPolls", serde_json::json!({}), None)
         .await
         .unwrap()
         .as_u64()
         .unwrap();
-    lease.client().shutdown_exit().await;
+    lease.client().shutdown_exit(None).await;
     assert!(
         polls > 28,
         "readiness returned before a nonempty workspace status and quiescence: {polls}"
@@ -3068,6 +3081,7 @@ while True:
     let request = lease.client().request(
         "textDocument/hover",
         serde_json::json!({"textDocument":{"uri":"file://x"}}),
+        None,
     );
     tokio::select! {
         _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {}
