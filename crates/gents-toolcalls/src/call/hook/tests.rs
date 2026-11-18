@@ -464,6 +464,17 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     bind_interruptible_request(&hook, "req-deadline", &session_id, deadline).await;
 
+    // Provider publication records the owned lifecycle's claimed deadline, not
+    // a separately sampled test clock. Bind the hook to that same authority.
+    let claimed_deadline = {
+        let fixtures = hook_execution_fixtures().lock().await;
+        fixtures[&hook_execution_fixture_key(&hook, "req-deadline")]
+            .lifecycle
+            .claimed_deadline_at()
+            .unwrap()
+    };
+    hook.set_request_deadline_at(Some(claimed_deadline)).await;
+
     accept_hook_tool_call(&hook, "internal-deadline", "read", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("read", None, "internal-deadline", "{}")
@@ -487,7 +498,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     )
     .unwrap()
     .with_timezone(&chrono::Utc);
-    assert!(observed_deadline <= deadline);
+    assert_eq!(observed_deadline, claimed_deadline);
     assert!(observed_deadline > chrono::Utc::now());
 
     let _ = std::fs::remove_dir_all(&data_path);
