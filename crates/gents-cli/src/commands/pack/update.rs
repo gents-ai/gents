@@ -18,19 +18,21 @@ pub(crate) async fn outdated_packs(
         } else {
             None
         };
-    let outdated = outdated_packs_on(
+    let report = outdated_packs_on(
         scope.graphql.is_none().then_some(home.as_path()),
         node.as_ref()
             .map(|(access, owner)| (access, owner.as_str())),
         registry,
     )
     .await;
-    if let Some(local) = node.as_ref().and_then(|(access, _)| access.local_node()) {
-        if let Err(error) = local.shutdown().await {
+    // The next command, such as the install an update runs, reopens this store:
+    // a dropped node's background tasks can still hold it.
+    if let Some(node) = node.as_ref().and_then(|(access, _)| access.local_node()) {
+        if let Err(error) = node.shutdown().await {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
         }
     }
-    outdated
+    report
 }
 
 pub(crate) async fn outdated_packs_on(

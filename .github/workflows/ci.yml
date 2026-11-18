@@ -245,7 +245,7 @@ jobs:
       - name: Check the live node backstop
         run: |
           shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh \
-            .github/scripts/setup-shellcheck.sh
+            .github/scripts/setup-shellcheck.sh .github/scripts/setup-ruff.sh
           python3 .github/scripts/test-host-runtime-service.py
 
       - name: Check Harbor runner syntax
@@ -291,6 +291,14 @@ jobs:
         run: |
           shellcheck .github/scripts/setup-lean-build-cache.sh
           python3 .github/scripts/test-setup-lean-build-cache.py
+
+      # A merge once dropped gate.py's `import shutil`; only the cache path,
+      # which no pull request ran, reached the missing name.
+      - name: Install ruff
+        run: .github/scripts/setup-ruff.sh
+
+      - name: Check the CI scripts for undefined names
+        run: ruff check --no-cache --select F821,F822,F823 scripts/ci .github/scripts scripts/evals
 
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
@@ -585,8 +593,9 @@ jobs:
 
   # With GATE_PORTABLE_SHARDS set, the portable groups' crates compile once
   # here into a nextest archive; `shard` runs slices of it and compiles nothing.
+  # With one slice it runs here, as one partition per portable host group.
   build:
-    name: build (${{ matrix.archive }})
+    name: build (${{ matrix.archive }}${{ matrix.partition && format(' {0}/{1}', matrix.partition, matrix.partitions) || '' }})
     needs: [plan, repository-guard]
     if: >-
       (github.event_name != 'pull_request' ||
@@ -612,9 +621,12 @@ jobs:
       # A single slice and the Vera feature tests run in this job, and the
       # Lean-backed ones need the built contract: without it 12 waited out
       # 600 s behind the proofs lock (dispatch 43780116459).
+      # The contract builds beside the Rust compile instead (gate.py run_build):
+      # it took 2.5 to 10 minutes before the compile started (PR #3926's runs).
       - uses: ./.github/actions/rust-runner
         with:
           lean: ${{ (matrix.run || matrix.vera) && 'true' || 'false' }}
+          lean-contract: deferred
           afterburner: ${{ matrix.run && matrix.go && 'true' || 'false' }}
 
       - name: Install cargo-nextest
@@ -623,13 +635,13 @@ jobs:
       - name: Build the ${{ matrix.archive }} test archive
         env:
           GATE_TEST_CACHE_REPORT: ${{ runner.temp }}/test-cache-report.json
-        run: make gate-run JOB="build:${{ matrix.archive }}"
+        run: make gate-run JOB="build:${{ matrix.archive }}${{ matrix.partition && format(':{0}', matrix.partition) || '' }}"
 
       - name: Upload the test cache report
         if: always() && matrix.test_cache != 'off'
         uses: actions/upload-artifact@v7
         with:
-          name: gents-test-cache-${{ matrix.archive }}-${{ github.run_attempt }}
+          name: gents-test-cache-${{ matrix.archive }}${{ matrix.partition && format('-{0}', matrix.partition) || '' }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/test-cache-report.json
           if-no-files-found: ignore
           retention-days: 14

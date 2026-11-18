@@ -121,73 +121,85 @@ fn results(messages: &[Message]) -> Vec<&str> {
         .collect()
 }
 
-async fn completed(
-    name: &str,
-) -> (
-    gents_inference::test_support::TestDb,
-    DefraSessionHook,
-    String,
-) {
-    let case = gents_lean_vocab::lean_transcript_case(name);
-    let (db, hook, session, request) = fixture(name).await;
-    publish_claimed_authored_input(
-        &hook,
-        &request,
-        None,
-        user_text_message("run transcript conformance tool"),
-    )
-    .await;
-    let (sequence, ids) = accept_turn(
-        &hook,
-        &case.action_call_ids,
-        &case.action_logical_result_ids,
-    )
-    .await;
-    assert_eq!(sequence as usize, case.assistant_sequence);
-    assert_eq!(ids.len(), 1, "completed action exports one provider result");
-    assert_eq!(case.action_payload_hashes.len(), 1);
-    dispatch(&hook, case.action_call_ids[0], &ids[0]).await;
-    complete(
-        &hook,
-        case.action_call_ids[0],
-        &ids[0],
-        &format!("payload-{}", case.action_payload_hashes[0]),
-    )
-    .await;
-    (db, hook, session)
+fn role(message: &Message) -> String {
+    match message {
+        Message::System { .. } => "system",
+        Message::User { .. } => "user",
+        Message::Assistant { .. } => "assistant",
+    }
+    .to_owned()
+}
+
+fn numbered(value: &str, prefix: &str) -> u64 {
+    value
+        .strip_prefix(prefix)
+        .and_then(|number| number.parse().ok())
+        .unwrap_or_else(|| panic!("{value:?} is not {prefix}<number>"))
+}
+
+fn lifecycle(row: &serde_json::Value) -> String {
+    row["lifecycle_state"]
+        .as_str()
+        .unwrap_or_else(|| panic!("tool call row without lifecycle_state: {row}"))
+        .to_owned()
 }
 
 #[tokio::test]
-async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
-    let ordering = gents_lean_vocab::lean_transcript_case("ordering_user_assistant_tool_result");
-    let (db, hook, session) = completed(&ordering.name).await;
-    let node = db.node.clone();
-    let rows = history(&hook, &session).await;
-    assert_eq!(rows.len(), ordering.post_message_count);
-    assert!(matches!(
-        rows.as_slice(),
-        [
-            Message::User { .. },
-            Message::Assistant { .. },
-            Message::User { .. }
-        ]
-    ));
-    let ordering_id = format!("result-{}", ordering.logical_result_id);
-    assert_eq!(results(&rows), vec![ordering_id.as_str()]);
-    let ordering_call = fetch_tool_call_row(&hook, &session, &ordering_id).await;
-    assert_eq!(
-        ordering_call["message_sequence"]
-            .as_u64()
-            .map(|value| value as usize),
-        Some(ordering.assistant_sequence)
-    );
-    assert_eq!(ordering_call["lifecycle_state"].as_str(), Some("completed"));
-    assert_eq!(
-        ordering_call["result"].as_str(),
-        Some(format!("payload-{}", ordering.payload_hash).as_str())
-    );
-    assert_eq!(
-        gents_session::session::max_sequence_as(
+async fn native_transcript_owners_follow_the_lean_witnesses() {
+    for case in gents_lean_vocab::families::transcript_cases_native_completion::cases() {
+        let input = &case.input;
+        let (db, hook, session, request) = fixture(&input.name).await;
+        let node = db.node.clone();
+        publish_claimed_authored_input(
+            &hook,
+            &request,
+            None,
+            user_text_message("run transcript conformance tools"),
+        )
+        .await;
+        let call_ids = input
+            .action_call_ids
+            .iter()
+            .map(|id| usize::try_from(*id).expect("call id"))
+            .collect::<Vec<_>>();
+        let logical_result_ids = input
+            .action_logical_result_ids
+            .iter()
+            .map(|id| usize::try_from(*id).expect("logical result id"))
+            .collect::<Vec<_>>();
+        let (assistant_sequence, ids) = accept_turn(&hook, &call_ids, &logical_result_ids).await;
+        assert_eq!(
+            input.action_payload_hashes.len(),
+            ids.len(),
+            "{}",
+            input.name
+        );
+        for ((call_id, id), payload_hash) in call_ids
+            .iter()
+            .copied()
+            .zip(&ids)
+            .zip(&input.action_payload_hashes)
+        {
+            dispatch(&hook, call_id, id).await;
+            complete(&hook, call_id, id, &format!("payload-{payload_hash}")).await;
+        }
+        let rows = history(&hook, &session).await;
+        let mut tool_call_states = Vec::new();
+        let mut tool_call_results = Vec::new();
+        for id in &ids {
+            let row = fetch_tool_call_row(&hook, &session, id).await;
+            assert_eq!(
+                row["message_sequence"].as_u64(),
+                Some(u64::from(assistant_sequence)),
+                "{}: tool call {id} belongs to the accepted assistant turn",
+                input.name
+            );
+            tool_call_states.push(lifecycle(&row));
+            if let Some(result) = row["result"].as_str() {
+                tool_call_results.push(numbered(result, "payload-"));
+            }
+        }
+        let max_sequence = gents_session::session::max_sequence_as(
             &node,
             &session,
             &hook.node_did,
@@ -195,99 +207,50 @@ async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
             hook.actor.clone(),
         )
         .await
-        .unwrap() as usize,
-        ordering.result_sequence
-    );
-    assert_eq!(
-        hook.cancel_in_flight_tool_calls().await.unwrap(),
-        ordering.post_in_flight_count
-    );
-
-    let dedupe = gents_lean_vocab::lean_transcript_case("dedupe_duplicate_reuses_sequence");
-    assert_eq!(dedupe.action, "observe_duplicate_tool_result");
-    assert!(dedupe.expected_duplicate_reused_sequence);
-
-    let distinct =
-        gents_lean_vocab::lean_transcript_case("distinct_result_ids_append_distinct_rows");
-    assert_eq!(distinct.action, "append_distinct_tool_result");
-    assert!(!distinct.expected_pair_closed);
-    let parallel = gents_lean_vocab::lean_transcript_case("parallel_results_share_assistant_turn");
-    assert_eq!(
-        parallel.action,
-        "publish_once_dispatch_in_order_then_complete_each_parallel_result"
-    );
-    let (_db, hook, session, request) = fixture(&parallel.name).await;
-    publish_claimed_authored_input(
-        &hook,
-        &request,
-        None,
-        user_text_message("run parallel tools"),
-    )
-    .await;
-    let (sequence, ids) = accept_turn(
-        &hook,
-        &parallel.action_call_ids,
-        &parallel.action_logical_result_ids,
-    )
-    .await;
-    assert_eq!(sequence as usize, parallel.assistant_sequence);
-    assert_eq!(parallel.action_payload_hashes.len(), ids.len());
-    for ((call_id, id), payload_hash) in parallel
-        .action_call_ids
-        .iter()
-        .copied()
-        .zip(&ids)
-        .zip(parallel.action_payload_hashes.iter().copied())
-    {
-        dispatch(&hook, call_id, id).await;
-        complete(&hook, call_id, id, &format!("payload-{payload_hash}")).await;
-    }
-    let rows = history(&hook, &session).await;
-    assert_eq!(rows.len(), parallel.post_message_count);
-    assert_eq!(
-        results(&rows),
-        ids.iter().map(String::as_str).collect::<Vec<_>>()
-    );
-    for (id, payload_hash) in ids.iter().zip(&parallel.action_payload_hashes) {
-        let row = fetch_tool_call_row(&hook, &session, id).await;
-        assert_eq!(
-            row["message_sequence"].as_u64().map(|value| value as usize),
-            Some(parallel.assistant_sequence)
-        );
-        assert_eq!(row["lifecycle_state"].as_str(), Some("completed"));
-        assert_eq!(
-            row["result"].as_str(),
-            Some(format!("payload-{payload_hash}").as_str())
+        .unwrap();
+        let in_flight = hook.cancel_in_flight_tool_calls().await.unwrap();
+        case.check(
+            gents_lean_vocab::families::transcript_cases_native_completion::NativeCompletionOutput {
+                assistant_sequence: u64::from(assistant_sequence),
+                post_message_count: rows.len() as u64,
+                message_roles: rows.iter().map(role).collect(),
+                result_ids: results(&rows)
+                    .into_iter()
+                    .map(|id| numbered(id, "result-"))
+                    .collect(),
+                tool_call_states,
+                tool_call_results,
+                max_sequence: u64::from(max_sequence),
+                post_in_flight_count: in_flight as u64,
+            },
         );
     }
 
-    let pair = gents_lean_vocab::lean_transcript_case("completed_tool_pair_closed");
-    let (_db, hook, session) = completed(&pair.name).await;
-    let id = format!("result-{}", pair.logical_result_id);
-    assert_eq!(
-        fetch_tool_call_row(&hook, &session, &id).await["lifecycle_state"].as_str(),
-        Some("completed")
-    );
-    assert_eq!(results(&history(&hook, &session).await), vec![id.as_str()]);
-    assert_eq!(
-        hook.cancel_in_flight_tool_calls().await.unwrap(),
-        pair.post_in_flight_count
-    );
-
-    let abandon = gents_lean_vocab::lean_transcript_case("drop_abandon_not_strong_drain");
-    let (_db, hook, session, _) = fixture(&abandon.name).await;
-    let (_, ids) = accept_turn(
-        &hook,
-        &abandon.action_call_ids,
-        &abandon.action_logical_result_ids,
-    )
-    .await;
-    assert_eq!(ids.len(), 1);
-    dispatch(&hook, abandon.action_call_ids[0], &ids[0]).await;
-    let reader = hook.actor_access().unwrap();
-    drop(hook);
-    assert_eq!(
-        fetch_tool_call_row_as(&reader, &session, &ids[0]).await["lifecycle_state"].as_str(),
-        Some("running")
-    );
+    for case in gents_lean_vocab::families::transcript_cases_native_abandon::cases() {
+        let input = &case.input;
+        let (_db, hook, session, _) = fixture(&input.name).await;
+        let call_ids = input
+            .action_call_ids
+            .iter()
+            .map(|id| usize::try_from(*id).expect("call id"))
+            .collect::<Vec<_>>();
+        let logical_result_ids = input
+            .action_logical_result_ids
+            .iter()
+            .map(|id| usize::try_from(*id).expect("logical result id"))
+            .collect::<Vec<_>>();
+        let (_, ids) = accept_turn(&hook, &call_ids, &logical_result_ids).await;
+        for (call_id, id) in call_ids.iter().copied().zip(&ids) {
+            dispatch(&hook, call_id, id).await;
+        }
+        let reader = hook.actor_access().unwrap();
+        drop(hook);
+        let mut states = Vec::new();
+        for id in &ids {
+            states.push(lifecycle(
+                &fetch_tool_call_row_as(&reader, &session, id).await,
+            ));
+        }
+        case.check(states);
+    }
 }

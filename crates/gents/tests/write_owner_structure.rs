@@ -5285,14 +5285,8 @@ const LEAN_GENERATOR_RUNS: &[&str] = &[
 /// generator inside `spawn_blocking`. This allowlist only shrinks.
 #[rustfmt::skip]
 const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-automation/src/goal/client_control/start_tests.rs", 1),
-    ("crates/gents-cli/tests/cli_enrollment/live_delegation.rs", 1),
-    ("crates/gents-cli/tests/cli_enrollment/live_two_agent.rs", 1),
-    ("crates/gents-desktop-bridge/src/snapshot/tests/goal_provenance.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/tests/readiness.rs", 1),
     ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
     ("crates/gents-host/src/http/access_tests.rs", 1),
-    ("crates/gents-loop/src/end_to_end_test.rs", 1),
 ];
 
 struct LeanGeneratorVisitor {
@@ -5527,10 +5521,83 @@ const LEASE_STARTS: &[&str] = &[
 /// read the model before the lease.
 /// Such a read can be the process's first, which runs Lean on the runtime
 /// thread for minutes and starves the lease renewal (#3704, #3891, #3892).
-#[derive(Default)]
 struct LeanReadAfterLeaseVisitor {
+    starts: BTreeSet<String>,
     events: Vec<(usize, usize, LeanEvent)>,
     sites: usize,
+}
+
+/// The names of one file's calls that start a lease: [`LEASE_STARTS`] and,
+/// to a fixed point, every function of the file whose body calls one, so a
+/// file-local fixture that claims counts at its call site (`step0` over
+/// `job_chain` in `plugin_job_dispatch.rs`).
+fn lease_starts_in_file(syntax: &syn::File) -> BTreeSet<String> {
+    #[derive(Default)]
+    struct Callees {
+        current: Option<String>,
+        functions: Vec<(String, BTreeSet<String>)>,
+    }
+    impl Callees {
+        fn enter(&mut self, name: String) -> Option<String> {
+            self.functions.push((name.clone(), BTreeSet::new()));
+            self.current.replace(name)
+        }
+        fn called(&mut self, name: String) {
+            if self.current.is_some() {
+                if let Some((_, calls)) = self.functions.last_mut() {
+                    calls.insert(name);
+                }
+            }
+        }
+    }
+    impl<'ast> Visit<'ast> for Callees {
+        fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+            let outer = self.enter(item.sig.ident.to_string());
+            visit::visit_item_fn(self, item);
+            self.current = outer;
+        }
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            let outer = self.enter(item.sig.ident.to_string());
+            visit::visit_impl_item_fn(self, item);
+            self.current = outer;
+        }
+        fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+            if let Expr::Path(function) = call.func.as_ref() {
+                if let Some(last) = function.path.segments.last() {
+                    self.called(last.ident.to_string());
+                }
+            }
+            visit::visit_expr_call(self, call);
+        }
+        fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+            self.called(call.method.to_string());
+            visit::visit_expr_method_call(self, call);
+        }
+        fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+            let (mut parsed, mut loose) = (Vec::new(), Vec::new());
+            macro_expressions(invocation.tokens.clone(), &mut parsed, &mut loose);
+            for argument in &parsed {
+                self.visit_expr(argument);
+            }
+        }
+    }
+    let mut callees = Callees::default();
+    callees.visit_file(syntax);
+    let mut starts = LEASE_STARTS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<BTreeSet<_>>();
+    loop {
+        let before = starts.len();
+        for (name, calls) in &callees.functions {
+            if calls.iter().any(|call| starts.contains(call)) {
+                starts.insert(name.clone());
+            }
+        }
+        if starts.len() == before {
+            return starts;
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -5586,10 +5653,7 @@ impl<'ast> Visit<'ast> for LeanReadAfterLeaseVisitor {
                     LeanEvent::SyncRead
                 };
                 self.record(call.span(), event);
-            } else if last
-                .as_deref()
-                .is_some_and(|name| LEASE_STARTS.contains(&name))
-            {
+            } else if last.as_ref().is_some_and(|name| self.starts.contains(name)) {
                 self.record(call.span(), LeanEvent::LeaseStart);
             }
         }
@@ -5597,15 +5661,27 @@ impl<'ast> Visit<'ast> for LeanReadAfterLeaseVisitor {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
-        if LEASE_STARTS.iter().any(|name| call.method == name) {
+        if self.starts.contains(&call.method.to_string()) {
             self.record(call.method.span(), LeanEvent::LeaseStart);
         }
         visit::visit_expr_method_call(self, call);
     }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let (mut parsed, mut loose) = (Vec::new(), Vec::new());
+        macro_expressions(invocation.tokens.clone(), &mut parsed, &mut loose);
+        for argument in &parsed {
+            self.visit_expr(argument);
+        }
+    }
 }
 
 fn lean_reads_after_lease(syntax: &syn::File) -> usize {
-    let mut visitor = LeanReadAfterLeaseVisitor::default();
+    let mut visitor = LeanReadAfterLeaseVisitor {
+        starts: lease_starts_in_file(syntax),
+        events: Vec::new(),
+        sites: 0,
+    };
     visitor.visit_file(syntax);
     visitor.sites
 }
@@ -5613,8 +5689,9 @@ fn lean_reads_after_lease(syntax: &syn::File) -> usize {
 /// An async test that holds an execution lease awaits
 /// `gents_lean_vocab::snapshot()` before any synchronous model read, so the
 /// first load runs off its runtime (`LeaseRenewalStarvation.tla`,
-/// `OffRuntime`). Syntactic: fixtures are matched by name and macro arguments
-/// are not read.
+/// `OffRuntime`). Syntactic: fixtures are matched by name, a file's own
+/// functions that reach a lease start count as one, and macro input is read
+/// as [`macro_expressions`] reads it.
 #[test]
 fn lease_holders_await_the_lean_snapshot() {
     let root = repo_root();
@@ -5666,6 +5743,18 @@ fn lean_read_fence_counts_reads_after_a_lease_without_the_await() {
         (
             "fn f() { l.claim_with_identity(); gents_lean_vocab::lean_contract_snapshot(); }",
             0,
+        ),
+        (
+            "async fn chain() { l.claim_with_identity().await; }\nasync fn step0() { chain().await; }\nasync fn f() { step0().await; for c in gents_lean_vocab::families::k::cases() {} }",
+            1,
+        ),
+        (
+            "async fn step0() { l.claim_with_identity().await; }\nasync fn f() { gents_lean_vocab::snapshot().await; step0().await; gents_lean_vocab::families::k::cases(); }",
+            0,
+        ),
+        (
+            "async fn chain() { assert_eq!(l.claim_with_identity().await, Claimed); }\nasync fn f() { chain().await; assert!(gents_lean_vocab::families::k::cases().is_empty()); }",
+            1,
         ),
         (
             "async fn f() { gents_lean_vocab::lean_contract_snapshot(); l.claim_with_identity().await; gents_lean_vocab::lean_contract_snapshot(); }",

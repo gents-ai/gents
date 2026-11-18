@@ -8,7 +8,7 @@ use gents_tools::surface::ToolCeiling;
 
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::snapshots::{
-    fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot, SnapshotReader,
+    is_routed_ready_after, wait_for_runtime_snapshot_as, SnapshotReader,
 };
 use crate::support::{managed_agent_fixture, test_db, ManagedAgentFixture};
 
@@ -173,29 +173,6 @@ async fn create_event_trigger(
     ]).await;
 }
 
-async fn wait_for_runtime_snapshot<F>(
-    access: &ConfigAccess,
-    node_did: &str,
-    predicate: F,
-) -> RuntimeSnapshot
-where
-    F: Fn(&RuntimeSnapshot) -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut changes = access.subscribe_changes("NodeRuntime").await;
-    loop {
-        let snapshot = fetch_runtime_snapshot_as(access, node_did).await;
-        if snapshot.as_ref().is_some_and(&predicate) {
-            return snapshot.unwrap();
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {node_did}; last snapshot: {snapshot:?}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
-    }
-}
-
 /// Scheduled requests belong to the Agent that runs them.
 fn agent_reader(db: &crate::support::TestDb, fixture: &ManagedAgentFixture) -> ConfigAccess {
     ConfigAccess::local_managed_agent(
@@ -252,7 +229,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -273,7 +250,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
@@ -297,7 +274,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         false,
     )
     .await;
-    let disabled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let disabled = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, reconciled.active_generation)
     })
     .await;
@@ -382,7 +359,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -411,7 +388,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;

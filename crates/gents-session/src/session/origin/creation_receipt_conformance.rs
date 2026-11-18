@@ -3,46 +3,60 @@ use gents_protocol::session::{SessionCreationCause, SessionCreationReceipt};
 use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
-async fn verified_receipt_cannot_authorize_a_different_opening_request() {
+async fn agent_creation_receipt_verifies_for_its_opening_request_as_modeled() {
     let directory = tempfile::tempdir().unwrap();
-    let agent = gents_store::identity::KeyIdentity::load_or_create(
-        directory.path().join("agent.key"),
+    let creator = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("creator.key"),
         None,
     )
     .unwrap();
-    let mut receipt = SessionCreationReceipt {
-        node_did: "did:example:node".into(),
-        session_id: "same-session".into(),
-        session_doc_id: "physical-session".into(),
-        requester_did: Some(agent.did().into()),
-        agent_did: agent.did().into(),
-        opening_request_doc_id: "first-opening".into(),
-        cause: SessionCreationCause::AgentNew,
-        cause_binding: "tool-call".into(),
-        starter: None,
-        signature: Vec::new(),
-    };
-    receipt.signature = agent.sign(&receipt.signing_payload()).await.unwrap();
-    let session: AgentSession = serde_json::from_value(serde_json::json!({
-        "node_did": receipt.node_did, "session_id": receipt.session_id,
-        "requester_did": receipt.requester_did, "agent_did": receipt.agent_did,
-        "created_at": "2026-01-01T00:00:00Z", "provenance": {"creation_receipt": receipt}
-    }))
+    let worker = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("worker.key"),
+        None,
+    )
     .unwrap();
-    assert!(
-        verified_agent_creation_receipt(&session, "physical-session", Some("first-opening"))
-            .is_some()
-    );
-    let cases = &gents_lean_vocab::lean_contract_snapshot().delegated_publication_cases;
-    let mismatch = cases
-        .iter()
-        .find(|case| case["name"] == "mismatched-recovery-binding")
+    for case in
+        gents_lean_vocab::families::agent_creation_receipt_opening::cases::<SessionCreationCause>()
+    {
+        let input = &case.input;
+        let mut receipt = SessionCreationReceipt {
+            node_did: "did:example:node".into(),
+            session_id: if input.scope_matches {
+                "same-session"
+            } else {
+                "other-session"
+            }
+            .into(),
+            session_doc_id: "physical-session".into(),
+            requester_did: Some(creator.did().into()),
+            agent_did: worker.did().into(),
+            opening_request_doc_id: input.signed_opening.clone(),
+            cause: input.cause,
+            cause_binding: "tool-call".into(),
+            starter: None,
+            signature: Vec::new(),
+        };
+        let signer = if input.signature_valid {
+            &creator
+        } else {
+            &worker
+        };
+        receipt.signature = signer.sign(&receipt.signing_payload()).await.unwrap();
+        let session: AgentSession = serde_json::from_value(serde_json::json!({
+            "node_did": "did:example:node", "session_id": "same-session",
+            "requester_did": creator.did(), "agent_did": worker.did(),
+            "created_at": "2026-01-01T00:00:00Z", "provenance": {"creation_receipt": receipt}
+        }))
         .unwrap();
-    assert_eq!(
-        verified_agent_creation_receipt(&session, "physical-session", Some("second-opening"))
+        case.check(
+            verified_agent_creation_receipt(
+                &session,
+                "physical-session",
+                input.expected_opening.as_deref(),
+            )
             .is_some(),
-        mismatch["expected_target_read"].as_bool().unwrap()
-    );
+        );
+    }
 }
 
 #[test]

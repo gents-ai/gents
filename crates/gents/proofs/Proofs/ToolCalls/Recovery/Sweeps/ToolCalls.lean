@@ -1,5 +1,6 @@
 import Proofs.Session.Recovery.Sweeps.Requests
 import Proofs.Session.ToolExecution.State
+import Proofs.Session.ToolExecution.CancelCause
 import Proofs.Session.ManagedExec.Ownership
 
 namespace Recovery
@@ -93,6 +94,52 @@ def notificationReason : ToolRecoveryCause → Option String
   | .requestDead => some "request_dead"
   | .requestInterrupted => some "request_interrupted"
   | .requestSuperseded => some "request_superseded"
+
+/-- The cancel cause a recovered row records. A row that settles cancelled
+or timed out records why it was stopped; a row that fails records none. A
+caller-persisted cancel cause takes precedence in production and is not
+modelled here. -/
+def cancelCause : ToolRecoveryCause → Option CancelCause
+  | .deadlineExceeded => some .deadline
+  | .parentInterrupted => some .interrupted
+  | .parentTerminal => none
+  | .terminalizeBackgroundedAsInterrupted => some .interrupted
+  | .processLost => none
+  | .sessionStopped => some .userCancelled
+  | .taskDeleted => some .interrupted
+  | .causedRequestUnbound => none
+  | .requestCompleted => none
+  | .requestFailed => none
+  | .requestDead => none
+  | .requestInterrupted => some .interrupted
+  | .requestSuperseded => none
+
+/-- The failure class a recovered row records: every recovery that ends a row
+failed or timed out blames the outside world, never the tool. -/
+def failureClass : ToolRecoveryCause → Option String
+  | .deadlineExceeded => some "external"
+  | .parentInterrupted => none
+  | .parentTerminal => some "external"
+  | .terminalizeBackgroundedAsInterrupted => none
+  | .processLost => some "external"
+  | .sessionStopped => none
+  | .taskDeleted => none
+  | .causedRequestUnbound => some "external"
+  | .requestCompleted => none
+  | .requestFailed => some "external"
+  | .requestDead => some "external"
+  | .requestInterrupted => none
+  | .requestSuperseded => some "external"
+
+theorem failureClass_iff_failed_or_timed_out (cause : ToolRecoveryCause) :
+    cause.failureClass.isSome = true ↔
+      (cause.terminalState = .failed ∨ cause.terminalState = .timedOut) := by
+  cases cause <;> simp [failureClass, terminalState]
+
+theorem cancelCause_iff_cancelled_or_timed_out (cause : ToolRecoveryCause) :
+    cause.cancelCause.isSome = true ↔
+      (cause.terminalState = .cancelled ∨ cause.terminalState = .timedOut) := by
+  cases cause <;> simp [cancelCause, terminalState]
 
 theorem terminalState_terminal (cause : ToolRecoveryCause) :
     isTerminal cause.terminalState := by
@@ -538,13 +585,11 @@ def deadlineActionTimesOut (row : TerminalParentToolRow) : Bool :=
 def timeoutAfterSweepState (row : TerminalParentToolRow) : ToolCallState :=
   if deadlineActionTimesOut row then .timedOut else (sweptToolRow row).state
 
-def sweptCancelCause : Option ToolRecoveryCause → Option String
-  | some .parentInterrupted => some "interrupted"
-  | _ => none
+def sweptCancelCause (cause : Option ToolRecoveryCause) : Option String :=
+  (cause.bind ToolRecoveryCause.cancelCause).map CancelCause.toDefraDB
 
-def sweptFailureClass : Option ToolRecoveryCause → Option String
-  | some .parentTerminal => some "external"
-  | _ => none
+def sweptFailureClass (cause : Option ToolRecoveryCause) : Option String :=
+  cause.bind ToolRecoveryCause.failureClass
 
 theorem timeout_adopts_terminal_written_by_terminal_parent_sweep
     (row : TerminalParentToolRow) (h_running : row.call.state = .running)

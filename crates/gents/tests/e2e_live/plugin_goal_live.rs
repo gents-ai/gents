@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 
 use crate::support::agent_requests::canonical_now;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_options, live_target, wait_for_request_terminal,
+    bind_target, boot_live_agent_with_options, live_target, rows_when, wait_for_request_terminal,
     wait_for_rows, InferenceTarget, LiveUser,
 };
 use crate::support::{test_db, ManagedAgentFixture};
@@ -476,18 +476,12 @@ async fn live_waited_process_defers_goal_until_its_completion_wake() {
         r#"{{ Goal(filter: {{goal_id: {{_eq: "{}"}}}}) {{last_continued_from_request_id status}} }}"#,
         escape_graphql_string(&goal.goal_id)
     );
-    wait_for_rows(
-        &actors.fixture.access,
-        "Goal",
-        &goal_query,
-        Duration::from_secs(30),
-        |data| {
-            data["Goal"].as_array().is_some_and(|rows| {
-                rows.iter()
-                    .any(|row| row["last_continued_from_request_id"] == REQUEST)
-            })
-        },
-    )
+    rows_when(&actors.fixture.access, "Goal", &goal_query, |data| {
+        data["Goal"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|row| row["last_continued_from_request_id"] == REQUEST)
+        })
+    })
     .await;
     let children_query = format!(
         r#"{{ AgentRequest(filter: {{caused_by_trigger_kind: {{_eq: "goal"}}, caused_by_trigger_id: {{_eq: "{}"}}}}) {{_docID request_id caused_by_parent_request_doc_id lifecycle_state}} }}"#,

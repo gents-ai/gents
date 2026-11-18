@@ -7,17 +7,12 @@ const OWNER: &str = "did:key:zPackInstallOwner";
 
 #[test]
 fn pack_cleanup_observation_matches_model() {
-    let modeled = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration policy model");
-    assert_eq!(modeled.configuration_pack_cleanup_cases.len(), 4);
-    for case in &modeled.configuration_pack_cleanup_cases {
-        let observed = case["visible"].as_array().unwrap().iter().all(|visible| {
-            require_owned_document_visible("Tools", "tool", visible.as_bool().unwrap()).is_ok()
-        });
-        assert_eq!(observed, case["expected"].as_bool().unwrap(), "{case}");
-    }
+    gents_lean_vocab::families::household_pack_cleanup_visible::replay(|input| {
+        input
+            .visible
+            .iter()
+            .all(|visible| require_owned_document_visible("Tools", "tool", *visible).is_ok())
+    });
 }
 
 #[test]
