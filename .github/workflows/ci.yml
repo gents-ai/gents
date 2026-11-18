@@ -769,8 +769,8 @@ jobs:
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.browser }}
     # On two Playwright workers the browser journeys take 24 to 37 minutes on
     # a hosted four-core runner (#3786); each third takes about 9 to 12. The
-    # job allows a cold browser install (12) plus the suite (25).
-    timeout-minutes: 45
+    # job allows a cold browser install (30) plus the suite (25).
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -856,10 +856,11 @@ jobs:
 
       # The unit lane's interaction budgets drive Chromium; the journeys
       # also need WebKit. Its own timeout keeps a slow install from spending
-      # the suite's time.
+      # the suite's time; it covers a cold cache (about 27 minutes of apt
+      # downloads), and a warm one takes about a minute.
       - name: Install Playwright browsers
         working-directory: apps/gents-desktop
-        timeout-minutes: 12
+        timeout-minutes: 30
         env:
           HOSTED: ${{ runner.environment == 'github-hosted' }}
           BROWSERS: ${{ steps.browsers.outputs.list }}
