@@ -15,13 +15,23 @@ archives="$1"
 shift
 mkdir -p "${archives}/partial"
 
-command="$(npx playwright install-deps --dry-run "$@")"
-packages="$(sed -n 's/.*apt-get install -y --no-install-recommends \([^"&;]*\).*/\1/p' <<< "${command}" | tr ' ' '\n' | sed '/^$/d' | sort -u)"
+# `install-deps --dry-run` lists only the packages this image lacks (the
+# "apt-get install" alternative in its report) and exits non-zero when any are
+# missing; zero means the image already has them all.
+if report="$(npx playwright install-deps --dry-run "$@" 2>&1)"; then
+  echo "the image already has the browsers' system packages"
+  exit 0
+fi
+packages="$(LC_ALL=C tr -cd '\11\12\40-\176' <<< "${report}" \
+  | awk '/apt-get install/ { listing = 1; sub(/.*apt-get install/, "") } listing && /^[[:space:]]*$/ { exit } listing { print }' \
+  | tr -s ' \\\t' '\n' | grep -E '^[a-z0-9][a-z0-9.+:-]+$' | sort -u || true)"
 if [[ -z "${packages}" ]]; then
-  echo "::warning::could not read Playwright's package list; using its own install"
+  echo "::warning::could not read Playwright's missing package list; using its own install"
+  printf '%s\n' "${report}"
   npx playwright install-deps "$@"
   exit 0
 fi
+echo "missing system packages: $(tr '\n' ' ' <<< "${packages}")"
 
 sudo apt-get update -qq
 mapfile -t names <<< "${packages}"
