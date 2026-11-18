@@ -38,12 +38,12 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         Ok((access, _)) => access,
         Err(error)
             if args.graphql.is_some()
-                && error
-                    .downcast_ref::<gents_store::client_error::BridgeError>()
-                    .is_some_and(|cause| {
+                && gents_store::client_error::BridgeError::carried_by(&error).is_some_and(
+                    |cause| {
                         cause.code
                             == gents_store::client_error::BridgeErrorCode::EndpointUnreachable
-                    }) =>
+                    },
+                ) =>
         {
             let matching = runtime_state
                 .as_ref()
