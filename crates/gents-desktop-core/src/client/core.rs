@@ -326,6 +326,7 @@ pub struct ClientCore {
     observer: Mutex<Option<ObserverHandle>>,
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
+    owed_settlements: owed_settlement::OwedSettlements,
     inference_observation_epoch: std::sync::atomic::AtomicU64,
     inference_observations: std::sync::Mutex<
         RapidHashMap<(String, String), inference_observation::InferenceObservationOwner>,
@@ -692,6 +693,7 @@ impl ClientCore {
             task.abort();
             let _ = task.await;
         }
+        self.owed_settlements.stop().await;
         if let Some(observer) = self.observer.lock().await.take() {
             tracing::info!("client core shutdown: stopping observer");
             observer.shutdown().await;

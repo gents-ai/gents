@@ -67,6 +67,23 @@ impl OwedSettlements {
             running.insert(node_did, task);
         }
     }
+
+    /// Stop every settlement and wait until each has let go of what it
+    /// holds, the peer directory among them.
+    pub(super) async fn stop(&self) {
+        let tasks = std::mem::take(
+            &mut *self
+                .running
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        );
+        for task in tasks.values() {
+            task.abort();
+        }
+        for task in tasks.into_values() {
+            drop(task.await);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,5 +149,34 @@ mod tests {
             gents_store::config_client::owed::OWED_FAILED_FOR_A_PERSON
         );
         assert!(local.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_stopped_settlement_lets_go_of_the_peer_directory() {
+        let vera = MockServer::start().await;
+        let asked = std::sync::Arc::new(tokio::sync::Notify::new());
+        let notify = std::sync::Arc::clone(&asked);
+        Mock::given(method("POST"))
+            .and(path(gents_protocol::owed_settlement::OWED_SETTLEMENT_PATH))
+            .respond_with(move |_: &wiremock::Request| {
+                notify.notify_one();
+                ResponseTemplate::new(200).set_body_json(json!({ "standings": ["sending"] }))
+            })
+            .mount(&vera)
+            .await;
+        let temp = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(temp.path());
+        paths.ensure_root_dirs().await.unwrap();
+        let user = PrincipalIdentity::load_or_create(&paths).await.unwrap();
+        let (dir, sync_state) =
+            ClientSyncStateOwner::for_test(vec![home(&vera, "did:key:vera", true)], vec![]).await;
+        let owed = OwedSettlements::default();
+        owed.settle_saved(&sync_state, &user);
+        asked.notified().await;
+        owed.stop().await;
+        drop(sync_state);
+        crate::client::peer_directory::PeerDirectory::open_writer(dir.path().join("peers.json"))
+            .await
+            .expect("the peer directory is free once its settlements stopped");
     }
 }
