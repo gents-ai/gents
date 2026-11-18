@@ -150,13 +150,8 @@ pub(super) async fn execute(
         // Typed Display formats only this resolution layer. Explicitly render
         // its sources, just as the anyhow call failure below does with {:#}.
         Err(error) => {
-            return deny(
-                node,
-                access,
-                invocation,
-                &gents_protocol::error_chain::ErrorChain(&error).to_string(),
-            )
-            .await
+            let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
+            return deny(node, access, invocation, &message).await;
         }
     };
     let input = gents_documents::callback_secret_fields::strip_secret_fields(source.clone());
