@@ -473,7 +473,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
             .unwrap()
     };
     assert_eq!(
-        *hook.request_deadline_at.lock().await,
+        hook.state.lock().await.request_deadline_at,
         Some(claimed_deadline)
     );
 

@@ -497,7 +497,7 @@ where
                 failure_count += 1;
                 tracing::error!(
                     agent_did = %agent_config.agent.agent_did,
-                    error = %error,
+                    error = %format!("{error:#}"),
                     delay_ms = delay.as_millis() as u64,
                     "agent slot failed, scheduling restart"
                 );
