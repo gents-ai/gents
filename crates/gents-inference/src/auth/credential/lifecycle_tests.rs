@@ -236,15 +236,12 @@ async fn signed_account_delete_requires_user_document_delete_permission() {
         .unwrap();
 
     let error = remove(&access, node_did, &credential_id).await.unwrap_err();
-    let typed =
-        gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| match cause
-            .downcast_ref::<ConfigClientError>(
-        ) {
-            Some(ConfigClientError::ClientAgentSigning(
-                defra_http::client_signed_create::ClientSignedCreateError::Incomplete,
-            )) => Some(()),
-            _ => None,
-        });
+    let typed = gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| {
+        cause
+            .downcast_ref::<ConfigClientError>()
+            .filter(|error| error.is_permission_denied() || error.is_graphql_rejection())
+            .map(|_| ())
+    });
     assert!(
         typed.is_some(),
         "a denied no-wave delete must remain an error: {error:#}"

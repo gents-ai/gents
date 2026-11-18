@@ -586,7 +586,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
             .await
             .expect_err("anonymous HTTP writes must be refused");
         assert!(
-            refused.to_string().contains("not authorized"),
+            refused.is_permission_denied(),
             "{phase}: unexpected refusal: {refused:#}"
         );
         gents_store::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
@@ -601,17 +601,11 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         )
         .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
-        let anonymous_rows = gents_store::config_client::ConfigAccess::graphql(graphql.clone())
+        let anonymous = gents_store::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
             .await
-            .with_context(|| format!("{phase}: anonymous HTTP read"))?;
-        assert!(
-            anonymous_rows
-                .pointer("/data/CompactionEntry")
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty),
-            "{phase}: anonymous HTTP read exposed the owner's row: {anonymous_rows}"
-        );
+            .expect_err("anonymous HTTP read must be refused");
+        assert!(anonymous.is_permission_denied(), "{phase}: {anonymous:#}");
         let owner_rows = gents_store::config_client::ConfigAccess::Graphql(
             support::graphql::served_endpoint(&graphql),
         )
