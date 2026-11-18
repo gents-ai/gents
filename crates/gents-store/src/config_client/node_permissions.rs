@@ -148,9 +148,7 @@ impl ConfigAccess {
         crate::graphql::validate_collection_identifier(collection)?;
         match self {
             Self::Local(local) => {
-                local
-                    .agent_signer()
-                    .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
+                local.require_actor_signer()?;
                 local
                     .identity()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?;
