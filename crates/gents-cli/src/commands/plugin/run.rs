@@ -113,6 +113,7 @@ async fn call_installed_inner(
             input,
             gents_toolcalls::plugin::executor::ToolInvocation {
                 tool_root: None,
+                own_folder: None,
                 tool_calls: false,
                 context,
             },

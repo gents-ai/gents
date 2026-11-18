@@ -7257,6 +7257,7 @@ dependencies = [
  "dirs 5.0.1",
  "flate2",
  "futures",
+ "gents-core-packs",
  "gents-documents",
  "gents-inference",
  "gents-lean-contract",
