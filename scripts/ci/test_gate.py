@@ -1210,6 +1210,72 @@ class TlaSelection(unittest.TestCase):
         self.assertEqual(select("docs/guide.md")["contract"]["tla"], [])
 
 
+class TlaRecordedOutcomes(unittest.TestCase):
+    """A TLC outcome is reused only for the same bytes TLC would read."""
+
+    def layout(self, root):
+        tla = Path(root)
+        (tla / "generated").mkdir()
+        (tla / "generated/LeanDecision_X.tla").write_text("---- MODULE LeanDecision_X ----\nd == 1\n====\n")
+        (tla / "Base.tla").write_text("---- MODULE Base ----\nEXTENDS Naturals\n====\n")
+        (tla / "A.tla").write_text("---- MODULE A ----\n\\* lean: X.d\n\\* crates: none\n"
+                                   "EXTENDS Base,\n  LeanDecision_X\n====\n")
+        (tla / "MCA.tla").write_text("---- MODULE MCA ----\nLOCAL INSTANCE A\n====\n")
+        (tla / "MCA.cfg").write_text("\\* expect: holds\nSPECIFICATION Spec\n")
+        (tla / "B.tla").write_text("---- MODULE B ----\n\\* lean: none\n\\* crates: none\n====\n")
+        return tla
+
+    def test_the_key_covers_every_module_tlc_reads_and_nothing_else(self):
+        check = gate.tla_check
+        with tempfile.TemporaryDirectory() as scratch:
+            tla = self.layout(scratch)
+            cfg = tla / "MCA.cfg"
+            self.assertEqual([path.relative_to(tla).as_posix() for path in check.module_files(cfg, tla)],
+                             ["A.tla", "Base.tla", "MCA.tla", "generated/LeanDecision_X.tla"])
+            before = check.result_key(cfg, tla)
+            (tla / "B.tla").write_text("---- MODULE B ----\n\\* lean: none\n\\* crates: none\nx == 2\n====\n")
+            self.assertEqual(check.result_key(cfg, tla), before)
+            for changed in ("generated/LeanDecision_X.tla", "Base.tla", "MCA.cfg"):
+                path = tla / changed
+                original = path.read_text()
+                path.write_text(original + "\\* changed\n")
+                self.assertNotEqual(check.result_key(cfg, tla), before, changed)
+                path.write_text(original)
+            self.assertEqual(check.result_key(cfg, tla), before)
+
+    def test_only_whole_verdicts_are_recorded_and_unreadable_records_are_absent(self):
+        check = gate.tla_check
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch) / "results"
+            self.assertIsNone(check.recall("k", directory))
+            check.record("k", check.Outcome("violates Safe", 12), directory)
+            self.assertEqual(check.recall("k", directory), check.Outcome("violates Safe", 12))
+            for verdict in ("error: TLC crashed", "timeout after 5s"):
+                check.record(verdict[0], check.Outcome(verdict, None), directory)
+                self.assertIsNone(check.recall(verdict[0], directory))
+            (directory / "torn.json").write_text('{"verdict": "hol')
+            self.assertIsNone(check.recall("torn", directory))
+            self.assertEqual(sorted(path.name for path in directory.iterdir()), ["k.json", "torn.json"])
+
+    def test_the_nightly_checks_every_configuration_with_tlc(self):
+        nightly = (gate.ROOT / ".github/workflows/tla-nightly.yml").read_text()
+        self.assertRegex(nightly, r"tla_check\.py run --all --fresh\b")
+
+
+class ContractBuilds(unittest.TestCase):
+    def test_the_policy_example_builds_in_the_test_builds_profile(self):
+        """Under `dev` it rebuilt the whole defradb tree that `cargo test` had just built."""
+        selection = {"contract": {"ratchets": False, "ts_lean": False, "tla": []}}
+        for profile, expected in (("", ["--profile", "test"]), ("fast-dev", ["--profile", "fast-dev"])):
+            with mock.patch.object(gate, "sh", return_value=True) as sh, \
+                    mock.patch.object(gate, "cargo_test", return_value=True), \
+                    mock.patch.dict(os.environ, {"PROFILE": profile}):
+                gate.run_contract(selection)
+            example = next(call.args[0] for call in sh.call_args_list
+                           if isinstance(call.args[0], list) and "regenerate_household_policy" in call.args[0])
+            self.assertEqual(example[2:4], expected, profile)
+
+
 class TlaStructure(unittest.TestCase):
     """Every spec names its Lean owners and crates, every config its TLC result."""
 
