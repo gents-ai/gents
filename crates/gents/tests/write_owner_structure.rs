@@ -2083,14 +2083,17 @@ fn ambient_context_skips_only_named_documented_statics() {
     }
 }
 
-/// Functions that write a file with `fs::write` and then give that path an
-/// exec bit. Linux execve refuses a file any process holds open for writing
-/// (ETXTBSY), and a concurrent test's spawn copies this process's write
-/// descriptor into its child until that child execs, even with O_CLOEXEC
-/// (`tla/ScriptFixtureExec.tla`). A static script is checked in; a generated
-/// one goes through `gents_store::test_support::write_executable_script`.
-/// Entries name why each remaining site never executes the file; the list
-/// only shrinks.
+/// Functions that create a file in-process (`fs::write`, `fs::copy`,
+/// `File::create`, an `OpenOptions` open with `create`) and then give that
+/// path an exec bit, or that `fs::copy` an executable (a source naming a
+/// binary, which the copy keeps executable). Linux execve refuses a file any
+/// process holds open for writing (ETXTBSY), and a concurrent spawn copies
+/// this process's write descriptor into its child until that child execs,
+/// even with O_CLOEXEC (`tla/ScriptFixtureExec.tla`). A static script is
+/// checked in; a generated one goes through
+/// `gents_store::test_support::write_executable_script` and a copied one
+/// through `gents_store::test_support::copy_executable`. Entries name why
+/// each remaining site is safe or where it is fixed; the list only shrinks.
 #[rustfmt::skip]
 const EXECUTABLE_WRITE_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-tools/src/native/file_tools/change_capture/tests.rs", 1, "reads the mode back as an observation; never executes the file"),
@@ -2101,6 +2104,24 @@ struct ExecutableWriteScan {
     written: BTreeSet<String>,
     permitted: Vec<String>,
     executable_mode: bool,
+    executable_copy: bool,
+}
+
+/// A copy source that names a binary: Cargo's `CARGO_BIN_EXE_*`,
+/// `current_exe`, or a `*_bin`/`*_exe`/`executable*` binding or helper.
+static EXECUTABLE_SOURCE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\b(CARGO_BIN_EXE\w*|current_exe|\w+_bin|\w+_exe|\w*executable\w*)\b")
+        .expect("executable source pattern")
+});
+
+fn method_chain_calls(expression: &Expr, names: &[&str]) -> bool {
+    match expression {
+        Expr::MethodCall(call) => {
+            names.iter().any(|name| call.method == name)
+                || method_chain_calls(&call.receiver, names)
+        }
+        _ => false,
+    }
 }
 
 fn path_argument_key(expression: &Expr) -> String {
@@ -2135,6 +2156,18 @@ impl<'ast> Visit<'ast> for ExecutableWriteScan {
                 [.., fs, write] if fs == "fs" && write == "write" => {
                     self.written.extend(first.map(path_argument_key));
                 }
+                [.., fs, copy] if fs == "fs" && copy == "copy" => {
+                    self.written
+                        .extend(call.args.iter().nth(1).map(path_argument_key));
+                    self.executable_copy |= first.is_some_and(|source| {
+                        EXECUTABLE_SOURCE.is_match(&path_argument_key(source))
+                    });
+                }
+                [.., file, create]
+                    if file == "File" && (create == "create" || create == "create_new") =>
+                {
+                    self.written.extend(first.map(path_argument_key));
+                }
                 [.., set] if set == "set_permissions" => {
                     self.permitted.extend(first.map(path_argument_key));
                 }
@@ -2151,6 +2184,10 @@ impl<'ast> Visit<'ast> for ExecutableWriteScan {
         if call.method == "set_mode" {
             self.executable_mode |= call.args.first().is_some_and(executable_literal);
         }
+        if call.method == "open" && method_chain_calls(&call.receiver, &["create", "create_new"]) {
+            self.written
+                .extend(call.args.first().map(path_argument_key));
+        }
         visit::visit_expr_method_call(self, call);
     }
 }
@@ -2164,11 +2201,12 @@ impl ExecutableWriteVisitor {
     fn scan(&mut self, block: &syn::Block) {
         let mut scan = ExecutableWriteScan::default();
         scan.visit_block(block);
-        if scan.executable_mode
-            && scan
-                .permitted
-                .iter()
-                .any(|path| scan.written.contains(path))
+        if scan.executable_copy
+            || scan.executable_mode
+                && scan
+                    .permitted
+                    .iter()
+                    .any(|path| scan.written.contains(path))
         {
             self.sites += 1;
         }
@@ -2274,6 +2312,25 @@ fn executable_write_fence_pairs_a_write_with_an_exec_bit_on_its_path() {
         ),
         (
             "fn f() { write_executable_script(&p, \"#!/bin/sh\\n\").unwrap(); }",
+            0,
+        ),
+        (
+            "fn f() { fs::copy(source, target)?; fs::set_permissions(target, fs::Permissions::from_mode(0o700))?; }",
+            1,
+        ),
+        ("fn f() { fs::copy(cli_bin(), &copy)?; }", 1),
+        ("fn f() { std::fs::copy(std::env::current_exe()?, &copy)?; }", 1),
+        ("fn f() { std::fs::copy(entry.path(), &target)?; }", 0),
+        (
+            "fn f() { let f = File::create(&p)?; drop(f); fs::set_permissions(&p, Permissions::from_mode(0o755))?; }",
+            1,
+        ),
+        (
+            "fn f() { let f = OpenOptions::new().write(true).create(true).open(&p)?; fs::set_permissions(&p, Permissions::from_mode(0o755))?; }",
+            1,
+        ),
+        (
+            "fn f() { let f = OpenOptions::new().write(true).open(&p)?; fs::set_permissions(&p, Permissions::from_mode(0o755))?; }",
             0,
         ),
     ] {
