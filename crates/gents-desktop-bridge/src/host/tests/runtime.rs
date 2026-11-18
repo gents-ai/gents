@@ -118,8 +118,6 @@ async fn paired_model_settings_use_the_authenticated_client_endpoint() {
 
 #[tokio::test]
 async fn private_snapshot_keeps_the_current_requesters_questions_without_config_authority() {
-    // A non-admin User observes mailbox items through recipient DAC; native
-    // admins bypass that policy, independently of the host surface grants.
     let served = crate::tests::support::served_desktop().await;
     let core = served.core.clone();
     core.stop_observer_for_test().await;
@@ -201,15 +199,11 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
         panic!("one paired runtime: {result}")
     };
     let items = deployment["mailboxItems"].as_array().unwrap();
-    assert_eq!(
-        items.len(),
-        2,
-        "the Node administrator may read both open questions: {result}"
-    );
-    let own = items
-        .iter()
-        .find(|item| item["sourceId"] == "current")
-        .unwrap();
+    let [own] = items.as_slice() else {
+        panic!("expected only the current requester's open question: {items:?}")
+    };
+    assert_eq!(own["sourceId"], "current");
+    assert_eq!(own["requesterDid"], requester);
     assert!(own["questionHash"]
         .as_str()
         .is_some_and(|hash| !hash.is_empty()));
