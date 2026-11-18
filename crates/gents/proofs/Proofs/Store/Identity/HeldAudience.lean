@@ -17,7 +17,7 @@ identity token it presented before this model. -/
 namespace Identity.HeldAudience
 
 open Identity.UserDelegation (Audience Reported Resolution resolve Delegation mint
-  presentedOverHttp credential Credential verdict)
+  presentedOverHttp credential Credential verdict HomeClock issueAt generalLifetime backdateSeconds)
 
 /-- What a client's record of its home holds of the home's audience. -/
 inductive Held where
@@ -30,6 +30,9 @@ inductive Change where
   | unchanged
   | learned
   | changed
+  /-- The audience is the one held, and the home's clock is not where the
+  record put it. -/
+  | reclocked
   | forgotten
   deriving DecidableEq, Repr
 
@@ -40,11 +43,16 @@ home is on the node's own store, or its runtime is older than this model. A
 status that could not read its audience now leaves the record as it is: the
 home is still on Vera, a delegation for the audience it named last is useless
 without the User's key, and a request it refuses is resolved again (`resend`).
-`sameAudience` is whether the status names the audience the record holds. -/
-def change (held : Held) (reported : Reported) (sameAudience : Bool) : Change :=
+`sameAudience` is whether the status names the audience the record holds.
+Decision (gents#3831): a status naming the held audience whose clock is not
+where the record put it (`clockMoved`) replaces the record's clock, so a client
+whose own clock was set since it last read the status mints at the provider's
+time again. -/
+def change (held : Held) (reported : Reported) (sameAudience clockMoved : Bool) : Change :=
   match held, reported with
   | .unknown, .named => .learned
-  | .known, .named => if sameAudience then .unchanged else .changed
+  | .known, .named =>
+    if !sameAudience then .changed else if clockMoved then .reclocked else .unchanged
   | .known, .absent => .forgotten
   | _, _ => .unchanged
 
@@ -52,69 +60,135 @@ def change (held : Held) (reported : Reported) (sameAudience : Bool) : Change :=
 identity reads the status again before it mints a request-bound delegation,
 since none can be minted for that audience
 (`UserDelegation.a_request_bound_delegation_needs_the_genesis`); a provider
-names it once it has proven its deployment's first block. A client holding no
-audience mints no delegation, and one whose audience names it mints at once. -/
-def rereadForGenesis (held : Held) (genesisKnown : Bool) : Bool :=
-  held == .known && !genesisKnown
+names it once it has proven its deployment's first block. So does one that
+holds no clock of its home: a request-bound delegation is issued at the
+provider's time (`UserDelegation.issueAt`), and the stored command carrying it
+is processed after its client is gone, so a wrong clock is not caught by a
+refusal its client could answer. A client holding no audience mints no
+delegation, and one whose audience names the genesis and whose clock is held
+mints at once. -/
+def rereadBeforeRequestBound (held : Held) (genesisKnown clockKnown : Bool) : Bool :=
+  held == .known && (!genesisKnown || !clockKnown)
 
-theorem a_client_whose_audience_names_its_genesis_mints_at_once (held : Held) :
-    rereadForGenesis held true = false := by
+theorem a_client_whose_record_is_complete_mints_at_once (held : Held) :
+    rereadBeforeRequestBound held true true = false := by
   cases held <;> decide
 
-/-- What a status read reports, with the audience it names. -/
+/-- What a status read reports, with the audience it names and the home's
+clock as the client read it. -/
 inductive Status where
   | absent
-  | named (audience : Audience)
+  | named (audience : Audience) (clock : Option HomeClock)
   | unavailable
   deriving DecidableEq, Repr
 
 def Status.reported : Status → Reported
   | .absent => .absent
-  | .named _ => .named
+  | .named _ _ => .named
   | .unavailable => .unavailable
 
-def Held.of : Option Audience → Held
+/-- What a client keeps of its home: the audience it mints for and the home's
+clock it mints at (`UserDelegation.issueAt`). -/
+structure Record where
+  audience : Audience
+  clock : Option HomeClock
+  deriving DecidableEq, Repr
+
+def Held.of : Option Record → Held
   | none => .unknown
   | some _ => .known
 
-def Status.names (status : Status) (held : Option Audience) : Bool :=
+def Status.names (status : Status) (held : Option Record) : Bool :=
   match status, held with
-  | .named audience, some kept => audience == kept
+  | .named audience _, some kept => audience == kept.audience
+  | _, _ => false
+
+/-- Decision (gents#3831): a home's clock read again has moved when the record
+held none, or when the provider's time it reports is further than the
+allowance DefraDB sets a delegation's start back by from where the held clock
+puts it. A read reporting no clock moves nothing. -/
+def clockMoved (held : Option HomeClock) (read : Option HomeClock) : Bool :=
+  match held, read with
+  | none, some _ => true
+  | some kept, some now =>
+    let expected := issueAt (some kept) now.clockAtRead
+    expected + backdateSeconds < now.providerAtRead
+      || now.providerAtRead + backdateSeconds < expected
+  | _, none => false
+
+def Status.moves (status : Status) (held : Option Record) : Bool :=
+  match status, held with
+  | .named _ clock, some kept => clockMoved kept.clock clock
   | _, _ => false
 
 /-- The record after a status read. -/
-def observe (held : Option Audience) : Status → Option Audience
+def observe (held : Option Record) : Status → Option Record
   | .absent => none
-  | .named audience => some audience
+  | .named audience clock =>
+    match held with
+    | some kept =>
+      if audience ≠ kept.audience ∨ clockMoved kept.clock clock then some ⟨audience, clock⟩
+      else held
+    | none => some ⟨audience, clock⟩
   | .unavailable => held
 
-theorem a_record_changes_exactly_when_the_change_says_so (held : Option Audience)
+theorem a_moved_clock_is_another_clock (held read : Option HomeClock)
+    (moved : clockMoved held read = true) : read ≠ held := by
+  intro same
+  subst same
+  cases read with
+  | none => simp [clockMoved] at moved
+  | some now => simp [clockMoved, issueAt] at moved; omega
+
+theorem a_record_changes_exactly_when_the_change_says_so (held : Option Record)
     (status : Status) :
     (observe held status = held) ↔
-      change (Held.of held) status.reported (status.names held) = .unchanged := by
+      change (Held.of held) status.reported (status.names held) (status.moves held)
+        = .unchanged := by
   cases held with
   | none => cases status <;> simp [observe, change, Held.of, Status.reported, Status.names]
   | some kept =>
     cases status with
-    | named audience =>
-      by_cases same : audience = kept
-      · simp [observe, change, Held.of, Status.reported, Status.names, same]
-      · simp [observe, change, Held.of, Status.reported, Status.names, same]
+    | named audience clock =>
+      by_cases same : audience = kept.audience
+      · by_cases moved : clockMoved kept.clock clock = true
+        · have other := a_moved_clock_is_another_clock _ _ moved
+          simp only [observe, change, Held.of, Status.reported, Status.names, Status.moves, same,
+            moved, ne_eq, not_true_eq_false, or_true, ite_true, beq_self_eq_true, Bool.not_true,
+            Bool.false_eq_true, ite_false, reduceCtorEq, iff_false, Option.some.injEq]
+          intro back
+          exact other (by rw [← back])
+        · simp [observe, change, Held.of, Status.reported, Status.names, Status.moves, same,
+            moved]
+      · have differs : (audience == kept.audience) = false := by simpa using same
+        simp only [observe, change, Held.of, Status.reported, Status.names, Status.moves,
+          differs, Bool.not_false, ite_true, reduceCtorEq, iff_false, ne_eq, same,
+          not_false_eq_true, true_or, Option.some.injEq]
+        intro back
+        exact same (by rw [← back])
     | absent => simp [observe, change, Held.of, Status.reported, Status.names]
     | unavailable => simp [observe, change, Held.of, Status.reported, Status.names]
 
 /-- The credential a record yields at the one minting point
 (`UserDelegation.credential`), for a client holding its User's key. -/
-def recordCredential (held : Option Audience) : Credential :=
+def recordCredential (held : Option Record) : Credential :=
   credential false true true held.isSome
 
-theorem a_record_resolves_as_its_status_does (held : Option Audience) (audience : Audience) :
-    recordCredential (observe held (.named audience)) = .delegation
-      ∧ resolve .named = .delegation := ⟨rfl, rfl⟩
+theorem a_record_resolves_as_its_status_does (held : Option Record) (audience : Audience)
+    (clock : Option HomeClock) :
+    recordCredential (observe held (.named audience clock)) = .delegation
+      ∧ resolve .named = .delegation := by
+  constructor
+  · cases held with
+    | none => rfl
+    | some kept =>
+      simp only [observe]
+      split <;> rfl
+  · rfl
 
 /-- A home on the node's own store leaves a record that mints what it minted
 before this model. -/
-theorem a_home_on_the_node_store_keeps_the_identity_token (held : Option Audience) :
+theorem a_home_on_the_node_store_keeps_the_identity_token (held : Option Record) :
     recordCredential (observe held .absent) = .identityToken := rfl
 
 /-- Why a node refused a client's request, as far as its credential goes. -/
@@ -124,6 +198,9 @@ inductive Refusal where
   /-- DefraDB refused a delegation the client presented: minted for another
   audience, or no longer current. -/
   | delegationRefused
+  /-- DefraDB refused a delegation the client presented because it does not
+  hold at the provider's time. -/
+  | outsideWindow
   /-- Anything else, which no status could fix. -/
   | other
   deriving DecidableEq, Repr
@@ -132,6 +209,8 @@ inductive Refusal where
 inductive Answer where
   | unauthorized
   | forbidden
+  /-- DefraDB's `DELEGATION_OUTSIDE_WINDOW` error. -/
+  | outsideWindow
   | other
   deriving DecidableEq, Repr
 
@@ -141,21 +220,31 @@ take, for another worker or deployment or no longer current, with 403.
 Decision (gents#3831): a client reads a 401 or 403 to a credential it
 presented as a refusal of that credential. Whether the request is sent again is
 the status's to decide (`resend`), so an ordinary 401 or 403 on a home whose
-status changes nothing is told as it was before. -/
+status changes nothing is told as it was before. External premise
+(defradb.rs#3006): DefraDB answers a verified write whose delegation does not
+hold at the provider's time with the error code `DELEGATION_OUTSIDE_WINDOW`;
+only a presented delegation can be refused so. -/
 def refusalOf (answer : Answer) (presented : Credential) : Refusal :=
   match answer, presented with
   | .other, _ => .other
+  | .outsideWindow, .delegation => .outsideWindow
+  | .outsideWindow, _ => .other
   | _, .identityToken => .delegationRequired
   | _, .delegation => .delegationRefused
   | _, _ => .other
 
 /-- Decision (gents#3831): a request refused for its credential reads the
 status again and is sent again once, silently, when that changed the record to
-name an audience; otherwise the refusal is what the person is told. A request
-already sent again is never sent a third time, so a client does not loop
-against a runtime that keeps refusing it. -/
+name an audience or moved its clock; otherwise the refusal is what the person
+is told. A delegation refused for its window is minted again and sent again
+once whatever the read changed: the read reset the clock it is minted at, and a
+delegation held past its end is cured by a new one. A request already sent
+again is never sent a third time, so a client does not loop against a runtime
+that keeps refusing it. -/
 def resend (resent : Bool) (refusal : Refusal) (record : Change) : Bool :=
-  !resent && decide (refusal ≠ .other) && (record == .learned || record == .changed)
+  !resent && decide (refusal ≠ .other)
+    && (record == .learned || record == .changed || record == .reclocked
+      || refusal == .outsideWindow)
 
 theorem a_request_presenting_no_credential_is_never_sent_again (answer : Answer)
     (presented : Credential) (resent : Bool) (record : Change)
@@ -173,17 +262,28 @@ theorem only_a_credential_refusal_is_sent_again (resent : Bool) (record : Change
 /-- A home on the node's own store never sends a request again: its status
 names no audience, so its record never comes to name one. -/
 theorem a_home_on_the_node_store_never_resends (resent : Bool) (refusal : Refusal)
-    (held : Held) (sameAudience : Bool) :
-    resend resent refusal (change held .absent sameAudience) = false := by
-  cases resent <;> cases refusal <;> cases held <;> rfl
+    (held : Held) (sameAudience clockMoved : Bool) (presented : Credential)
+    (answer : Answer) (read : refusal = refusalOf answer presented)
+    (noDelegation : presented ≠ .delegation) :
+    resend resent refusal (change held .absent sameAudience clockMoved) = false := by
+  subst read
+  cases resent <;> cases answer <;> cases presented <;> cases held <;> simp_all [resend, refusalOf, change]
+
+/-- A client whose clock is wrong and whose delegation was refused for its
+window reads its home's clock again, mints at it and sends once more. -/
+theorem a_delegation_refused_for_its_window_is_sent_again_once (record : Change) :
+    resend false (refusalOf .outsideWindow .delegation) record = true
+      ∧ resend true (refusalOf .outsideWindow .delegation) record = false := by
+  cases record <;> decide
 
 theorem a_client_mints_for_its_held_audience (user : String) (node : Audience) (now : Nat)
-    (delegation : Delegation) (minted : mint (.client user) user node now none = some delegation) :
+    (delegation : Delegation) (minted : mint (.client user) user node now none none = some delegation) :
     presentedOverHttp node now delegation = some user := by
   unfold mint at minted
   split at minted
   · cases minted
-    simp [presentedOverHttp, verdict, Delegation.validFor, Delegation.currentAt]
+    simp [presentedOverHttp, verdict, Delegation.validFor, Delegation.currentAt, generalLifetime,
+      issueAt]
   · cases minted
 
 /-- After its runtime comes back under another audience, a client that held
@@ -192,16 +292,19 @@ once more, and is taken as its User. -/
 theorem a_client_recovers_from_a_restart_under_another_audience (user : String)
     (before after : Audience) (now : Nat) (stale fresh : Delegation)
     (changed : before ≠ after) (mintedFor : stale.audience = before)
-    (minted : mint (.client user) user after now none = some fresh) :
+    (minted : mint (.client user) user after now none none = some fresh) :
     presentedOverHttp after now stale = none
-      ∧ observe (some before) (.named after) = some after
-      ∧ change (Held.of (some before)) (Status.named after).reported
-          ((Status.named after).names (some before)) = .changed
+      ∧ observe (some ⟨before, none⟩) (.named after none) = some ⟨after, none⟩
+      ∧ change (Held.of (some ⟨before, none⟩)) (Status.named after none).reported
+          ((Status.named after none).names (some ⟨before, none⟩))
+          ((Status.named after none).moves (some ⟨before, none⟩)) = .changed
       ∧ resend false .delegationRefused .changed = true
       ∧ presentedOverHttp after now fresh = some user := by
-  refine ⟨?_, rfl, ?_, rfl, a_client_mints_for_its_held_audience user after now fresh minted⟩
+  refine ⟨?_, ?_, ?_, rfl, a_client_mints_for_its_held_audience user after now fresh minted⟩
   · have elsewhere : stale.audience ≠ after := by rw [mintedFor]; exact changed
     simp [presentedOverHttp, verdict, Delegation.validFor, elsewhere]
+  · have differs : after ≠ before := fun same => changed same.symm
+    simp [observe, differs]
   · have differs : (after == before) = false := by
       simp only [beq_eq_false_iff_ne, ne_eq]
       exact fun same => changed same.symm
@@ -212,10 +315,10 @@ token, is refused at the edge, learns the audience and sends the request once
 more as its User. -/
 theorem a_client_learns_its_audience_from_the_refusal (user : String) (node : Audience)
     (now : Nat) (fresh : Delegation)
-    (minted : mint (.client user) user node now none = some fresh) :
+    (minted : mint (.client user) user node now none none = some fresh) :
     (recordCredential none).presents.map (UserDelegation.edge .embeddedVera .user)
         = some .delegationRequired
-      ∧ change .unknown .named false = .learned
+      ∧ change .unknown .named false false = .learned
       ∧ resend false .delegationRequired .learned = true
       ∧ presentedOverHttp node now fresh = some user :=
   ⟨rfl, rfl, rfl, a_client_mints_for_its_held_audience user node now fresh minted⟩
@@ -268,11 +371,15 @@ theorem a_unit_that_sent_a_signed_write_runs_again_only_as_a_rebuild (resent : B
     mode = .signedConflictRebuild := by
   cases mode <;> simp_all [resendUnit, TransactionReplay.rerunHonoured]
 
-theorem a_unit_on_the_node_store_is_never_run_again (resent : Bool) (refusal : Refusal)
-    (held : Held) (sameAudience : Bool) (stage : UnitStage) (mode : TransactionReplay.Mode)
-    (dispatched : Bool) :
-    resendUnit resent refusal (change held .absent sameAudience) stage mode dispatched = false := by
-  simp [resendUnit, a_home_on_the_node_store_never_resends]
+theorem a_unit_on_the_node_store_is_never_run_again (resent : Bool) (held : Held)
+    (sameAudience clockMoved : Bool) (stage : UnitStage) (mode : TransactionReplay.Mode)
+    (dispatched : Bool) (presented : Credential) (answer : Answer)
+    (noDelegation : presented ≠ .delegation) :
+    resendUnit resent (refusalOf answer presented) (change held .absent sameAudience clockMoved)
+      stage mode dispatched = false := by
+  simp [resendUnit,
+    a_home_on_the_node_store_never_resends resent _ held sameAudience clockMoved presented answer
+      rfl noDelegation]
 
 /-- What a client tells the person of a request that stayed refused. -/
 inductive Told where

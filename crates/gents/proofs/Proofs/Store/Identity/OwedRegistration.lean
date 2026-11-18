@@ -185,7 +185,7 @@ message within the other half of the lifetime acts under a current
 delegation, even at an idle node's trailing block time. -/
 theorem a_refreshed_connection_acts_under_a_current_delegation (holder : Holder)
     (issuer : String) (audience : Audience) (issued age elapsed trail : Nat)
-    (delegation : Delegation) (minted : mint holder issuer audience issued none = some delegation)
+    (delegation : Delegation) (minted : mint holder issuer audience issued none none = some delegation)
     (fresh : refreshDue age = false) (prompt : elapsed ≤ lifetimeSeconds - refreshAfterSeconds)
     (trails : trail ≤ idleTrailSeconds) :
     delegation.currentAt (issued + (age + elapsed) - trail) = true := by

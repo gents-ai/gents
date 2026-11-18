@@ -51,10 +51,18 @@ structure Delegation where
 minutes. -/
 def lifetimeSeconds : Nat := 120
 
-/-- External premise (defradb.rs#2972): a request-bound delegation lives at
-most ten minutes and is executable only within that long before its expiry,
-so a stored command is processed within ten minutes of its signing or signed
-again. -/
+/-- External premise (defradb.rs#3006, `acp::CLOCK_SKEW_ALLOWANCE`): DefraDB
+dates every delegation's validity from thirty seconds before it is issued,
+general and request-bound alike. -/
+def backdateSeconds : Nat := 30
+
+/-- External premise: the block time of an idle embedded Vera node trails the
+clock by at most this much. -/
+def idleTrailSeconds : Nat := 20
+
+/-- External premise (vera.rs `MAX_OPERATION_TTL`): vera.rs executes a
+request-bound delegation only while its operation identity is open, and refuses
+one that stays open more than ten minutes past the block that executes it. -/
 def requestBoundLimitSeconds : Nat := 600
 
 theorem the_lifetime_fits_a_request_bound_delegation :
@@ -66,24 +74,16 @@ as expired after that. -/
 def storedCommandLifetimeSeconds : Nat := 300
 
 /-- Decision (gents#3831): a request-bound delegation a stored command carries
-lives 570 seconds, the most a provider that also refuses a delegation reaching
-it outside its validity takes (defradb.rs#3006), and so outlives its command
-by four and a half minutes in which the registration it authorizes is sent. -/
+lives 570 seconds, the most DefraDB issues (defradb.rs#3006: the provider's
+ten minutes less the clock skew allowance), and so outlives its command by four
+and a half minutes in which the registration it authorizes is sent. -/
 def requestBoundLifetimeSeconds : Nat := 570
 
 theorem a_request_bound_lifetime_fits_the_provider :
-    requestBoundLifetimeSeconds ≤ requestBoundLimitSeconds := by decide
+    requestBoundLifetimeSeconds + backdateSeconds ≤ requestBoundLimitSeconds := by decide
 
 theorem a_request_bound_delegation_outlives_its_stored_command :
     storedCommandLifetimeSeconds < requestBoundLifetimeSeconds := by decide
-
-/-- External premise: DefraDB dates a delegation's validity from thirty seconds
-before it is issued. -/
-def backdateSeconds : Nat := 30
-
-/-- External premise: the block time of an idle embedded Vera node trails the
-clock by at most this much. -/
-def idleTrailSeconds : Nat := 20
 
 /-- Whoever holds keys. A client holds its User's key and no other. The
 runtime holds the Node's key and derives its Agents' keys; it never holds a
@@ -97,37 +97,89 @@ def Holder.signsFor : Holder → String → Bool
   | .client user, issuer => user == issuer
   | .runtime node agents, issuer => node == issuer || agents.contains issuer
 
+/-- What a client knows of its home's clock: the provider's time its home's
+status last reported, and the client's own clock when it read it. -/
+structure HomeClock where
+  providerAtRead : Nat
+  clockAtRead : Nat
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3831): a client takes the provider's time now to be the
+time its home's status reported, advanced by what its own clock has run since
+it read it, and its own clock while it has read none. A clock that is merely
+wrong drops out: only how far it ran since the read counts. External premise
+(defradb.rs#3006): the provider judges a delegation at its own time, which the
+status reports as its light client's newest verified block time. -/
+def issueAt (home : Option HomeClock) (clock : Nat) : Nat :=
+  match home with
+  | none => clock
+  | some home => home.providerAtRead + (clock - home.clockAtRead)
+
+/-- How long a general delegation is minted for. External premise
+(`vera::vera_rs::caller_delegation`): DefraDB issues a general delegation at the
+signer's own clock and takes only its lifetime. Decision (gents#3831): a client
+whose clock is behind its home's lengthens it by how far behind, so the
+delegation ends `lifetimeSeconds` after the provider's time, as one issued
+there would; a clock ahead is left to the allowance DefraDB sets its start back
+by. -/
+def generalLifetime (home : Option HomeClock) (clock : Nat) : Nat :=
+  lifetimeSeconds + (issueAt home clock - clock)
+
+/-- Decision (gents#3831): a client dates a stored command it signs at the same
+estimate of the provider's time (`issueAt`), and it lasts
+`storedCommandLifetimeSeconds` from there. -/
+def storedCommandWindow (home : Option HomeClock) (clock : Nat) : Nat × Nat :=
+  (issueAt home clock, issueAt home clock + storedCommandLifetimeSeconds)
+
+/-- A stored command dated at its home's clock is never early for the runtime,
+which reads the provider's clock, and is processed inside its lifetime whenever
+the runtime takes it up `wait` after its signing, however wrong the client's
+clock: the client read its home's status `trail` behind the provider's time
+and ran its own clock on by `elapsed` before it signed. -/
+theorem a_stored_command_from_a_skewed_clock_is_current_for_the_runtime
+    (providerAtRead clockAtRead elapsed trail wait : Nat)
+    (prompt : trail + wait < storedCommandLifetimeSeconds) :
+    let window := storedCommandWindow (some ⟨providerAtRead, clockAtRead⟩) (clockAtRead + elapsed)
+    window.1 ≤ providerAtRead + trail + elapsed + wait
+      ∧ providerAtRead + trail + elapsed + wait < window.2 := by
+  simp only [storedCommandWindow, issueAt]
+  omega
+
 /-- The one minting point. A delegation is issued only by the holder of its
-issuer's key, for the audience a node reported, at the holder's clock, either
-general or for the one write `request` names. External premise
-(`vera::vera_rs::request_delegation`, defradb.rs#2987): a request-bound
-delegation names the deployment's genesis identity, so none is minted for an
-audience that names none, and it is valid from the moment it is issued. The
-holder's clock is the one point that changes when a provider reports its own
-time (defradb.rs#3006). -/
-def mint (holder : Holder) (issuer : String) (audience : Audience) (now : Nat)
-    (request : Option String) : Option Delegation :=
+issuer's key, for the audience a node reported, either general or for the one
+write `request` names. External premise (`vera::vera_rs::request_delegation_at`,
+defradb.rs#2987, #3006): a request-bound delegation names the deployment's
+genesis identity, so none is minted for an audience that names none, and it is
+issued at the time its signer names. Decision (gents#3831): a client issues a
+request-bound delegation at its estimate of the provider's time (`issueAt`),
+and a general one at its own clock for `generalLifetime`. `clock` is the
+holder's clock and `home` what it read of its home's. -/
+def mint (holder : Holder) (issuer : String) (audience : Audience) (clock : Nat)
+    (home : Option HomeClock) (request : Option String) : Option Delegation :=
   if holder.signsFor issuer ∧ (request.isNone ∨ audience.genesis.isSome) then
+    let issued := if request.isSome then issueAt home clock else clock
     some { issuer, audience,
-           notBefore := if request.isSome then now else now - backdateSeconds,
-           expires := now + if request.isSome then requestBoundLifetimeSeconds else lifetimeSeconds,
+           notBefore := issued - backdateSeconds,
+           expires := issued + if request.isSome then requestBoundLifetimeSeconds
+             else generalLifetime home clock,
            policyCommands := true, request, signed := true }
   else none
 
 theorem a_request_bound_delegation_needs_the_genesis (holder : Holder) (issuer : String)
-    (audience : Audience) (now : Nat) (write : String) (unknown : audience.genesis = none) :
-    mint holder issuer audience now (some write) = none := by
+    (audience : Audience) (now : Nat) (home : Option HomeClock) (write : String)
+    (unknown : audience.genesis = none) :
+    mint holder issuer audience now home (some write) = none := by
   simp [mint, unknown]
 
 theorem the_runtime_never_mints_a_user_delegation (node user : String) (agents : List String)
-    (audience : Audience) (now : Nat) (request : Option String) (notNode : node ≠ user)
-    (notAgent : user ∉ agents) :
-    mint (.runtime node agents) user audience now request = none := by
+    (audience : Audience) (now : Nat) (home : Option HomeClock) (request : Option String)
+    (notNode : node ≠ user) (notAgent : user ∉ agents) :
+    mint (.runtime node agents) user audience now home request = none := by
   simp [mint, Holder.signsFor, notNode, notAgent]
 
 theorem a_client_mints_only_as_its_own_user (user issuer : String) (audience : Audience)
-    (now : Nat) (request : Option String) (delegation : Delegation)
-    (h : mint (.client user) issuer audience now request = some delegation) :
+    (now : Nat) (home : Option HomeClock) (request : Option String) (delegation : Delegation)
+    (h : mint (.client user) issuer audience now home request = some delegation) :
     delegation.issuer = user := by
   unfold mint at h
   split at h
@@ -146,15 +198,55 @@ def Delegation.currentAt (delegation : Delegation) (now : Nat) : Bool :=
 than an idle node's does and any `elapsed` within the lifetime. -/
 theorem a_minted_delegation_outlives_an_idle_block (holder : Holder) (issuer : String)
     (audience : Audience) (issued elapsed trail : Nat) (delegation : Delegation)
-    (minted : mint holder issuer audience issued none = some delegation)
+    (minted : mint holder issuer audience issued none none = some delegation)
     (withinLifetime : elapsed ≤ lifetimeSeconds) (trails : trail ≤ idleTrailSeconds) :
     delegation.currentAt (issued + elapsed - trail) = true := by
   unfold mint at minted
   split at minted
   · cases minted
-    simp only [Delegation.currentAt, backdateSeconds, lifetimeSeconds, idleTrailSeconds,
+    simp only [Delegation.currentAt, backdateSeconds, generalLifetime, issueAt, lifetimeSeconds,
+      idleTrailSeconds, Option.isSome_none, Bool.false_eq_true, ite_false, Bool.and_eq_true,
+      decide_eq_true_eq] at *
+    omega
+  · cases minted
+
+/-- A general delegation minted by a client whose clock is behind its home's by
+any amount, or ahead by no more than the allowance DefraDB sets its start back
+by, is current at the provider's time for its whole lifetime after the client
+read its home's status, `trail` behind the provider, and ran its own clock on
+by `elapsed`. -/
+theorem a_general_delegation_from_a_slow_clock_is_current (holder : Holder) (issuer : String)
+    (audience : Audience) (providerAtRead clockAtRead elapsed trail wait : Nat)
+    (delegation : Delegation)
+    (minted : mint holder issuer audience (clockAtRead + elapsed)
+      (some ⟨providerAtRead, clockAtRead⟩) none = some delegation)
+    (ahead : clockAtRead ≤ providerAtRead + backdateSeconds)
+    (prompt : trail + wait ≤ lifetimeSeconds) :
+    delegation.currentAt (providerAtRead + trail + elapsed + wait) = true := by
+  unfold mint at minted
+  split at minted
+  · cases minted
+    simp only [Delegation.currentAt, backdateSeconds, generalLifetime, issueAt, lifetimeSeconds,
       Option.isSome_none, Bool.false_eq_true, ite_false, Bool.and_eq_true,
       decide_eq_true_eq] at *
+    omega
+  · cases minted
+
+/-- The limit `generalLifetime` leaves: DefraDB issues a general delegation at
+its signer's clock, so one from a clock further ahead of the provider than the
+allowance is not yet valid when it arrives, whatever its client read. -/
+theorem a_general_delegation_from_a_fast_clock_is_not_yet_valid (holder : Holder)
+    (issuer : String) (audience : Audience) (providerAtRead clockAtRead elapsed : Nat)
+    (delegation : Delegation)
+    (minted : mint holder issuer audience (clockAtRead + elapsed)
+      (some ⟨providerAtRead, clockAtRead⟩) none = some delegation)
+    (fast : providerAtRead + backdateSeconds < clockAtRead) :
+    delegation.currentAt (providerAtRead + elapsed) = false := by
+  unfold mint at minted
+  split at minted
+  · cases minted
+    simp only [Delegation.currentAt, backdateSeconds, Option.isSome_none, Bool.false_eq_true,
+      ite_false, Bool.and_eq_false_iff, decide_eq_false_iff_not] at *
     omega
   · cases minted
 
@@ -557,7 +649,7 @@ delegation minted now for that command's own write, and it is admitted
 whether the command is direct or stored. -/
 theorem a_refused_command_is_signed_again (digest : Digest) (node : Audience) (now : Nat)
     (user write : String) (carrier : Carrier) (delegation : Delegation)
-    (minted : mint (.client user) user node now (some write) = some delegation) :
+    (minted : mint (.client user) user node now none (some write) = some delegation) :
     admitCommand digest .embeddedVera .user node now
       { signer := user, carrier, kind := .create, write,
         delegationDigest := some (digest.of delegation) }
@@ -566,24 +658,29 @@ theorem a_refused_command_is_signed_again (digest : Digest) (node : Audience) (n
   split at minted
   · cases minted
     rw [admitCommand_attached _ _ _ _ _ (by simp)]
-    simp [scope, Delegation.validFor, Delegation.currentAt]
+    simp [scope, Delegation.validFor, Delegation.currentAt, issueAt]
   · cases minted
 
 /-- A stored create carrying a delegation its client minted when it signed the
 command is admitted whenever the runtime processes the command inside the
-command's own validity. External premise: on a home whose Vera node runs in the
-runtime's process, the runtime and the provider read one clock, and the
-provider judges the delegation in a block proposed after the runtime submitted
-the command. Decision (gents#3831): a registration or relationship change the
+command's own validity, however wrong the client's clock: the client read its
+home's status `trail` behind the provider's time, ran its own clock on by
+`elapsed` before it minted, and the runtime processes the command `wait` later.
+External premise: on a home whose Vera node runs in the runtime's process, the
+runtime and the provider read one clock, and the provider judges the
+delegation in a block proposed after the runtime submitted the command.
+Decision (gents#3831): a registration or relationship change the
 create still owes when its delegation lapses waits for authority, and the
 client settles it in the background under a general delegation
 (`Identity.OwedRegistration.handling`); the stored command is never signed
 again and no one is asked. -/
 theorem a_stored_create_is_admitted_through_its_window (digest : Digest) (node : Audience)
-    (user write : String) (issued elapsed : Nat) (delegation : Delegation)
-    (minted : mint (.client user) user node issued (some write) = some delegation)
-    (within : elapsed ≤ storedCommandLifetimeSeconds) :
-    admitCommand digest .embeddedVera .user node (issued + elapsed)
+    (user write : String) (providerAtRead clockAtRead elapsed trail wait : Nat)
+    (delegation : Delegation)
+    (minted : mint (.client user) user node (clockAtRead + elapsed)
+      (some ⟨providerAtRead, clockAtRead⟩) (some write) = some delegation)
+    (trails : trail ≤ idleTrailSeconds) (within : wait ≤ storedCommandLifetimeSeconds) :
+    admitCommand digest .embeddedVera .user node (providerAtRead + trail + elapsed + wait)
       { signer := user, carrier := .stored, kind := .create, write,
         delegationDigest := some (digest.of delegation) }
       (some delegation) = .forwarded := by
@@ -591,8 +688,9 @@ theorem a_stored_create_is_admitted_through_its_window (digest : Digest) (node :
   split at minted
   · cases minted
     rw [admitCommand_attached _ _ _ _ _ (by simp)]
-    simp only [storedCommandLifetimeSeconds] at within
-    simp [scope, Delegation.validFor, Delegation.currentAt, requestBoundLifetimeSeconds]
+    simp only [storedCommandLifetimeSeconds, idleTrailSeconds] at within trails
+    simp [scope, Delegation.validFor, Delegation.currentAt, requestBoundLifetimeSeconds, issueAt,
+      backdateSeconds]
     omega
   · cases minted
 
