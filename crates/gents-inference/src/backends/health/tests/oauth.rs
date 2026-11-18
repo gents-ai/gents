@@ -83,7 +83,7 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
         .await
         .unwrap();
     let publication_allowed = |native_read: bool| {
-        gents_lean_vocab::families::household_backend_probe::cases()
+        gents_lean_vocab::families::household_backend_probe_access::cases()
             .into_iter()
             .find(|case| {
                 case.input.native_read == native_read

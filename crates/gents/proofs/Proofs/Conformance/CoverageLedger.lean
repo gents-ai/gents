@@ -3172,7 +3172,9 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_backend_discovery")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "family" "household_backend_probe")
+  , tagged (consumerCoverage "family" "household_backend_probe_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_probe_race")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_backend_removal")
       "identity-permission" [Surface.runtimeInternal]
