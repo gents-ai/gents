@@ -21,7 +21,7 @@ use crate::identity::NodeIdentity;
 /// without this version's marker is reported as made by an older version and
 /// is never opened, so nothing in it changes; there is no conversion.
 const MARKER: &str = ".gents-private-backend-v2";
-pub(crate) const PROVENANCE_MARKER: &str = MARKER;
+pub const PROVENANCE_MARKER: &str = MARKER;
 const DOMAIN: &[u8] = b"gents private backend fresh store v2\0";
 type MarkerMac = Hmac<Sha256>;
 

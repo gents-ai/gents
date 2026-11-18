@@ -1,19 +1,13 @@
 /// The data-plane pairing overlay is an Agent-owned document parented by the
-/// runtime Node: its native ACP follows the Lean `pairing_overlay_cases` for
+/// runtime Node: its native ACP follows the Lean `household_pairing_overlay` cases for
 /// every actor, before and after the parent relationship is revoked, and the
 /// revocation survives a restart.
 #[tokio::test]
 async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Result<()> {
-    use gents_lean_vocab::lean_identity_household_cases;
     use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
     use gents_store::identity::NodeIdentity as _;
     use gents_store::graphql::escape_graphql_string;
-    use anyhow::Context as _;
 
-    let model = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .context("missing configuration model")?;
     let directory = tempfile::tempdir()?;
     let runtime_path = directory.path().join("runtime");
     let runtime = Arc::new(gents_store::identity::KeyIdentity::load_or_create(&runtime_path, None)?);
@@ -136,8 +130,10 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
         r#"{{ DataPlanePairingDesired(filter: {{_docID: {{_eq:"{}"}}}}) {{_docID template}} }}"#,
         escape_graphql_string(&doc)
     );
-    for revoked in [false, true] {
-        if revoked {
+    let mut parent_revoked = false;
+    for case in gents_lean_vocab::families::household_pairing_overlay::cases() {
+        let revoked = case.input.revoked;
+        if revoked && !parent_revoked {
             agent_access
                 .delete_resource_relationship(
                     "DataPlanePairingDesired",
@@ -147,55 +143,47 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
                     &parent,
                 )
                 .await?;
+            parent_revoked = true;
         }
-        for case in model
-            .pairing_overlay_cases
-            .iter()
-            .filter(|case| case["revoked"] == revoked)
-        {
-            let access = match case["actor"].as_str().unwrap() {
-                "user" => &user_access,
-                "runtime" => &runtime_access,
-                "agent" => &agent_access,
-                "sibling" => &sibling_access,
-                "outsider" => &outsider_access,
-                _ => unreachable!(),
-            };
-            let expected = case["expected"].as_bool().unwrap();
-            let actual = if case["permission"] == "read" {
-                !gents_protocol::graphql::graphql_rows_from_response(
-                    &access.execute(&query).await?,
-                    "DataPlanePairingDesired",
+        assert_eq!(revoked, parent_revoked, "{:?}", case.input);
+        let access = match case.input.actor.as_str() {
+            "user" => &user_access,
+            "runtime" => &runtime_access,
+            "agent" => &agent_access,
+            "sibling" => &sibling_access,
+            "outsider" => &outsider_access,
+            other => panic!("unmodeled overlay actor {other}"),
+        };
+        let actual = if case.input.permission == "read" {
+            !gents_protocol::graphql::graphql_rows_from_response(
+                &access.execute(&query).await?,
+                "DataPlanePairingDesired",
+            )
+            .is_empty()
+        } else {
+            let before = agent_access.execute(&query).await?;
+            let mutation = format!(
+                r#"mutation {{ update_DataPlanePairingDesired(docID:"{}", input: {{template:"{}"}}) {{_docID}} }}"#,
+                escape_graphql_string(&doc),
+                escape_graphql_string(&format!("{}-{revoked}", case.input.actor))
+            );
+            let updated = match access.write("test.overlay.update", &mutation).await {
+                Ok(value) => !gents_protocol::graphql::graphql_rows_from_response(
+                    &value,
+                    "update_DataPlanePairingDesired",
                 )
-                .is_empty()
-            } else {
-                let before = agent_access.execute(&query).await?;
-                let mutation = format!(
-                    r#"mutation {{ update_DataPlanePairingDesired(docID:"{}", input: {{template:"{}"}}) {{_docID}} }}"#,
-                    escape_graphql_string(&doc),
-                    escape_graphql_string(&format!(
-                        "{}-{revoked}",
-                        case["actor"].as_str().unwrap()
-                    ))
-                );
-                let updated = match access.write("test.overlay.update", &mutation).await {
-                    Ok(value) => !gents_protocol::graphql::graphql_rows_from_response(
-                        &value,
-                        "update_DataPlanePairingDesired",
-                    )
-                    .is_empty(),
-                    Err(error) if error.is_permission_denied() || error.is_graphql_rejection() => {
-                        false
-                    }
-                    Err(error) => return Err(error.into()),
-                };
-                if !expected {
-                    assert_eq!(agent_access.execute(&query).await?, before);
+                .is_empty(),
+                Err(error) if error.is_permission_denied() || error.is_graphql_rejection() => {
+                    false
                 }
-                updated
+                Err(error) => return Err(error.into()),
             };
-            assert_eq!(actual, expected, "{case}");
-        }
+            if !updated {
+                assert_eq!(agent_access.execute(&query).await?, before);
+            }
+            updated
+        };
+        case.check(actual);
     }
     drop(agent_access);
     drop(sibling_access);

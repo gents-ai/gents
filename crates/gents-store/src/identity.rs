@@ -35,7 +35,7 @@ pub use enrollment_grant::{
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
-pub use grant_sets::{GrantSet, GrantSetError};
+pub use grant_sets::{GrantSet, GrantSetError, Recipient, RecipientGrants};
 pub use macos::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,

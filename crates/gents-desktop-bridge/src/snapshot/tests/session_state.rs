@@ -2,8 +2,6 @@ use super::*;
 use crate::types::ReconstructionState;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use gents_lean_vocab::lean_transcript_cases;
-
 fn session(requester_did: Option<&str>) -> AgentSession {
     AgentSession {
         session_id: "session-1".into(),
@@ -739,43 +737,41 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
 }
 
 #[test]
-fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
-    let cases = lean_transcript_cases();
-    assert_eq!(cases.len(), 11);
-    for case in cases {
+fn session_snapshot_transcript_rendering_follows_the_lean_projection() {
+    gents_lean_vocab::families::transcript_cases_snapshot_projection::replay(|case| {
         let mut rows = ClientStoreRows {
             sessions: vec![session(None)],
             ..ClientStoreRows::default()
         };
-        for sequence in 0..case.post_message_count {
+        for (index, message) in case.messages.iter().enumerate() {
             push_canonical_text_message(
                 &mut rows,
-                &format!("{}-message-{sequence}", case.name),
+                &format!("{}-message-{index}", case.name),
                 "session-1",
                 Some("req-1"),
-                u32::try_from(sequence + 1).expect("contract sequence"),
-                if sequence == 0 {
-                    MessageRole::User
-                } else {
-                    MessageRole::Assistant
+                u32::try_from(message.sequence).expect("contract sequence"),
+                match message.role.as_str() {
+                    "user" => MessageRole::User,
+                    "assistant" => MessageRole::Assistant,
+                    other => panic!("{}: unknown message role {other:?}", case.name),
                 },
-                &format!("{} payload {sequence}", case.name),
+                &format!("{} payload {index}", case.name),
             );
         }
-        for index in 0..case.post_tool_call_count {
+        for call in &case.tool_calls {
             rows.tool_calls.push(
                 serde_json::from_value(serde_json::json!({
-                    "_docID": format!("{}-tool-{index}", case.name),
+                    "_docID": format!("{}-tool-{}", case.name, call.call_id),
                     "node_did": "did:test:amy",
                     "request_doc_id": "req-1",
-                    "tool_call_key": format!("{}-tool-{index}", case.name),
+                    "tool_call_key": format!("{}-tool-{}", case.name, call.call_id),
                     "session_id": "session-1",
                     "request_id": "req-1",
-                    "message_sequence": case.assistant_sequence,
+                    "message_sequence": call.message_sequence,
                     "tool_name": "read",
-                    "tool_call_id": format!("result-{}", case.logical_result_id + index),
-                    "status": if case.expected_pair_closed { "completed" } else { "running" },
-                    "lifecycle_state": if case.expected_pair_closed { "completed" } else { "running" }
+                    "tool_call_id": format!("result-{}", call.call_id),
+                    "status": call.state,
+                    "lifecycle_state": call.state
                 }))
                 .expect("canonical tool-call envelope"),
             );
@@ -786,20 +782,10 @@ fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
             Some("req-1"),
         )
         .unwrap_or_else(|| panic!("case {} should produce a snapshot", case.name));
-        assert_eq!(
-            snapshot.messages.len(),
-            case.post_message_count,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            snapshot.tool_calls.len(),
-            case.post_tool_call_count,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            snapshot
+        gents_lean_vocab::families::transcript_cases_snapshot_projection::SnapshotOutput {
+            post_message_count: snapshot.messages.len() as u64,
+            post_tool_call_count: snapshot.tool_calls.len() as u64,
+            tool_groups: snapshot
                 .timeline_items
                 .iter()
                 .filter_map(|item| match item {
@@ -807,41 +793,21 @@ fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
                         message_sequence,
                         tools,
                         ..
-                    } => {
-                        Some((*message_sequence, tools.len()))
-                    }
+                    } => Some(
+                        gents_lean_vocab::families::transcript_cases_snapshot_projection::ToolGroupWire {
+                            message_sequence: message_sequence
+                                .and_then(|sequence| u64::try_from(sequence).ok())
+                                .unwrap_or_else(|| {
+                                    panic!("{}: tool group without a sequence", case.name)
+                                }),
+                            tools: tools.len() as u64,
+                        },
+                    ),
                     _ => None,
                 })
-                .collect::<Vec<_>>(),
-            if case.post_tool_call_count == 0 {
-                Vec::new()
-            } else {
-                vec![(
-                    Some(case.assistant_sequence as i64),
-                    case.post_tool_call_count,
-                )]
-            },
-            "{} tool pairing/group sequence drifted",
-            case.name
-        );
-        assert!(
-            case.expected_ordered,
-            "{} must retain transcript ordering",
-            case.name
-        );
-        if case.expected_duplicate_reused_sequence {
-            assert_eq!(
-                case.pre_message_count, case.post_message_count,
-                "{} duplicate observation must not append a message",
-                case.name
-            );
-            assert_eq!(
-                case.result_sequence, case.post_message_count,
-                "{} must retain the original tool-result sequence",
-                case.name
-            );
+                .collect(),
         }
-    }
+    });
 }
 
 #[test]

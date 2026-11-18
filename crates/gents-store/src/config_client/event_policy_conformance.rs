@@ -5,34 +5,6 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::Result<()> {
-    let contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration contract");
-    let modeled_user = &contract
-        .objects
-        .iter()
-        .find(|row| row.id == "home")
-        .unwrap()
-        .owner;
-    let modeled_agent = &contract
-        .objects
-        .iter()
-        .find(|row| row.id == "agent-created")
-        .unwrap()
-        .owner;
-    let modeled_runtime = contract
-        .relations
-        .iter()
-        .find_map(|relation| match &relation.subject {
-            gents_lean_vocab::LeanIdentitySubject::Actor { actor }
-                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .unwrap();
     let directory = tempfile::tempdir()?;
     let root =
         crate::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
@@ -66,7 +38,11 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
     )?;
     let context = defra_core::RequestContext::default().with_identity(Some(root.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&context, &contract.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
         .await?;
     assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
     owner.add_collection(gents_protocol::schemas::NODE).await?;
@@ -113,8 +89,9 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
     let mut revoked = false;
     let mut rebound = false;
     let mut rebound_revoked = false;
-    for observation in &contract.event_configuration_cases {
-        if observation["revoked"] == true && !revoked {
+    for case in gents_lean_vocab::families::household_event_configuration_access::cases() {
+        let observation = &case.input;
+        if observation.revoked && !revoked {
             owner
                 .delete_actor_relationship(
                     "EventSource",
@@ -125,7 +102,7 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
                 .await?;
             revoked = true;
         }
-        if observation["rebound"] == true && !rebound {
+        if observation.rebound && !rebound {
             // Lean `rebindEventConfiguration`: the Trigger's exclusive reader moves
             // from the old Agent to the new one; the shared source only gains the
             // new reader and keeps the old one's grant unless revoked above.
@@ -149,7 +126,7 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
             }
             rebound = true;
         }
-        if observation["post_revoke"] == true && !rebound_revoked {
+        if observation.post_revoke && !rebound_revoked {
             owner
                 .delete_actor_relationship(
                     "EventSource",
@@ -160,18 +137,14 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
                 .await?;
             rebound_revoked = true;
         }
-        let modeled_actor = observation["actor"].as_str().unwrap();
-        let access = if modeled_actor == modeled_user {
-            &owner
-        } else if modeled_actor == modeled_runtime {
-            &runtime_access
-        } else if modeled_actor == modeled_agent {
-            &agent_access
-        } else {
-            &sibling_access
+        let access = match observation.role.as_str() {
+            "user" => &owner,
+            "runtime" => &runtime_access,
+            "agent" => &agent_access,
+            "sibling" => &sibling_access,
+            other => panic!("unmodeled event actor role {other}"),
         };
-        let name = observation["id"].as_str().unwrap();
-        let allowed = match (name, observation["permission"].as_str().unwrap()) {
+        let allowed = match (observation.id.as_str(), observation.permission.as_str()) {
             ("trigger", "read") => !access.execute("{Trigger {_docID}}").await?["data"]["Trigger"].as_array().unwrap().is_empty(),
             ("source", "read") => !access.execute("{EventSource {_docID}}").await?["data"]["EventSource"].as_array().unwrap().is_empty(),
             ("trigger", "update") => match access.write("test.event_policy.update", &format!("mutation {{update_Trigger(docID:\"{}\",input:{{display_name:\"edited\"}}){{_docID}}}}", escape_graphql_string(&trigger))).await {
@@ -181,11 +154,7 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
             },
             _ => unreachable!(),
         };
-        assert_eq!(
-            allowed,
-            observation["expected"].as_bool().unwrap(),
-            "{observation}"
-        );
+        case.check(allowed);
     }
     owner
         .add_collection(gents_protocol::schemas::EVENT_SOURCE_CURSOR)
@@ -204,8 +173,12 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
         )
         .await?;
     let mut cursor_revoked = false;
-    for (step, observation) in contract.event_cursor_cases.iter().enumerate() {
-        if observation["revoked"] == true && !cursor_revoked {
+    for (step, case) in gents_lean_vocab::families::household_event_cursor_access::cases()
+        .into_iter()
+        .enumerate()
+    {
+        let observation = &case.input;
+        if observation.revoked && !cursor_revoked {
             owner
                 .delete_actor_relationship(
                     "EventSourceCursor",
@@ -216,17 +189,14 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
                 .await?;
             cursor_revoked = true;
         }
-        let modeled_actor = observation["actor"].as_str().unwrap();
-        let access = if modeled_actor == modeled_user {
-            &owner
-        } else if modeled_actor == modeled_runtime {
-            &runtime_access
-        } else if modeled_actor == modeled_agent {
-            &agent_access
-        } else {
-            &sibling_access
+        let access = match observation.role.as_str() {
+            "user" => &owner,
+            "runtime" => &runtime_access,
+            "agent" => &agent_access,
+            "sibling" => &sibling_access,
+            other => panic!("unmodeled event actor role {other}"),
         };
-        let allowed = match observation["permission"].as_str().unwrap() {
+        let allowed = match observation.permission.as_str() {
             "read" => !access.execute("{EventSourceCursor {_docID}}").await?["data"]["EventSourceCursor"].as_array().unwrap().is_empty(),
             "update" => match access.write("test.event_policy.update_cursor", &format!("mutation {{update_EventSourceCursor(docID:\"{}\",input:{{after:\"{}\"}}){{_docID}}}}", escape_graphql_string(&cursor_doc), step + 1)).await {
                 Ok(response) => !response["data"]["update_EventSourceCursor"].as_array().unwrap().is_empty(),
@@ -235,11 +205,7 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
             },
             _ => unreachable!(),
         };
-        assert_eq!(
-            allowed,
-            observation["expected"].as_bool().unwrap(),
-            "{observation}"
-        );
+        case.check(allowed);
     }
     node.shutdown().await?;
     Ok(())
