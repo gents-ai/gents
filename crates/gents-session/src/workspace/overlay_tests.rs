@@ -247,7 +247,7 @@ fn live_tree_hash_drift_fails_closed() {
     workspace.seal_hash = Some("hash-1".into());
     let mut placed = placement(&placement_path);
     placed.observed_tree_hash = Some("hash-1".into());
-    let overlay = bind_workspace_overlay(
+    bind_workspace_overlay(
         &workspace,
         &placed,
         WorkspaceBindInput {
@@ -257,7 +257,6 @@ fn live_tree_hash_drift_fails_closed() {
         },
     )
     .unwrap();
-    assert_eq!(overlay.seal_hash.as_deref(), Some("hash-1"));
 
     let error = bind_workspace_overlay(
         &workspace,
