@@ -470,6 +470,17 @@ See `../README.md` for how this fits the broader formal-verification model.
   `NamedTempFile` held open until persist), `Unwaited` (the copy child not
   reaped). Green copies with a reaped `/bin/cp` child into a file the updater
   never opens for writing.
+- `UsageRecordObservation` — a provider response's usage headers reach the
+  runtime's `UsageCache` through a detached writer (`UsageReporter::observe`
+  spawns credential resolution and the record), while the caller backfills
+  the credential's `provider_account_key` between two responses and then
+  reads the backend's usage. The binding is the row's stable `_docID`, so the
+  backfill strands no observation; the reader is the side that can be wrong.
+  Green subscribes to the cache's record count before checking and reads once
+  both writers have recorded. RED: `ReadOnce` (the 2026-11-19 CI failure: the
+  read is ordered after neither write and finds nothing), `SubscribeAfterRead`
+  (a record landing between a short check and the subscription is never
+  signalled).
 - `CommitResponseWait` — a client transaction's commit over the runtime's
   HTTP endpoint on a loaded host (`txn_commit`, e.g. the pack document
   install). RED: `ClientWindow`, a total request timeout, reports a live
