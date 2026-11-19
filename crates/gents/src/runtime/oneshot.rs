@@ -433,7 +433,7 @@ where
             None,
             Default::default(),
             false,
-            inference,
+            Box::pin(inference),
         );
     let response = scoped_inference.await;
 

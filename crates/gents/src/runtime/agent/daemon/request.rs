@@ -289,7 +289,7 @@ where
                 .await
         };
 
-        handled.await
+        Box::pin(handled).await
     }
 }
 

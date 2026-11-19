@@ -457,7 +457,7 @@ where
             )),
             ..Default::default()
         };
-        async {
+        Box::pin(async {
             lifecycle.begin_owned_execution(writer).await?;
             if request.purpose == RequestPurpose::AccessReview {
                 return self
@@ -568,7 +568,7 @@ where
                 &mut interrupt_rx,
             )
             .await
-        }
+        })
         .await
     }
 
