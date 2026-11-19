@@ -913,26 +913,24 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginOutcome> {
-        Ok(
-            PluginExecutor::call(self, record, input, &ToolCallEnvelope::default())
-                .await?
-                .outcome,
-        )
+        Ok(PluginExecutor::call(self, record, input, context)
+            .await?
+            .outcome)
     }
 
     async fn run_plugin_once(
         self: Arc<Self>,
         coordinate: &str,
         selected: &[gents_documents::PluginToolRef],
-        node: Arc<defra_node::Node>,
-        node_did: &str,
-        agent_did: Option<&str>,
+        agent: gents_tools::plugin_host::PluginRunAgent<'_>,
         input: serde_json::Value,
+        context: &ToolCallEnvelope,
     ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
         super::tool::PluginTool::for_run(self, coordinate, selected)?
-            .with_agent_data(node, node_did, agent_did)?
-            .run_once(input, &ToolCallEnvelope::default())
+            .with_agent_data(agent.node, agent.node_did, agent.agent_did)?
+            .run_once(input, context)
             .await
     }
 

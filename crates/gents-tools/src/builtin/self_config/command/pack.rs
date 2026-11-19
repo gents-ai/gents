@@ -98,10 +98,13 @@ impl ConfigCommandTool {
             .run_plugin_once(
                 coordinate,
                 &self.selected_plugins,
-                self.node.clone(),
-                &self.node_did,
-                Some(self.core.agent_did()),
+                crate::plugin_host::PluginRunAgent {
+                    node: self.node.clone(),
+                    node_did: &self.node_did,
+                    agent_did: Some(self.core.agent_did()),
+                },
                 input,
+                &self.envelope,
             )
             .await
             .with_context(|| format!("calling plugin {coordinate}"))?;

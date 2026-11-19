@@ -6,6 +6,14 @@ use std::sync::{
     Arc,
 };
 
+#[cfg(test)]
+tokio::task_local! {
+    /// A task-local the caller of the loop stream sets, standing in for the
+    /// ones that remain (the workspace-approval context, the rendered-request
+    /// capture scope): work the stream drives must observe the caller's.
+    static CALLER_SCOPE: &'static str;
+}
+
 fn drive_admissions<S>(
     stream: S,
 ) -> impl futures::Stream<Item = Result<super::LoopStreamItem, super::LoopStreamError>>
@@ -47,7 +55,7 @@ async fn dropping_the_loop_cancels_pending_compaction() {
 }
 
 #[tokio::test]
-async fn dropping_pending_provider_dispatch_cancels_work() {
+async fn dropping_pending_provider_dispatch_keeps_scope_and_cancels_work() {
     struct Dropped(Arc<AtomicBool>);
     impl Drop for Dropped {
         fn drop(&mut self) {
@@ -57,17 +65,25 @@ async fn dropping_pending_provider_dispatch_cancels_work() {
 
     let dropped = Arc::new(AtomicBool::new(false));
     let marker = Dropped(dropped.clone());
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let capture = observed.clone();
     let (reply, result) = tokio::sync::oneshot::channel::<()>();
     let inner = async_stream::stream! {
         yield Ok(OwnedLoopItem::ProviderWork(Box::pin(async move {
             let _marker = marker;
+            *capture.lock().unwrap() = CALLER_SCOPE.try_with(|scope| *scope).ok();
             std::future::pending::<()>().await;
             let _ = reply.send(());
         })));
     };
     let mut stream = Box::pin(drive_admissions(inner));
-    assert!(futures::poll!(stream.next()).is_pending());
-    drop(stream);
+    CALLER_SCOPE
+        .scope("request", async {
+            assert!(futures::poll!(stream.next()).is_pending());
+            drop(stream);
+        })
+        .await;
+    assert_eq!(*observed.lock().unwrap(), Some("request"));
     assert!(dropped.load(Ordering::SeqCst));
     assert!(result.await.is_err());
 }
@@ -311,4 +327,29 @@ async fn skip_keeps_the_hook_effect_as_the_lean_admission_model() {
         };
         case.check(if effect { "committed" } else { "not_started" }.to_owned());
     }
+}
+
+#[tokio::test]
+async fn admission_work_runs_in_the_callers_task_scope() {
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let capture = observed.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let work = AdmissionWork {
+        future: Box::pin(async move {
+            *capture.lock().unwrap() = CALLER_SCOPE.try_with(|scope| *scope).ok();
+            ToolCallHookAction::Continue
+        }),
+        reply: sender,
+    };
+    let inner = async_stream::stream! {
+        yield Ok(OwnedLoopItem::Admission(work));
+        let _ = receiver.await;
+    };
+    let mut stream = Box::pin(drive_admissions(inner));
+    CALLER_SCOPE
+        .scope("request", async {
+            assert!(stream.next().await.is_none());
+        })
+        .await;
+    assert_eq!(*observed.lock().unwrap(), Some("request"));
 }

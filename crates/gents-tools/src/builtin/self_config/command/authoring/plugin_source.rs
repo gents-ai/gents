@@ -194,13 +194,18 @@ impl ConfigCommandTool {
             node: self.node.clone(),
             actor: self.identity.clone(),
             home: Some(home),
-            envelope: self.envelope.clone(),
+            envelope: gents_loop::tool::ToolCallEnvelope::default(),
         };
         // A dropped request (an interrupt cancels the tool call's future)
         // must not stop between a pin move and the install it waits for, so
         // the moves, the install and their compensation run as one owned
-        // task that finishes whether or not this call is still awaited.
-        let owned = self.clone();
+        // task that finishes whether or not this call is still awaited. The
+        // task serves no call: it carries none, so nothing in it observes the
+        // call's cancellation.
+        let owned = Self {
+            envelope: gents_loop::tool::ToolCallEnvelope::default(),
+            ..self.clone()
+        };
         let update = prepared.installed;
         let (owned_coordinate, owned_id) = (coordinate.clone(), id.clone());
         let (receipt, followed) = tokio::spawn(async move {

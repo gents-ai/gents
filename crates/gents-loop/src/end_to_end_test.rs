@@ -158,6 +158,15 @@ struct AdmissionGate {
 struct SettlementGate {
     entered: tokio::sync::Notify,
     dropped: std::sync::atomic::AtomicBool,
+    caller: Mutex<Option<&'static str>>,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    /// A task-local the caller of the loop stream sets, standing in for the
+    /// ones that remain (the workspace-approval context, the rendered-request
+    /// capture scope): settlement the stream drives must observe the caller's.
+    static CALLER_SCOPE: &'static str;
 }
 
 impl RecordingHook {
@@ -249,6 +258,7 @@ impl SessionHook for RecordingHook {
                 }
             }
             let _guard = Dropped(gate.clone());
+            *gate.caller.lock().unwrap() = CALLER_SCOPE.try_with(|scope| *scope).ok();
             gate.entered.notify_one();
             std::future::pending::<()>().await;
         }
@@ -693,7 +703,7 @@ fn steering_loop_config() -> LoopConfig {
 }
 
 #[tokio::test]
-async fn cancelling_pending_settlement_drops_the_hook() {
+async fn cancelling_pending_settlement_drops_hook_in_the_callers_scope() {
     use futures::StreamExt;
 
     let gate = Arc::new(SettlementGate::default());
@@ -709,34 +719,41 @@ async fn cancelling_pending_settlement_drops_the_hook() {
         calls: Arc::default(),
         policy_allows: true,
     })]);
-    with_steering_capture_scope(async {
-        let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
-            model,
-            Some(hook),
-            TaggedMessage::unassociated(Message::user("echo")),
-            Vec::new(),
-            tools,
-            steering_loop_config(),
-        ));
-        loop {
-            match stream.next().await.unwrap().unwrap() {
-                crate::loop_stream::LoopStreamItem::AuthoredInputReady { reply, .. }
-                | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
-                    reply.send(Ok(Vec::new())).unwrap();
+    CALLER_SCOPE
+        .scope(
+            "request",
+            with_steering_capture_scope(async {
+                let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
+                    model,
+                    Some(hook),
+                    TaggedMessage::unassociated(Message::user("echo")),
+                    Vec::new(),
+                    tools,
+                    steering_loop_config(),
+                ));
+                loop {
+                    match stream.next().await.unwrap().unwrap() {
+                        crate::loop_stream::LoopStreamItem::AuthoredInputReady {
+                            reply, ..
+                        }
+                        | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                            reply.send(Ok(Vec::new())).unwrap();
+                        }
+                        crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
+                        _ => {}
+                    }
                 }
-                crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
-                _ => {}
-            }
-        }
-        let mut next = Box::pin(stream.next());
-        tokio::select! {
-            () = gate.entered.notified() => {},
-            item = &mut next => panic!("settlement did not remain pending: {item:?}"),
-        }
-        drop(next);
-        drop(stream);
-    })
-    .await;
+                let mut next = Box::pin(stream.next());
+                tokio::select! {
+                    () = gate.entered.notified() => {},
+                    item = &mut next => panic!("settlement did not remain pending: {item:?}"),
+                }
+                drop(next);
+                drop(stream);
+            }),
+        )
+        .await;
+    assert_eq!(*gate.caller.lock().unwrap(), Some("request"));
     assert!(gate.dropped.load(std::sync::atomic::Ordering::SeqCst));
 }
 

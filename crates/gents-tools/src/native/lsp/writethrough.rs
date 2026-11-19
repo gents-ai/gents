@@ -87,7 +87,7 @@ impl LspWritethrough {
             }
         };
         let workspace = super::overlay_workspace_or(call, &self.config.workspace);
-        let context = ToolContext::new(workspace, true).ok()?;
+        let context = ToolContext::new(workspace, true).ok()?.for_call(call);
         let encoding = lease.client().position_encoding().await;
         let workspace_edit = json!({ "changes": { uri: edits } });
         let prepared = match prepare_workspace_edit(&context, &workspace_edit, encoding) {
