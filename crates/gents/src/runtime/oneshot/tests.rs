@@ -42,6 +42,7 @@ async fn oneshot_fixture(
 }
 
 async fn capture_scripted_request(
+    call: &gents_loop::provider_call::ProviderCall,
     request: CompletionRequest,
 ) -> Result<serde_json::Value, CompletionError> {
     let dto = rig::providers::openai::completion::CompletionRequest::try_from((
@@ -66,9 +67,10 @@ async fn capture_scripted_request(
             |error| CompletionError::ProviderError(error.to_string()),
         )?))
         .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
-    let _response = gents_loop::rig_compat::http::Transport::send_streaming(&transport, outbound)
-        .await
-        .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
+    let _response =
+        gents_loop::rig_compat::http::Transport::send_streaming(&transport, call, outbound)
+            .await
+            .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
     assert_eq!(
         inner.send_count(),
         1,
@@ -82,8 +84,18 @@ async fn capture_scripted_request(
 /// ends without a terminal response.
 #[derive(Clone)]
 struct PartialThenEmptyProvider {
+    call: gents_loop::provider_call::ProviderCall,
     observations: Arc<AtomicUsize>,
     eof: tokio_util::sync::CancellationToken,
+}
+
+impl gents_loop::provider_call::ForCall for PartialThenEmptyProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -94,6 +106,7 @@ impl CompletionModel for PartialThenEmptyProvider {
 
     fn make(_: &(), _: impl Into<String>) -> Self {
         Self {
+            call: Default::default(),
             observations: Arc::new(AtomicUsize::new(0)),
             eof: tokio_util::sync::CancellationToken::new(),
         }
@@ -110,7 +123,7 @@ impl CompletionModel for PartialThenEmptyProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        capture_scripted_request(request).await?;
+        capture_scripted_request(&self.call, request).await?;
 
         let observations = self.observations.clone();
         let eof = self.eof.clone();
@@ -206,6 +219,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
             None,
             &prompt,
             PartialThenEmptyProvider {
+                call: Default::default(),
                 observations: observations.clone(),
                 eof: eof.clone(),
             },
@@ -305,8 +319,18 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
 
 #[derive(Clone)]
 struct OutputObligationProvider {
+    call: gents_loop::provider_call::ProviderCall,
     calls: Arc<AtomicUsize>,
     access: gents_store::config_client::ConfigAccess,
+}
+
+impl gents_loop::provider_call::ForCall for OutputObligationProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -330,7 +354,7 @@ impl CompletionModel for OutputObligationProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        let body = capture_scripted_request(request).await?;
+        let body = capture_scripted_request(&self.call, request).await?;
 
         let turn = self.calls.fetch_add(1, Ordering::SeqCst);
         let chunks = match turn {
@@ -503,6 +527,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             None,
             &prompt,
             OutputObligationProvider {
+                call: Default::default(),
                 calls: calls.clone(),
                 access: agent_access.clone(),
             },
@@ -561,7 +586,13 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
 }
 
 #[derive(Clone)]
-struct OneshotBashProvider(Arc<AtomicUsize>);
+struct OneshotBashProvider(Arc<AtomicUsize>, gents_loop::provider_call::ProviderCall);
+
+impl gents_loop::provider_call::ForCall for OneshotBashProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self(self.0.clone(), call.clone())
+    }
+}
 
 #[allow(refining_impl_trait)]
 impl CompletionModel for OneshotBashProvider {
@@ -570,7 +601,7 @@ impl CompletionModel for OneshotBashProvider {
     type Client = ();
 
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self(Arc::new(AtomicUsize::new(0)))
+        Self(Arc::new(AtomicUsize::new(0)), Default::default())
     }
 
     async fn completion(
@@ -584,7 +615,7 @@ impl CompletionModel for OneshotBashProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        let body = capture_scripted_request(request).await?;
+        let body = capture_scripted_request(&self.1, request).await?;
         let chunks = match self.0.fetch_add(1, Ordering::SeqCst) {
             0 => vec![
                 RawStreamingChoice::ToolCall(rig::streaming::RawStreamingToolCall::new(
@@ -656,7 +687,7 @@ async fn oneshot_bash_uses_owned_request_context() {
         &agent.tools,
         None,
         &prompt,
-        OneshotBashProvider(calls.clone()),
+        OneshotBashProvider(calls.clone(), Default::default()),
         "inspect the directory",
         tools,
         config,

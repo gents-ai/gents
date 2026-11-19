@@ -1892,9 +1892,6 @@ fn where_clause_fence_counts_inline_bounds_only() {
 /// the list only shrinks.
 #[rustfmt::skip]
 const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-loop/src/provider_input/routing_affinity.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
-    ("crates/gents-loop/src/rendered_request/scope.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
-    ("crates/gents-inference/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
     ("crates/gents-tools/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
 ];
 

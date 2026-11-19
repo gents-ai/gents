@@ -6,7 +6,7 @@ use gents_inference::admission::recovery_fixtures::{
     InferenceCallRecord, InferenceRecoveryOutcome, PendingCallMetadata, ProviderCallUsage,
     StaleInferenceCallRow,
 };
-use gents_inference::admission::CallKind;
+use gents_loop::provider_call::admission::CallKind;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 

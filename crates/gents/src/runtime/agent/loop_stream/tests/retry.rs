@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn owned_hook_observes_retry_and_clears_after_execution() {
     use gents_inference::inference_observation::{InferenceKey, InferenceObservationRegistry};
-    use gents_inference::rendered_request::scope::{scope_request, test_scope};
+    use gents_inference::rendered_request::scope::test_scope;
     let (_db, hook, _writer, lifecycle) = owned_test_hook().await;
     let request = lifecycle.request();
     let registry = InferenceObservationRegistry::default();
@@ -29,7 +29,7 @@ async fn owned_hook_observes_retry_and_clears_after_execution() {
             RawStreamingChoice::FinalResponse(()),
         ]),
     ]);
-    scope_request(scope, async {
+    { settings.provider_call.capture = Some(scope); async {
         let stream = run_loop_stream(
             model,
             Some(hook),
@@ -75,7 +75,7 @@ async fn owned_hook_observes_retry_and_clears_after_execution() {
                 _ => {}
             }
         }
-    })
+    } }
     .await;
     drop(guard);
     assert!(registry.snapshot(&key).is_none());

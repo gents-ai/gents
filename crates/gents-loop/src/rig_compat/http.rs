@@ -2,6 +2,8 @@ use std::future::Future;
 
 use bytes::Bytes;
 use rig::http_client::HttpClientExt;
+
+use crate::provider_call::ProviderCall;
 use rig::wasm_compat::WasmCompatSend;
 
 pub use rig::http_client::sse::BoxedStream;
@@ -17,29 +19,41 @@ pub use rig::http_client::{
 /// body rewriting) implements this over the transport beneath it, and
 /// [`Lifted`] is the one place a stack becomes Rig's client.
 ///
-/// `send` and `send_multipart` return a `'static` future the provider client
-/// may poll from any task, so whatever a layer reads from the calling task it
-/// reads before returning that future.
+/// Each send receives the [`ProviderCall`] it belongs to and passes it to the
+/// transport beneath. `send` and `send_multipart` return a `'static` future
+/// the provider client may poll from any task.
 pub trait Transport: Send + Sync {
     fn send(
         &self,
+        call: &ProviderCall,
         request: Request<Bytes>,
     ) -> impl Future<Output = Result<Response<LazyBody<Bytes>>>> + Send + 'static;
 
     fn send_multipart(
         &self,
+        call: &ProviderCall,
         request: Request<MultipartForm>,
     ) -> impl Future<Output = Result<Response<LazyBody<Bytes>>>> + Send + 'static;
 
     fn send_streaming(
         &self,
+        call: &ProviderCall,
         request: Request<Bytes>,
     ) -> impl Future<Output = Result<StreamingResponse>> + Send;
 }
 
-/// A [`Transport`] as Rig's HTTP client.
+/// A [`Transport`] as Rig's HTTP client for one call.
 #[derive(Clone, Debug, Default)]
-pub struct Lifted<T>(pub T);
+pub struct Lifted<T> {
+    transport: T,
+    call: ProviderCall,
+}
+
+impl<T> Lifted<T> {
+    pub fn new(transport: T, call: ProviderCall) -> Self {
+        Self { transport, call }
+    }
+}
 
 fn typed_body<U>(response: Response<LazyBody<Bytes>>) -> Response<LazyBody<U>>
 where
@@ -60,7 +74,7 @@ where
         B: Into<Bytes> + WasmCompatSend,
         U: From<Bytes> + WasmCompatSend + 'static,
     {
-        let response = self.0.send(req.map(Into::into));
+        let response = self.transport.send(&self.call, req.map(Into::into));
         async move { response.await.map(typed_body) }
     }
 
@@ -71,7 +85,7 @@ where
     where
         U: From<Bytes> + WasmCompatSend + 'static,
     {
-        let response = self.0.send_multipart(req);
+        let response = self.transport.send_multipart(&self.call, req);
         async move { response.await.map(typed_body) }
     }
 
@@ -82,18 +96,20 @@ where
     where
         B: Into<Bytes>,
     {
-        self.0.send_streaming(req.map(Into::into))
+        self.transport
+            .send_streaming(&self.call, req.map(Into::into))
     }
 }
 
 /// Rig's own clients, and anything else already speaking its client trait,
-/// carry a stack as its innermost transport.
+/// carry a stack as its innermost transport; they read nothing of the call.
 impl<H> Transport for H
 where
     H: HttpClientExt,
 {
     fn send(
         &self,
+        _call: &ProviderCall,
         request: Request<Bytes>,
     ) -> impl Future<Output = Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         HttpClientExt::send::<Bytes, Bytes>(self, request)
@@ -101,6 +117,7 @@ where
 
     fn send_multipart(
         &self,
+        _call: &ProviderCall,
         request: Request<MultipartForm>,
     ) -> impl Future<Output = Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         HttpClientExt::send_multipart::<Bytes>(self, request)
@@ -108,6 +125,7 @@ where
 
     fn send_streaming(
         &self,
+        _call: &ProviderCall,
         request: Request<Bytes>,
     ) -> impl Future<Output = Result<StreamingResponse>> + Send {
         HttpClientExt::send_streaming(self, request)

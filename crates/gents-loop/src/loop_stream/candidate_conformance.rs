@@ -72,6 +72,12 @@ fn error(kind: &str) -> CompletionError {
     }.into())
 }
 
+impl crate::provider_call::ForCall for Model {
+    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for Model {
     type Response = Response;
@@ -192,11 +198,12 @@ fn config(
 ) -> LoopConfig {
     let has_limit = input.limit.is_some();
     let arming = input.missing_capture.then(|| {
-        crate::rendered_request::scope::ambient_arming_sink(
+        crate::rendered_request::scope::arming_sink(
             gents_protocol::rendered_request::CaptureScopeKind::Inference,
         )
     });
     LoopConfig {
+        provider_call: Default::default(),
         replay: Default::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
             BackendProviderKind::OpenAiCompatible,
@@ -222,9 +229,10 @@ fn config(
             .then(StructuredOutputConfig::for_type::<TypedReply>),
         tool_choice: None,
         configuration_guard: None,
-        on_rendered_request: Some(Arc::new(move |turn, attempt, request, trace| {
+        on_rendered_request: Some(Arc::new(move |call, turn, attempt, request, trace| {
             let captures = captures.clone();
             let arming = arming.clone();
+            let call = call.clone();
             let allowances = allowances.clone();
             Box::pin(async move {
                 let request_debug = format!("{request:?}");
@@ -264,7 +272,7 @@ fn config(
                 };
                 captures.lock().unwrap().push((capture, request_debug));
                 if let Some(arming) = arming {
-                    arming(turn, attempt, request, trace).await?;
+                    arming(&call, turn, attempt, request, trace).await?;
                 }
                 Ok(())
             })
@@ -395,11 +403,15 @@ fn failure(error: &crate::error::LoopStreamError) -> Failure {
     }
 }
 
-async fn observe(input: &family::Input) -> family::Observation<Failure> {
+async fn observe(
+    input: &family::Input,
+    capture: Option<Arc<crate::rendered_request::scope::RequestCaptureScope>>,
+) -> family::Observation<Failure> {
     let model = model(&input.calls);
     let captures = Arc::new(Mutex::new(Vec::new()));
     let allowances = Arc::new(Mutex::new(Vec::new()));
     let mut config = config(input, captures.clone(), allowances.clone());
+    config.provider_call.capture = capture;
     let budget = config.aggregate_token_budget.clone();
     if let Some(usage) = input.nested_usage.clone() {
         let budget = budget.clone().unwrap();
@@ -557,7 +569,7 @@ async fn observe(input: &family::Input) -> family::Observation<Failure> {
 async fn generated_completion_stream_traces_replay_retry_publication_and_repair() {
     for case in family::cases::<Failure>() {
         let result = if case.input.missing_capture {
-            use crate::rendered_request::scope::{scope_request, test_scope};
+            use crate::rendered_request::scope::test_scope;
             use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
             let context = RenderedRequestContext {
                 request_doc_id: "doc".into(),
@@ -571,9 +583,9 @@ async fn generated_completion_stream_traces_replay_retry_publication_and_repair(
                 provider_family: None,
             };
             let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
-            scope_request(test_scope(context, sink), observe(&case.input)).await
+            observe(&case.input, Some(test_scope(context, sink))).await
         } else {
-            observe(&case.input).await
+            observe(&case.input, None).await
         };
         case.check(result);
     }
@@ -607,6 +619,8 @@ async fn retry_machine_witnesses_replay_through_the_owned_loop() {
         gents_lean_vocab::families::completion_retry_contracts_loop_witness::cases::<String>()
     {
         let input: family::Input = gents_lean_vocab::family::recode(&case.input.scenario);
-        case.check(gents_lean_vocab::family::recode(&observe(&input).await));
+        case.check(gents_lean_vocab::family::recode(
+            &observe(&input, None).await,
+        ));
     }
 }

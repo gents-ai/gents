@@ -80,6 +80,7 @@ pub(crate) fn rejected_response_error(
 impl Transport for ProviderHttpClient {
     fn send(
         &self,
+        _call: &gents_loop::provider_call::ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let (parts, body) = req.into_parts();
@@ -118,13 +119,15 @@ impl Transport for ProviderHttpClient {
 
     fn send_multipart(
         &self,
+        call: &gents_loop::provider_call::ProviderCall,
         req: Request<MultipartForm>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
-        Transport::send_multipart(&self.inner, req)
+        Transport::send_multipart(&self.inner, call, req)
     }
 
     fn send_streaming(
         &self,
+        _call: &gents_loop::provider_call::ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let (parts, body) = req.into_parts();

@@ -18,8 +18,8 @@ async fn other_provider_loop_has_no_codex_affinity() {
         RawStreamingChoice::Message("done".into()),
         RawStreamingChoice::FinalResponse(()),
     ])
-    .with_provider_observer(Arc::new(|_| {
-        assert!(gents_loop::provider_input::routing_affinity::current().is_none());
+    .with_provider_observer(Arc::new(|_, call| {
+        assert!(call.routing_affinity.is_none());
     }));
     let stream = run_loop_stream(
         model,

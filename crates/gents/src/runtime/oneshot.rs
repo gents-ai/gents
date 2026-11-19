@@ -359,6 +359,7 @@ where
         ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(deadline, request_token)
     }
     .call();
+    config.provider_call.capture = capture_scope.clone();
     let inference = async {
         let mut stream = Box::pin(crate::runtime::agent::loop_stream::run_loop_stream(
             model,
@@ -374,7 +375,8 @@ where
             &mut lifecycle,
             &response_doc_id,
             provider_profile,
-        );
+        )
+        .with_capture(capture_scope);
         let mut lease_poll = tokio::time::interval(std::time::Duration::from_secs(1));
         lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -410,12 +412,7 @@ where
             "provider stream ended without an explicit terminal response"
         ))
     };
-    let response = match capture_scope {
-        Some(scope) => {
-            gents_inference::rendered_request::scope::scope_request(scope, inference).await
-        }
-        None => inference.await,
-    };
+    let response = Box::pin(inference).await;
 
     let session_id = hook.session_id().await;
     match response {

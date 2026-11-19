@@ -10,6 +10,8 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
 
+use crate::provider_call::{ForCall, ProviderCall};
+
 /// What a [`Model`]'s response ends with: the usage it charges, and what the
 /// loop reads from a final provider response by field name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -38,6 +40,9 @@ pub trait Model: Clone + Send + Sync + 'static {
     type Client: Send + Sync;
 
     fn make(client: &Self::Client, model: String) -> Self;
+
+    /// This model for one call: what it sends carries `call`.
+    fn for_call(&self, call: &ProviderCall) -> Self;
 
     /// The whole response as assistant text with its end.
     fn completion(
@@ -85,6 +90,15 @@ where
     M: Model,
 {
     type CompletionModel = LiftedModel<M>;
+}
+
+impl<M> ForCall for LiftedModel<M>
+where
+    M: Model,
+{
+    fn for_call(&self, call: &ProviderCall) -> Self {
+        Self(self.0.for_call(call))
+    }
 }
 
 impl<M> CompletionModel for LiftedModel<M>
