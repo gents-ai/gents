@@ -659,7 +659,7 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     let hashing = tokio::spawn(async move {
         super::super::request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            gents_session::workspace::adapter::working_tree_hash(&dest),
+            gents_session::workspace::adapter::working_tree_hash(&dest, None),
         )
         .await
         .map(|hashed| hashed.map_err(|error| format!("{error:#}")))

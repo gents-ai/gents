@@ -20,7 +20,7 @@ async fn call(tool: &SessionHistoryTool, params: Value) -> Value {
         &Tool::call(
             tool,
             serde_json::from_value(params).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap(),
@@ -112,7 +112,7 @@ resources:
     let error = Tool::call(
         &denied_tool,
         serde_json::from_value(json!({"action":"get","session_id":"shared"})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -123,7 +123,7 @@ resources:
         &denied_tool,
         serde_json::from_value(json!({"action":"output","session_id":"shared","call_id":"any"}))
             .unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -207,7 +207,7 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     let recovery = Tool::call(
         &tool,
         serde_json::from_value(json!({"action":"get","session_id":"atlas-typo"})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -217,7 +217,7 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     let other_node = Tool::call(
         &tool,
         serde_json::from_value(json!({"action":"get","session_id":"foreign-session"})).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -303,7 +303,7 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
             json!({"action":"search","filter":{"text":"retry decision","tag":"release"},"limit":1}),
         )
         .unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -332,7 +332,7 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
         let error = Tool::call(
             &tool,
             serde_json::from_value(missing.clone()).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err()

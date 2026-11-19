@@ -348,7 +348,7 @@ async fn run_claude_fixture_turns(
             .lifted()
             .completion_model("claude-sonnet-5");
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.on_rendered_request =
         Some(gents_inference::rendered_request::scope::arming_sink(scope_kind));
     config.provider_input_counter =
@@ -457,7 +457,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 panic!("expected the AnthropicApiKey client");
             };
 
-            let mut config = owned_config(2);
+            let mut config = owned_config_for(2, &lifecycle);
             config.provider_input_counter =
                 Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
                     gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey,

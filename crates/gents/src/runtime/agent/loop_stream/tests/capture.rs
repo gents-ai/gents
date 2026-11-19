@@ -281,7 +281,7 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
                 assert_eq!(affinity.token(), first.as_deref());
             }
         }));
-        let mut cfg = owned_config(4);
+        let mut cfg = owned_config_for(4, &lifecycle);
         cfg.provider_input_counter =
             Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
                 gents_inference::backends::provider::BackendProviderKind::ChatGptCodex,

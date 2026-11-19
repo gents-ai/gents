@@ -250,13 +250,14 @@ impl Serialize for AnswerFirst<'_> {
 
 pub(super) async fn run(
     tool: &SessionHistoryTool,
+    call: &gents_loop::tool::ToolCallEnvelope,
     args: &SessionHistoryParams,
     action: &str,
 ) -> Result<Value> {
     if action == "help" {
         return Ok(json!({"help":action_help(args.topic.as_deref())?}));
     }
-    let current = crate::runtime_context::current_tool_runtime_context();
+    let current = crate::runtime_context::tool_runtime_context(call);
     if let Some(context) = &current {
         anyhow::ensure!(
             context.node_did.as_deref() == Some(tool.node_did.as_str()),

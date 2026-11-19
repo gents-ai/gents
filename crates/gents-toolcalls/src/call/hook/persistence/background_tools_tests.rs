@@ -594,30 +594,30 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
         let deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
         tokio::time::pause();
         let worker = tokio::spawn(async move {
-            gents_tools::runtime_context::scope_request_tool_execution(
+            let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
                 Some(deadline),
                 worker_token,
-                gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
-                    &PendingNative,
-                    "{}".into(),
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
-                    move |outcome| {
-                        if let Some(gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut {
-                            ..
-                        }) = outcome
-                        {
-                            worker_registry.set_stop_receipt(
-                                "deadline-call",
-                                "deadline-doc",
-                                crate::call::hook::RetainedStopReceipt::Timeout,
-                            );
-                            if let Some(sender) = worker_sender.lock().unwrap().take() {
-                                let _ = sender.send(());
-                            }
+            )
+            .call();
+            gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
+                &PendingNative,
+                "{}".into(),
+                &scope_call,
+                move |outcome| {
+                    if let Some(gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }) =
+                        outcome
+                    {
+                        worker_registry.set_stop_receipt(
+                            "deadline-call",
+                            "deadline-doc",
+                            crate::call::hook::RetainedStopReceipt::Timeout,
+                        );
+                        if let Some(sender) = worker_sender.lock().unwrap().take() {
+                            let _ = sender.send(());
                         }
-                        true
-                    },
-                ),
+                    }
+                    true
+                },
             )
             .await
         });

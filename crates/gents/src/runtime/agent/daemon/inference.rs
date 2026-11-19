@@ -381,8 +381,6 @@ where
                             inference_token: &inference_token,
                             request_id: &request_id,
                             session_id: &session_id,
-                            trigger_correlation: &trigger_correlation,
-                            trigger_context: &trigger_context,
                             request_deadline,
                             terminal_failure_reason: &terminal_failure_reason,
                             max_turns_provenance,
@@ -412,29 +410,7 @@ where
             )));
 
         let outcome =
-            gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-                Some(
-                    gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
-                        request.requester_did.clone(),
-                        Some(request.node_did.clone()),
-                        Some(agent_did.to_string()),
-                        Some(request.request_id.clone()),
-                    ),
-                ),
-                request_deadline,
-                request_token.clone(),
-                workspace,
-                None,
-                Some(session_id.clone()),
-                trigger_correlation.clone(),
-                trigger_context.source_fields.clone(),
-                false,
-                gents_tools::plugin::approval::scope_interactive(
-                    request.execution_origin.as_deref() == Some("interactive"),
-                    gents_tools::plugin::approval::workspace::scope(approval_context, inference),
-                ),
-            )
-            .await;
+            gents_tools::plugin::approval::workspace::scope(approval_context, inference).await;
 
         if let Some(error) = reviewer.take_failure() {
             return Err(error);

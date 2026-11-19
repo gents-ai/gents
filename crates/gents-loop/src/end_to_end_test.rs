@@ -111,7 +111,11 @@ impl Tool for EchoTool {
         }
     }
 
-    fn admit(&self, _args: &Self::Args) -> Result<(), Self::Error> {
+    fn admit(
+        &self,
+        _args: &Self::Args,
+        _context: &crate::tool::ToolCallEnvelope,
+    ) -> Result<(), Self::Error> {
         if self.policy_allows {
             Ok(())
         } else {
@@ -165,7 +169,15 @@ struct AdmissionGate {
 struct SettlementGate {
     entered: tokio::sync::Notify,
     dropped: std::sync::atomic::AtomicBool,
-    request_id: Mutex<Option<String>>,
+    caller: Mutex<Option<&'static str>>,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    /// A task-local the caller of the loop stream sets, standing in for the
+    /// ones that remain (the workspace-approval context, the rendered-request
+    /// capture scope): settlement the stream drives must observe the caller's.
+    static CALLER_SCOPE: &'static str;
 }
 
 impl RecordingHook {
@@ -257,9 +269,7 @@ impl SessionHook for RecordingHook {
                 }
             }
             let _guard = Dropped(gate.clone());
-            *gate.request_id.lock().unwrap() =
-                crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-                    .and_then(|context| context.request_id);
+            *gate.caller.lock().unwrap() = CALLER_SCOPE.try_with(|scope| *scope).ok();
             gate.entered.notify_one();
             std::future::pending::<()>().await;
         }
@@ -338,7 +348,7 @@ pub(crate) fn test_loop_config() -> LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: crate::tool::ToolCallEnvelope::ambient(),
+        tool_context: crate::tool::ToolCallEnvelope::default(),
     }
 }
 
@@ -521,13 +531,10 @@ async fn a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent() {
 }
 
 #[tokio::test]
-async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
+async fn cancelling_a_foreground_tool_keeps_its_request_and_drops_execution() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use crate::tool_call_lifecycle::runtime::{
-        current_tool_runtime_context, scope_request_tool_execution_with_session,
-        ToolRequestIdentity,
-    };
+    use crate::tool_call_lifecycle::runtime::ToolRequestIdentity;
 
     struct PendingTool {
         dropped: Arc<AtomicBool>,
@@ -551,7 +558,7 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
         fn call<'a>(
             &'a self,
             _: String,
-            _context: &'a crate::tool::ToolCallEnvelope,
+            context: &'a crate::tool::ToolCallEnvelope,
         ) -> crate::tool::BoxFuture<'a, Result<String, crate::tool::ToolError>> {
             struct Dropped(Arc<AtomicBool>);
             impl Drop for Dropped {
@@ -563,7 +570,7 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
             let observed = self.observed.clone();
             Box::pin(async move {
                 let _marker = marker;
-                *observed.lock().unwrap() = current_tool_runtime_context().unwrap().request_id;
+                *observed.lock().unwrap() = context.runtime().unwrap().request_id;
                 std::future::pending().await
             })
         }
@@ -579,31 +586,27 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
         dropped: dropped.clone(),
         observed: observed.clone(),
     })]);
-    scope_request_tool_execution_with_session(
-        Some(ToolRequestIdentity::new(
+    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry {
+        identity: Some(ToolRequestIdentity::new(
             Some("requester".into()),
             Some("node".into()),
             Some("agent".into()),
             Some("request".into()),
         )),
-        None,
-        Default::default(),
-        None,
-        None,
-        None,
-        async {
-            let mut completion = Box::pin(run_loop_to_text(
-                model,
-                Message::user("echo"),
-                Vec::new(),
-                tools,
-                test_loop_config(),
-            ));
-            assert!(futures::poll!(&mut completion).is_pending());
-            drop(completion);
-        },
-    )
-    .await;
+        ..crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, Default::default())
+    }
+    .call();
+    let mut config = test_loop_config();
+    config.tool_context = scope_call;
+    let mut completion = Box::pin(run_loop_to_text(
+        model,
+        Message::user("echo"),
+        Vec::new(),
+        tools,
+        config,
+    ));
+    assert!(futures::poll!(&mut completion).is_pending());
+    drop(completion);
     assert_eq!(*observed.lock().unwrap(), Some("request".into()));
     assert!(dropped.load(Ordering::SeqCst));
 }
@@ -732,10 +735,7 @@ fn steering_loop_config() -> LoopConfig {
 }
 
 #[tokio::test]
-async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
-    use crate::tool_call_lifecycle::runtime::{
-        scope_request_tool_execution_with_session, ToolRequestIdentity,
-    };
+async fn cancelling_pending_settlement_drops_hook_in_the_callers_scope() {
     use futures::StreamExt;
 
     let gate = Arc::new(SettlementGate::default());
@@ -751,19 +751,8 @@ async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
         calls: Arc::default(),
         policy_allows: true,
     })]);
-    scope_request_tool_execution_with_session(
-        Some(ToolRequestIdentity::new(
-            Some("requester".into()),
-            Some("node".into()),
-            Some("agent".into()),
-            Some("request".into()),
-        )),
-        None,
-        Default::default(),
-        None,
-        None,
-        None,
-        async {
+    CALLER_SCOPE
+        .scope("request", async {
             let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
                 model,
                 Some(hook),
@@ -789,10 +778,9 @@ async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
             }
             drop(next);
             drop(stream);
-        },
-    )
-    .await;
-    assert_eq!(*gate.request_id.lock().unwrap(), Some("request".into()));
+        })
+        .await;
+    assert_eq!(*gate.caller.lock().unwrap(), Some("request"));
     assert!(gate.dropped.load(std::sync::atomic::Ordering::SeqCst));
 }
 
@@ -1068,7 +1056,7 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
                 Ok("done".into())
             })
         }
-        fn footprint(&self, _: &str) -> ToolFootprint {
+        fn footprint(&self, _: &str, _: &crate::tool::ToolCallEnvelope) -> ToolFootprint {
             ToolFootprint::Read
         }
     }

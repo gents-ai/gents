@@ -618,7 +618,7 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
     let initial = query
         .call(
             BoundedQueryParams(Map::new()),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -628,7 +628,7 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
             BoundedWriteParams(
                 serde_json::from_value(json!({"title":"kept", "lane":"doing"})).unwrap(),
             ),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -645,7 +645,7 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
                 BoundedWriteParams(
                     serde_json::from_value(json!({"title":"rolled-back", "lane":"doing"})).unwrap(),
                 ),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             ),
         )
         .await;
@@ -665,7 +665,7 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
     assert!(query
         .call(
             BoundedQueryParams(Map::new()),
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await
         .is_err());
@@ -674,7 +674,7 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
             BoundedWriteParams(
                 serde_json::from_value(json!({"title":"denied", "lane":"doing"})).unwrap()
             ),
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await
         .is_err());

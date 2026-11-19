@@ -48,7 +48,7 @@ async fn schema_argument_repairs_drive_the_owned_loop() {
             TaggedMessage::unassociated(Message::user("exercise schema repairs")),
             Vec::new(),
             Arc::new(tools),
-            owned_config(4),
+            owned_config_for(4, &lifecycle),
         ),
         &hook,
         &writer,

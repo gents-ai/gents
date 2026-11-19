@@ -682,7 +682,9 @@ async fn seal_drift_fails_closed() {
     let sealed = seal_writer(&fx, &mut docs, "ws-drift", "req-writer");
     let hash = sealed.workspace.seal_hash.clone().unwrap();
     fs::write(dest.join("after-seal.txt"), "mutated after review\n").unwrap();
-    let live = super::adapter::working_tree_hash(&dest).await.unwrap();
+    let live = super::adapter::working_tree_hash(&dest, None)
+        .await
+        .unwrap();
     assert_ne!(live, hash);
 
     let mut workspace = super::IsolatedWorkspaceRecord {

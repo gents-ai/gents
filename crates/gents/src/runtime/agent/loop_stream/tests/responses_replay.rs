@@ -81,7 +81,7 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     let node = db.node.clone();
     let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.on_rendered_request =
         Some(gents_inference::rendered_request::scope::arming_sink(scope_kind));
     config.provider_input_counter =

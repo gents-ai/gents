@@ -306,7 +306,7 @@ fn config(
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: crate::tool::ToolCallEnvelope::ambient(),
+        tool_context: crate::tool::ToolCallEnvelope::default(),
     }
 }
 

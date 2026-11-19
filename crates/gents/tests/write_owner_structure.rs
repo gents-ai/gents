@@ -1892,12 +1892,7 @@ fn where_clause_fence_counts_inline_bounds_only() {
 /// the list only shrinks.
 #[rustfmt::skip]
 const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-session/src/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-tools/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-tools/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents-tools/src/runtime_context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
 ];
 
 /// Task-local statics that hold no request context, by file and name. The

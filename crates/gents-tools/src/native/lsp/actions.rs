@@ -57,6 +57,7 @@ pub struct ActionRequest {
     pub limit: Option<u32>,
 }
 
+/// `context` is bound to the call it serves.
 pub async fn dispatch(
     context: &ToolContext,
     lease: Option<&LspLease>,
@@ -66,25 +67,40 @@ pub async fn dispatch(
     workspace: &Path,
     req: ActionRequest,
 ) -> Result<String, ToolError> {
+    let call = context.call();
     match req.action {
         LspAction::Status => {
-            let session_id = crate::runtime_context::current_tool_runtime_context()
+            let session_id = crate::runtime_context::tool_runtime_context(call)
                 .and_then(|scope| scope.session_id)
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
             let states = pool
-                .inspect_session(&session_id, &config.agent_did, workspace, &config.digest)
+                .inspect_session(
+                    call,
+                    &session_id,
+                    &config.agent_did,
+                    workspace,
+                    &config.digest,
+                )
                 .await
                 .map_err(|error| ToolError::reported_failure(FailureClass::PolicyDenied, error))?;
             Ok(status_text(states, &config.servers, workspace))
         }
         LspAction::Reload => {
-            let session_id = crate::runtime_context::current_tool_runtime_context()
+            let session_id = crate::runtime_context::tool_runtime_context(call)
                 .and_then(|scope| scope.session_id)
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
             let retired = pool
-                .reload_snapshot(&session_id, &config.agent_did, workspace, &config.digest)
+                .reload_snapshot(
+                    &session_id,
+                    &config.agent_did,
+                    workspace,
+                    &config.digest,
+                    crate::runtime_context::tool_runtime_context(call)
+                        .map(|runtime| runtime.cancellation_token)
+                        .as_ref(),
+                )
                 .await;
             Ok(format!(
                 "retired {retired} language-server client(s) for the current snapshot"
@@ -109,15 +125,19 @@ async fn run_file_action(
     action: LspAction,
     req: &ActionRequest,
 ) -> Result<String, ToolError> {
+    let call = context.call();
+    let cancel = crate::runtime_context::tool_runtime_context(call)
+        .map(|runtime| runtime.cancellation_token);
+    let cancel = cancel.as_ref();
     if matches!(action, LspAction::RequestRead | LspAction::RequestWrite) {
-        return raw_request(context, client, req).await;
+        return raw_request(context, client, req, cancel).await;
     }
     let file = req
         .file
         .as_deref()
         .ok_or_else(|| arg_invalid("file parameter required"))?;
     if file == "*" {
-        return workspace_action(context, client, action, req).await;
+        return workspace_action(context, client, action, req, cancel).await;
     }
     if looks_like_glob(file) {
         return glob_action(
@@ -231,6 +251,7 @@ async fn run_file_action(
         request_timeout(req),
         config.action_timeout.maximum,
         retry_empty,
+        cancel,
     )
     .await
     {
@@ -259,7 +280,7 @@ async fn run_file_action(
             return Err(policy("lsp apply is not authorized"));
         }
         let edit = if matches!(action, LspAction::CodeActionsApply) {
-            resolve_code_action_edit(client, &result, req.query.as_deref()).await?
+            resolve_code_action_edit(client, &result, req.query.as_deref(), cancel).await?
         } else {
             result.clone()
         };
@@ -281,14 +302,14 @@ async fn run_file_action(
                 prepared.push(rename);
             }
         }
-        let applied = apply_prepared_edits(context, client, &prepared).await?;
+        let applied = apply_prepared_edits(call, context, client, &prepared).await?;
         return Ok(format!("Applied edit to {applied} file(s)"));
     }
     let mut output =
         truncate_model_output(format_result_with_limit(context, action, result, req.limit));
     if matches!(action, LspAction::Diagnostics) {
         if let Some(linter) =
-            run_linter_diagnostics(config, servers, &path, request_timeout(req)).await
+            run_linter_diagnostics(call, config, servers, &path, request_timeout(req)).await
         {
             output = format!("{output}\n{linter}");
         }
@@ -301,6 +322,7 @@ async fn workspace_action(
     client: &LspClient,
     action: LspAction,
     req: &ActionRequest,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<String, ToolError> {
     match action {
         LspAction::Symbols => {
@@ -313,6 +335,7 @@ async fn workspace_action(
                     "workspace/symbol",
                     json!({ "query": query }),
                     request_timeout(req),
+                    cancel,
                 )
                 .await
                 .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
@@ -326,6 +349,7 @@ async fn workspace_action(
                     "workspace/diagnostic",
                     json!({ "identifier": "gents" }),
                     request_timeout(req),
+                    cancel,
                 )
                 .await
             {
@@ -348,6 +372,7 @@ async fn raw_request(
     context: &ToolContext,
     client: &LspClient,
     req: &ActionRequest,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<String, ToolError> {
     let method = req
         .query
@@ -355,7 +380,7 @@ async fn raw_request(
         .ok_or_else(|| arg_invalid("query (method) required for request"))?;
     let params = validate_raw_request(context, method, req.payload.as_deref())?;
     let result = client
-        .request_with_timeout(method, params, request_timeout(req))
+        .request_with_timeout(method, params, request_timeout(req), cancel)
         .await
         .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
     Ok(truncate_model_output(format_result_with_limit(

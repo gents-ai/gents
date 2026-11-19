@@ -342,7 +342,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(
@@ -504,7 +504,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             Some("call-1".to_string()),
             "internal-1",
             r#"{"path":"/work/entry.c"}"#,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await,
         gents_inference::llm::ToolCallHookAction::Continue
@@ -717,7 +717,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
                 Some(call_id.clone()),
                 &internal_id,
                 &args,
-                &gents_loop::tool::ToolCallEnvelope::ambient()
+                &gents_loop::tool::ToolCallEnvelope::default()
             )
             .await,
             gents_inference::llm::ToolCallHookAction::Continue
@@ -833,7 +833,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
             None,
             "call-1",
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(
@@ -1153,7 +1153,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             Some("call-1".to_string()),
             "internal-1",
             gents_store::test_support::CORRUPT_TOOL_ARGS_589,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await,
         gents_inference::llm::ToolCallHookAction::Continue

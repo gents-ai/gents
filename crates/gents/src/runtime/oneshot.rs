@@ -353,22 +353,12 @@ where
         Some(request.agent_did.clone()),
         Some(request.request_id.clone()),
     );
-    config.tool_context = gents_loop::tool::ToolCallEnvelope::new(Some(
-        gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext::entered(
-            None,
-            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
-                identity: Some(identity.clone()),
-                deadline_at: deadline,
-                cancellation_token: request_token.clone(),
-                workspace_cwd: None,
-                live_output: None,
-                session_id: Some(request.session_id.clone()),
-                correlation: None,
-                source_fields: Default::default(),
-                background: false,
-            },
-        ),
-    ));
+    config.tool_context = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        identity: Some(identity),
+        session_id: Some(request.session_id.clone()),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(deadline, request_token)
+    }
+    .call();
     config.provider_call.capture = capture_scope.clone();
     let inference = async {
         let mut stream = Box::pin(crate::runtime::agent::loop_stream::run_loop_stream(
@@ -422,20 +412,7 @@ where
             "provider stream ended without an explicit terminal response"
         ))
     };
-    let scoped_inference =
-        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            Some(identity),
-            deadline,
-            request_token,
-            None,
-            None,
-            Some(request.session_id.clone()),
-            None,
-            Default::default(),
-            false,
-            Box::pin(inference),
-        );
-    let response = scoped_inference.await;
+    let response = Box::pin(inference).await;
 
     let session_id = hook.session_id().await;
     match response {
