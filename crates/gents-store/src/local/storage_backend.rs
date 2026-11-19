@@ -174,6 +174,9 @@ pub fn incompatible_store(
                 super::backend_protection::BackendProtectionError::MissingProvenance => {
                     Some(IncompatibleStoreKind::UnknownLineage)
                 }
+                super::backend_protection::BackendProtectionError::NewerLineage => {
+                    Some(IncompatibleStoreKind::ForeignVersion)
+                }
                 super::backend_protection::BackendProtectionError::DocumentAcp(refused) => {
                     refused.refusal()
                 }
