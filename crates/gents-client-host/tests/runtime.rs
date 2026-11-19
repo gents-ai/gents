@@ -1578,22 +1578,6 @@ async fn run_editor_journey(
     );
     let mut editor = Command::new("node");
     editor.envs(support::homes::ProcessHomes::under(root).env());
-    if scenario == "full" && std::env::var("GENTS_VSCODE_STARTUP_CUSTODY").as_deref() == Ok("file")
-    {
-        let startup_paths = DesktopPaths::from_root(root.join("startup-client"));
-        let startup = Arc::new(
-            ClientRuntime::start_with_paths_and_options(
-                startup_paths.clone(),
-                ClientRuntimeOptions {
-                    store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
-                    ..Default::default()
-                },
-            )
-            .await?,
-        );
-        startup.shutdown().await?;
-        editor.env("GENTS_VSCODE_STARTUP_CLIENT_HOME", startup_paths.root());
-    }
     let log = std::fs::File::create(root.join("editor.log"))?;
     let child = editor
         .env("GENTS_VSCODE_INFERENCE_ENDPOINT", endpoint)
