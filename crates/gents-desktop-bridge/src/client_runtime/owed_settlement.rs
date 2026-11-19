@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_vera_home_is_settled_and_a_change_it_did_not_keep_is_told() {
+    async fn a_local_and_a_vera_home_are_settled_and_a_change_they_did_not_keep_is_told() {
         let vera = MockServer::start().await;
         let local = MockServer::start().await;
         for server in [&vera, &local] {
@@ -136,15 +136,20 @@ mod tests {
         ] {
             owed.settle(&record, endpoint, stores.clone());
         }
-        updates.changed().await.unwrap();
+        while owed.unkept().len() < 2 {
+            updates.changed().await.unwrap();
+        }
         let told = owed.unkept();
-        assert_eq!(told.len(), 1);
-        assert_eq!(told[0].node_did, "did:key:vera");
         assert_eq!(
-            told[0].message,
-            gents_store::config_client::owed::OWED_FAILED_FOR_A_PERSON
+            told.iter()
+                .map(|change| change.node_did.as_str())
+                .collect::<Vec<_>>(),
+            ["did:key:local", "did:key:vera"]
         );
-        assert!(local.received_requests().await.unwrap().is_empty());
+        assert!(told
+            .iter()
+            .all(|change| change.message
+                == gents_store::config_client::owed::OWED_FAILED_FOR_A_PERSON));
     }
 
     #[tokio::test]
