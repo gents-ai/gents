@@ -253,6 +253,8 @@ impl ConfigAccess {
         }
     }
 
+    /// A grant to a member whose Node administration removal is owed is
+    /// refused (Lean `Identity.EnrollmentGrant.permissionGrantAdmitted`).
     /// Native NAC decides the change as this access's actor: locally its
     /// identity under its managed signer, over HTTP the endpoint principal.
     /// The runtime principal's own change is issued as the NAC owner, which
@@ -273,6 +275,16 @@ impl ConfigAccess {
                     .identity()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?
                     .clone();
+                if !delete {
+                    let owed =
+                        crate::identity::owed_removal_receipts(local.node(), target.as_str())
+                            .await?;
+                    if !crate::identity::permission_grant_admitted(!owed.is_empty()) {
+                        return Err(ConfigClientError::AdministrationRemovalPending {
+                            member: target.as_str().to_owned(),
+                        });
+                    }
+                }
                 let context = local.request_context();
                 let target = target.clone();
                 local

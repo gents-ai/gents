@@ -62,6 +62,7 @@ pub(crate) fn state() -> RuntimeHttpState {
         replicated_schema: Default::default(),
         serve_lifecycle: Default::default(),
         document_acp: Default::default(),
+        node_identity: None,
     }
 }
 
@@ -307,6 +308,189 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     gents_store::service::verify_control_receipt(&retire, &repeated).unwrap();
     assert_eq!(repeated.disposition, RuntimeControlDisposition::Stopping);
     drop(server);
+}
+
+#[tokio::test]
+async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
+    use gents_lean_vocab::families::contracts_pack_installation_operator_wire as operator_wire;
+    use gents_pack::pack::plugin_wire::{WireCommand, WireRequest, WIRE_PATH};
+    let home = crate::test_support::ClientHome::new().await;
+    let identity = home.home.identity.clone();
+    let owner = identity.did().to_owned();
+    let binding = home.agent("fixture").await;
+    home.mark_backend_healthy(&binding).await;
+    let configuration: gents_documents::PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": owner},
+        "tools": [{"node_did": owner, "tools_id": "wire-tools"}],
+        "contexts": [{"node_did": owner, "context_id": "wire-context", "tools_id": "wire-tools"}],
+        "agents": [{"node_did": owner, "agent_did": binding.agent_did,
+            "creation_nonce": binding.creation_nonce, "context_id": "wire-context",
+            "inference_profile_id": format!("{}:inference", binding.agent_did), "enabled": true}]
+    }))
+    .unwrap();
+    let plan = gents_documents::DesiredStateApplyPlan::from_pack_config(&configuration).unwrap();
+    home.access
+        .transact_write("test.wire.context", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    let runtime = gents::Gents::builder()
+        .node(home.node().clone())
+        .backend_admission(home.home.backend_admission())
+        .identity(identity.clone())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
+        .agent("fixture")
+        .identity_binding(binding.clone())
+        .backend_id(format!("{}:backend", binding.agent_did))
+        .model_name("test-model")
+        .done()
+        .build()
+        .await
+        .unwrap();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let user = gents_service::home_state::load_held_user_identity(plugin_home.path())
+        .await
+        .unwrap();
+    let native = gents_store::config_client::ConfigAccess::local_as(
+        home.node().clone(),
+        identity::Did::new(&owner).unwrap(),
+    );
+    gents_store::identity::GrantSet::HouseholdOwner
+        .grant(&native, &identity::Did::new(user.did()).unwrap())
+        .await
+        .unwrap();
+    let roots = home.access.execute("{ Node { _docID } }").await.unwrap();
+    home.access
+        .add_actor_relationship(
+            "Node",
+            roots["data"]["Node"][0]["_docID"].as_str().unwrap(),
+            "administrator",
+            &identity::Did::new(user.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let (mut plugin, artifact) = gents_pack::plugin::test_fixtures::build_plugin_pack(
+        "wire_acceptance",
+        &gents_pack::plugin::test_fixtures::constant_output_wat(br#"{}"#),
+        None,
+    );
+    plugin.name = "tool".into();
+    let installed = gents_pack::plugin::install::install_from_pack(
+        plugin_home.path(),
+        "acme",
+        "acme/wire_acceptance",
+        "1.0.0",
+        &format!("sha256:{}", "a".repeat(64)),
+        &plugin,
+        &artifact,
+        None,
+        Default::default(),
+        Default::default(),
+        false,
+    )
+    .unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for case in gents_lean_vocab::families::contracts_pack_installation_operator_wire::cases() {
+        let (activation_runtime, activation_observation) = empty_activation_state();
+        if case.input.ready {
+            assert!(activation_runtime.set(runtime.clone()).is_ok());
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let graphql = format!("http://{addr}/api/v0/graphql");
+        let app = runtime_contract_router(
+            graphql.clone(),
+            GraphqlEndpoint::anonymous(graphql.clone()),
+            "operator-wire".into(),
+            owner.clone(),
+            "readwrite".into(),
+            Ok(None),
+            Vec::new(),
+            case.input
+                .home
+                .then(|| plugin_home.path().display().to_string()),
+            None,
+            None,
+            None,
+            None,
+            crate::http::enrollment::empty_issuer_handle(),
+            crate::http::enrollment::empty_decision_service_handle(),
+            activation_runtime,
+            activation_observation,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            None,
+        )
+        .contract;
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let request = client
+            .post(format!("http://{addr}{WIRE_PATH}"))
+            .json(&WireCommand {
+                node_did: owner.clone(),
+                request: WireRequest {
+                    plugin: "acme/tool".into(),
+                    agent: binding.agent_did.clone(),
+                    targets_from: Vec::new(),
+                    remove: false,
+                    preview: false,
+                    dynamic_consent: false,
+                    tool_calls_consent: false,
+                },
+            });
+        let request = if case.input.operator {
+            GraphqlEndpoint::as_principal(&graphql, identity.did())
+                .with_client_signing_capability(identity.client_signing_capability().unwrap())
+                .unwrap()
+                .authorize_runtime(request)
+                .await
+                .unwrap()
+        } else {
+            request
+        };
+        let response = request.send().await.unwrap();
+        let status = response.status();
+        if case.input.operator && case.input.ready && case.input.home {
+            let report: Value = response.json().await.unwrap();
+            assert_eq!(status, StatusCode::OK, "{report}");
+            assert_eq!(report["preview"], false);
+            let rows = home
+                .access
+                .execute("{ Tools { integrations } }")
+                .await
+                .unwrap();
+            assert!(
+                rows["data"]["Tools"].as_array().unwrap().iter().any(|row| {
+                    row["integrations"]["plugins"]
+                        .as_array()
+                        .is_some_and(|plugins| {
+                            plugins.iter().any(|entry| {
+                                entry["plugin"] == "acme/tool"
+                                    && entry["digest"] == installed.digest
+                            })
+                        })
+                }),
+                "{rows}"
+            );
+        }
+        case.check(operator_wire::OperatorWireOutput {
+            allowed: !matches!(
+                status,
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::SERVICE_UNAVAILABLE
+            ),
+        });
+    }
 }
 
 /// The home's GraphQL beside the contract routes, as one runtime serves
@@ -681,6 +865,7 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             Default::default(),
             Default::default(),
             document_acp,
+            None,
         )
         .contract
         .route(
@@ -1213,7 +1398,7 @@ fn p2p_metrics_snapshot_decodes_pinned_live_sync_status() {
 #[tokio::test]
 async fn status_lifecycle_is_starting_until_serve_marks_it_ready() {
     async fn lifecycle(state: &RuntimeHttpState) -> Value {
-        let response = status_handler(State(state.clone()), &state.p2p_graphql).await;
+        let response = status_handler(State(state.clone()), &state.p2p_graphql, None).await;
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("status body");
@@ -1302,7 +1487,7 @@ async fn stalled_liveness_activity_read_does_not_hold_health() {
 
     let started = std::time::Instant::now();
     let (_, status_body) =
-        health_body(status_handler(State(state.clone()), &state.p2p_graphql).await).await;
+        health_body(status_handler(State(state.clone()), &state.p2p_graphql, None).await).await;
     assert!(
         started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
         "/status waited {:?}",
@@ -1318,7 +1503,7 @@ async fn late_core_read_leaves_status_ok_when_activity_stalls() {
 
     let started = std::time::Instant::now();
     let (_, status_body) =
-        health_body(status_handler(State(state.clone()), &state.p2p_graphql).await).await;
+        health_body(status_handler(State(state.clone()), &state.p2p_graphql, None).await).await;
     assert!(
         started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
         "/status waited {:?}",
@@ -1441,4 +1626,53 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "signed: {body}");
     let (status, body) = usage_route(&state, command, Some(owner.as_ref())).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "replay: {body}");
+}
+
+#[tokio::test]
+async fn a_status_read_with_a_nonce_says_whether_the_node_key_signed_it() {
+    let mut state = state();
+    state.graphql = GraphqlEndpoint::anonymous("http://127.0.0.1:9/api/v0/graphql");
+    state.p2p_graphql = state.graphql.clone();
+    let app = Router::new()
+        .route("/status", get(super::status::status_route))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let read = |query: Option<&str>| {
+        let mut request = reqwest::Client::new().get(format!("http://{address}/status"));
+        if let Some(nonce) = query {
+            request = request.query(&[(gents_protocol::home_attestation::HOME_NONCE_QUERY, nonce)]);
+        }
+        request.send()
+    };
+    let field = gents_protocol::home_attestation::STATUS_HOME_ATTESTATION_FIELD;
+
+    let displayed: Value = read(None).await.unwrap().json().await.unwrap();
+    assert!(displayed.get(field).is_none(), "{displayed}");
+
+    let nonce = gents_protocol::home_attestation::HomeNonce::from_bytes([3; 32]);
+    let answered = read(Some(nonce.as_str())).await.unwrap();
+    assert_eq!(
+        answered.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    let answered: Value = answered.json().await.unwrap();
+    assert_eq!(
+        serde_json::from_value::<gents_protocol::home_attestation::HomeAttestation>(
+            answered[field].clone()
+        )
+        .unwrap(),
+        gents_protocol::home_attestation::HomeAttestation::Unsigned {
+            reason: gents_protocol::home_attestation::UnsignedHomeStatus::RuntimeNotReady,
+        },
+        "a runtime that has not started holds no node key to sign with"
+    );
+
+    assert_eq!(
+        read(Some("not-a-nonce")).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
 }

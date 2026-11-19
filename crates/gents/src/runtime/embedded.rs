@@ -445,30 +445,48 @@ async fn trial_http(
     let status = served.clone();
     let metadata = axum::Router::new().route(
         "/status",
-        axum::routing::get(move || {
-            let served = status.clone();
-            async move {
-                use axum::response::IntoResponse;
-                let Some((node, runtime)) = served
-                    .get()
-                    .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
-                else {
-                    return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
-                };
-                match gents_store::config_client::client_authentication::runtime_authentication(
-                    &gents_store::config_client::ConfigAccess::local(node),
-                )
-                .await
-                {
-                    Ok(authentication) => axum::Json(serde_json::json!({
+        axum::routing::get(
+            move |query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                let served = status.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    let Ok(nonce) = query
+                        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                        .map(|nonce| gents_protocol::home_attestation::HomeNonce::parse(nonce))
+                        .transpose()
+                    else {
+                        return axum::http::StatusCode::BAD_REQUEST.into_response();
+                    };
+                    let Some((node, runtime)) = served
+                        .get()
+                        .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                    else {
+                        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    };
+                    let Ok(authentication) =
+                        gents_store::config_client::client_authentication::runtime_authentication(
+                            &gents_store::config_client::ConfigAccess::local(node),
+                        )
+                        .await
+                    else {
+                        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    };
+                    let mut status = serde_json::json!({
                         "node_did": runtime.did(),
                         (gents_protocol::client_authentication::STATUS_FIELD): authentication,
-                    }))
-                    .into_response(),
-                    Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                    });
+                    if let Some(nonce) = &nonce {
+                        gents_store::identity::home_status::attest(
+                            Some(runtime.as_ref()),
+                            nonce,
+                            &mut status,
+                        )
+                        .await;
+                    }
+                    axum::Json(status).into_response()
                 }
-            }
-        }),
+            },
+        ),
     );
     let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?
         .with_extra_routes(metadata)

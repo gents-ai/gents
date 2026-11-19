@@ -34,7 +34,7 @@ async fn one_time_workspace_approval_runs_the_reported_six_browser_cases() {
         ..Default::default()
     }
     .call();
-    workspace::scope(context, async {
+    async {
         let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();
         let policy = crate::native::CommandExecutionPolicy::write_capable()
             .with_mode(crate::native::CommandExecutionMode::WorkspaceWrite);
@@ -125,6 +125,6 @@ async fn one_time_workspace_approval_runs_the_reported_six_browser_cases() {
         decide(&home, &questions[0].id, Answer::Deny).unwrap();
         assert!(again.await.is_err());
         assert!(pending_requests(&home).unwrap().is_empty());
-    })
+    }
     .await;
 }

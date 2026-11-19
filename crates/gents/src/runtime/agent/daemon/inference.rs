@@ -266,7 +266,7 @@ where
                 gents_tools::runtime_context::ToolHostContext {
                     workspace: Default::default(),
                     interactive: request.execution_origin.as_deref() == Some("interactive"),
-                    approval: approval_context.clone(),
+                    approval: approval_context,
                 },
             ),
             workspace.clone(),
@@ -409,8 +409,7 @@ where
                 retry_attempt = false,
             )));
 
-        let outcome =
-            gents_tools::plugin::approval::workspace::scope(approval_context, inference).await;
+        let outcome = inference.await;
 
         if let Some(error) = reviewer.take_failure() {
             return Err(error);

@@ -175,7 +175,10 @@ impl LspWritethrough {
             workspace_root,
             server_name: server.name.clone(),
             config_digest: self.config.digest.clone(),
-            operator_guard_home: crate::plugin::approval::workspace::command_guard_home().ok()?,
+            operator_guard_home: crate::plugin::approval::workspace::command_guard_home(
+                crate::runtime_context::host(call).approval.as_ref(),
+            )
+            .ok()?,
         };
         self.pool.get_ready(call, &key).await
     }

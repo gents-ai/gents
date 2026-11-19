@@ -142,108 +142,147 @@ impl DefraSessionHook {
             recorder,
         )
         .unwrap_or_default();
-        tokio::spawn(gents_tools::plugin::approval::workspace::carry(
-            async move {
-                let mut lifecycle = lifecycle;
-                let check_registry = hook.background_executions.clone();
-                let check_call = lifecycle.tool_call_id().to_owned();
-                let check_doc = doc.clone();
-                let cleanup: gents_loop::session_hook::NativeCleanupCheck =
-                    Arc::new(move |outcome| {
-                        if let Some(outcome) = outcome.filter(|outcome| {
-                            gents_session::exec::ownership::native_terminal_needs_confirmation(
-                                Some(outcome),
-                            )
-                        }) {
-                            check_registry.set_stop_receipt(
-                                &check_call,
-                                &check_doc,
-                                crate::call::hook::RetainedStopReceipt::from_outcome(outcome),
-                            );
-                        }
-                        check_registry.live_process_evidence(&check_call, &check_doc)
-                            != gents_session::exec::ownership::LiveProcessEvidence::NeverSpawned
-                    });
-                let execution =
-                    AssertUnwindSafe(async { call(handoff.clone(), Some(cleanup)).await })
-                        .catch_unwind();
-                tokio::pin!(execution);
-                let mut changes = Some(changes);
-                let mut answer = Some(answer);
-                let mut backgrounded = false;
-                let mut inspect = true;
-                loop {
-                    if inspect && !backgrounded {
-                        inspect = false;
-                        match hook.foreground_background_request(&doc).await {
-                            Ok(Some(requested_at)) => {
-                                let receipt = json!({
+        tokio::spawn(async move {
+            let mut lifecycle = lifecycle;
+            let check_registry = hook.background_executions.clone();
+            let check_call = lifecycle.tool_call_id().to_owned();
+            let check_doc = doc.clone();
+            let cleanup: gents_loop::session_hook::NativeCleanupCheck = Arc::new(move |outcome| {
+                if let Some(outcome) = outcome.filter(|outcome| {
+                    gents_session::exec::ownership::native_terminal_needs_confirmation(Some(
+                        outcome,
+                    ))
+                }) {
+                    check_registry.set_stop_receipt(
+                        &check_call,
+                        &check_doc,
+                        crate::call::hook::RetainedStopReceipt::from_outcome(outcome),
+                    );
+                }
+                check_registry.live_process_evidence(&check_call, &check_doc)
+                    != gents_session::exec::ownership::LiveProcessEvidence::NeverSpawned
+            });
+            let execution = AssertUnwindSafe(async { call(handoff.clone(), Some(cleanup)).await })
+                .catch_unwind();
+            tokio::pin!(execution);
+            let mut changes = Some(changes);
+            let mut answer = Some(answer);
+            let mut backgrounded = false;
+            let mut inspect = true;
+            loop {
+                if inspect && !backgrounded {
+                    inspect = false;
+                    match hook.foreground_background_request(&doc).await {
+                        Ok(Some(requested_at)) => {
+                            let receipt = json!({
                                 "tool_call_id": lifecycle.tool_call_id(),
                                 "status": "running", "await_mode": "background",
                                 "message": "The same process continues in the background. Its result will arrive in this conversation."
                             }).to_string();
-                                // Cancellation drains this same request-local map. Hold it through
-                                // the receipt commit so it cannot terminalize a stale foreground copy.
-                                let mut in_flight = hook.in_flight_lifecycles.lock().await;
-                                let admitted = if in_flight.contains_key(&internal_id)
-                                    && !parent_token.is_cancelled()
-                                {
-                                    lifecycle.background_with_receipt(&receipt).await
-                                } else {
-                                    Err(anyhow::anyhow!("foreground request already stopped"))
-                                };
-                                match admitted {
-                                    Ok(()) => {
-                                        // The receipt and mode commit before releasing the parent. Once
-                                        // committed, dropping the parent's receiver must not cancel this process.
-                                        backgrounded = true;
-                                        hook.foreground_process_evidence.lock().await.remove(&doc);
-                                        changes = None;
-                                        in_flight.remove(&internal_id);
-                                        if let Some(answer) = answer.take() {
-                                            let _ = answer
-                                                .send(ForegroundResult::Backgrounded(receipt));
-                                        }
+                            // Cancellation drains this same request-local map. Hold it through
+                            // the receipt commit so it cannot terminalize a stale foreground copy.
+                            let mut in_flight = hook.in_flight_lifecycles.lock().await;
+                            let admitted = if in_flight.contains_key(&internal_id)
+                                && !parent_token.is_cancelled()
+                            {
+                                lifecycle.background_with_receipt(&receipt).await
+                            } else {
+                                Err(anyhow::anyhow!("foreground request already stopped"))
+                            };
+                            match admitted {
+                                Ok(()) => {
+                                    // The receipt and mode commit before releasing the parent. Once
+                                    // committed, dropping the parent's receiver must not cancel this process.
+                                    backgrounded = true;
+                                    hook.foreground_process_evidence.lock().await.remove(&doc);
+                                    changes = None;
+                                    in_flight.remove(&internal_id);
+                                    if let Some(answer) = answer.take() {
+                                        let _ =
+                                            answer.send(ForegroundResult::Backgrounded(receipt));
                                     }
-                                    Err(error) => {
-                                        drop(in_flight);
-                                        tracing::warn!(%error, tool_call_doc_id = %doc, "foreground background handoff refused");
-                                        if let Err(error) = lifecycle
-                                            .clear_background_request(Some(&requested_at))
-                                            .await
-                                        {
-                                            tracing::warn!(%error, "could not clear refused background request");
-                                        }
+                                }
+                                Err(error) => {
+                                    drop(in_flight);
+                                    tracing::warn!(%error, tool_call_doc_id = %doc, "foreground background handoff refused");
+                                    if let Err(error) = lifecycle
+                                        .clear_background_request(Some(&requested_at))
+                                        .await
+                                    {
+                                        tracing::warn!(%error, "could not clear refused background request");
                                     }
                                 }
                             }
-                            Ok(None) => {}
-                            Err(error) => tracing::warn!(%error, tool_call_doc_id = %doc,
-                            "foreground background request read failed"),
                         }
+                        Ok(None) => {}
+                        Err(error) => tracing::warn!(%error, tool_call_doc_id = %doc,
+                            "foreground background request read failed"),
                     }
-                    tokio::select! {
-                        biased;
-                        _ = async {
-                            tokio::select! {
-                                _ = parent_token.cancelled() => {},
-                                _ = async {
-                                    if let Some(answer) = answer.as_mut() { answer.closed().await }
-                                    else { std::future::pending::<()>().await }
-                                } => {},
+                }
+                tokio::select! {
+                    biased;
+                    _ = async {
+                        tokio::select! {
+                            _ = parent_token.cancelled() => {},
+                            _ = async {
+                                if let Some(answer) = answer.as_mut() { answer.closed().await }
+                                else { std::future::pending::<()>().await }
+                            } => {},
+                        }
+                    }, if !backgrounded => {
+                        process_token.cancel();
+                        if let Err(error) = lifecycle.clear_background_request(None).await {
+                            tracing::warn!(%error, "could not clear cancelled background request");
+                        }
+                        let outcome = execution.await.unwrap_or_else(|_| {
+                            if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.mark_unverified_failure(); }
+                            gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
+                        });
+                        let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
+                        if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome))
+                            && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
+                            hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::call::hook::RetainedStopReceipt::from_outcome(&outcome));
+                            match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
+                                Ok(receipt) => {
+                                    if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Backgrounded(receipt)); }
+                                    reservation.retain_stopped_worker(lifecycle, false);
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, tool_call_doc_id = %doc, "foreground recovery handoff retained for retry");
+                                    reservation.retain_for_recovery(lifecycle);
+                                    if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
+                                }
                             }
-                        }, if !backgrounded => {
-                            process_token.cancel();
-                            if let Err(error) = lifecycle.clear_background_request(None).await {
-                                tracing::warn!(%error, "could not clear cancelled background request");
-                            }
-                            let outcome = execution.await.unwrap_or_else(|_| {
+                            return;
+                        }
+                        if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome)) {
+                            let receipt = crate::call::hook::RetainedStopReceipt::from_outcome(&outcome);
+                            hook.background_executions.retain_confirmed_worker(lifecycle, reservation, receipt);
+                            if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
+                            return;
+                        }
+                        if hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
+                            if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.exited(); }
+                            hook.background_executions.release_process_record(lifecycle.tool_call_id(), &doc).await;
+                        }
+                        if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
+                        drop(reservation);
+                        return;
+                    }
+                    outcome = &mut execution => {
+                        if backgrounded {
+                            super::background_tools::finish::finish_background_execution(
+                                lifecycle, hook.node.clone(), hook.background_live_outputs.clone(),
+                                hook.background_executions.clone(), reservation, outcome,
+                            ).await;
+                        } else {
+                            let outcome = outcome.unwrap_or_else(|_| {
                                 if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.mark_unverified_failure(); }
                                 gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
                             });
                             let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
-                            if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome))
-                                && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
+                            let needs_confirmation = gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome));
+                            if needs_confirmation && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
                                 hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::call::hook::RetainedStopReceipt::from_outcome(&outcome));
                                 match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
                                     Ok(receipt) => {
@@ -258,7 +297,7 @@ impl DefraSessionHook {
                                 }
                                 return;
                             }
-                            if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome)) {
+                            if needs_confirmation {
                                 let receipt = crate::call::hook::RetainedStopReceipt::from_outcome(&outcome);
                                 hook.background_executions.retain_confirmed_worker(lifecycle, reservation, receipt);
                                 if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
@@ -268,69 +307,26 @@ impl DefraSessionHook {
                                 if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.exited(); }
                                 hook.background_executions.release_process_record(lifecycle.tool_call_id(), &doc).await;
                             }
-                            if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
+                            if let Some(answer) = answer.take() {
+                                let _ = answer.send(ForegroundResult::Settled(outcome));
+                            }
                             drop(reservation);
-                            return;
                         }
-                        outcome = &mut execution => {
-                            if backgrounded {
-                                super::background_tools::finish::finish_background_execution(
-                                    lifecycle, hook.node.clone(), hook.background_live_outputs.clone(),
-                                    hook.background_executions.clone(), reservation, outcome,
-                                ).await;
-                            } else {
-                                let outcome = outcome.unwrap_or_else(|_| {
-                                    if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.mark_unverified_failure(); }
-                                    gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
-                                });
-                                let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
-                                let needs_confirmation = gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome));
-                                if needs_confirmation && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
-                                    hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::call::hook::RetainedStopReceipt::from_outcome(&outcome));
-                                    match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
-                                        Ok(receipt) => {
-                                            if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Backgrounded(receipt)); }
-                                            reservation.retain_stopped_worker(lifecycle, false);
-                                        }
-                                        Err(error) => {
-                                            tracing::warn!(%error, tool_call_doc_id = %doc, "foreground recovery handoff retained for retry");
-                                            reservation.retain_for_recovery(lifecycle);
-                                            if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
-                                        }
-                                    }
-                                    return;
-                                }
-                                if needs_confirmation {
-                                    let receipt = crate::call::hook::RetainedStopReceipt::from_outcome(&outcome);
-                                    hook.background_executions.retain_confirmed_worker(lifecycle, reservation, receipt);
-                                    if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
-                                    return;
-                                }
-                                if hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
-                                    if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.exited(); }
-                                    hook.background_executions.release_process_record(lifecycle.tool_call_id(), &doc).await;
-                                }
-                                if let Some(answer) = answer.take() {
-                                    let _ = answer.send(ForegroundResult::Settled(outcome));
-                                }
-                                drop(reservation);
-                            }
-                            return;
-                        }
-                        batch = async {
-                            match changes.as_mut() {
-                                Some(changes) => changes.recv().await,
-                                None => std::future::pending().await,
-                            }
-                        }, if !backgrounded => match batch {
-                            Some(batch) => inspect = batch.resync_required
-                                || batch.changes.iter().any(|change| change.doc_id == doc),
-                            None => changes = None,
-                        },
+                        return;
                     }
+                    batch = async {
+                        match changes.as_mut() {
+                            Some(changes) => changes.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    }, if !backgrounded => match batch {
+                        Some(batch) => inspect = batch.resync_required
+                            || batch.changes.iter().any(|change| change.doc_id == doc),
+                        None => changes = None,
+                    },
                 }
-            },
-        ));
+            }
+        });
         result.await.unwrap_or_else(|_| {
             ForegroundResult::Settled(
                 gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(

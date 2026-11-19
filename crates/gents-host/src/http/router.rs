@@ -57,6 +57,9 @@ pub struct RuntimeHttpState {
     pub serve_lifecycle: ServeLifecycleHandle,
     pub client_access_decisions: Arc<tokio::sync::Mutex<()>>,
     pub document_acp: gents_store::local::document_acp::DocumentAcp,
+    /// The home's node key, which signs its status before the runtime that
+    /// holds it too has started.
+    pub node_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
 }
 
 impl RuntimeHttpState {
@@ -147,6 +150,7 @@ pub fn runtime_contract_router(
     replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
     serve_lifecycle: ServeLifecycleHandle,
     document_acp: gents_store::local::document_acp::DocumentAcp,
+    node_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
 ) -> RuntimeRouters {
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
@@ -174,6 +178,7 @@ pub fn runtime_contract_router(
         replicated_schema,
         serve_lifecycle,
         document_acp,
+        node_identity,
     };
 
     let operator_routes = Router::new()
@@ -233,6 +238,10 @@ pub fn runtime_contract_router(
         .route(
             gents_protocol::owed_settlement::OWED_SETTLEMENT_PATH,
             post(crate::http::owed_settlement::settle),
+        )
+        .route(
+            gents_protocol::owed_settlement::OWED_REMOVALS_PATH,
+            post(crate::http::owed_settlement::removals),
         )
         .route("/fleet/slots", get(fleet_slots_handler))
         .route(

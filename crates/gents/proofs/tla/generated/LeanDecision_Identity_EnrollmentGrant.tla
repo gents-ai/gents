@@ -10,6 +10,16 @@ afterRemoval_table ==
 afterRemoval(taken_over) ==
   afterRemoval_table[<<taken_over>>]
 
+\* Lean `Identity.EnrollmentGrant.restorationStep`.
+restorationStep_table ==
+  ((<<FALSE, FALSE>> :> "restore"
+    @@ <<FALSE, TRUE>> :> "close")
+   @@ (<<TRUE, FALSE>> :> "close"
+       @@ <<TRUE, TRUE>> :> "close"))
+
+restorationStep(owed, held) ==
+  restorationStep_table[<<owed, held>>]
+
 \* Lean `Identity.EnrollmentGrant.settlementStep`.
 settlementStep_table ==
   ((<<FALSE, FALSE>> :> "leave"

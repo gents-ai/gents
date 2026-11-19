@@ -13,10 +13,15 @@ pub(crate) async fn authorize_file_mutation(
     path: &Path,
     input: &impl Serialize,
 ) -> Result<Option<ActionConsent>> {
-    let Some(home) = context::current_home() else {
+    let approval = crate::runtime_context::host(call).approval;
+    let Some(approval) = approval.as_ref() else {
+        return Ok(None);
+    };
+    let Some(home) = context::current_home(Some(approval)) else {
         return Ok(None);
     };
     let Some(decision) = super::binding_route(
+        Some(approval),
         &home,
         || {
             Ok(BindingAction::FileMutation {
@@ -27,7 +32,7 @@ pub(crate) async fn authorize_file_mutation(
                 existed: path.try_exists()?,
             })
         },
-        context::within_workspace(path),
+        context::within_workspace(Some(approval), path),
         || serde_json::to_value(input).map_err(Into::into),
     )?
     else {
@@ -40,5 +45,5 @@ pub(crate) async fn authorize_file_mutation(
         "The file change was not approved for this workspace.",
     )
     .await?;
-    Ok(Some(super::action_consent(&home, binding)))
+    Ok(Some(super::action_consent(approval, &home, binding)))
 }
