@@ -186,16 +186,18 @@ impl ClientRuntime {
         if !input.input.has_authored_input(&input.content) {
             return Err(RequestOperationError::ContentRequired.into());
         }
-        input
-            .request_id
-            .get_or_insert_with(|| uuid::Uuid::new_v4().to_string());
+        let nonblank = |value: Option<String>| {
+            value
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        };
+        let request_id =
+            nonblank(input.request_id.take()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         input.session_id = Some(gents_protocol::authored_submission::authored_session_id(
-            input
-                .request_id
-                .as_deref()
-                .expect("authored request identity"),
-            input.session_id.as_deref(),
+            &request_id,
+            nonblank(input.session_id.take()).as_deref(),
         ));
+        input.request_id = Some(request_id);
         super::writes::ensure_runtime_connection(
             &input.node_did,
             self.connection_for_write(&input.node_did)?.as_ref(),

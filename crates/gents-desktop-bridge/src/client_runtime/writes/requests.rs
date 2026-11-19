@@ -113,10 +113,11 @@ impl ClientRuntime {
             return Ok(SubmittedRequest {
                 request_id: record.submission_id.clone(),
                 node_did: record.node_did.clone(),
-                session_id: gents_protocol::authored_submission::authored_session_id(
-                    &record.submission_id,
-                    input.session_id.as_deref(),
-                ),
+                session_id: record
+                    .authored()?
+                    .session_id()
+                    .context("the retained submission has no session")?
+                    .to_owned(),
                 agent_did: input.agent_did,
             });
         }
