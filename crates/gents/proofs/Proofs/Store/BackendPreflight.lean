@@ -20,10 +20,14 @@ theorem incompatible_never_opens : decision .incompatible ≠ "open" := by decid
 /-- A store's lineage marker is a file in its own data directory, named this
 prefix and then the lineage version in decimal. The version moves with the
 node grants and the Household policy a store is created under as well as with
-its format (gents#3747, gents#3794): those policy changes keep the policy ID,
-so only the marker tells one lineage's store from another's before DefraDB
-refuses to register the policy. It is read from the directory's names alone,
-so a refusal leaves the store unopened. -/
+its format: v2 began when the Agent baseline gained `get-collection`
+(gents#3747, `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`),
+v3 when `agent_manager` came to take only the Node administrators' userset
+(gents#3794, `Identity.Household.catalog_restriction_keeps_policy_id`). Those
+changes keep the policy ID, so only the marker tells one lineage's store from
+another's before DefraDB refuses to register the policy. It is read from the
+directory's names alone, so a refusal leaves the store unopened, and a store
+without this build's marker is never opened: there is no conversion. -/
 def markerPrefix : String := ".gents-private-backend-v"
 
 /-- What a directory entry's name says as a lineage marker. -/
@@ -55,9 +59,13 @@ inductive Lineage where
 
 /-- The lineage of a store whose directory holds `markers`, for a build of
 lineage `current`. This build's own marker wins over any other, so a store
-this build made opens. Any newer marker then makes the store newer, because
-the release that wrote it may still want it. Only markers that are all of
-earlier versions make a store older. -/
+this build made opens. Premise: no release writes its marker into a store
+holding another release's, because a marker is written only into a fresh store
+whose directory was observed empty (`FreshBackendStore::observe`), and there
+are no migrations before 1.0; another marker beside this build's was put there
+from outside. Any newer marker then makes the store newer, because the release
+that wrote it may still want it. Only markers that are all of earlier versions
+make a store older. -/
 def classify (current : Nat) (markers : List Marker) : Lineage :=
   if Marker.version current ∈ markers then .current
   else if markers.any (Marker.newerThan current) then .newer
@@ -121,7 +129,9 @@ private theorem classify_unmarked {current : Nat} {markers : List Marker}
       | cons => simp [hc, ha] at h
 
 /-- Starting fresh is offered, at any read, only for a store each of whose
-markers names a version earlier than this build's. -/
+markers names a version earlier than this build's. For an unmarked store,
+which is refused as older once the lock is held, it holds vacuously: there is
+no marker to name a version. -/
 theorem deletion_is_offered_only_for_earlier_markers (beforeLock : Bool) (current : Nat)
     (markers : List Marker) (r : Refusal)
     (refused : refusal beforeLock (classify current markers) = some r)
@@ -152,6 +162,8 @@ theorem a_newer_store_is_never_offered_for_deletion (beforeLock keyPresent : Boo
   rw [StoreKeyCustody.a_foreign_version_is_never_offered_for_deletion]
   rfl
 
+/-- A marker whose version cannot be read fails closed: its store is never
+older, so never offered for deletion. -/
 theorem an_unreadable_marker_is_never_older (current : Nat) (markers : List Marker)
     (h : Marker.unparseable ∈ markers) : classify current markers ≠ .older :=
   fun older => by simpa using classify_older older _ h

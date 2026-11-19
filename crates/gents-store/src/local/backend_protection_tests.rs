@@ -22,7 +22,7 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
         .iter()
         .any(|(path, _)| path == &home.join("data.lock")));
 
-    let refused = super::backend_protection::refuse_earlier_lineage(&data)
+    let refused = super::backend_protection::refuse_other_lineage(&data)
         .expect_err("the previous lineage is not this version's");
     assert!(
         matches!(refused, BackendProtectionError::MissingProvenance),
@@ -47,9 +47,9 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
         data.join(".gents-private-backend-v2"),
         data.join(PROVENANCE_MARKER),
     )?;
-    super::backend_protection::refuse_earlier_lineage(&data)?;
+    super::backend_protection::refuse_other_lineage(&data)?;
     std::fs::remove_file(data.join(PROVENANCE_MARKER))?;
-    super::backend_protection::refuse_earlier_lineage(&data)?;
+    super::backend_protection::refuse_other_lineage(&data)?;
     Ok(())
 }
 
@@ -107,7 +107,7 @@ async fn a_store_from_a_newer_release_is_never_reported_as_older() -> anyhow::Re
         .iter()
         .any(|(path, _)| path == &home.join("data.lock")));
 
-    let refused = super::backend_protection::refuse_earlier_lineage(&data)
+    let refused = super::backend_protection::refuse_other_lineage(&data)
         .expect_err("a newer lineage is not this version's");
     let store = super::storage_backend::incompatible_store(&refused, &data)
         .context("the refusal is reported as an incompatible store")?;
@@ -130,7 +130,6 @@ async fn a_store_from_a_newer_release_is_never_reported_as_older() -> anyhow::Re
 async fn a_home_with_a_store_from_a_newer_release_is_never_reported_as_older() -> anyhow::Result<()>
 {
     use super::backend_protection::PROVENANCE_MARKER;
-    use super::store_compat::{check_home_store, StoreCompatibility};
     let directory = tempfile::tempdir()?;
     let home = directory.path().to_owned();
     let data = fresh_protected_store(&home).await?;
@@ -140,18 +139,29 @@ async fn a_home_with_a_store_from_a_newer_release_is_never_reported_as_older() -
     )?;
     assert!(data.join("MANIFEST").is_file(), "the home holds a store");
 
-    let store = match check_home_store(&home).await? {
-        StoreCompatibility::Refused(store) => store,
-        verdict => anyhow::bail!("a newer store is refused, not {verdict:?}"),
-    };
+    let kind = refused_unchanged(&home).await?;
     assert!(
-        !store.kind.is_older(),
-        "a newer store is offered for deletion: kind {:?}, is_older {}, made_by_older_version {}",
-        store.kind,
-        store.kind.is_older(),
-        store.kind.made_by_older_version()
+        !kind.is_older(),
+        "a newer store is offered for deletion: kind {kind:?}, is_older {}, made_by_older_version {}",
+        kind.is_older(),
+        kind.made_by_older_version()
     );
     Ok(())
+}
+
+/// What `check_home_store` refuses the home as, asserting the look leaves the
+/// home byte-identical.
+async fn refused_unchanged(
+    home: &std::path::Path,
+) -> anyhow::Result<gents_protocol::operations::install_repair::IncompatibleStoreKind> {
+    use super::store_compat::{check_home_store, StoreCompatibility};
+    let before = store_bytes(home)?;
+    let verdict = check_home_store(home).await?;
+    assert_eq!(store_bytes(home)?, before, "the home is byte-identical");
+    match verdict {
+        StoreCompatibility::Refused(store) => Ok(store.kind),
+        verdict => anyhow::bail!("the home is refused, not {verdict:?}"),
+    }
 }
 
 /// A home whose store has an earlier lineage's marker, or no marker, is
@@ -160,16 +170,6 @@ async fn a_home_with_a_store_from_a_newer_release_is_never_reported_as_older() -
 async fn a_home_with_an_earlier_or_no_lineage_marker_is_reported_as_older() -> anyhow::Result<()> {
     use super::backend_protection::PROVENANCE_MARKER;
     use gents_protocol::operations::install_repair::IncompatibleStoreKind;
-    async fn refused_unchanged(home: &std::path::Path) -> anyhow::Result<IncompatibleStoreKind> {
-        use super::store_compat::{check_home_store, StoreCompatibility};
-        let before = store_bytes(home)?;
-        let verdict = check_home_store(home).await?;
-        assert_eq!(store_bytes(home)?, before, "the home is byte-identical");
-        match verdict {
-            StoreCompatibility::Refused(store) => Ok(store.kind),
-            verdict => anyhow::bail!("the home is refused, not {verdict:?}"),
-        }
-    }
     let directory = tempfile::tempdir()?;
     let home = directory.path().to_owned();
     let data = fresh_protected_store(&home).await?;

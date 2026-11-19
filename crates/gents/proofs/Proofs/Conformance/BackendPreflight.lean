@@ -19,14 +19,16 @@ structure LineageInput where
   deriving Lean.ToJson
 
 /-- Store directory listings around lineage `current`: its own marker, an
-earlier and a later one and mixes of them, versions that cannot be read, and
-names that only resemble a marker. -/
+earlier and a later one and mixes of them in either order (a directory lists
+in no fixed order), versions that cannot be read, and names that only resemble
+a marker. -/
 def lineageListings (current : Nat) : List (List String) :=
   let named (suffix : String) := _root_.BackendPreflight.markerPrefix ++ suffix
   let version (n : Nat) := named (toString n)
   [[], ["MANIFEST", ".gents-store-compatibility"],
     [version current], [version (current - 1)], [version (current + 1)],
-    [version current, version (current + 1)], [version (current - 1), version current],
+    [version current, version (current + 1)], [version (current + 1), version current],
+    [named "x", version current], [version (current - 1), version current],
     [version (current - 1), version (current + 1)], ["MANIFEST", version (current - 1)],
     [named "x"], [named ""], [named ("0" ++ toString current)], [named ("+" ++ toString current)],
     [named "18446744073709551616"], [version (current - 1), named "x"],

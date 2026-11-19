@@ -14,20 +14,11 @@ use super::{
 };
 use crate::identity::NodeIdentity;
 
-/// The store's lineage marker. Its version names the node grants and the
-/// Household policy a store was created under as well as its format: v2 began
-/// when the Agent baseline gained `get-collection` (gents#3747, Lean
-/// `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`); v3 when
-/// `agent_manager` came to take only the Node administrators' userset under
-/// the same policy ID (gents#3794,
-/// `Identity.Household.catalog_restriction_keeps_policy_id`). The policy ID
-/// does not change, so only this marker tells a v2 store's earlier policy from
-/// this one before DefraDB refuses to register it. A store without this
-/// version's marker is never opened, so nothing in it changes; there is no
-/// conversion.
+/// This build's lineage marker (Lean `BackendPreflight.markerPrefix`):
+/// [`MARKER_PREFIX`] followed by [`VERSION`]. A new lineage bumps this name,
+/// [`VERSION`] and [`DOMAIN`] together.
 const MARKER: &str = ".gents-private-backend-v3";
-/// Lean `BackendPreflight.markerPrefix`; [`MARKER`] is it followed by [`VERSION`].
-const LINEAGE: &str = ".gents-private-backend-v";
+const MARKER_PREFIX: &str = ".gents-private-backend-v";
 const VERSION: u64 = 3;
 pub const PROVENANCE_MARKER: &str = MARKER;
 const DOMAIN: &[u8] = b"gents private backend fresh store v3\0";
@@ -125,7 +116,10 @@ pub(crate) fn lineage_refusal(
     before_lock: bool,
 ) -> Option<BackendProtectionError> {
     let (mut marked, mut newer) = (false, false);
-    for suffix in names.iter().filter_map(|name| name.strip_prefix(LINEAGE)) {
+    for suffix in names
+        .iter()
+        .filter_map(|name| name.strip_prefix(MARKER_PREFIX))
+    {
         match suffix
             .parse::<u64>()
             .ok()
@@ -158,7 +152,7 @@ pub(crate) fn refuse_lineage(data: &Path, before_lock: bool) -> Result<()> {
 /// Refuses a store that carries another lineage's marker and not this
 /// version's. It runs before the store lock is taken, because taking the lock
 /// rewrites the lock file and a refused home is left byte-identical.
-pub fn refuse_earlier_lineage(data: &Path) -> Result<()> {
+pub fn refuse_other_lineage(data: &Path) -> Result<()> {
     refuse_lineage(data, true)
 }
 

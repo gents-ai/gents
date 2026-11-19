@@ -666,7 +666,7 @@ async fn resolve_config_access_inner(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
-    gents_store::local::backend_protection::refuse_earlier_lineage(&data_dir)?;
+    gents_store::local::backend_protection::refuse_other_lineage(&data_dir)?;
     let claim = gents_store::local::home::acquire_store(
         &home_dir,
         &data_dir,
