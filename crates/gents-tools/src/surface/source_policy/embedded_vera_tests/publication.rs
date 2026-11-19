@@ -11,7 +11,7 @@ async fn a_vera_home_refuses_node_run_peer_publication_and_a_local_home_does_not
         let home = home(directory.path(), name).await?;
         FreshBackendStore::observe(&home.data, &home.lock)
             .await?
-            .initialize(&home.key, &home.node, document_acp)
+            .initialize(&home.key, &home.node, &home.owner, document_acp)
             .await?;
         let node = start(&home, document_acp).await?;
         let published = ensure_node_publication(&node);
