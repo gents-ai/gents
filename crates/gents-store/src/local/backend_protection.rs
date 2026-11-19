@@ -60,6 +60,18 @@ pub enum BackendProtectionError {
          re-enable NAC as the node owner or an admin before starting"
     )]
     NodeAcpNotEnabled { status: String },
+    #[error(
+        "the runtime's Node identity reads past document access control: it owns node access \
+         control, is a node admin or holds bypass-dac, so it would read every actor's documents. \
+         A home set up before its User owned node access control cannot be converted: back it up \
+         or delete it, then run `gents` to set up a fresh one. Otherwise revoke the Node's admin \
+         or bypass-dac as the home's User."
+    )]
+    NodeReadsPastDocumentAcp,
+    #[error("node access control could not be read")]
+    NodeAcpRead(#[source] db::nac::Error),
+    #[error("node access control must be owned by the home's User, not its Node")]
+    NodeOwnedNodeAcp,
     #[error("the store could not be checked on a copy; the original was not opened")]
     CopyCheck(#[source] Box<super::store_compat::StoreCompatibilityError>),
     #[error("backend protection storage operation failed")]
@@ -205,16 +217,21 @@ impl<'a> FreshBackendStore<'a> {
         self,
         key: &StoreKey,
         node: &Arc<dyn NodeIdentity>,
+        nac_owner: &identity::Did,
         document_acp: DocumentAcp,
     ) -> Result<()> {
         let did = node_did(node)?;
+        if nac_owner.as_str() == did {
+            return Err(BackendProtectionError::NodeOwnedNodeAcp);
+        }
         let builder = super::store_key::persistent_builder(&self.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?
-            .with_node_identity_did(did)
-            .with_node_acp_enabled();
+            .with_node_identity_did(did.clone())
+            .with_node_acp_owner(nac_owner.as_str());
         let builder = document_acp::configure_fresh(builder, &self.data, key, document_acp, node)?;
         let node = start(builder).await?;
         let result: Result<_> = async {
+            grant_node_runtime(&node, nac_owner, &did).await?;
             crate::schema::ensure_runtime_schemas(&node)
                 .await
                 .map_err(BackendProtectionError::Schema)?;
@@ -346,8 +363,7 @@ impl PreflightProtectedBackendStore<'_> {
         self,
         key: &StoreKey,
         runtime: Arc<dyn crate::identity::NodeIdentity>,
-        http: Option<defra_node::HttpConfig>,
-        p2p: Option<defra_node::P2PConfig>,
+        configure: impl FnOnce(defra_node::NodeBuilder) -> defra_node::NodeBuilder + Send,
         policy: Arc<dyn super::ToolSourcePolicy>,
         plugins: Vec<super::ProjectedPlugin>,
         composition: &crate::node_extension::Extensions,
@@ -356,7 +372,7 @@ impl PreflightProtectedBackendStore<'_> {
             return Err(BackendProtectionError::WrongNode);
         }
         let started = self
-            .start_node_with_plugins(key, runtime, http, p2p, policy, plugins)
+            .start_node_with_plugins(key, runtime, configure, policy, plugins)
             .await?;
         if let Err(error) = crate::node_extension::attach_all(&started.0, composition) {
             let _ = started.0.shutdown().await;
@@ -369,8 +385,7 @@ impl PreflightProtectedBackendStore<'_> {
         self,
         key: &StoreKey,
         runtime: Arc<dyn crate::identity::NodeIdentity>,
-        http: Option<defra_node::HttpConfig>,
-        p2p: Option<defra_node::P2PConfig>,
+        configure: impl FnOnce(defra_node::NodeBuilder) -> defra_node::NodeBuilder + Send,
         policy: Arc<dyn super::ToolSourcePolicy>,
         plugins: Vec<super::ProjectedPlugin>,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
@@ -382,14 +397,9 @@ impl PreflightProtectedBackendStore<'_> {
             .with_document_projector(projection)
             .with_node_identity_did(self.node_did)
             .with_node_acp_enabled();
-        let mut builder =
+        let builder =
             document_acp::configure(builder, &self.store.data, key, self.document_acp, &runtime)?;
-        if let Some(http) = http {
-            builder = builder.with_http(http);
-        }
-        if let Some(p2p) = p2p {
-            builder = builder.with_p2p(p2p);
-        }
+        let builder = configure(builder);
         let node = Arc::new(build_configured(builder, &self.store.data, self.document_acp).await?);
         if let Err(error) = validate_binding(&node).await {
             let _ = node.shutdown().await;
@@ -420,27 +430,55 @@ impl BackendAdmission {
     }
 }
 
-/// `Identity.NodeProvisioning.runtimeMayStart`: every authorization decision
-/// assumes NAC is enabled, and native treats every actor as admin while it is
-/// not, so a node observed without it is refused before it serves or admits
-/// work. This is the one runtime check of that invariant.
-async fn require_node_acp_enabled(node: &defra_node::Node) -> Result<()> {
-    let nac = node.nac_manager();
-    if nac.is_enabled().await {
-        return Ok(());
+/// The owner grants the Node `Identity.GrantSets.nodeRuntimePermissions` once,
+/// when the fresh store is first opened and before anything else is written.
+async fn grant_node_runtime(
+    node: &defra_node::Node,
+    owner: &identity::Did,
+    node_did: &str,
+) -> Result<()> {
+    let context = defra_core::RequestContext::default().with_identity(Some(owner.to_string()));
+    for permission in crate::identity::node_runtime_permissions() {
+        node.add_nac_actor_relationship_as(&context, permission.as_str(), node_did)
+            .await?;
     }
-    Err(BackendProtectionError::NodeAcpNotEnabled {
-        status: nac.info().await.status,
-    })
+    Ok(())
+}
+
+/// `Identity.NodeProvisioning.runtimeMayStart`: every authorization decision
+/// assumes NAC is enabled and that the Node reads only what document ACP
+/// grants it. Native treats every actor as admin while NAC is off, and lets
+/// the NAC owner and every `bypass-dac` holder read past document ACP, so a
+/// node observed either way is refused before it serves or admits work. This
+/// is the one runtime check of that invariant.
+async fn require_runtime_may_start(node: &defra_node::Node) -> Result<()> {
+    let nac = node.nac_manager();
+    if !nac.is_enabled().await {
+        return Err(BackendProtectionError::NodeAcpNotEnabled {
+            status: nac.info().await.status,
+        });
+    }
+    let did = node
+        .node_identity_did()
+        .and_then(|did| identity::Did::new(did).ok())
+        .ok_or(BackendProtectionError::InvalidProvenance)?;
+    if nac
+        .check_permission(&did, acp::nac::NodePermission::DacBypass)
+        .await
+        .map_err(BackendProtectionError::NodeAcpRead)?
+    {
+        return Err(BackendProtectionError::NodeReadsPastDocumentAcp);
+    }
+    Ok(())
 }
 
 async fn validate_binding(node: &defra_node::Node) -> Result<()> {
-    require_node_acp_enabled(node).await?;
+    require_runtime_may_start(node).await?;
     validate_policy_binding(node).await
 }
 
 /// The collection binding alone, for a copy of a store opened without its
-/// node's identity, which [`require_node_acp_enabled`] needs.
+/// node's identity, which [`require_runtime_may_start`] needs.
 pub(crate) async fn validate_policy_binding(node: &defra_node::Node) -> Result<()> {
     use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, INFERENCE_BACKEND_NAME};
     let current = node

@@ -14,6 +14,7 @@ use gents_pack::pack::{
 };
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::UNREACHED_DEADLINE;
 use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
@@ -126,39 +127,33 @@ async fn boot_cycle(cycle: &Cycle, root: &Path) -> BootedAgent {
         r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
         escape_graphql_string(&cycle.owner),
     );
-    crate::support::live_inference::wait_for_rows(
-        &cycle.access,
-        "NodeReadiness",
-        &query,
-        STALL_CEILING,
-        |data| {
-            let row = data["NodeReadiness"]
-                .as_array()
-                .and_then(|rows| rows.first())
-                .and_then(|row| {
-                    serde_json::from_value::<gents_protocol::node_readiness::NodeReadinessRow>(
-                        row.clone(),
-                    )
-                    .ok()
-                });
-            let projection = gents_protocol::node_readiness::project_node_readiness(
-                row.as_ref(),
-                &cycle.owner,
-                cycle
-                    .agents
-                    .values()
-                    .map(|binding| binding.agent_did.as_str()),
-                Some(cycle.agent(WRITER)),
-            );
-            projection.unknown_reason.is_none()
-                && projection.agents.values().all(|state| {
-                    matches!(
-                        state,
-                        gents_protocol::node_readiness::ProjectedAgentReadiness::Ready
-                    )
-                })
-        },
-    )
+    crate::support::live_inference::rows_when(&cycle.access, "NodeReadiness", &query, |data| {
+        let row = data["NodeReadiness"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(|row| {
+                serde_json::from_value::<gents_protocol::node_readiness::NodeReadinessRow>(
+                    row.clone(),
+                )
+                .ok()
+            });
+        let projection = gents_protocol::node_readiness::project_node_readiness(
+            row.as_ref(),
+            &cycle.owner,
+            cycle
+                .agents
+                .values()
+                .map(|binding| binding.agent_did.as_str()),
+            Some(cycle.agent(WRITER)),
+        );
+        projection.unknown_reason.is_none()
+            && projection.agents.values().all(|state| {
+                matches!(
+                    state,
+                    gents_protocol::node_readiness::ProjectedAgentReadiness::Ready
+                )
+            })
+    })
     .await;
     runtime
 }
@@ -761,7 +756,7 @@ fn failure_inbox_backend() -> MockStreamingBackend {
 async fn install_inference(access: &ConfigAccess, owner: &str, source: InferenceSource<'_>) {
     let execution = json!({
         "node_did":owner,"execution_id":"workspace-cycle-execution","max_turns":8,
-        "deadline_duration_secs":60,"stream_liveness_timeout_secs":10,"stream_batch_ms":5
+        "deadline_duration_secs":UNREACHED_DEADLINE.as_secs(),"stream_batch_ms":5
     });
     let mut docs = vec![(Collection::InferenceExecution, execution)];
     let (backend, profile, sampling) = match source {
@@ -1372,14 +1367,19 @@ async fn wait_supervisor_inbox(access: &ConfigAccess, work_unit_id: &str) -> Val
 
 #[cfg(feature = "live-e2e")]
 async fn wait_request_completed(access: &ConfigAccess, request_id: &str) {
-    assert_eq!(
-        crate::support::live_inference::wait_for_request_terminal(
-            access,
-            request_id,
-            STALL_CEILING,
+    let query = format!(
+        "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ request_id lifecycle_state failure_reason }} }}",
+        escape_graphql_string(request_id)
+    );
+    let rows = crate::support::live_inference::rows_when(access, "AgentRequest", &query, |data| {
+        gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
+            data["AgentRequest"][0]["lifecycle_state"].as_str(),
         )
-        .await,
-        "completed"
+    })
+    .await;
+    assert_eq!(
+        rows["AgentRequest"][0]["lifecycle_state"], "completed",
+        "{rows:#}"
     );
 }
 

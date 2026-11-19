@@ -32,7 +32,7 @@ const remote = (nodeDid: string, name: string) =>
   node({
     nodeDid,
     label: name,
-    source: "enrollment",
+    local: false,
     node: { ...deployment.node, nodeDid, displayName: name },
     agents: deployment.agents.map((a) => ({ ...a, nodeDid })),
   });
@@ -96,10 +96,7 @@ describe("the startup node", () => {
   });
 
   it("falls back from a chosen node that refuses this app, though its dial succeeded", () => {
-    const app = launch("did:key:vega", [
-      ...withoutVega(),
-      { ...unreached("refused"), dialSucceeded: true },
-    ]);
+    const app = launch("did:key:vega", [...withoutVega(), { ...unreached("refused") }]);
     expect(app.at()).toBe(HOME);
     expect(toast).toHaveBeenCalledWith(
       "Vega isn't reachable, so the app opened on Local Agent",

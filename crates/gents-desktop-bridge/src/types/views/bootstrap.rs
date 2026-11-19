@@ -5,15 +5,10 @@ use crate::types::ManagedServerToolCeiling;
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SavedPeerView {
-    pub peer_id: String,
-    pub label: String,
+pub struct SavedRuntimeView {
     pub node_did: String,
-    pub addr: String,
-    pub source: Option<String>,
+    pub label: String,
     pub graphql: Option<String>,
-    /// This Mac's managed node. Once enrolled its `source` is `enrollment`,
-    /// like a remote; after its home is removed nothing else marks it local.
     pub local: bool,
 }
 
@@ -23,7 +18,7 @@ pub struct ManagedServerRepairResult {
     pub repaired: Vec<String>,
     pub outcome: ManagedServerRepairOutcome,
     pub blocker: Option<String>,
-    pub saved_peers: Vec<SavedPeerView>,
+    pub saved_runtimes: Vec<SavedRuntimeView>,
     /// This launch retired the state of a local node whose home is gone, so
     /// setup runs again even when remote nodes are saved. The user deleted
     /// that folder, so it is not reported as a repair.
@@ -58,7 +53,7 @@ pub struct DesktopBootstrapSummary {
     /// The configured home holds a committed node name but never served or
     /// paired, so setup can offer to continue it or start over.
     pub local_setup_unfinished: bool,
-    pub saved_peers: Vec<SavedPeerView>,
+    pub saved_runtimes: Vec<SavedRuntimeView>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
@@ -100,7 +95,7 @@ pub struct ManagedServerStatus {
     pub runtime_booting: bool,
     pub error: Option<String>,
     #[ts(optional = nullable)]
-    pub error_code: Option<crate::error::BridgeErrorCode>,
+    pub error_code: Option<gents_store::client_error::BridgeErrorCode>,
     /// The local node's folder, once its node stopped because the folder was
     /// deleted; kept until a new setup writes the folder's `init.json`.
     #[ts(optional = nullable)]

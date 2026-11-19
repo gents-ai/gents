@@ -54,16 +54,11 @@ fn deleted(doc_id: &str) -> PackMutation {
     }
 }
 
-async fn display_names(node: &Arc<defra_node::Node>) -> anyhow::Result<Vec<String>> {
-    let read = ConfigAccess::local(node.clone())
-        .execute("{ Task { display_name } }")
-        .await?;
-    Ok(read["data"]["Task"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|task| task["display_name"].as_str().map(str::to_owned))
-        .collect())
+async fn display_names(
+    node: &defra_node::Node,
+    owner: &identity::Did,
+) -> anyhow::Result<Vec<String>> {
+    super::stored(node, owner, "Task", "display_name").await
 }
 
 #[tokio::test]
@@ -99,7 +94,7 @@ async fn a_stored_update_or_delete_runs_on_its_users_verified_permission_alone(
         "edited",
     )
     .await?;
-    assert_eq!(tasks(&node).await?, ["edited"]);
+    assert_eq!(tasks(&node, &home.owner).await?, ["edited"]);
     let agent_did = identity::Did::new(agent.did())?;
     let token = gents_store::config_client::mint_with_lifetime_for_test(
         &user.0,
@@ -123,12 +118,15 @@ async fn a_stored_update_or_delete_runs_on_its_users_verified_permission_alone(
         .map_or(true, |applied| applied.is_err()),
         "a User without update on the document changes nothing"
     );
-    assert_eq!(display_names(&node).await?, Vec::<String>::new());
+    assert_eq!(
+        display_names(&node, &home.owner).await?,
+        Vec::<String>::new()
+    );
 
     stored_edit(&node, &agent, &user.0, &renamed(&created, "by-owner"))
         .await?
         .expect("the owner's stored update runs on its verified permission");
-    assert_eq!(display_names(&node).await?, ["by-owner"]);
+    assert_eq!(display_names(&node, &home.owner).await?, ["by-owner"]);
 
     assert!(
         stored_edit(&node, &agent, &stranger.0, &deleted(&created))
@@ -136,12 +134,12 @@ async fn a_stored_update_or_delete_runs_on_its_users_verified_permission_alone(
             .map_or(true, |applied| applied.is_err()),
         "a User without delete on the document removes nothing"
     );
-    assert_eq!(tasks(&node).await?, ["edited"]);
+    assert_eq!(tasks(&node, &home.owner).await?, ["edited"]);
 
     stored_edit(&node, &agent, &user.0, &deleted(&created))
         .await?
         .expect("the owner's stored delete runs on its verified permission");
-    assert_eq!(tasks(&node).await?, Vec::<String>::new());
+    assert_eq!(tasks(&node, &home.owner).await?, Vec::<String>::new());
     assert!(defra_core::signing::get_identity(user.did()).is_none());
 
     node.shutdown().await?;

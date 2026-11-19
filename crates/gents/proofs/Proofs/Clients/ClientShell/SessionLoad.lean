@@ -40,7 +40,7 @@ message-delivery phase between a written request and its session. -/
 def Phase.isWaiting (p : Phase) : Bool := p == .pending
 
 inductive Layer where
-  | localDatabase | p2p | sessionSync | sync | runtime | inference
+  | localDatabase | sessionSync | sync | runtime | inference
   deriving DecidableEq, Repr
 
 inductive Action where
@@ -60,7 +60,7 @@ structure Status where
   deriving DecidableEq, Repr
 
 inductive OperationalLayer where
-  | client | selection | sync | p2p | route | runtime | inference | reconcile
+  | client | selection | sync | route | runtime | inference | reconcile
   deriving DecidableEq, Repr
 
 inductive OperationalKind where
@@ -100,7 +100,7 @@ structure Input where
 def operationalStatus (b : Blocker) : Status :=
   { layer :=
       match b.layer with
-      | .p2p | .route => .p2p
+      | .route => .runtime
       | .sync => .sync
       | .inference => .inference
       | _ => .runtime

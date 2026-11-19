@@ -6,6 +6,12 @@ namespace Identity.NodeProvisioning
 not establish document authorization, and unbound collections do not acquire
 document protection from them. Extra operations require their own justification.
 
+The native collection selector and relationship publication paths require
+`get-collection` even when an Agent already holds document read/update and
+DAC relation permissions. Goal control exercises these paths as the executing
+Agent. This read-only metadata permission enables those operations without
+schema mutation, document access, or a different transaction identity.
+
 `delete-dac-relation` is the revoke of `add-dac-relation` (maintainer decision,
 2026-11-12, gents#3683): whoever can grant access on a document can revoke it,
 so an Agent that links or shares a document it manages can withdraw that
@@ -65,8 +71,9 @@ consumes a one-shot marker for a verified fresh store. The authenticated client
 and matching runtime principal are separately required. An absent Node means an
 authoritative absence, not an empty actor-filtered read. The bootstrap grants
 are the direct sets `GrantSets.directSets` names for the init User and the
-default Agent; configuration is published after them. A lost or ambiguous
-reservation response grants nothing; after a crash, a durable reservation cannot authorize replay. -/
+default Agent, issued as the NAC owner (`nacOwner`); configuration is published
+after them. A lost or ambiguous reservation response grants nothing; after a
+crash, a durable reservation cannot authorize replay. -/
 structure BootstrapObservation where
   exclusive : Bool
   matchingRuntime : Bool
@@ -81,6 +88,17 @@ structure BootstrapObservation where
 
 def reservationConfirmed (created fileSynced directorySynced : Bool) : Bool :=
   created && fileSynced && directorySynced
+
+/-- Identity preparation precedes consuming the fresh home's one-shot marker.
+Once consumed, the marker still cannot be replayed after a later failure. -/
+def reservationAfterIdentity (alreadyReserved identityReady : Bool) : Bool :=
+  alreadyReserved || identityReady
+
+theorem identity_failure_keeps_fresh_reservation_available :
+    reservationAfterIdentity false false = false := by rfl
+
+theorem identity_failure_never_clears_a_consumed_reservation :
+    reservationAfterIdentity true false = true := by rfl
 
 theorem ambiguous_reservation_cannot_authorize (created fileSynced : Bool) :
     reservationConfirmed created fileSynced false = false := by
@@ -127,8 +145,36 @@ def NacStatus.name : NacStatus → String
   | .enabled => "enabled"
   | .disabledTemporarily => "disabled_temporarily"
 
-/-- Runtime invariant: the runtime operates only with node ACP (NAC) enabled.
-Every authorization decision in this model assumes it. Native premise: while
+/-- Who owns node access control (NAC) on a home's store.
+
+External premise (the pinned DefraDB revision, defradb.rs #2744): while NAC is
+enabled, the NAC owner and every holder of `bypass-dac` (the native `admin`
+relation confers it) read past document ACP. The node's own DID passes every
+node-operation check whatever NAC holds for it (`check_node_access`), but a NAC
+relationship change has no such exception: native admits it only from the
+owner, an admin, or a delegate holding both the operation and the permission.
+
+Decision (2026-11-17): the init User owns NAC, named when its fresh store is
+first opened; the Node never owns it and holds only the permissions the owner
+grants it then (`GrantSets.nodeRuntimePermissions`: all but `bypass-dac` and
+the enforcement switches), so the runtime reads only what document ACP grants
+the actor it runs as.
+Every NAC relationship change the runtime principal makes in process (the
+bootstrap, trial and enrollment grants among them) is issued as that owner:
+native takes an in-process call's identity as named, so the runtime names the
+owner without holding its key and keeps the NAC authority it had as owner,
+without its read bypass. Over HTTP the owning User issues them with its own
+client. -/
+inductive NacOwner where
+  | initUser
+  | node
+  deriving DecidableEq, Repr
+
+def nacOwner : NacOwner := .initUser
+
+/-- Runtime invariant: the runtime operates only with node ACP (NAC) enabled,
+and only on a node whose own identity does not read past document ACP.
+Every authorization decision in this model assumes both. Native premise: while
 NAC is not `Enabled`, DefraDB bypasses node-permission checks and reports every
 actor as admin (`NodeACP::is_admin`); disabling NAC is an admin-class native
 operation, so an admin can turn it off at runtime, and native persists
@@ -137,15 +183,34 @@ node open enables NAC, but that does not exclude a store reopened disabled. A
 node observed without NAC enabled is therefore refused before the runtime
 admits work (fail closed), never treated as "everyone is admin"; the fix is to
 re-enable NAC as its owner or an admin. Destructive admin decisions refuse it
-again as defence in depth (`Configuration.destructiveAdminDecision`). -/
-def runtimeMayStart (status : NacStatus) : Bool := status == .enabled
+again as defence in depth (`Configuration.destructiveAdminDecision`).
 
-theorem runtime_refuses_without_enabled_nac (status : NacStatus)
-    (notEnabled : status ≠ .enabled) : runtimeMayStart status = false := by
+`nodeReadsPastDac` is native NAC's answer for the Node's own DID and
+`bypass-dac`: true for a store whose Node owns NAC (every store created before
+`nacOwner` was the init User) and for a Node an admin made admin or granted
+`bypass-dac`. Such a node is refused the same way: its Node would read every
+actor's documents. A store whose Node owns NAC cannot be given another owner,
+so it is not converted; it is refused with the instruction to set the home up
+again. -/
+def runtimeMayStart (status : NacStatus) (nodeReadsPastDac : Bool) : Bool :=
+  status == .enabled && !nodeReadsPastDac
+
+theorem runtime_refuses_without_enabled_nac (status : NacStatus) (nodeReadsPastDac : Bool)
+    (notEnabled : status ≠ .enabled) : runtimeMayStart status nodeReadsPastDac = false := by
   cases status <;> simp_all [runtimeMayStart]
 
+theorem runtime_refuses_a_node_reading_past_dac (status : NacStatus) :
+    runtimeMayStart status true = false := by
+  simp [runtimeMayStart]
+
 theorem disabled_nac_is_refused_at_startup :
-    runtimeMayStart .disabledTemporarily = false ∧ runtimeMayStart .notConfigured = false ∧
-      runtimeMayStart .enabled = true := by decide
+    runtimeMayStart .disabledTemporarily false = false ∧
+      runtimeMayStart .notConfigured false = false ∧
+      runtimeMayStart .enabled false = true := by decide
+
+/-- A store set up with `nacOwner` starts: its Node owns nothing and reads
+past no document ACP until an admin grants it that. -/
+theorem init_user_owned_store_may_start :
+    runtimeMayStart .enabled (nacOwner == .node) = true := by decide
 
 end Identity.NodeProvisioning

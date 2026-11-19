@@ -376,6 +376,10 @@ def main():
             helper_log = home / "service-updates" / operation / "helper.log"
             if helper_log.exists():
                 print(helper_log.read_text()[-12000:], file=sys.stderr)
+            if system == "macos":
+                runtime_log = Path.home() / "Library/Logs/gents/runtime-errors.log"
+                if runtime_log.exists():
+                    print(runtime_log.read_text()[-12000:], file=sys.stderr)
             if system == "linux":
                 for unit in (metadata["systemd_unit"], f"{helper_label}.service"):
                     print(run(["journalctl", "--user", "-u", unit, "-n", "60", "--no-pager"], check=False).stdout, file=sys.stderr)

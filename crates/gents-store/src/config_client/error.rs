@@ -7,6 +7,24 @@ use super::write_telemetry::{ConflictSource, WriteTelemetryError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigClientError {
+    #[error("reading the runtime's client authentication audience")]
+    RuntimeAuthenticationRead(#[source] Box<defra_node::Error>),
+    #[error("runtime endpoint cache is unavailable")]
+    RuntimeEndpointCache,
+    #[error("reading the selected runtime's authentication metadata")]
+    RuntimeAuthenticationHttp(#[source] reqwest::Error),
+    #[error("runtime authentication metadata returned HTTP {0}")]
+    RuntimeAuthenticationStatus(reqwest::StatusCode),
+    #[error("runtime authentication metadata does not identify the selected Node")]
+    RuntimeAuthenticationIdentity,
+    #[error("the runtime has not advertised usable client authentication; reconnect the runtime")]
+    RuntimeAuthenticationUnavailable,
+    #[error("preparing the held client key for a runtime delegation")]
+    ClientDelegationSigner(#[source] Box<vera::vera_rs::SignerError>),
+    #[error("client delegation signing task failed")]
+    ClientDelegationTask(#[source] tokio::task::JoinError),
+    #[error("signing the client delegation for the selected runtime")]
+    ClientDelegation(#[source] Box<vera::vera_rs::BearerError>),
     #[error("this read adapter does not support GraphQL variables")]
     ReadVariablesUnsupported,
     #[error(transparent)]
@@ -133,6 +151,8 @@ pub enum ConfigClientError {
     TransactionActorMismatch,
     #[error("validated managed Agent signing capability is required")]
     ManagedAgentSignerRequired,
+    #[error("node access control has no owner to issue this change as")]
+    NodeAcpOwnerUnknown,
     #[error("a document relationship requires an authenticated actor")]
     RelationshipActorRequired,
     #[error("invalid transaction owner observation response")]
@@ -627,6 +647,7 @@ impl ConfigClientError {
     pub fn transport_error(&self) -> Option<&reqwest::Error> {
         match self {
             Self::Http(source)
+            | Self::RuntimeAuthenticationHttp(source)
             | Self::HttpClientBuild(source)
             | Self::ReadTxBegin(source)
             | Self::ReadTxCommit(source)

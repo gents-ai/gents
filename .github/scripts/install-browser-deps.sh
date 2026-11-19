@@ -15,16 +15,18 @@ archives="$1"
 shift
 mkdir -p "${archives}/partial"
 
-# `install-deps --dry-run` lists only the packages this image lacks (the
-# "apt-get install" alternative in its report) and exits non-zero when any are
-# missing; zero means the image already has them all.
 if report="$(npx playwright install-deps --dry-run "$@" 2>&1)"; then
   echo "the image already has the browsers' system packages"
   exit 0
 fi
-packages="$(LC_ALL=C tr -cd '\11\12\40-\176' <<< "${report}" \
-  | awk '/apt-get install/ { listing = 1; sub(/.*apt-get install/, "") } listing && /^[[:space:]]*$/ { exit } listing { print }' \
-  | tr -s ' \\\t' '\n' | grep -E '^[a-z0-9][a-z0-9.+:-]+$' | sort -u || true)"
+packages="$(awk '
+  /^Missing system dependencies \([0-9]+\):$/ {
+    count = $NF; gsub(/[^0-9]/, "", count); listing = 1; next
+  }
+  listing && NF == 1 && $1 ~ /^[a-z0-9][a-z0-9.+:-]+$/ { names[++n] = $1; next }
+  listing { exit }
+  END { if (n == count && n > 0) for (i = 1; i <= n; i++) print names[i] }
+' <<< "${report}")"
 if [[ -z "${packages}" ]]; then
   echo "::warning::could not read Playwright's missing package list; using its own install"
   printf '%s\n' "${report}"
@@ -43,8 +45,13 @@ echo "$(wc -l < "${archives}/uris.txt") packages to fetch for $(wc -l <<< "${pac
 fetch() {
   local uri="$1" file="$2" target="${archives}/$2"
   [[ -s "${target}" ]] && return 0
-  local path="${uri#*://*/}"
-  for source in "${uri}" "http://archive.ubuntu.com/${path}"; do
+  local source
+  local -a sources=()
+  case "${uri}" in http://*|https://*) sources+=("${uri}");; esac
+  if [[ "${uri}" == */pool/* ]]; then
+    sources+=("https://archive.ubuntu.com/ubuntu/pool/${uri#*/pool/}")
+  fi
+  for source in "${sources[@]}"; do
     if curl -fsSL --retry 2 --connect-timeout 15 --speed-limit 20000 --speed-time 20 \
       -o "${target}.part" "${source}"; then
       mv "${target}.part" "${target}"
@@ -57,6 +64,6 @@ fetch() {
 export -f fetch
 export archives
 # shellcheck disable=SC2016 # expanded by the inner bash
-xargs -P 16 -n 2 bash -c 'fetch "$1" "$2"' _ < "${archives}/uris.txt"
+xargs -r -P 16 -n 2 bash -c 'fetch "$1" "$2"' _ < "${archives}/uris.txt"
 
 sudo apt-get install -y --no-install-recommends -o "Dir::Cache::Archives=${archives}" "${names[@]}"

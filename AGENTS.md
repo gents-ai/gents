@@ -161,8 +161,10 @@ are fixed in defradb.rs or Regolith, not hidden by a Gents retry.
   schedules are documents reconciled by their owners.
 - **Clients are adapters.** An operation's contract lives in
   `gents_protocol::operations`, its handler with the documents; clients never
-  re-implement validation, defaults or permissions. Sync health belongs to
-  `ClientSyncStateOwner` and `project_sync_health`.
+  re-implement validation, defaults or permissions. Clients retain only their
+  private journal and configured HTTP runtime connections. Their held User key
+  signs short-lived native delegations; runtime access and revocation are ACP
+  operations. P2P discovery and enrollment belong only to runtime peers.
 - **Model-facing text** discloses progressively: a small core, help per
   resource, errors naming the next call; answer first, then next steps, then
   metadata.

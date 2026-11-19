@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 
 /// Throwaway user, runtime and desktop homes under a test's own directory for
 /// every host and CLI process it spawns. Without them the runtime CLI resolves
@@ -34,7 +34,7 @@ impl ProcessHomes {
         [
             ("GENTS_HOME", self.root.join("runtime")),
             (
-                gents_desktop_core::client::DESKTOP_HOME_ENV,
+                gents_store::client_journal::paths::DESKTOP_HOME_ENV,
                 self.root.join("desktop"),
             ),
             ("XDG_DATA_HOME", user.join(".local").join("share")),

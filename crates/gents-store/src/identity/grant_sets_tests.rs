@@ -15,6 +15,11 @@ fn sets_match_lean_owner() {
             .map(|permission| permission.as_str().to_owned())
             .collect()
     });
+    families::node_provisioning_node_runtime_grants::replay(|_| {
+        node_runtime_permissions()
+            .map(|permission| permission.as_str().to_owned())
+            .collect()
+    });
 }
 
 #[test]

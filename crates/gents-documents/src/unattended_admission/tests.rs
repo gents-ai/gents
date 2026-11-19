@@ -1,5 +1,5 @@
 use super::*;
-use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
 
@@ -35,17 +35,9 @@ async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> 
     gents_store::schema::ensure_runtime_schemas(&node).await?;
     let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
     for did in [owner.did(), selected.did()] {
-        for permission in [
-            NodePermission::CollectionGet,
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-            NodePermission::DacRelationDelete,
-        ] {
-            runtime
-                .grant_node_permission(&identity::Did::new(did)?, permission)
-                .await?;
-        }
+        gents_store::identity::GrantSet::AgentBaseline
+            .grant(&runtime, &identity::Did::new(did)?)
+            .await?;
     }
     let owner_access = ConfigAccess::local_managed_agent(
         node.clone(),

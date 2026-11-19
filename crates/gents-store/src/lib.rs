@@ -1,4 +1,6 @@
 pub mod agent_identity_watch;
+pub mod client_error;
+pub mod client_journal;
 pub mod collection;
 pub mod config_client;
 pub mod drop_cleanup;

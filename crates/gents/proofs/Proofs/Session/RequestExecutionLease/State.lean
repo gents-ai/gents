@@ -138,4 +138,13 @@ def terminalize {Generation : Type}
 /-- EOF is transport observation, not evidence of a completed provider turn. -/
 def providerEofIsFailure (sawExplicitFinal : Bool) : Bool := !sawExplicitFinal
 
+/-- A provider retry whose backoff has ended is a `dispatch` producer
+decision: it goes ahead only for the owning generation of a processing request
+before its deadline (`retry_wake_is_dispatch_authorization`). The backoff
+never renews the lease, so a lease that ran out during the backoff stops the
+retry at its wake; the owner's periodic lease poll alone leaves the wake a
+window after the deadline (`tla/RetryBackoffLease`, `Unfenced`). -/
+def retryWakeDispatches (owned processing beforeDeadline : Bool) : Bool :=
+  owned && processing && beforeDeadline
+
 end RequestExecutionLease

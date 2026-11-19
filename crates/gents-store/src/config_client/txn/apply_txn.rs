@@ -46,6 +46,8 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) owner_staged_revocations: Mutex<super::OwnerStagedRevocations>,
     /// The runtime key's derivation proof this transaction's access carried.
     pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,
+    pub(super) client_authorization:
+        Option<crate::config_client::client_authentication::ClientAuthorization>,
     /// The apply's owner authorized rerunning its callback after PLAN
     /// (`Identity.OwnerStaged.applyOverHttp`).
     pub(super) planned_replay_authorized: AtomicBool,
@@ -76,6 +78,24 @@ impl<'a> ConfigApplyTxn<'a> {
             TxnBackend::Embedded { node, .. } => Some(node),
             TxnBackend::Http { .. } => self.loopback_node.as_ref(),
         }
+    }
+
+    pub(super) fn request_context(
+        &self,
+        actor: Option<identity::Did>,
+    ) -> defra_core::RequestContext {
+        crate::config_client::client_authentication::ClientAuthorization::request_context(
+            self.client_authorization.as_ref(),
+            actor,
+        )
+    }
+
+    pub(super) fn with_client_authorization(
+        mut self,
+        authorization: Option<crate::config_client::client_authentication::ClientAuthorization>,
+    ) -> Self {
+        self.client_authorization = authorization;
+        self
     }
 
     pub fn has_local_node(&self) -> bool {
@@ -260,6 +280,7 @@ impl<'a> ConfigApplyTxn<'a> {
             rerun_notes: Vec::new(),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
             agent_proof: None,
+            client_authorization: None,
             planned_replay_authorized: AtomicBool::new(false),
             publication_observer: None,
             pack_approval: None,
@@ -388,6 +409,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 rerun_notes: Vec::new(),
                 owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
                 agent_proof: None,
+                client_authorization: None,
                 planned_replay_authorized: AtomicBool::new(false),
                 publication_observer: None,
                 pack_approval: None,
@@ -419,6 +441,7 @@ impl<'a> ConfigApplyTxn<'a> {
             rerun_notes: Vec::new(),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
             agent_proof: None,
+            client_authorization: None,
             planned_replay_authorized: AtomicBool::new(false),
             publication_observer: None,
             pack_approval: None,

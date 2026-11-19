@@ -7,6 +7,7 @@ use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 pub mod agent;
+pub mod client_access;
 mod enrollment_approval;
 mod enrollment_grant;
 mod error;
@@ -28,14 +29,17 @@ pub use enrollment_approval::{
     EnrollmentApproval, EnrollmentApprovalError,
 };
 pub use enrollment_grant::{
-    grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant,
-    plan_membership_withdrawal, plan_withdrawal, EnrollmentGrantError, EnrollmentGrantOutcome,
-    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal,
+    administration_owed, after_removal, grant_enrollment_authority, load_enrollment_grant_receipts,
+    plan_grant, plan_membership_withdrawal, plan_owing, plan_withdrawal, settle_owed_withdrawals,
+    settlement_step, AfterRemoval, EnrollmentGrantError, EnrollmentGrantOutcome,
+    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal, SettlementStep,
 };
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
-pub use grant_sets::{GrantSet, GrantSetError, Recipient, RecipientGrants};
+pub use grant_sets::{
+    node_runtime_permissions, GrantSet, GrantSetError, Recipient, RecipientGrants,
+};
 pub use macos::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
@@ -353,13 +357,6 @@ pub(crate) fn defradb_bearer_authorization_with_config(
 
 pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
-}
-
-/// P2P administration must carry the node DID explicitly across worker boundaries.
-pub fn node_p2p(node: &defra_node::Node) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
-    let context = defra_core::RequestContext::default()
-        .with_identity(node.node_identity_did().map(ToOwned::to_owned));
-    node.p2p_arc().and_then(|p2p| p2p.bind_request(&context))
 }
 
 #[async_trait]

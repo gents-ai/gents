@@ -5,11 +5,11 @@ import { bootstrap } from "./config-panel-wiring/fixtures";
 
 const remote = node({
   nodeDid: "did:key:remote",
-  source: "enrollment",
+  local: false,
   label: "Atlas",
 });
 const home = node({ nodeDid: "did:key:home", label: "Forge" });
-const other = node({ nodeDid: "did:key:other", source: "enrollment", label: "Juno" });
+const other = node({ nodeDid: "did:key:other", local: false, label: "Juno" });
 
 /* the remote node is listed first, as an enrolled peer can be */
 const start = () =>

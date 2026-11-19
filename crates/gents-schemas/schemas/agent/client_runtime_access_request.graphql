@@ -1,0 +1,9 @@
+type ClientRuntimeAccessRequest @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "operations") {
+    request_id: String @index(unique: true) @immutable
+    node_did: String @index @immutable
+    client_did: String @index @immutable
+    intent_json: String @immutable
+    state: String
+    node_doc_id: String @immutable
+    parent_linked: Boolean
+}

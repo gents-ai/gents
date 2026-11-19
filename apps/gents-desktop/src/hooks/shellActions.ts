@@ -45,6 +45,8 @@ export function createShellActions({
     ...route,
     refreshSnapshot,
     readSnapshot: () => api.fetchDesktopSnapshot(),
+    listRuntimeAccess: api.listRuntimeAccess,
+    decideRuntimeAccess: api.decideRuntimeAccess,
     fetchOperationsSnapshot: (request: DesktopOperationsSnapshotRequest) =>
       api.fetchOperationsSnapshot(request),
     canOpenDbExplorer: Boolean(api.openDbExplorer),

@@ -91,9 +91,21 @@ async fn decide(
         &actor.context(),
         requester.as_str(),
     );
-    let access = ConfigAccess::local_as(node.clone(), requester.clone())
+    let authorization =
+        match crate::config_client::client_authentication::ClientAuthorization::from_http(
+            &actor, headers,
+        ) {
+            Ok(authorization) => authorization,
+            Err(_) => return denied(),
+        };
+    let access = match ConfigAccess::local_as(node.clone(), requester.clone())
         .with_runtime_agent_proof(proof)
-        .with_presented_delegation(presented);
+        .with_presented_delegation(presented)
+        .with_client_authorization(authorization)
+    {
+        Ok(access) => access,
+        Err(_) => return denied(),
+    };
     // Authority before the nonce: an unauthorized signer is refused with the
     // decision's own fixed denial and makes the runtime write nothing.
     match access

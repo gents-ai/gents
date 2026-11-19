@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { enrollmentActivationMessage } from "@source-inc/gents-desktop-client";
 import type {
   BootstrapSummary,
   DeploymentView,
-  EnrollmentRequestView,
+  ClientAccessRequestView,
   SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import type { FleetCopy } from "../copy.js";
@@ -16,15 +15,15 @@ export type FleetDashboardProps = {
   addingPeer: boolean;
   bootstrap: BootstrapSummary | null;
   deployments: DeploymentView[];
-  enrollmentRequests: EnrollmentRequestView[] | null;
+  accessRequests: ClientAccessRequestView[] | null;
   loading: boolean;
   syncHealth?: SyncHealthView | null;
   starting: boolean;
-  onRequestStatusEnrollment: AddPeerFormProps["onRequestStatusEnrollment"];
+  onRequestRuntimeAccess: AddPeerFormProps["onRequestRuntimeAccess"];
   onOpenChat: (nodeDid: string) => void;
   onOpenConfig: (nodeDid: string) => void;
-  onRemovePeer?: (peerId: string) => Promise<unknown> | void;
-  onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
+  onRemoveRuntime?: (nodeDid: string) => Promise<unknown> | void;
+  onRenameRuntime?: (nodeDid: string, label: string) => Promise<unknown> | void;
   brand?: ReactNode;
   copy?: FleetCopy;
   headerLeadingActions?: ReactNode;
@@ -39,14 +38,14 @@ export function FleetDashboard({
   addingPeer,
   bootstrap,
   deployments,
-  enrollmentRequests,
+  accessRequests,
   syncHealth = null,
   starting,
-  onRequestStatusEnrollment,
+  onRequestRuntimeAccess,
   onOpenChat,
   onOpenConfig,
-  onRemovePeer,
-  onRenamePeer,
+  onRemoveRuntime,
+  onRenameRuntime,
   brand,
   copy,
   headerLeadingActions,
@@ -61,76 +60,50 @@ export function FleetDashboard({
   const deploymentNeedingInference =
     deployments.find(needsInferenceSetup) ?? null;
   const activeWizardDeployment = wizardDeployment
-    ? (deployments.find((entry) => entry.peerId === wizardDeployment.peerId) ??
-      wizardDeployment)
+    ? (deployments.find(
+        (entry) => entry.nodeDid === wizardDeployment.nodeDid,
+      ) ?? wizardDeployment)
     : null;
   useEffect(() => {
     if (
       !renderInferenceSetup ||
       !deploymentNeedingInference ||
-      deploymentNeedingInference.source !== "local-standard" ||
-      autoPromptedInference.current.has(deploymentNeedingInference.peerId)
+      !deploymentNeedingInference.local ||
+      autoPromptedInference.current.has(deploymentNeedingInference.nodeDid)
     ) {
       return;
     }
-    autoPromptedInference.current.add(deploymentNeedingInference.peerId);
+    autoPromptedInference.current.add(deploymentNeedingInference.nodeDid);
     setWizardDeployment(deploymentNeedingInference);
   }, [deploymentNeedingInference, renderInferenceSetup]);
 
-  async function requestStatusEnrollment(serverAddress: string) {
-    const request = await onRequestStatusEnrollment(serverAddress);
+  async function requestRuntimeAccess(serverAddress: string) {
+    const request = await onRequestRuntimeAccess(serverAddress);
     setShowAddPeer(false);
     return request;
   }
 
-  const enrollmentNotice =
-    enrollmentRequests === null ? (
+  const enrollmentNotice = accessRequests
+    ?.filter((r) => r.state !== "approved")
+    .map((request) => (
       <section
+        key={request.requestId}
         aria-live="polite"
         className="fleet-enrollment-pending"
-        data-testid="fleet-enrollment-pending"
       >
-        <div>
-          <p className="eyebrow">Enrollment state unavailable</p>
-          <strong>Waiting for the signed enrollment state</strong>
-          <p className="muted">
-            New enrollment is disabled until the database can be read.
-          </p>
-        </div>
+        <strong>
+          {request.state === "pending"
+            ? "Waiting for administrator approval"
+            : `Access ${request.state}`}
+        </strong>
+        <p className="muted">{request.nodeDid}</p>
+        <p className="muted">
+          {request.state === "pending"
+            ? "Ask the node administrator to approve this device."
+            : "Request access again from the node’s address."}
+        </p>
       </section>
-    ) : enrollmentRequests.length > 0 ? (
-      <div data-testid="fleet-enrollment-pending">
-        {enrollmentRequests.map((request) => (
-          <section
-            aria-live="polite"
-            className="fleet-enrollment-pending"
-            key={request.requestId}
-          >
-            <div>
-              <p className="eyebrow">Enrollment requested</p>
-              <strong>
-                {enrollmentActivationMessage(request)
-                  ? "Access approved · connection retrying"
-                  : request.state === "approved"
-                    ? "Approval received · finishing secure route"
-                    : "Waiting for pairing request acceptance"}
-              </strong>
-              {enrollmentActivationMessage(request) && (
-                <p role="alert">{enrollmentActivationMessage(request)}</p>
-              )}
-              <p className="muted">
-                Request <span className="mono">{request.requestId}</span>
-                {request.state !== "approved" && (
-                  <> · expires {request.expiresAt}</>
-                )}
-              </p>
-            </div>
-          </section>
-        ))}
-      </div>
-    ) : null;
-  const enrollmentBlocked = enrollmentRequests === null;
-
+    ));
   if (!hasDeployments) {
     return (
       <section className="fleet-empty" data-testid="fleet-empty">
@@ -141,12 +114,12 @@ export function FleetDashboard({
             <p className="muted">
               {localRuntimeSetup
                 ? "Optionally create a node on this machine, or skip local setup and connect a remote node."
-                : "Enroll with a remote node using its authenticated server offer."}
+                : "Enter a runtime server address and request administrator approval."}
             </p>
           </div>
           {localRuntimeSetup}
           {enrollmentNotice}
-          {enrollmentRequests !== null ? (
+          {accessRequests !== null ? (
             <details
               className="fleet-remote-disclosure"
               data-testid="fleet-remote-disclosure"
@@ -160,7 +133,7 @@ export function FleetDashboard({
                 addingPeer={addingPeer}
                 disabled={starting}
                 localError={null}
-                onRequestStatusEnrollment={requestStatusEnrollment}
+                onRequestRuntimeAccess={requestRuntimeAccess}
               />
             </details>
           ) : null}
@@ -177,7 +150,7 @@ export function FleetDashboard({
           {headerLeadingActions}
           <button
             className="primary-button"
-            disabled={enrollmentBlocked}
+            disabled={false}
             onClick={() => {
               setShowAddPeer((value) => !value);
             }}
@@ -190,14 +163,14 @@ export function FleetDashboard({
 
       {enrollmentNotice}
 
-      {showAddPeer && !enrollmentBlocked ? (
+      {showAddPeer ? (
         <section className="panel fleet-add-panel">
           {localRuntimeSetup}
           <AddPeerForm
             addingPeer={addingPeer}
             disabled={starting}
             localError={null}
-            onRequestStatusEnrollment={requestStatusEnrollment}
+            onRequestRuntimeAccess={requestRuntimeAccess}
           />
         </section>
       ) : null}
@@ -222,11 +195,11 @@ export function FleetDashboard({
                 bootstrap={bootstrap}
                 deployment={deployment}
                 syncHealth={syncHealth}
-                key={deployment.peerId}
+                key={deployment.nodeDid}
                 onOpenChat={onOpenChat}
                 onOpenConfig={onOpenConfig}
-                onRemovePeer={onRemovePeer}
-                onRenamePeer={onRenamePeer}
+                onRemoveRuntime={onRemoveRuntime}
+                onRenameRuntime={onRenameRuntime}
                 onSetupInference={
                   renderInferenceSetup ? setWizardDeployment : undefined
                 }

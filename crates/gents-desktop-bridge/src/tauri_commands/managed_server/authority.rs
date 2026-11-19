@@ -1,5 +1,6 @@
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{ManagedServerStatus, ManagedServerToolCeiling};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

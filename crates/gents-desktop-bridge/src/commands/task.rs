@@ -1,5 +1,5 @@
+use crate::client_runtime::ClientRuntime;
 use anyhow::{anyhow, bail, Result};
-use gents_desktop_core::client::ClientCore;
 use gents_documents::{Schedule, Task};
 use gents_protocol::operations::request::RequestRef;
 use gents_protocol::row::AgentRequestRow;
@@ -45,7 +45,7 @@ fn run_node(node_did: Option<String>) -> Result<String> {
 }
 
 async fn load_agent_request_by_request_id(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
     request_id: &str,
 ) -> Result<AgentRequestRow> {
@@ -58,19 +58,22 @@ async fn load_agent_request_by_request_id(
         },
     )
     .await
-    .map_err(gents_desktop_core::error::request_operation_failure)
+    .map_err(gents_store::client_error::request_operation_failure)
 }
 
-pub async fn save_task_config(core: &ClientCore, request: TaskSaveRequest) -> Result<()> {
+pub async fn save_task_config(core: &ClientRuntime, request: TaskSaveRequest) -> Result<()> {
     core.save_task(&request.document).await
 }
 
-pub async fn save_schedule_config(core: &ClientCore, request: ScheduleSaveRequest) -> Result<()> {
+pub async fn save_schedule_config(
+    core: &ClientRuntime,
+    request: ScheduleSaveRequest,
+) -> Result<()> {
     core.save_schedule(&request.document).await
 }
 
 pub async fn run_schedule_config(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: ScheduleRunRequest,
 ) -> Result<TaskRunResult> {
     let schedule_id = require_trimmed("schedule_id", request.schedule_id)?;
@@ -97,11 +100,14 @@ pub async fn run_schedule_config(
     })
 }
 
-pub async fn save_trigger_config(core: &ClientCore, request: TriggerSaveRequest) -> Result<()> {
+pub async fn save_trigger_config(core: &ClientRuntime, request: TriggerSaveRequest) -> Result<()> {
     core.save_trigger(&request.document).await
 }
 
-pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Result<TaskRunResult> {
+pub async fn run_task_config(
+    core: &ClientRuntime,
+    request: TaskRunRequest,
+) -> Result<TaskRunResult> {
     let task_id = require_trimmed("task_id", request.task_id)?;
     let args = request.args.unwrap_or_else(|| serde_json::json!({}));
     let node_did = run_node(request.node_did)?;
@@ -128,14 +134,14 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
 }
 
 pub async fn save_event_source_config(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: EventSourceSaveRequest,
 ) -> Result<()> {
     core.save_event_source(&request.document).await
 }
 
 pub async fn delete_event_source_config(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: EventSourceDeleteRequest,
 ) -> Result<()> {
     core.delete_event_source(&request.event_source_id, &request.node_did)

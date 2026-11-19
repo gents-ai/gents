@@ -179,7 +179,7 @@ pub(super) async fn sweep_member_renewals(
     {
         tracing::warn!(%error, "failed to prune expired renewal intents");
     }
-    let p2p = gents_store::identity::node_p2p(node).context("runtime P2P is unavailable")?;
+    let p2p = crate::node_access::operations(node).context("runtime P2P is unavailable")?;
     let local_peer = p2p.local_peer_id().await.map_err(anyhow::Error::msg)?;
     let (outcomes, _) = load_status_enrollment_approvals(node, identity, &local_peer).await?;
     let now = Utc::now();

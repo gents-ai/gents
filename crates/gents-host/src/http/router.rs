@@ -55,6 +55,7 @@ pub struct RuntimeHttpState {
     pub activation_observation: watch::Receiver<RuntimeActivationObservation>,
     pub replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
     pub serve_lifecycle: ServeLifecycleHandle,
+    pub client_access_decisions: Arc<tokio::sync::Mutex<()>>,
     pub document_acp: gents_store::local::document_acp::DocumentAcp,
 }
 
@@ -150,6 +151,7 @@ pub fn runtime_contract_router(
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
+        client_access_decisions: Arc::new(tokio::sync::Mutex::new(())),
         p2p_graphql,
         graphql: GraphqlEndpoint::anonymous(graphql),
         node_name,
@@ -217,6 +219,18 @@ pub fn runtime_contract_router(
             gents_protocol::agent_identity::AGENT_ADMISSION_PATH,
             post(crate::http::agent_identity::admission),
         )
+        .route(
+            gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH,
+            post(crate::http::goal_control::apply),
+        )
+        .route(
+            gents_protocol::client_access::REQUEST_PATH,
+            post(crate::http::client_access::request),
+        )
+        .route(
+            gents_protocol::client_access::DECIDE_PATH,
+            post(crate::http::client_access::decide),
+        )
         .route("/status", get(status_route))
         .route(
             gents_protocol::owed_settlement::OWED_SETTLEMENT_PATH,
@@ -239,7 +253,7 @@ pub fn runtime_contract_router(
         .route("/enrollment/pending", post(enrollment_pending_handler))
         .route("/accounts/usage/read", post(account_usage_read_handler))
         .route(
-            gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
+            gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
             get(crate::http::inference::inference_settings_handler),
         )
         .route(

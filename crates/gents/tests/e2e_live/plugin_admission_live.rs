@@ -25,7 +25,7 @@ use super::plugin_job_support::{
 };
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    boot_live_agent_with_options, live_target, wait_for_request_terminal, wait_for_rows, LiveUser,
+    boot_live_agent_with_options, live_target, rows_when, wait_for_request_terminal, LiveUser,
 };
 use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
@@ -179,7 +179,7 @@ impl LiveJobs {
     async fn invoke_in_session(&self, session: &str, name: &str, plan: Vec<PlanEntry>) -> Value {
         self.submit_job(session, name, plan).await;
         assert_eq!(
-            wait_for_request_terminal(&self.live.access, name, Duration::from_secs(120)).await,
+            wait_for_request_terminal(&self.live.access, name).await,
             "completed"
         );
         let rows = self.live.access.execute(&format!(
@@ -243,17 +243,11 @@ impl LiveJobs {
                 r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash"}}}}) {{lifecycle_state}} }}"#,
                 escape_graphql_string(child["request_id"].as_str().unwrap())
             );
-            wait_for_rows(
-                &self.live.access,
-                "AgentToolCall",
-                &query,
-                Duration::from_secs(120),
-                |data| {
-                    data["AgentToolCall"].as_array().is_some_and(|rows| {
-                        rows.iter().any(|row| row["lifecycle_state"] == "running")
-                    })
-                },
-            )
+            rows_when(&self.live.access, "AgentToolCall", &query, |data| {
+                data["AgentToolCall"]
+                    .as_array()
+                    .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
+            })
             .await;
         }
     }
@@ -526,12 +520,7 @@ async fn operator_cancel_and_non_job_stop_each_end_the_row_cancelled() {
         let view = h.job(&row, |view| view.state == JobState::Cancelled).await;
         for child in view.children {
             assert_eq!(
-                wait_for_request_terminal(
-                    &h.live.access,
-                    &child.request_id,
-                    Duration::from_secs(120)
-                )
-                .await,
+                wait_for_request_terminal(&h.live.access, &child.request_id).await,
                 "interrupted"
             );
         }
@@ -539,20 +528,14 @@ async fn operator_cancel_and_non_job_stop_each_end_the_row_cancelled() {
             r#"{{ AgentMessage(filter: {{session_id: {{_eq: "{}"}}}}) {{publication}} }}"#,
             escape_graphql_string(name)
         );
-        wait_for_rows(
-            &h.live.access,
-            "AgentMessage",
-            &query,
-            Duration::from_secs(120),
-            |data| {
-                data["AgentMessage"].as_array().is_some_and(|rows| {
-                    rows.iter().any(|message| {
-                        message["publication"]["kind"] == "tool_delivery"
-                            && message["publication"]["tool_call_doc_id"] == row["_docID"]
-                    })
+        rows_when(&h.live.access, "AgentMessage", &query, |data| {
+            data["AgentMessage"].as_array().is_some_and(|rows| {
+                rows.iter().any(|message| {
+                    message["publication"]["kind"] == "tool_delivery"
+                        && message["publication"]["tool_call_doc_id"] == row["_docID"]
                 })
-            },
-        )
+            })
+        })
         .await;
         h.runtime.shutdown().await;
     }

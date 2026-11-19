@@ -2364,8 +2364,11 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
-    let fx = gents_session::workspace::artifact_test_fixture(&[]).await;
-    for case in gents_lean_vocab::families::contracts_artifact_spawn_launch::cases() {
+    use gents_lean_vocab::families::contracts_artifact_spawn_launch as family;
+
+    let cases = tokio::task::spawn_blocking(family::cases).await.unwrap();
+    for case in cases {
+        let fx = gents_session::workspace::artifact_test_fixture(&[]).await;
         assert_eq!(case.input.requested_mode, "artifact_write");
         let name = case.input.name.as_str();
         let background = match case.input.kind.as_str() {
@@ -2443,11 +2446,9 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
             "{name}: dispatch effect disagrees with the result: {result:?}"
         );
         assert_eq!(fx.grant.root().join("tmp").join(name).exists(), dispatched);
-        case.check(
-            gents_lean_vocab::families::contracts_artifact_spawn_launch::ArtifactSpawnOutput {
-                mode: dispatched.then(|| CommandExecutionMode::ArtifactWrite.as_str().to_string()),
-            },
-        );
+        case.check(family::ArtifactSpawnOutput {
+            mode: dispatched.then(|| CommandExecutionMode::ArtifactWrite.as_str().to_string()),
+        });
     }
 }
 

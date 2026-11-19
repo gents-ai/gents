@@ -679,7 +679,10 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     for case in gents_lean_vocab::families::household_backend_destination::cases() {
         case.check(moved_published);
     }
-    for case in gents_lean_vocab::families::household_backend_probe::cases() {
+    for case in gents_lean_vocab::families::household_backend_probe_race::cases()
+        .into_iter()
+        .filter(|case| case.input.native_read)
+    {
         let key = (
             case.input.same_doc,
             case.input.same_connection,

@@ -25,10 +25,10 @@ const forgeBootstrap = {
 };
 const forge: DeploymentView = {
   ...deployment,
-  peerId: "peer-forge",
+
   label: "Forge",
   nodeDid: FORGE_DID,
-  source: "local-standard",
+  local: true,
   nodeConfig: { node_did: FORGE_DID, display_name: "Forge" },
   node: {
     ...deployment.node,
@@ -38,10 +38,10 @@ const forge: DeploymentView = {
 };
 const remote: DeploymentView = {
   ...deployment,
-  peerId: "peer-remote",
+
   label: "Remote",
   nodeDid: "did:key:z6MkRemote",
-  source: "enrollment",
+  local: false,
   node: {
     ...deployment.node,
     nodeDid: "did:key:z6MkRemote",
@@ -75,11 +75,11 @@ function fleet(listed: DeploymentView[], read: string[] = []) {
       bootstrap: forgeBootstrap,
       client: { deployments: listed, operatorConfigAuthoritativeNodeDids: read },
     })),
-    requestStatusEnrollment: vi.fn(async (_address: string) => ({
+    requestRuntimeAccess: vi.fn(async (_address: string) => ({
       requestId: "request-1",
     })),
     initLocalStandardRuntime: vi.fn(),
-    renamePeer: vi.fn(async () => ({
+    renameRuntime: vi.fn(async () => ({
       bootstrap: forgeBootstrap,
       client: { deployments: listed },
     })),
@@ -137,48 +137,41 @@ describe("Add node enrollment", () => {
       expect(
         within(dialog).queryByRole("radio", { name: /Local node/ }),
       ).not.toBeInTheDocument();
-      expect(
-        within(dialog).getByLabelText("Invitation or node server"),
-      ).toBeInTheDocument();
+      expect(within(dialog).getByLabelText("Node server address")).toBeInTheDocument();
       expect(api.startManagedServer).not.toHaveBeenCalled();
       expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["local-standard", "enrollment"])(
-    "hides impossible Remove for the managed agent with source %s",
-    async (source) => {
-      const { app } = fleet([{ ...forge, source }]);
-      renderIn(app, <AgentsScreen />);
-      await userEvent.click(screen.getByRole("button", { name: "Forge actions" }));
-      expect(
-        await screen.findByRole("menuitem", { name: "Rename" }),
-      ).toBeInTheDocument();
-      expect(
-        screen.queryByRole("menuitem", { name: "Remove peer" }),
-      ).not.toBeInTheDocument();
-    },
-  );
+  it("hides impossible Remove for the managed runtime", async () => {
+    const { app } = fleet([forge]);
+    renderIn(app, <AgentsScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "Forge actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "Remove connection" }),
+    ).not.toBeInTheDocument();
+  });
 
   it("retains Remove for a remote enrolled peer", async () => {
     const { app } = fleet([remote]);
     renderIn(app, <AgentsScreen />);
     await userEvent.click(screen.getByRole("button", { name: "Remote actions" }));
     expect(
-      await screen.findByRole("menuitem", { name: "Remove peer" }),
+      await screen.findByRole("menuitem", { name: "Remove connection" }),
     ).toBeInTheDocument();
   });
 
   it("shows a failed request's reason, and opens clean the next time", async () => {
     const { api, app } = fleet([forge]);
-    api.requestStatusEnrollment.mockRejectedValueOnce(new Error("server refused"));
+    api.requestRuntimeAccess.mockRejectedValueOnce(new Error("server refused"));
     let dialog = await openAddAgent(app);
     await userEvent.type(
-      within(dialog).getByLabelText("Invitation or node server"),
+      within(dialog).getByLabelText("Node server address"),
       "server.example:9191",
     );
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Request enrolment" }),
+      within(dialog).getByRole("button", { name: "Request access" }),
     );
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "server refused",
@@ -192,39 +185,19 @@ describe("Add node enrollment", () => {
 
   it("retains initial remote enrollment", async () => {
     const { api, app } = fleet([forge]);
-    api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });
+    api.requestRuntimeAccess.mockResolvedValue({ requestId: "request-1" });
     const dialog = await openAddAgent(app);
     await userEvent.type(
-      within(dialog).getByLabelText("Invitation or node server"),
+      within(dialog).getByLabelText("Node server address"),
       "server.example:9191",
     );
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Request enrolment" }),
+      within(dialog).getByRole("button", { name: "Request access" }),
     );
     await waitFor(() =>
-      expect(api.requestStatusEnrollment).toHaveBeenCalledWith("server.example:9191"),
+      expect(api.requestRuntimeAccess).toHaveBeenCalledWith("server.example:9191"),
     );
     expect(api.fetchDesktopSnapshot).toHaveBeenCalled();
-  });
-
-  it("includes the chosen name in the enrollment request", async () => {
-    const { api, app } = fleet([forge]);
-    api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });
-    const dialog = await openAddAgent(app);
-    await userEvent.type(
-      within(dialog).getByLabelText("Invitation or node server"),
-      "server.example:9191",
-    );
-    await userEvent.type(within(dialog).getByLabelText("Your name (optional)"), "Ivan");
-    await userEvent.click(
-      within(dialog).getByRole("button", { name: "Request enrolment" }),
-    );
-    await waitFor(() =>
-      expect(api.requestStatusEnrollment).toHaveBeenCalledWith(
-        "server.example:9191",
-        "Ivan",
-      ),
-    );
   });
 });
 
@@ -258,8 +231,8 @@ describe("renaming a deployment", () => {
     await userEvent.type(input, " Edge 2 ");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(api.renamePeer).toHaveBeenCalledTimes(1));
-    expect(api.renamePeer).toHaveBeenCalledWith("peer-remote", "Edge 2");
+    await waitFor(() => expect(api.renameRuntime).toHaveBeenCalledTimes(1));
+    expect(api.renameRuntime).toHaveBeenCalledWith(remote.nodeDid, "Edge 2");
   });
 });
 

@@ -613,7 +613,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
                 for collection in ["Goal", "AgentRequest", "GoalCreationClaim"] {
                     assert!(before["data"][collection].as_array().unwrap().is_empty());
                 }
-                process_command(&node, &identity, &doc_id, selected_identity)
+                process_command(&node, &identity, &doc_id, selected_identity, None)
                     .await
                     .unwrap();
                 assert!(receipt(&access, &doc_id).await.is_none());
@@ -638,7 +638,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
                 node.shutdown().await.expect("node shutdown");
                 return false;
             }
-            process_command(&node, &identity, &doc_id, selected_identity)
+            process_command(&node, &identity, &doc_id, selected_identity, None)
                 .await
                 .unwrap();
             let outcome = receipt(&access, &doc_id).await.unwrap().outcome;
@@ -681,7 +681,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
     if case.name == "authority_unavailable" {
         let result = ConfigApplyTxn::with_read_storage_failure(
             "AgentSessionGoalControl",
-            process_command(&node, &identity, &doc_id, selected_identity),
+            process_command(&node, &identity, &doc_id, selected_identity, None),
         )
         .await;
         assert!(result.is_err());
@@ -697,7 +697,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         let mut processing = Box::pin(ConfigApplyTxn::with_embedded_before_commit_pause(
             reached.clone(),
             release.clone(),
-            process_command(&node, &identity, &doc_id, selected_identity),
+            process_command(&node, &identity, &doc_id, selected_identity, None),
         ));
         tokio::select! {
             _ = reached.notified() => {}
@@ -713,7 +713,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         matches!(outcome, Some(GoalControlOutcome::Applied { .. }))
     } else if case.commit && (!case.signature_valid || !case.first_request_valid) {
         assert_eq!(
-            process_command(&node, &identity, &doc_id, selected_identity)
+            process_command(&node, &identity, &doc_id, selected_identity, None)
                 .await
                 .unwrap(),
             None,
@@ -742,7 +742,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         false
     } else if case.commit {
         assert_eq!(
-            process_command(&node, &identity, &doc_id, selected_identity)
+            process_command(&node, &identity, &doc_id, selected_identity, None)
                 .await
                 .unwrap(),
             None,

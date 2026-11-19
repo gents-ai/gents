@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::{anyhow, Result};
 #[cfg(test)]
 use gents_automation::triggers::task_run::{
     lookup_request_by_retry_key, prepare_task_run_goal_id, prepare_task_run_input,
@@ -79,10 +81,7 @@ pub(crate) async fn enqueue_task_run_on(
     continue_session: Option<&str>,
 ) -> Result<TaskRunOutput> {
     let node_did = gents_service::home_state::resolve_node_did(home, None)?;
-    let actor_did = access
-        .actor_did()
-        .context("Task invocation requires an authenticated client identity")?;
-    let signer = gents_store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
+    let signer = access.client_signer()?;
     gents_automation::operations::task::run(
         access,
         &node_did,
@@ -207,10 +206,7 @@ mod tests {
             let before = source.exchanges();
             let actual = prepare_task_run_input(
                 &access,
-                &gents_store::identity::RegisteredIdentity::from_registered_did(
-                    access.actor_did().context("test actor")?,
-                    None,
-                )?,
+                &access.client_signer()?,
                 &source.node_did,
                 "chat",
                 case["existing"].as_bool().unwrap(),

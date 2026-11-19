@@ -2,8 +2,9 @@
 
 use tauri::{AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindowBuilder};
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 use crate::navigation::{restrict_window, EXPLORER_WINDOW as DB_EXPLORER_WINDOW_LABEL};
 
