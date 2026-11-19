@@ -288,6 +288,10 @@ fn configuration_grant_route_matches_the_lean_model() {
         match super::configuration_grant_route(document_acp(input.provider), input.actor_owns) {
             super::ConfigurationGrantRoute::Direct => Route::Direct,
             super::ConfigurationGrantRoute::OwnerStaged => Route::OwnerStaged,
+        }
+    });
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Periodic {
