@@ -17,6 +17,9 @@ struct Status {
     identity: Arc<dyn gents_store::identity::NodeIdentity>,
     node: Arc<OnceLock<Weak<defra_node::Node>>>,
     names_audience: Arc<AtomicBool>,
+    /// The node the status names when it is not this runtime's own: an
+    /// impostor can name any node, but signs only with its own key.
+    claims: Option<String>,
 }
 
 impl Status {
@@ -43,6 +46,11 @@ impl Status {
         )
         .await;
         status["lifecycle"] = "ready".into();
+        if let Some(claimed) = &self.claims {
+            status["node_did"] = claimed.as_str().into();
+            status[gents_protocol::home_attestation::STATUS_HOME_ATTESTATION_FIELD]["statement"]
+                ["node_did"] = claimed.as_str().into();
+        }
         status
     }
 }
@@ -52,12 +60,23 @@ async fn serve_at(
     home: &Home,
     address: std::net::SocketAddr,
 ) -> anyhow::Result<(Arc<defra_node::Node>, Status)> {
+    serve_claiming(home, address, None).await
+}
+
+/// Start a runtime on `home` at `address` whose status names `claims` in
+/// place of its own node when given.
+async fn serve_claiming(
+    home: &Home,
+    address: std::net::SocketAddr,
+    claims: Option<String>,
+) -> anyhow::Result<(Arc<defra_node::Node>, Status)> {
     let listener =
         tokio::task::spawn_blocking(move || std::net::TcpListener::bind(address)).await??;
     let status = Status {
         identity: home.node.clone(),
         node: Arc::default(),
         names_audience: Arc::new(AtomicBool::new(true)),
+        claims,
     };
     let served = status.clone();
     let (node, _admission) = ProtectedBackendStore::open(&home.data, &home.key, &home.lock)
@@ -222,6 +241,47 @@ async fn a_client_recovers_when_its_runtime_comes_back_as_another_deployment() -
         "a status naming no audience leaves the identity token refused"
     );
     assert_eq!(tasks(&node, &second.owner).await?, ["after"]);
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn another_vera_home_answering_for_the_saved_home_is_given_nothing() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let user = client_key(directory.path(), "user.key").await?;
+    let user_did = identity::Did::new(user.did())?;
+    let saved = vera_home(directory.path(), "saved", &user_did).await?;
+    let other = vera_home(directory.path(), "other", &user_did).await?;
+    assert_ne!(saved.node.did(), other.node.did());
+    let address = tokio::task::spawn_blocking(|| {
+        std::net::TcpListener::bind("127.0.0.1:0").and_then(|listener| listener.local_addr())
+    })
+    .await??;
+    let url = format!("http://{address}/api/v0/graphql");
+    let client = GraphqlEndpoint::as_principal(&url, user.did())
+        .with_client_signing_capability(user.clone())?
+        .with_reported_delegation_audience(ReportedDelegationAudience::Absent)?
+        .with_audience_resolver(
+            saved.node.did(),
+            Arc::new(PublicStatus {
+                url: format!("http://{address}/status"),
+            }),
+        );
+
+    let (node, _status) =
+        serve_claiming(&other, address, Some(saved.node.did().to_owned())).await?;
+    let refused = create_task(&ConfigAccess::Graphql(client.clone()), "elsewhere")
+        .await
+        .expect_err("a home that cannot sign as the saved node is given no delegation");
+    assert!(
+        format!("{refused:#}").contains("the home's status could not be authenticated"),
+        "{refused:#}"
+    );
+    assert!(
+        !client.mints_delegations(),
+        "no audience of the other home is kept"
+    );
+    assert_eq!(tasks(&node, &other.owner).await?, Vec::<String>::new());
     node.shutdown().await?;
     Ok(())
 }
