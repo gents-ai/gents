@@ -1700,6 +1700,9 @@ impl RecoveryOutcome {
     }
 }
 
+#[cfg(all(test, feature = "vera"))]
+mod vera_tests;
+
 #[cfg(test)]
 mod actor_read_tests {
     use super::*;
