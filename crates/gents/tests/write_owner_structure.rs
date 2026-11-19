@@ -1445,7 +1445,7 @@ fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
 }
 
 const RIG_OWNER_MODULES: &[&str] = &[
-    "crates/gents-loop/src/rig_compat.rs",
+    "crates/gents-loop/src/rig_compat",
     "crates/gents-loop/src/provider_input",
     "crates/gents-loop/src/loop_stream",
     "crates/gents-inference/src/llm/rig_compat.rs",
@@ -1453,24 +1453,11 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents/src/runtime/agent/loop_stream",
 ];
 
-/// Files that implement a Rig trait or build a Rig provider client, which no
-/// re-export through `rig_compat` can stand in for. The capture layer, the
-/// credential and limit-header clients, the Responses and session-tagging
-/// layers, the Codex policy and the Claude transport implement
-/// `HttpClientExt` or are generic over it; `claude_subscription` implements
-/// `CompletionModel` and `CompletionClient`. A row leaves when its owner
-/// exposes a native transport or model trait that one adapter in `rig_compat`
-/// lifts into Rig's.
-#[rustfmt::skip]
-const RIG_PATH_ALLOWLIST: &[&str] = &[
-    "crates/gents-loop/src/rendered_request/transport.rs",
-    "crates/gents-inference/src/clients/chatgpt_codex.rs",
-    "crates/gents-inference/src/clients/claude_messages/transport.rs",
-    "crates/gents-inference/src/clients/claude_subscription.rs",
-    "crates/gents-inference/src/clients/inference_http.rs",
-    "crates/gents-inference/src/auth/http.rs",
-    "crates/gents-inference/src/clients/provider_http.rs",
-];
+/// Files outside the owner modules that still name `rig`. A layer over the
+/// provider exchange implements `rig_compat::http::Transport`, and a model
+/// this workspace implements itself `rig_compat::model::Model`; `rig_compat`
+/// lifts both into Rig's traits. This list stays empty.
+const RIG_PATH_ALLOWLIST: &[&str] = &[];
 
 #[derive(Default)]
 struct RigPathVisitor {

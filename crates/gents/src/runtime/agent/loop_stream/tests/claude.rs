@@ -345,6 +345,7 @@ async fn run_claude_fixture_turns(
 
     let model =
         ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")))
+            .lifted()
             .completion_model("claude-sonnet-5");
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
     let mut config = owned_config(4);

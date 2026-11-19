@@ -276,7 +276,7 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(150);
     let client =
-        crate::clients::inference_http::build_openai_chat_completions_client(
+        crate::llm::rig_compat::providers::build_openai_chat_completions_client(
             "no-key",
             &endpoint,
             crate::clients::inference_http::SessionTaggingHttpClient::<

@@ -44,7 +44,6 @@ async fn oneshot_fixture(
 async fn capture_scripted_request(
     request: CompletionRequest,
 ) -> Result<serde_json::Value, CompletionError> {
-    use rig::http_client::HttpClientExt;
     let dto = rig::providers::openai::completion::CompletionRequest::try_from((
         "scripted".to_owned(),
         request,
@@ -67,8 +66,7 @@ async fn capture_scripted_request(
             |error| CompletionError::ProviderError(error.to_string()),
         )?))
         .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
-    let _response = transport
-        .send_streaming(outbound)
+    let _response = gents_loop::rig_compat::http::Transport::send_streaming(&transport, outbound)
         .await
         .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
     assert_eq!(

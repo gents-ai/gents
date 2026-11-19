@@ -2,17 +2,12 @@ use rapidhash::RapidHashSet;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::llm::rig_compat::completion::{CompletionError, CompletionRequest, RawStreamingChoice};
+use crate::llm::rig_compat::model::{LiftedClient, Model, ModelStream, StreamEnd};
 use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 use futures::StreamExt;
 use reqwest::StatusCode;
-use rig::client::CompletionClient;
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, GetTokenUsage, Usage,
-};
-use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
-use rig::OneOrMany;
-use serde::{Deserialize, Serialize};
 
 use chrono::DateTime;
 use gents_claude::metadata::device_id;
@@ -307,30 +302,6 @@ where
     }
 }
 
-impl<S> CompletionClient for ClaudeSubscriptionClient<S>
-where
-    S: BearerSource + 'static,
-{
-    type CompletionModel = ClaudeSubscriptionModel<S>;
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ClaudeStreamResponse {
-    pub usage: Option<Usage>,
-    #[serde(default)]
-    pub token_usage: gents_protocol::usage::TokenUsage,
-    /// The response's `request-id` header, under the field name the loop reads
-    /// (`gents_loop::rig_compat::RESPONSE_REQUEST_ID_FIELD`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-}
-
-impl GetTokenUsage for ClaudeStreamResponse {
-    fn token_usage(&self) -> Option<Usage> {
-        self.usage
-    }
-}
-
 pub struct ClaudeSubscriptionModel<S = DbCredentialBearer>
 where
     S: BearerSource,
@@ -376,16 +347,7 @@ where
     S: BearerSource + 'static,
 {
     /// Open the response stream: on the one account, or on the pool's pick with its rotation bookkeeping.
-    async fn open(
-        &self,
-        request: &CompletionRequest,
-    ) -> Result<
-        futures::stream::BoxStream<
-            'static,
-            Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>,
-        >,
-        CompletionError,
-    > {
+    async fn open(&self, request: &CompletionRequest) -> Result<ModelStream, CompletionError> {
         let surface = surface_of(request);
         match &self.rotation {
             Some(rotation) => open_rotated(
@@ -419,16 +381,22 @@ where
     }
 }
 
-impl<S> CompletionModel for ClaudeSubscriptionModel<S>
+impl<S> ClaudeSubscriptionClient<S>
 where
     S: BearerSource + 'static,
 {
-    type Response = ClaudeStreamResponse;
-    type StreamingResponse = ClaudeStreamResponse;
+    pub fn lifted(self) -> LiftedClient<ClaudeSubscriptionModel<S>> {
+        LiftedClient(self)
+    }
+}
+
+impl<S> Model for ClaudeSubscriptionModel<S>
+where
+    S: BearerSource + 'static,
+{
     type Client = ClaudeSubscriptionClient<S>;
 
-    fn make(client: &Self::Client, model: impl Into<String>) -> Self {
-        let model = model.into();
+    fn make(client: &Self::Client, model: String) -> Self {
         let family = gents_claude::rotation::Family::of_model(&model);
         let accounts = match client.rotation {
             None => client.accounts.clone(),
@@ -459,19 +427,15 @@ where
     async fn completion(
         &self,
         request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+    ) -> Result<(String, StreamEnd), CompletionError> {
         let mut stream = self.open(&request).await?;
         let mut text = String::new();
-        let mut usage = Usage::new();
-        let mut raw_response = ClaudeStreamResponse::default();
+        let mut end = StreamEnd::default();
         while let Some(item) = stream.next().await {
             match item? {
                 RawStreamingChoice::Message(chunk) => text.push_str(&chunk),
                 RawStreamingChoice::FinalResponse(raw) => {
-                    if let Some(reported) = raw.token_usage() {
-                        usage = reported;
-                    }
-                    raw_response = raw;
+                    end = raw;
                     break;
                 }
                 _ => {}
@@ -482,20 +446,11 @@ where
                 "Claude Messages returned empty assistant text".to_string(),
             ));
         }
-        Ok(CompletionResponse {
-            choice: OneOrMany::one(rig::completion::AssistantContent::text(text)),
-            usage,
-            raw_response,
-            message_id: None,
-        })
+        Ok((text, end))
     }
 
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let stream = self.open(&request).await?;
-        Ok(StreamingCompletionResponse::stream(stream))
+    async fn stream(&self, request: CompletionRequest) -> Result<ModelStream, CompletionError> {
+        self.open(&request).await
     }
 }
 
@@ -538,7 +493,7 @@ async fn open_rotated<S>(
     accounts: &Arc<[ClaudeAccount<S>]>,
     rotation: &Rotation,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
 >
 where

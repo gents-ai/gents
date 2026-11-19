@@ -111,7 +111,9 @@ async fn owned_loop_uses_each_turns_wire_finish_reason_for_tool_errors() {
     let client = rig::providers::openai::CompletionsClient::builder()
         .api_key("test")
         .base_url("https://provider.invalid/v1")
-        .http_client(RenderedRequestCapturingHttpClient::new(wire.clone()))
+        .http_client(crate::rig_compat::http::Lifted(
+            RenderedRequestCapturingHttpClient::new(wire.clone()),
+        ))
         .build()
         .unwrap();
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -352,7 +354,9 @@ async fn responses_outcomes(turns: Vec<String>) -> (Vec<String>, Vec<String>, Op
     let client = rig::providers::openai::Client::builder()
         .api_key("test")
         .base_url("https://provider.invalid/v1")
-        .http_client(RenderedRequestCapturingHttpClient::new(wire))
+        .http_client(crate::rig_compat::http::Lifted(
+            RenderedRequestCapturingHttpClient::new(wire),
+        ))
         .build()
         .unwrap();
     let calls = Arc::new(Mutex::new(Vec::new()));

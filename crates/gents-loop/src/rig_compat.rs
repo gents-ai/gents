@@ -51,15 +51,8 @@ pub mod completion {
     pub use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 }
 
-/// The HTTP exchange types Rig's client hands a transport and takes back, for
-/// code that inspects or rewrites an exchange. `Request`, `Response` and `Uri`
-/// are the `http` crate's. Rig's client trait, its lazy body and its multipart
-/// form are deliberately absent: a module that implements the trait names Rig
-/// and stays on the ratchet's list.
-pub mod http {
-    pub use rig::http_client::sse::BoxedStream;
-    pub use rig::http_client::{Error, Request, Response, Result, StreamingResponse, Uri};
-}
+pub mod http;
+pub mod model;
 
 pub fn charged_usage_total(usage: rig::completion::Usage) -> u64 {
     usage.input_tokens.saturating_add(usage.output_tokens)

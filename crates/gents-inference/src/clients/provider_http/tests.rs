@@ -90,11 +90,7 @@ async fn credential_client_does_not_follow_redirects() {
         .body(Bytes::new())
         .unwrap();
     let client = ProviderHttpClient::new(ProviderHttpClient::credential_client().unwrap());
-    let error = client
-        .send::<Bytes, Bytes>(request)
-        .await
-        .err()
-        .expect("redirect rejected");
+    let error = client.send(request).await.err().expect("redirect rejected");
     assert!(
         matches!(error, http_client::Error::InvalidStatusCodeWithMessage(status, _) if status == StatusCode::FOUND)
     );
@@ -143,7 +139,7 @@ async fn buffered_429_honors_short_retry_after() {
     )
     .await;
     let error = ProviderHttpClient::default()
-        .send::<Bytes, Bytes>(post(&url))
+        .send(post(&url))
         .await
         .err()
         .expect("429");
@@ -162,7 +158,7 @@ async fn buffered_429_honors_short_retry_after() {
 async fn success_passes_the_body_through() {
     let url = one_shot_server("200 OK", &[], r#"{"ok":true}"#).await;
     let response = ProviderHttpClient::default()
-        .send::<Bytes, Bytes>(post(&url))
+        .send(post(&url))
         .await
         .expect("200");
     assert_eq!(
@@ -182,7 +178,7 @@ async fn codex_usage_limit_survives_rig_responses_stream() {
         r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_at":1790354400}}"#,
     )
     .await;
-    let client = crate::clients::inference_http::build_openai_responses_client(
+    let client = crate::llm::rig_compat::providers::build_openai_responses_client(
         "test-key",
         &format!("{url}/v1"),
         ProviderHttpClient::default(),
@@ -237,16 +233,16 @@ async fn overloaded_529_with_overage_rejected_stays_transient() {
 }
 
 async fn openrouter_stream_error(url: &str) -> rig::completion::CompletionError {
-    let client: rig::providers::openrouter::Client<
+    let client: crate::llm::rig_compat::providers::OpenRouterClient<
         crate::rendered_request::RenderedRequestCapturingHttpClient<ProviderHttpClient>,
     > = rig::providers::openrouter::Client::builder()
         .api_key("test-key")
         .base_url(url)
-        .http_client(
+        .http_client(crate::llm::rig_compat::http::Lifted(
             crate::rendered_request::RenderedRequestCapturingHttpClient::<
                 ProviderHttpClient,
             >::default(),
-        )
+        ))
         .build()
         .expect("client");
     let model = client.completion_model("test/model");
@@ -364,7 +360,7 @@ async fn usage_capture_success_send_records_header_windows() {
     let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
     let (db, account, client) = usage_client(&cache, "backend-usage-send").await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
-    client.send::<Bytes, Bytes>(post(&url)).await.expect("200");
+    client.send(post(&url)).await.expect("200");
 
     let stored = stored_usage_eventually(&cache, &db.node, &account)
         .await
@@ -442,10 +438,7 @@ async fn usage_capture_requires_no_persistent_schema() {
         crate::usage_observation::UsageReporter::new(cache.clone(), node.clone(), account.clone());
     let client = ProviderHttpClient::with_usage(ReqwestClient::new(), reporter);
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
-    let response = client
-        .send::<Bytes, Bytes>(post(&url))
-        .await
-        .expect("the call succeeds");
+    let response = client.send(post(&url)).await.expect("the call succeeds");
     assert_eq!(
         response.into_body().await.expect("body"),
         Bytes::from_static(br#"{"ok":true}"#)
