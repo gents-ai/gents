@@ -288,6 +288,7 @@ inductive StoreWrapper where
   | enrollmentGrantErrorObserve
   | enrollmentGrantErrorRecord
   | enrollmentGrantErrorIssue
+  | enrollmentGrantErrorIssueNotAbandoned
   | enrollmentGrantErrorRevoke
   | enrollmentGrantErrorRetire
   | grantSetErrorGrant

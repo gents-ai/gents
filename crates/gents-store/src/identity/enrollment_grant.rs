@@ -200,11 +200,22 @@ pub enum EnrollmentGrantError {
     #[error("the enrollment grant receipt create returned no document")]
     RecordUnconfirmed(#[source] gents_protocol::graphql::GraphqlError),
     #[error(
-        "the enrollment grant receipt is recorded, but issuing {tuple} failed; \
-         retry the grant to finish it, or revoke the enrollment to withdraw it"
+        "issuing {tuple} failed; the authority this grant had issued was removed and its \
+         receipt kept, so approving the request again reissues it"
     )]
     Issue {
         tuple: &'static str,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error(
+        "issuing {tuple} failed, and removing {removing} afterwards failed too; the receipt \
+         is kept, so approving the request again reissues every tuple and denying or revoking \
+         it withdraws them"
+    )]
+    IssueNotAbandoned {
+        tuple: &'static str,
+        removing: &'static str,
         #[source]
         source: ConfigClientError,
     },
@@ -228,6 +239,7 @@ impl crate::config_client::TransactionFailure for EnrollmentGrantError {
             | Self::Record(error)
             | Self::Retire(error)
             | Self::Issue { source: error, .. }
+            | Self::IssueNotAbandoned { source: error, .. }
             | Self::Revoke { source: error, .. } => Some(error),
             _ => None,
         }
@@ -259,6 +271,84 @@ pub async fn grant_enrollment_authority(
     request_id: &str,
     member: &identity::Did,
 ) -> Result<EnrollmentGrantOutcome, EnrollmentGrantError> {
+    let tuples = NativeTuples {
+        owner,
+        nac_owner,
+        node_doc_id,
+        member,
+    };
+    grant_with(&tuples, owner, runtime, node_doc_id, request_id, member).await
+}
+
+/// One member's native tuples on one Node: the Node `administrator`
+/// relation, written by the Node's owner, and node permissions, written by
+/// the NAC owner.
+pub(crate) trait TupleChanges {
+    async fn issue(&self, tuple: EnrollmentGrantTuple) -> Result<(), ConfigClientError>;
+    async fn remove(&self, tuple: EnrollmentGrantTuple) -> Result<(), ConfigClientError>;
+}
+
+pub(crate) struct NativeTuples<'a> {
+    pub(crate) owner: &'a ConfigAccess,
+    pub(crate) nac_owner: &'a ConfigAccess,
+    pub(crate) node_doc_id: &'a str,
+    pub(crate) member: &'a identity::Did,
+}
+
+impl TupleChanges for NativeTuples<'_> {
+    async fn issue(&self, tuple: EnrollmentGrantTuple) -> Result<(), ConfigClientError> {
+        match tuple {
+            EnrollmentGrantTuple::NodeAdministrator => {
+                self.owner
+                    .add_actor_relationship(
+                        "Node",
+                        self.node_doc_id,
+                        NODE_ADMINISTRATOR_RELATION,
+                        self.member,
+                    )
+                    .await
+            }
+            EnrollmentGrantTuple::Permission(permission) => {
+                self.nac_owner
+                    .grant_node_permission(self.member, permission)
+                    .await
+            }
+        }
+    }
+
+    async fn remove(&self, tuple: EnrollmentGrantTuple) -> Result<(), ConfigClientError> {
+        match tuple {
+            EnrollmentGrantTuple::NodeAdministrator => {
+                self.owner
+                    .delete_actor_relationship(
+                        "Node",
+                        self.node_doc_id,
+                        NODE_ADMINISTRATOR_RELATION,
+                        self.member,
+                    )
+                    .await
+            }
+            EnrollmentGrantTuple::Permission(permission) => {
+                self.nac_owner
+                    .revoke_node_permission(self.member, permission)
+                    .await
+            }
+        }
+    }
+}
+
+/// [`grant_enrollment_authority`] issuing through `tuples`.
+pub(crate) async fn grant_with<T>(
+    tuples: &T,
+    owner: &ConfigAccess,
+    runtime: &ConfigAccess,
+    node_doc_id: &str,
+    request_id: &str,
+    member: &identity::Did,
+) -> Result<EnrollmentGrantOutcome, EnrollmentGrantError>
+where
+    T: TupleChanges,
+{
     let receipts = load_enrollment_grant_receipts(runtime, member.as_str()).await?;
     if let Some(existing) = receipts
         .iter()
@@ -269,7 +359,7 @@ pub async fn grant_enrollment_authority(
                 request_id: request_id.to_owned(),
             });
         }
-        issue(owner, nac_owner, node_doc_id, member, &existing.tuples).await?;
+        issue_or_abandon(tuples, existing, &receipts).await?;
         return Ok(EnrollmentGrantOutcome {
             recorded: existing.tuples.clone(),
             reissued: true,
@@ -302,7 +392,7 @@ pub async fn grant_enrollment_authority(
         "node_doc_id": node_doc_id,
         "parent_linked": true,
     });
-    runtime
+    let doc_id = runtime
         .transact_signed_conflict_rebuild("enrollment_grant.record", |txn| {
             let input = &input;
             Box::pin(async move {
@@ -322,40 +412,58 @@ pub async fn grant_enrollment_authority(
             })
         })
         .await?;
-    issue(owner, nac_owner, node_doc_id, member, &recorded).await?;
+    let receipt = EnrollmentGrantReceipt {
+        doc_id,
+        request_id: request_id.to_owned(),
+        member_did: member.as_str().to_owned(),
+        tuples: recorded.clone(),
+        withdrawn: false,
+    };
+    let mut receipts = receipts;
+    receipts.push(receipt.clone());
+    issue_or_abandon(tuples, &receipt, &receipts).await?;
     Ok(EnrollmentGrantOutcome {
         recorded,
         reissued: false,
     })
 }
 
-async fn issue(
-    owner: &ConfigAccess,
-    nac_owner: &ConfigAccess,
-    node_doc_id: &str,
-    member: &identity::Did,
-    tuples: &[EnrollmentGrantTuple],
-) -> Result<(), EnrollmentGrantError> {
-    for tuple in tuples {
-        let result = match tuple {
-            EnrollmentGrantTuple::NodeAdministrator => {
-                owner
-                    .add_actor_relationship(
-                        "Node",
-                        node_doc_id,
-                        NODE_ADMINISTRATOR_RELATION,
-                        member,
-                    )
-                    .await
+/// Issue `receipt`'s tuples one at a time. When one fails, remove every
+/// tuple the receipt alone accounts for and keep the receipt live (Lean
+/// `Identity.EnrollmentGrant.abandon`), so a failed grant leaves no authority it
+/// issued and a retried grant reissues all of it. When a removal fails too, the
+/// receipt still accounts for whatever remains, which approving the request again
+/// reissues and denying or revoking it withdraws.
+async fn issue_or_abandon<T>(
+    tuples: &T,
+    receipt: &EnrollmentGrantReceipt,
+    receipts: &[EnrollmentGrantReceipt],
+) -> Result<(), EnrollmentGrantError>
+where
+    T: TupleChanges,
+{
+    for tuple in &receipt.tuples {
+        if let Err(source) = tuples.issue(*tuple).await {
+            for removed in plan_withdrawal(receipt, receipts) {
+                if let Err(removal) = tuples.remove(removed).await {
+                    tracing::warn!(
+                        tuple = tuple.name(),
+                        removing = removed.name(),
+                        error = %removal,
+                        "an abandoned enrollment grant kept authority it had issued"
+                    );
+                    return Err(EnrollmentGrantError::IssueNotAbandoned {
+                        tuple: tuple.name(),
+                        removing: removed.name(),
+                        source,
+                    });
+                }
             }
-            EnrollmentGrantTuple::Permission(permission) => {
-                nac_owner.grant_node_permission(member, *permission).await
-            }
-        };
-        result.map_err(|source| EnrollmentGrantError::Issue {
-            tuple: tuple.name(),
-            source,
-        })?;
+            return Err(EnrollmentGrantError::Issue {
+                tuple: tuple.name(),
+                source,
+            });
+        }
     }
     Ok(())
 }
@@ -452,24 +560,21 @@ impl EnrollmentGrantWithdrawal {
         nac_owner: &ConfigAccess,
         node_doc_id: &str,
     ) -> Result<(), EnrollmentGrantError> {
-        if self
-            .tuples
-            .contains(&EnrollmentGrantTuple::NodeAdministrator)
-        {
-            approver
-                .delete_actor_relationship(
-                    "Node",
-                    node_doc_id,
-                    NODE_ADMINISTRATOR_RELATION,
-                    &self.member,
-                )
+        let tuples = NativeTuples {
+            owner: approver,
+            nac_owner,
+            node_doc_id,
+            member: &self.member,
+        };
+        for tuple in &self.tuples {
+            tuples
+                .remove(*tuple)
                 .await
                 .map_err(|source| EnrollmentGrantError::Revoke {
-                    tuple: "node-administrator",
+                    tuple: tuple.name(),
                     source,
                 })?;
         }
-        self.revoke_node_permissions(nac_owner).await?;
         runtime
             .transact_write("client_access.retire_grant", |txn| {
                 Box::pin(async move { self.retire_receipts_in_txn(txn).await })

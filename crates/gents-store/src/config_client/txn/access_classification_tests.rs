@@ -98,6 +98,14 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
                 source: access,
             },
         ),
+        "enrollment_grant_error_issue_not_abandoned" => classify_owner(
+            erasure,
+            EnrollmentGrantError::IssueNotAbandoned {
+                tuple: "node admin",
+                removing: "node admin",
+                source: access,
+            },
+        ),
         "enrollment_grant_error_revoke" => classify_owner(
             erasure,
             EnrollmentGrantError::Revoke {

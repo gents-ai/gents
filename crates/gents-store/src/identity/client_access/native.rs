@@ -53,9 +53,26 @@ async fn credential(
     )?)
 }
 
-#[tokio::test]
-async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -> anyhow::Result<()>
-{
+/// A runtime on embedded Vera serving its Node document, its User owner
+/// and a candidate client holding its own key, with the access service.
+struct VeraRuntime {
+    _directory: tempfile::TempDir,
+    runtime: Arc<crate::identity::KeyIdentity>,
+    owner_key: RawIdentity,
+    owner: ClientSigningCapability,
+    candidate_key: RawIdentity,
+    candidate: ClientSigningCapability,
+    node: Arc<defra_node::Node>,
+    owner_endpoint: crate::config_client::GraphqlEndpoint,
+    owner_access: ConfigAccess,
+    node_doc: String,
+    candidate_endpoint: crate::config_client::GraphqlEndpoint,
+    candidate_access: ConfigAccess,
+    service: ClientAccessOwner,
+    _endpoints: (RuntimeEndpoints, RuntimeEndpoints),
+}
+
+async fn vera_runtime() -> anyhow::Result<VeraRuntime> {
     let directory = tempfile::tempdir()?;
     let runtime = Arc::new(crate::identity::KeyIdentity::load_or_create(
         directory.path().join("runtime.key"),
@@ -203,6 +220,43 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
     let candidate_endpoint = candidate_endpoints.endpoint(runtime.did(), &url)?;
     let candidate_access = ConfigAccess::Graphql(candidate_endpoint.clone());
     let service = ClientAccessOwner::new(node.clone(), runtime.clone(), Default::default());
+    Ok(VeraRuntime {
+        _directory: directory,
+        runtime,
+        owner_key,
+        owner,
+        candidate_key,
+        candidate,
+        node,
+        owner_endpoint,
+        owner_access,
+        node_doc,
+        candidate_endpoint,
+        candidate_access,
+        service,
+        _endpoints: (owner_endpoints, candidate_endpoints),
+    })
+}
+
+#[tokio::test]
+async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -> anyhow::Result<()>
+{
+    let VeraRuntime {
+        _directory,
+        runtime,
+        owner_key,
+        owner,
+        candidate_key,
+        candidate,
+        node,
+        owner_endpoint,
+        owner_access,
+        node_doc,
+        candidate_endpoint,
+        candidate_access,
+        service,
+        _endpoints,
+    } = vera_runtime().await?;
     let now = Utc::now();
     let mut request = ClientAccessRequest {
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -393,5 +447,160 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
     assert!(defra_core::signing::get_identity(candidate.did()).is_none());
     drop(owner_key);
     node.shutdown().await?;
+    Ok(())
+}
+
+/// Native tuple changes that refuse the issue at `fail_at` and pass every
+/// other change through.
+struct FailingAt<'a> {
+    inner: crate::identity::enrollment_grant::NativeTuples<'a>,
+    fail_at: usize,
+    issues: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::identity::enrollment_grant::TupleChanges for FailingAt<'_> {
+    async fn issue(
+        &self,
+        tuple: crate::identity::EnrollmentGrantTuple,
+    ) -> Result<(), crate::config_client::ConfigClientError> {
+        if self
+            .issues
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == self.fail_at
+        {
+            return Err(crate::config_client::ConfigClientError::RelationshipActorRequired);
+        }
+        self.inner.issue(tuple).await
+    }
+
+    async fn remove(
+        &self,
+        tuple: crate::identity::EnrollmentGrantTuple,
+    ) -> Result<(), crate::config_client::ConfigClientError> {
+        self.inner.remove(tuple).await
+    }
+}
+
+/// An approval whose grant fails at any of its tuples, after the Node
+/// `administrator` relation was issued or later, leaves the client no
+/// administrator relationship and no node permission, its request pending,
+/// and a retried approval grants it access (Lean
+/// `Identity.EnrollmentGrant.abandon`).
+#[tokio::test]
+async fn a_failed_approval_leaves_no_access_and_a_retry_approves() -> anyhow::Result<()> {
+    let fixture = vera_runtime().await?;
+    let member: identity::Did = fixture.candidate.did().parse()?;
+    let approver = ConfigAccess::local_as(fixture.node.clone(), fixture.owner.did().parse()?)
+        .with_client_authorization(credential(&fixture.owner_endpoint, &fixture.owner).await?)?;
+    let runtime = ConfigAccess::local_as(fixture.node.clone(), fixture.runtime.did().parse()?);
+    let administers = || async {
+        fixture
+            .node
+            .document_acp()
+            .check_named_permission(
+                &member,
+                "administrator",
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                "nodes",
+                &fixture.node_doc,
+            )
+            .await
+    };
+    let direct_permissions = || async {
+        Ok::<_, anyhow::Error>(
+            runtime
+                .explain_node_subject(&member)
+                .await?
+                .into_iter()
+                .filter(|provenance| matches!(provenance.via, acp::nac::PermissionVia::Direct))
+                .count(),
+        )
+    };
+    for fail_at in 0..crate::identity::EnrollmentGrantTuple::derived().len() {
+        let now = Utc::now();
+        let mut request = ClientAccessRequest {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            node_did: fixture.runtime.did().into(),
+            client_did: fixture.candidate.did().into(),
+            label: "Native desktop".into(),
+            issued_at: now.to_rfc3339(),
+            expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
+            signature: Vec::new(),
+        };
+        request.signature = fixture.candidate_key.sign(&request.signing_payload()?)?;
+        let candidate = || credential(&fixture.candidate_endpoint, &fixture.candidate);
+        assert_eq!(
+            fixture
+                .service
+                .request(candidate().await?, request.clone())
+                .await?
+                .state,
+            ClientAccessState::Pending
+        );
+        let tuples = FailingAt {
+            inner: crate::identity::enrollment_grant::NativeTuples {
+                owner: &approver,
+                nac_owner: &runtime,
+                node_doc_id: &fixture.node_doc,
+                member: &member,
+            },
+            fail_at,
+            issues: Default::default(),
+        };
+        let failed = crate::identity::enrollment_grant::grant_with(
+            &tuples,
+            &approver,
+            &runtime,
+            &fixture.node_doc,
+            &request.request_id,
+            &member,
+        )
+        .await;
+        assert!(
+            matches!(failed, Err(EnrollmentGrantError::Issue { .. })),
+            "{fail_at}: {failed:?}"
+        );
+        assert!(!administers().await?, "{fail_at}");
+        assert_eq!(direct_permissions().await?, 0, "{fail_at}");
+        assert_eq!(
+            fixture
+                .service
+                .request(candidate().await?, request.clone())
+                .await?
+                .state,
+            ClientAccessState::Pending,
+            "{fail_at}"
+        );
+        let decision = DecideClientAccess {
+            node_did: fixture.runtime.did().into(),
+            request_id: request.request_id.clone(),
+            decision: ClientAccessDecision::Approve,
+        };
+        let owner = || credential(&fixture.owner_endpoint, &fixture.owner);
+        assert_eq!(
+            fixture
+                .service
+                .decide(owner().await?, decision.clone())
+                .await?
+                .state,
+            ClientAccessState::Approved,
+            "{fail_at}"
+        );
+        assert!(administers().await?, "{fail_at}");
+        assert!(direct_permissions().await? > 0, "{fail_at}");
+        fixture
+            .service
+            .decide(
+                owner().await?,
+                DecideClientAccess {
+                    decision: ClientAccessDecision::Revoke,
+                    ..decision
+                },
+            )
+            .await?;
+        assert!(!administers().await?, "{fail_at}");
+    }
+    drop(fixture.owner_key);
+    fixture.node.shutdown().await?;
     Ok(())
 }
