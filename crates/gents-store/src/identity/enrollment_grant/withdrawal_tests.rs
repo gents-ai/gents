@@ -613,9 +613,24 @@ async fn an_owed_member_is_refused_node_permissions(provider: Provider) -> anyho
         matches!(&set, crate::identity::GrantSetError::Grant { source, .. } if pending(source)),
         "{provider:?}: {set:?}"
     );
+    let remote = ConfigAccess::Graphql(home.owner_endpoint.clone());
+    let refused = remote
+        .grant_node_permission(&member, NodePermission::DocumentRead)
+        .await
+        .expect_err("an HTTP grant also waits for settlement");
+    assert!(
+        matches!(
+            refused,
+            ConfigClientError::NodePermissionStatus {
+                status: reqwest::StatusCode::CONFLICT,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
     assert_eq!(home.direct_permissions(&member).await?, 0, "{provider:?}");
     home.settle_as(home.authorization().await?).await?;
-    runtime
+    remote
         .grant_node_permission(&member, NodePermission::DocumentRead)
         .await?;
     assert_eq!(home.direct_permissions(&member).await?, 1, "{provider:?}");
