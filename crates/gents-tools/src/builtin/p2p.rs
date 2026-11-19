@@ -963,7 +963,7 @@ impl P2pTool {
                     }
                 })?;
                 Ok(reply(
-                    json!({"request_id":result.request_id,"state":result.state,"delivery_pending":result.delivery_pending,"decision_doc_id":result.decision_doc_id,"revision_doc_id":result.revision_doc_id}),
+                    json!({"request_id":result.request_id,"state":result.state,"delivery_pending":result.delivery_pending,"administration_removal_pending":result.administration_removal_pending,"decision_doc_id":result.decision_doc_id,"revision_doc_id":result.revision_doc_id}),
                     Some(json!({"action":"enrollment_history"})),
                     Value::Null,
                 ))
