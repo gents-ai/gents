@@ -431,6 +431,20 @@ See `../README.md` for how this fits the broader formal-verification model.
   each tool's output observed at the wall clock and was refused by the claim
   deadline before any notification ran; `NoGate` loses a notifier to aborted
   attempts; `NoGateNoConflict` creates two wakes.
+- `BackgroundEnvelopeProjection` — a session transcript where two background
+  completions, their coalesced wake request and a person's look-alike inputs
+  (the wake text and a quoted envelope) arrive in any order
+  (`live_background_completions_project_as_tool_attributed_activity`). The
+  worker claims in arrival order and publishes each input with its claim or
+  fold; the projection classifies by Lean
+  `TranscriptInputOrigin.classification` over the authoring request's facts.
+  The observer stops once the notifications and every input, the wake's and
+  each submitted one, are published; then `TestPasses` (the person's inputs
+  render as a person's, the wake as a wake, the notifications as results)
+  holds. `NoInputWait` is the observer before the fix: jobs that finish
+  before the quote is submitted put the wake ahead of it, and the observer
+  stops with the quote still pending. `ByText` classifies by the input's
+  text and fails even the waiting observer.
 - `StreamDelivery` — streamed provider text reaching a subscribed client
   while the provider pauses (#2131, #3803): the provider's chunks and its
   gated completion, the owned drive loop and stream writer (flush on the
@@ -489,6 +503,17 @@ See `../README.md` for how this fits the broader formal-verification model.
   `NamedTempFile` held open until persist), `Unwaited` (the copy child not
   reaped). Green copies with a reaped `/bin/cp` child into a file the updater
   never opens for writing.
+- `UsageRecordObservation` — a provider response's usage headers reach the
+  runtime's `UsageCache` through a detached writer (`UsageReporter::observe`
+  spawns credential resolution and the record), while the caller backfills
+  the credential's `provider_account_key` between two responses and then
+  reads the backend's usage. The binding is the row's stable `_docID`, so the
+  backfill strands no observation; the reader is the side that can be wrong.
+  Green subscribes to the cache's record count before checking and reads once
+  both writers have recorded. RED: `ReadOnce` (the 2026-11-19 CI failure: the
+  read is ordered after neither write and finds nothing), `SubscribeAfterRead`
+  (a record landing between a short check and the subscription is never
+  signalled).
 - `CommitResponseWait` — a client's wait for a store request's answer over
   the runtime's HTTP endpoint on a loaded host (`txn_commit`, e.g. the pack
   document install; auto-commit mutations and reads are the same wait).
