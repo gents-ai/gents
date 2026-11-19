@@ -360,6 +360,19 @@ pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
 }
 
+impl KeyIdentity {
+    /// A test fake answering inside a synchronous responder signs here.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn sign_now(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        self.identity
+            .sign(payload)
+            .map_err(|source| IdentityError::SignPayload {
+                did: self.did.clone(),
+                source,
+            })
+    }
+}
+
 #[async_trait]
 impl NodeIdentity for KeyIdentity {
     fn did(&self) -> &str {

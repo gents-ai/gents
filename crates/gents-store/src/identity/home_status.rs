@@ -4,9 +4,6 @@ use gents_protocol::home_attestation::{
 
 use super::NodeIdentity;
 
-/// Sign what `status` says, for the read that sent `nonce`, with the home's
-/// node key (`Identity.HeldAudience.authentic`); a home that holds no key it
-/// can sign with says so instead.
 pub async fn attest(
     identity: Option<&dyn NodeIdentity>,
     nonce: &HomeNonce,

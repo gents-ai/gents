@@ -255,10 +255,6 @@ fn resend_unit(
         && rerun_honoured(mode, true, false, dispatched)
 }
 
-/// Read the home's status again when `error` refused the credential of a
-/// request `txn` sent at `stage`, and say whether the whole transaction runs
-/// again (`resend_unit`); a status that is not the home's says why
-/// (`Identity.HeldAudience.recovery`).
 async fn refused_unit_runs_again(
     txn: &ConfigApplyTxn<'_>,
     error: Option<&ConfigClientError>,

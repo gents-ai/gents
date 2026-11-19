@@ -426,11 +426,19 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
             .unwrap();
     let capability = user.client_signing_capability().unwrap();
     let record = hosted_record(&home, &did, &graphql);
+    let signed_did = did.clone();
     Mock::given(method("GET"))
         .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            json!({"node_did":did,"tool_root":"/w", "client_authentication":{"kind":"local"}}),
-        ))
+        .respond_with(move |request: &wiremock::Request| {
+            use identity::FullIdentity as _;
+            let mut status = gents_store::test_support::local_home_status_now(
+                &signed_did,
+                &|payload| node.sign(payload).unwrap(),
+                request.url.query(),
+            );
+            status["tool_root"] = "/w".into();
+            ResponseTemplate::new(200).set_body_json(status)
+        })
         .mount(&server)
         .await;
     let payload = super::fetch_hosted_runtime_status(&record, Some(&capability))
@@ -525,17 +533,32 @@ async fn managed_readiness_status_rejects_redirects_without_forwarding_authority
 #[tokio::test]
 async fn document_operator_endpoint_preserves_client_without_loading_runtime_key() {
     let directory = tempfile::tempdir().unwrap();
-    let runtime = "did:key:unloaded-runtime";
+    let runtime_key =
+        gents_store::identity::load_or_create_file_identity(&directory.path().join("runtime.key"))
+            .unwrap();
+    let runtime_did = {
+        use identity::Identity as _;
+        runtime_key.did().unwrap().to_string()
+    };
+    let runtime = runtime_did.as_str();
     let caller = gents_store::identity::KeyIdentity::load_or_create(
         directory.path().join("caller.key"),
         None,
     )
     .unwrap();
     let server = wiremock::MockServer::start().await;
+    let signed_did = runtime_did.clone();
     wiremock::Mock::given(wiremock::matchers::path("/status"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
-            "node_did": runtime, "client_authentication": {"kind": "local"}
-        })))
+        .respond_with(move |request: &wiremock::Request| {
+            use identity::FullIdentity as _;
+            wiremock::ResponseTemplate::new(200).set_body_json(
+                gents_store::test_support::local_home_status_now(
+                    &signed_did,
+                    &|payload| runtime_key.sign(payload).unwrap(),
+                    request.url.query(),
+                ),
+            )
+        })
         .mount(&server)
         .await;
     let record = hosted_record(

@@ -21,7 +21,12 @@ fn free_address() -> SocketAddr {
     address
 }
 
-async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> Arc<EmbeddedNode> {
+async fn served_home(
+    data_dir: &Path,
+    identity: &Arc<KeyIdentity>,
+    address: SocketAddr,
+) -> Arc<EmbeddedNode> {
+    let principal = identity.did();
     let node = EmbeddedNode::builder()
         .data_path(data_dir)
         .with_storage_backend(StorageBackend::Regolith)
@@ -29,7 +34,7 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
             HttpConfig::with_listener(std::net::TcpListener::bind(address).unwrap())
                 .unwrap()
                 .with_extra_routes(gents_store::test_support::local_authentication_route(
-                    principal,
+                    identity.clone(),
                 )),
         )
         .with_p2p(gents_p2p::test_support::transport::test_p2p_config(
@@ -144,7 +149,7 @@ async fn assert_access_control(
 /// Stopping the phase runtime releases the node's detached HTTP/P2P tasks for the next opener.
 fn serve_phase(
     data_dir: &Path,
-    principal: &str,
+    identity: &Arc<KeyIdentity>,
     phase: impl for<'a> FnOnce(
         &'a Arc<EmbeddedNode>,
         SocketAddr,
@@ -157,7 +162,7 @@ fn serve_phase(
         .build()?;
     let result = runtime.block_on(async {
         let address = free_address();
-        let node = served_home(data_dir, principal, address).await;
+        let node = served_home(data_dir, identity, address).await;
         let result = phase(&node, address).await;
         node.shutdown().await.expect("node shutdown");
         result
@@ -176,7 +181,7 @@ fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
     let principal = identity.did().to_string();
     let data_dir = home.path().join("data");
 
-    serve_phase(&data_dir, &principal, |node, address| {
+    serve_phase(&data_dir, &identity, |node, address| {
         let identity = identity.clone();
         Box::pin(async move {
             node.add_collection(SCHEMA).await?;
@@ -184,7 +189,7 @@ fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
             Ok(())
         })
     })?;
-    serve_phase(&data_dir, &principal, |node, address| {
+    serve_phase(&data_dir, &identity, |node, address| {
         let identity = identity.clone();
         Box::pin(async move {
             assert_access_control(node, identity.as_ref(), address, "restarted").await;

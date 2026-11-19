@@ -44,7 +44,7 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     });
     Mock::given(method("GET"))
         .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(public.clone()))
+        .respond_with(signed_public(public.clone(), &key_path))
         .with_priority(2)
         .mount(&server)
         .await;
@@ -202,7 +202,12 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
         http_addr: "127.0.0.1".parse().unwrap(),
         http_port: endpoint.port().unwrap(),
     };
-    let did = "did:key:z6MkfLocalCoHostedNode".to_string();
+    let key_path = home.join("node.key");
+    let did = gents_store::identity::load_or_create_file_identity(&key_path)
+        .unwrap()
+        .did()
+        .unwrap()
+        .to_string();
     let graphql = format!("{}/api/v0/graphql", server.uri());
     std::fs::write(
         home.join("init.json"),
@@ -230,7 +235,7 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
     });
     Mock::given(method("GET"))
         .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(public.clone()))
+        .respond_with(signed_public(public.clone(), &key_path))
         .with_priority(2)
         .mount(&server)
         .await;
@@ -290,4 +295,27 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
     assert_eq!(unauthorized.effective_tool_ceiling, None);
     assert_eq!(unauthorized.effective_tool_root, None);
     assert!(validate_ready_runtime(&unauthorized, &authority, &home).is_err());
+}
+
+/// The public status `public` of the co-hosted node whose key is at
+/// `key_path`, signed for each read that sends a nonce, as the host signs it.
+fn signed_public(public: serde_json::Value, key_path: &std::path::Path) -> impl wiremock::Respond {
+    let key = gents_store::identity::load_file_identity(key_path).unwrap();
+    move |request: &wiremock::Request| {
+        use identity::FullIdentity as _;
+        let did = public["node_did"].as_str().unwrap_or_default().to_owned();
+        let mut status = gents_store::test_support::local_home_status_now(
+            &did,
+            &|payload| key.sign(payload).unwrap(),
+            request.url.query(),
+        );
+        for (field, value) in public.as_object().into_iter().flatten() {
+            status
+                .as_object_mut()
+                .unwrap()
+                .entry(field.clone())
+                .or_insert_with(|| value.clone());
+        }
+        wiremock::ResponseTemplate::new(200).set_body_json(status)
+    }
 }

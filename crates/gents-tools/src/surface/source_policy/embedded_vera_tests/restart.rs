@@ -63,8 +63,6 @@ async fn serve_at(
     serve_claiming(home, address, None).await
 }
 
-/// Start a runtime on `home` at `address` whose status names `claims` in
-/// place of its own node when given.
 async fn serve_claiming(
     home: &Home,
     address: std::net::SocketAddr,

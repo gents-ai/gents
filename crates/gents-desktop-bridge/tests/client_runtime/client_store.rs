@@ -154,7 +154,15 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    const NODE_DID: &str = "did:test:hosted-amy";
+    let node_key = std::sync::Arc::new(
+        tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("hosted-amy"))
+            .await?,
+    );
+    let node_did: &'static str = Box::leak(
+        gents_store::identity::NodeIdentity::did(node_key.as_ref())
+            .to_owned()
+            .into_boxed_str(),
+    );
     const REQUEST_ID: &str = "request-terminal-config";
     let tempdir = tempfile::tempdir()?;
     let core = ClientRuntime::start_with_paths_and_options(
@@ -168,21 +176,21 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         "_docID": "remote-terminal-request-doc",
         "request_id": REQUEST_ID,
         "purpose": "normal",
-        "node_did": NODE_DID,
-        "requester_did": NODE_DID,
+        "node_did": node_did,
+        "requester_did": node_did,
         "agent_did": "did:test:hosted-amy:default",
         "session_id": "session-terminal-config",
         "content": "make research the default",
         "lifecycle_state": "completed"
     });
     let runtime_default = Arc::new(std::sync::Mutex::new("did:test:hosted-amy:default"));
-    let store = core.stores().ensure(NODE_DID);
+    let store = core.stores().ensure(node_did);
     let response_request = completed_request.clone();
     let response_session = serde_json::json!({
         "_docID": "remote-terminal-session-doc",
         "session_id": "session-terminal-config",
-        "node_did": NODE_DID,
-        "requester_did": NODE_DID,
+        "node_did": node_did,
+        "requester_did": node_did,
         "agent_did": "did:test:hosted-amy:default",
         "created_at": "2026-07-24T00:00:00Z"
     });
@@ -216,13 +224,13 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
             let mut rows = serde_json::json!({
                 "Node": [{
                     "_docID": "remote-node-doc",
-                    "node_did": NODE_DID,
+                    "node_did": node_did,
                     "display_name": "Amy",
                     "enabled": true
                 }],
                 "DefaultAgentSelection": [{
                     "_docID": "remote-selection-doc",
-                    "node_did": NODE_DID,
+                    "node_did": node_did,
                     "default_agent_did": *served_default.lock().unwrap()
                 }],
             });
@@ -238,13 +246,19 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         .await;
     Mock::given(method("GET"))
         .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({"node_did":NODE_DID,"client_authentication":{"kind":"local"}}),
-        ))
+        .respond_with(move |request: &wiremock::Request| {
+            ResponseTemplate::new(200).set_body_json(
+                gents_store::test_support::local_home_status_now(
+                    node_did,
+                    &|payload| node_key.sign_now(payload).unwrap(),
+                    request.url.query(),
+                ),
+            )
+        })
         .mount(&server)
         .await;
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
-        node_did: (NODE_DID).to_string(),
+        node_did: (node_did).to_string(),
         label: ("Hosted Amy").to_string(),
         graphql: format!("{}/api/v0/graphql", server.uri()),
         local_node_home: Some(("/tmp/test-hosted-amy-home").to_string()),
@@ -252,11 +266,11 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         access_state: None,
     })
     .await?;
-    core.refresh_node(NODE_DID).await?;
+    core.refresh_node(node_did).await?;
     assert_eq!(
         core.stores()
-            .snapshot(NODE_DID)
-            .selected_default_agent_did(NODE_DID),
+            .snapshot(node_did)
+            .selected_default_agent_did(node_did),
         Some("did:test:hosted-amy:default"),
         "the starting configuration is the runtime's"
     );
@@ -268,7 +282,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     let mut updates = core.store_updates();
     let refreshed = core
         .refresh_local_request(
-            NODE_DID,
+            node_did,
             "session-terminal-config",
             Some(REQUEST_ID),
             None,
@@ -284,8 +298,8 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         loop {
             if core
                 .stores()
-                .snapshot(NODE_DID)
-                .selected_default_agent_did(NODE_DID)
+                .snapshot(node_did)
+                .selected_default_agent_did(node_did)
                 == Some("did:test:hosted-amy:research")
             {
                 break;
