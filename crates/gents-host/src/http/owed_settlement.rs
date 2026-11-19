@@ -84,3 +84,47 @@ pub async fn settle(
     );
     response
 }
+
+/// The administration removals the caller's home owes that it may complete
+/// (`Identity.EnrollmentGrant.settlementStep`).
+pub async fn removals(
+    State(state): State<RuntimeHttpState>,
+    identity: ExtractIdentity,
+    headers: HeaderMap,
+    Json(request): Json<OwedSettlementRequest>,
+) -> Response {
+    if request.node_did != state.node_did {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "The requested node does not serve this endpoint.",
+        );
+    }
+    let Some(owner) = super::client_access::owner(&state) else {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The runtime is still starting.",
+        );
+    };
+    let Ok(caller) = ClientAuthorization::from_http(&identity, &headers) else {
+        return failure(StatusCode::UNAUTHORIZED, "Connect this client first.");
+    };
+    match owner.owed_removals(caller).await {
+        Ok(removals) => {
+            let mut response =
+                Json(gents_protocol::owed_settlement::OwedRemovalsReport { removals })
+                    .into_response();
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            );
+            response
+        }
+        Err(error) => {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "owed removals could not be read");
+            failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The runtime cannot answer now.",
+            )
+        }
+    }
+}

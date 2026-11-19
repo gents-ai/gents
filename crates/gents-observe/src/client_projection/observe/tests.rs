@@ -246,7 +246,7 @@ impl ObservedRuntime {
                 .with_http(
                     defra_node::HttpConfig::with_listener(listener.into_std().unwrap())
                         .unwrap()
-                        .with_extra_routes(runtime_status(runtime_identity.did())),
+                        .with_extra_routes(runtime_status(&directory.path().join("runtime.key"))),
                 )
                 .build()
                 .await
@@ -378,7 +378,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
             .with_http(
                 defra_node::HttpConfig::with_listener(listener.into_std().unwrap())
                     .unwrap()
-                    .with_extra_routes(runtime_status(runtime_identity.did())),
+                    .with_extra_routes(runtime_status(&directory.path().join("runtime.key"))),
             )
             .build()
             .await
@@ -1778,18 +1778,8 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
     );
 }
 
-fn runtime_status(node: &str) -> axum::Router {
-    let node = node.to_owned();
-    axum::Router::new().route(
-        "/status",
-        axum::routing::get(move || {
-            let node = node.clone();
-            async move {
-                axum::Json(serde_json::json!({
-                    "node_did": node,
-                    "client_authentication": {"kind": "local"}
-                }))
-            }
-        }),
-    )
+fn runtime_status(key_path: &std::path::Path) -> axum::Router {
+    gents_store::test_support::local_authentication_route(Arc::new(
+        KeyIdentity::load_or_create(key_path.to_path_buf(), None).unwrap(),
+    ))
 }

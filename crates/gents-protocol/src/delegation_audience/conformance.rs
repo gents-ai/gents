@@ -89,36 +89,40 @@ fn a_status_read_changes_the_held_audience_as_the_lean_model_does() {
     );
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RecoveryOut {
+    Resend,
+    Tell,
+    Unauthenticated,
+}
+
 #[test]
-fn a_status_from_another_node_reports_nothing_for_the_home_as_the_lean_model_says() {
-    gents_lean_vocab::families::identity_held_audience_reported_of_home::replay::<Reported>(
-        |input| {
-            let mut status = serde_json::json!({
-                super::STATUS_NODE_DID_FIELD: if input.same_node { "did:key:home" } else { "did:key:other" },
-                super::STATUS_PROVIDER_TIME_FIELD: 1_000,
-            });
-            match input.reported {
-                Reported::Absent => {}
-                Reported::Named => {
-                    status[super::STATUS_DELEGATION_AUDIENCE_FIELD] =
-                        serde_json::json!(audience(1));
-                }
-                Reported::Unavailable => {
-                    status[super::STATUS_DELEGATION_AUDIENCE_FIELD] = serde_json::Value::Null;
-                }
-            }
-            let home = super::ReportedHome::of_home(&status, "did:key:home");
-            assert_eq!(home.provider_time.is_some(), input.same_node);
-            match home.audience {
-                ReportedDelegationAudience::Absent => Reported::Absent,
-                ReportedDelegationAudience::Named(named) => {
-                    assert_eq!(named, audience(1));
-                    Reported::Named
-                }
-                ReportedDelegationAudience::Unavailable => Reported::Unavailable,
-            }
-        },
-    );
+fn a_refused_request_recovers_as_the_lean_model_says() {
+    gents_lean_vocab::families::identity_held_audience_recovery::replay::<
+        Change,
+        RecoveryOut,
+        Refusal,
+    >(|input| {
+        let refusal = match input.refusal {
+            Refusal::DelegationRequired => CredentialRefusal::DelegationRequired,
+            Refusal::DelegationRefused => CredentialRefusal::DelegationRefused,
+            Refusal::OutsideWindow => CredentialRefusal::OutsideWindow,
+            Refusal::Other => CredentialRefusal::Other,
+        };
+        let record = match input.record {
+            Change::Unchanged => HeldAudienceChange::Unchanged,
+            Change::Learned => HeldAudienceChange::Learned(audience(1)),
+            Change::Changed => HeldAudienceChange::Changed(audience(2)),
+            Change::Reclocked => HeldAudienceChange::Reclocked,
+            Change::Forgotten => HeldAudienceChange::Forgotten,
+        };
+        match super::recovery(input.resent, refusal, input.authenticated, &record) {
+            super::Recovery::Resend => RecoveryOut::Resend,
+            super::Recovery::Tell => RecoveryOut::Tell,
+            super::Recovery::Unauthenticated => RecoveryOut::Unauthenticated,
+        }
+    });
 }
 
 #[test]

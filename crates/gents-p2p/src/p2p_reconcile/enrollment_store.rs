@@ -710,6 +710,7 @@ impl GraphqlEnrollmentStore {
                 decision_doc_id,
                 revision_doc_id: Some(revision_doc_id),
                 delivery_pending,
+                administration_removal_pending: false,
             });
         }
         if let Some(denied) = projection
@@ -724,12 +725,13 @@ impl GraphqlEnrollmentStore {
             let request = denied.request.clone();
             let decision_doc_id = denied.decision_doc_id.clone();
             drop(_guard);
-            self.finish_grant_withdrawal(
-                request_id,
-                &request.candidate_did,
-                WithdrawalScope::Request,
-            )
-            .await?;
+            let administration_removal_pending = self
+                .finish_grant_withdrawal(
+                    request_id,
+                    &request.candidate_did,
+                    WithdrawalScope::Request,
+                )
+                .await?;
             let delivery_pending = self
                 .deliver_terminal(&request, &decision_doc_id, None, None)
                 .await;
@@ -739,6 +741,7 @@ impl GraphqlEnrollmentStore {
                 decision_doc_id,
                 revision_doc_id: None,
                 delivery_pending,
+                administration_removal_pending,
             });
         }
         let pending = projection.pending_for_decision(request_id)?;
@@ -899,14 +902,17 @@ impl GraphqlEnrollmentStore {
         drop(_guard);
         /* Lean `Identity.EnrollmentGrant.applyDecision .deny`: a grant whose
         approval never committed is withdrawn with the denial */
-        if kind == WireDecisionKind::Denied {
-            self.finish_grant_withdrawal(
-                request_id,
-                &pending.request.candidate_did,
-                WithdrawalScope::Request,
-            )
-            .await?;
-        }
+        let administration_removal_pending = match kind {
+            WireDecisionKind::Denied => {
+                self.finish_grant_withdrawal(
+                    request_id,
+                    &pending.request.candidate_did,
+                    WithdrawalScope::Request,
+                )
+                .await?
+            }
+            WireDecisionKind::Approved => false,
+        };
         let delivery_pending = match &revision_doc_id {
             Some(revision_doc_id) => {
                 self.deliver_terminal(
@@ -931,6 +937,7 @@ impl GraphqlEnrollmentStore {
             decision_doc_id,
             revision_doc_id,
             delivery_pending,
+            administration_removal_pending,
         })
     }
 
@@ -948,12 +955,13 @@ impl GraphqlEnrollmentStore {
             .find(|revoked| revoked.request.request_id == request_id)
         {
             let revoked = revoked.clone();
-            self.finish_grant_withdrawal(
-                request_id,
-                &revoked.request.candidate_did,
-                WithdrawalScope::Membership,
-            )
-            .await?;
+            let administration_removal_pending = self
+                .finish_grant_withdrawal(
+                    request_id,
+                    &revoked.request.candidate_did,
+                    WithdrawalScope::Membership,
+                )
+                .await?;
             drop(guard);
             let delivery_pending = self
                 .deliver_terminal(
@@ -969,6 +977,7 @@ impl GraphqlEnrollmentStore {
                 decision_doc_id: revoked.decision_doc_id,
                 revision_doc_id: Some(revoked.revision_doc_id),
                 delivery_pending,
+                administration_removal_pending,
             });
         }
         let active = projection
@@ -1024,6 +1033,9 @@ impl GraphqlEnrollmentStore {
                 WithdrawalScope::Membership,
             )
             .await?;
+        let administration_removal_pending = withdrawal
+            .as_ref()
+            .is_some_and(|withdrawal| !withdrawal.owing_doc_ids.is_empty());
         let mutation = revision_mutation(&revision);
         let response = self
             .publish_records(
@@ -1068,6 +1080,7 @@ impl GraphqlEnrollmentStore {
             decision_doc_id: active.decision_doc_id,
             revision_doc_id: Some(revision_doc_id),
             delivery_pending,
+            administration_removal_pending,
         })
     }
 
@@ -1120,12 +1133,12 @@ impl GraphqlEnrollmentStore {
         request_id: &str,
         member: &str,
         scope: WithdrawalScope,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let Some(withdrawal) = self
             .prepare_grant_withdrawal(request_id, member, scope)
             .await?
         else {
-            return Ok(());
+            return Ok(false);
         };
         self.runtime_access()?
             .transact_write("p2p.withdraw_enrollment_grant", |txn| {
@@ -1135,7 +1148,36 @@ impl GraphqlEnrollmentStore {
                     Ok::<_, anyhow::Error>(())
                 })
             })
-            .await
+            .await?;
+        Ok(!withdrawal.owing_doc_ids.is_empty())
+    }
+
+    /// Lean `Identity.EnrollmentGrant.membershipLapsed`: withdraw, as a
+    /// revocation does (`Step.expire`), the grant of every member all of
+    /// whose current authorization leases ended on the lapse clock, decided
+    /// on a projection read under the decision lock so a renewal of the same
+    /// member is decided before or after it, never interleaved.
+    pub(super) async fn withdraw_lapsed_memberships(&self) -> Result<()> {
+        let _guard = self.decision_lock.lock().await;
+        let projection = self.load_projection().await?;
+        let provider = gents_store::local::document_acp::node_provider_time(&self.node);
+        let wall = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+        let mut members: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
+        for active in &projection.active {
+            let expires = DateTime::parse_from_rfc3339(&active.revision.authorization_expires_at)
+                .context("parsing an enrollment authorization lease")?;
+            members
+                .entry(active.request.candidate_did.as_str())
+                .or_default()
+                .push(u64::try_from(expires.timestamp()).unwrap_or(0));
+        }
+        for (member, leases) in members {
+            if gents_store::identity::membership_lapsed(provider, wall, &leases) {
+                self.finish_grant_withdrawal("", member, WithdrawalScope::Membership)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     async fn verify_live_candidate(
@@ -1749,6 +1791,10 @@ pub struct EnrollmentDecisionOutcome {
     pub decision_doc_id: String,
     pub revision_doc_id: Option<String>,
     pub delivery_pending: bool,
+    /// The member's Node administration removal waits for a client of the
+    /// Node owner or a Node administrator (Lean
+    /// `Identity.EnrollmentGrant.oweRevoke`).
+    pub administration_removal_pending: bool,
 }
 
 #[derive(Debug)]
