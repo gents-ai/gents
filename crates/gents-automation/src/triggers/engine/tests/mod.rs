@@ -455,10 +455,8 @@ fn resolved_schedule(schedule_id: &str, task: ResolvedTask) -> ResolvedSchedule 
         trigger_doc_id: format!("{schedule_id}-doc"),
         schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         cadence: ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
     }
 }
@@ -475,10 +473,8 @@ fn resolved_schedule_with_concurrency(
         trigger_doc_id: format!("{schedule_id}-doc"),
         schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         cadence: ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency,
     }
 }
@@ -497,12 +493,10 @@ fn resolved_event_trigger_with_concurrency(
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
-        task_id: task.task_id.clone(),
         task,
         source_collection: "WebhookEvent".to_string(),
         event_kind: "created".to_string(),
         filter: None,
-        enabled: true,
         concurrency,
         fire_mode: gents_documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
