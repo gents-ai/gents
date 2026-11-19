@@ -332,8 +332,11 @@ async fn home_endpoint_as(
     client_signed_endpoint(url, identity, &node_did)
 }
 
-/// Reads the public status of the CLI's runtime again through the readiness
-/// probe; the CLI keeps what it reports only with its endpoint.
+/// The endpoint reads its runtime's public status before its first request
+/// and mints for the audience it reports; a request refused for its
+/// credential reads the status again (`Identity.HeldAudience.resend`), so an
+/// endpoint held across a restart under another audience recovers on its next
+/// request. The CLI keeps what the status reports only with its endpoint.
 fn client_signed_endpoint(
     url: impl Into<String>,
     identity: &gents_store::client_journal::principal_identity::PrincipalIdentity,
