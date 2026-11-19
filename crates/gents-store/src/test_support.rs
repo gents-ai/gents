@@ -115,8 +115,6 @@ fn home_status_body(
     status
 }
 
-/// A home's public status reporting `reports` and `provider_time`, signed by
-/// its node key `node` for the read that sent `nonce`, as the host signs it.
 pub async fn signed_home_status(
     node: &dyn crate::identity::NodeIdentity,
     reports: &gents_protocol::delegation_audience::ReportedDelegationAudience,
@@ -128,10 +126,6 @@ pub async fn signed_home_status(
     status
 }
 
-/// The public status of a home on the node's own store whose node is
-/// `node_did`, for a read whose query is `query`: signed with `sign`, the
-/// node key, when the read sent a nonce, as the host signs it, for a fake
-/// answering synchronously.
 pub fn local_home_status_now(
     node_did: &str,
     sign: &dyn Fn(&[u8]) -> Vec<u8>,
@@ -346,8 +340,6 @@ pub async fn client_journal_node(
     Ok(node)
 }
 
-/// The status of a home on the node's own store whose node key is `node`,
-/// signed for each read that sends a nonce, as the host signs it.
 pub fn local_authentication_route(
     node: std::sync::Arc<dyn crate::identity::NodeIdentity>,
 ) -> axum::Router {

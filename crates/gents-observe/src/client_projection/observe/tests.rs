@@ -1778,8 +1778,6 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
     );
 }
 
-/// The status of the runtime whose node key is at `key_path`, signed for each
-/// read as the host signs it.
 fn runtime_status(key_path: &std::path::Path) -> axum::Router {
     gents_store::test_support::local_authentication_route(Arc::new(
         KeyIdentity::load_or_create(key_path.to_path_buf(), None).unwrap(),

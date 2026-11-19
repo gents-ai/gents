@@ -30,7 +30,6 @@ pub async fn connect_runtime(
     }
 }
 
-/// A served runtime's node key, whose DID a fake runtime names.
 #[cfg(test)]
 pub async fn runtime_key(name: &str) -> RuntimeKey {
     let name = name.to_owned();
@@ -47,7 +46,6 @@ pub async fn runtime_key(name: &str) -> RuntimeKey {
 #[cfg(test)]
 type SignNow = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 
-/// A node DID and its key, signing synchronously.
 #[cfg(test)]
 #[derive(Clone)]
 pub struct RuntimeKey {
@@ -79,8 +77,6 @@ impl RuntimeKey {
     }
 }
 
-/// Serve, at `server`, the public status of a home on the node's own store
-/// whose node key is `node`, signed for each read as the host signs it.
 #[cfg(test)]
 pub async fn runtime_metadata(server: &wiremock::MockServer, node: &RuntimeKey) {
     let node = node.clone();

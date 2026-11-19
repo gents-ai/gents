@@ -163,8 +163,6 @@ async fn address(answering: Answering, home: Arc<KeyIdentity>, other: Arc<KeyIde
     }
 }
 
-/// A status the home signs whose client authentication names deployment 2
-/// and whose audience names deployment 3.
 async fn contradictory(home: &KeyIdentity, nonce: &HomeNonce) -> serde_json::Value {
     use gents_protocol::home_attestation::{
         AttestedAudience, HomeAttestation, HomeStatement, HOME_ATTESTATION_VERSION,

@@ -361,7 +361,6 @@ pub fn can_mint_defradb_bearer(did: &str) -> bool {
 }
 
 impl KeyIdentity {
-    /// A test fake answering inside a synchronous responder signs here.
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn sign_now(&self, payload: &[u8]) -> Result<Vec<u8>> {
         self.identity

@@ -297,8 +297,6 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
     assert!(validate_ready_runtime(&unauthorized, &authority, &home).is_err());
 }
 
-/// The public status `public` of the co-hosted node whose key is at
-/// `key_path`, signed for each read that sends a nonce, as the host signs it.
 fn signed_public(public: serde_json::Value, key_path: &std::path::Path) -> impl wiremock::Respond {
     let key = gents_store::identity::load_file_identity(key_path).unwrap();
     move |request: &wiremock::Request| {

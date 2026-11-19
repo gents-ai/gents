@@ -412,9 +412,6 @@ mod tests {
         }
     }
 
-    /// The home's status, signed by its node key for each read, naming one
-    /// Vera deployment in its client authentication and another in its
-    /// audience.
     struct Contradictory {
         node: crate::identity::KeyIdentity,
         reads: AtomicUsize,
