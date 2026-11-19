@@ -78,9 +78,11 @@ impl Fixture {
             self.agent_identity.did(),
             self.identity.clone(),
             "run the task",
-            60,
-            ExecutionOrigin::Interactive,
-            "task-hook-recovery",
+            gents_session::request::lifecycle::ExecutionBinding {
+                deadline_duration_secs: 60,
+                execution_origin: ExecutionOrigin::Interactive,
+                backend_id: "task-hook-recovery".into(),
+            },
             TriggerLineage::default(),
             Some(self.agent_identity.clone()),
         )

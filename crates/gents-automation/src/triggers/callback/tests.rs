@@ -873,7 +873,14 @@ fn callback_result_only_after_workspace_docs_are_durable() {
     ));
 
     let mut ctx = HostExecutorContext {
-        owner_node_did: "deploy-1".into(),
+        provenance: gents_session::workspace::WorkspaceProvenance {
+            owner_node_did: "deploy-1".into(),
+            writer_principal: "did:key:zW".into(),
+            integrator_principal: "did:key:zI".into(),
+            caused_by_invocation_id: "inv-1".into(),
+            caused_by_correlation: "corr-1".into(),
+            route: Default::default(),
+        },
         repository: RepositoryPlacementRef {
             repository_id: "repo-1".into(),
             owner_node_did: "deploy-1".into(),
@@ -882,12 +889,7 @@ fn callback_result_only_after_workspace_docs_are_durable() {
         },
         ceiling: fx.repo.parent(),
         capabilities: caps,
-        writer_principal: "did:key:zW".into(),
-        integrator_principal: "did:key:zI".into(),
-        caused_by_invocation_id: "inv-1".into(),
-        caused_by_correlation: "corr-1".into(),
         documents: &mut docs,
-        route: Default::default(),
     };
     let outcome = execute_create_workspace_plan(&plan, &mut journal, &mut ctx).expect("provision");
     assert_eq!(

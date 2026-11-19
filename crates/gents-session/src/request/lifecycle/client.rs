@@ -355,13 +355,15 @@ pub async fn stage_admitted_request_in_txn(
     }
     crate::session::ensure_session_in_txn(
         txn,
-        &create.session_id,
-        &create.node_did,
-        &create.agent_did,
-        Some(&create.requester_did),
-        create.input.initial_title.clone(),
-        provenance,
-        &create.created_at,
+        crate::session::NewAgentSession {
+            session_id: &create.session_id,
+            node_did: &create.node_did,
+            agent_did: &create.agent_did,
+            requester_did: Some(&create.requester_did),
+            title: create.input.initial_title.clone(),
+            provenance,
+            created_at: &create.created_at,
+        },
     )
     .await?;
     Ok(doc_id)
@@ -395,13 +397,15 @@ pub async fn ensure_request_session_in_txn(
     }
     let created = crate::session::ensure_reserved_session_in_txn(
         txn,
-        &create.session_id,
-        &create.node_did,
-        &create.agent_did,
-        Some(&create.requester_did),
-        create.input.initial_title.clone(),
-        None,
-        &create.created_at,
+        crate::session::NewAgentSession {
+            session_id: &create.session_id,
+            node_did: &create.node_did,
+            agent_did: &create.agent_did,
+            requester_did: Some(&create.requester_did),
+            title: create.input.initial_title.clone(),
+            provenance: None,
+            created_at: &create.created_at,
+        },
     )
     .await?;
     let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
@@ -1588,9 +1592,11 @@ mod tests {
             &binding.agent_did,
             runtime.clone(),
             "hello",
-            60,
-            crate::request::lifecycle::ExecutionOrigin::Interactive,
-            "fixture-backend",
+            crate::request::lifecycle::ExecutionBinding {
+                deadline_duration_secs: 60,
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                backend_id: "fixture-backend".into(),
+            },
             crate::request::lifecycle::TriggerLineage::default(),
             Some(agent.clone()),
         )
@@ -1962,13 +1968,15 @@ mod tests {
                 Box::pin(async {
                     crate::session::ensure_session_in_txn(
                         txn,
-                        "unattended",
-                        runtime.did(),
-                        &agent.agent_did,
-                        Some(user.did()),
-                        None,
-                        None,
-                        "2026-11-04T00:00:00Z",
+                        crate::session::NewAgentSession {
+                            session_id: "unattended",
+                            node_did: runtime.did(),
+                            agent_did: &agent.agent_did,
+                            requester_did: Some(user.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-11-04T00:00:00Z",
+                        },
                     )
                     .await?;
                     let session =

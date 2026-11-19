@@ -149,8 +149,10 @@ async fn explicitly_promoted_queue_input_reaches_the_same_request_after_a_tool()
         actors.node_did(),
         SESSION,
         edit,
-        &selected,
-        Some("promote-steered"),
+        gents_session::request::lifecycle::SteeredMessage {
+            request_doc_id: &selected,
+            request_id: Some("promote-steered"),
+        },
     )
     .await
     .unwrap();
