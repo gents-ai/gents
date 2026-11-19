@@ -317,9 +317,10 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
     })
 }
 
-/// [`write_pack`] for `gents config pack build`: a manifest that declares no
-/// `gents_version` is packed declaring `release`, the building CLI's own, and
-/// the digest covers the manifest as packed.
+/// [`write_pack`] for a source directory, as `gents config pack build` and an
+/// install of the directory pack it: a manifest that declares no
+/// `gents_version` is packed declaring `release`, the packing runtime's own,
+/// and the digest covers the manifest as packed.
 pub fn write_built_pack(dir: &Path, out: impl Write, release: &Release) -> Result<PackHeader> {
     write_pack_validated(dir, out, Bounds::default(), Some(release), |manifest| {
         validate_manifest(&manifest.name, manifest)
