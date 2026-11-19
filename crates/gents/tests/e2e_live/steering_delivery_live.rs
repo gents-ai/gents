@@ -14,10 +14,10 @@ use serde_json::Value;
 
 use crate::support::agent_requests::{canonical_now, submit_user_request, RequestActors};
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, terminal_assistant_answer,
-    wait_for_request_terminal, STALL_CEILING,
+    bind_target, boot_live_agent, live_target, terminal_assistant_answer, wait_for_request_terminal,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 async fn request_row(actors: &RequestActors, doc_id: &str) -> Value {
     let response = actors
