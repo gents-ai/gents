@@ -426,11 +426,19 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
             .unwrap();
     let capability = user.client_signing_capability().unwrap();
     let record = hosted_record(&home, &did, &graphql);
+    let signed_did = did.clone();
     Mock::given(method("GET"))
         .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            json!({"node_did":did,"tool_root":"/w", "client_authentication":{"kind":"local"}}),
-        ))
+        .respond_with(move |request: &wiremock::Request| {
+            use identity::FullIdentity as _;
+            let mut status = gents_store::test_support::local_home_status_now(
+                &signed_did,
+                &|payload| node.sign(payload).unwrap(),
+                request.url.query(),
+            );
+            status["tool_root"] = "/w".into();
+            ResponseTemplate::new(200).set_body_json(status)
+        })
         .mount(&server)
         .await;
     let payload = super::fetch_hosted_runtime_status(&record, Some(&capability))
@@ -525,17 +533,32 @@ async fn managed_readiness_status_rejects_redirects_without_forwarding_authority
 #[tokio::test]
 async fn document_operator_endpoint_preserves_client_without_loading_runtime_key() {
     let directory = tempfile::tempdir().unwrap();
-    let runtime = "did:key:unloaded-runtime";
+    let runtime_key =
+        gents_store::identity::load_or_create_file_identity(&directory.path().join("runtime.key"))
+            .unwrap();
+    let runtime_did = {
+        use identity::Identity as _;
+        runtime_key.did().unwrap().to_string()
+    };
+    let runtime = runtime_did.as_str();
     let caller = gents_store::identity::KeyIdentity::load_or_create(
         directory.path().join("caller.key"),
         None,
     )
     .unwrap();
     let server = wiremock::MockServer::start().await;
+    let signed_did = runtime_did.clone();
     wiremock::Mock::given(wiremock::matchers::path("/status"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
-            "node_did": runtime, "client_authentication": {"kind": "local"}
-        })))
+        .respond_with(move |request: &wiremock::Request| {
+            use identity::FullIdentity as _;
+            wiremock::ResponseTemplate::new(200).set_body_json(
+                gents_store::test_support::local_home_status_now(
+                    &signed_did,
+                    &|payload| runtime_key.sign(payload).unwrap(),
+                    request.url.query(),
+                ),
+            )
+        })
         .mount(&server)
         .await;
     let record = hosted_record(
@@ -610,32 +633,60 @@ async fn runtime_status_uses_the_caller_and_rejects_another_node() {
 /// present is told as an update of Gents, never as a raw refusal.
 #[tokio::test]
 async fn a_status_read_refused_at_a_vera_edge_asks_for_an_update() {
-    use wiremock::matchers::{header_exists, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/status"))
-        .and(header_exists("authorization"))
-        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
-            "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
-            "error": "refused",
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "node_did": "did:key:home",
-            "client_authentication":{"kind":"local"},
-        })))
-        .mount(&server)
-        .await;
+    let home = std::sync::Arc::new(gents_store::test_support::test_identity(
+        "update-required-home",
+    ));
+    let home_did = gents_store::identity::NodeIdentity::did(home.as_ref()).to_owned();
+    let signer = home.clone();
+    let edge = axum::Router::new().route(
+        "/status",
+        axum::routing::get(
+            move |headers: axum::http::HeaderMap,
+                  query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                let signer = signer.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    if headers.contains_key(axum::http::header::AUTHORIZATION) {
+                        return (
+                            axum::http::StatusCode::UNAUTHORIZED,
+                            axum::Json(json!({
+                                "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+                                "error": "refused",
+                            })),
+                        )
+                            .into_response();
+                    }
+                    let Some(nonce) = query
+                        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                        .and_then(|nonce| {
+                            gents_protocol::home_attestation::HomeNonce::parse(nonce).ok()
+                        })
+                    else {
+                        return axum::http::StatusCode::BAD_REQUEST.into_response();
+                    };
+                    axum::Json(
+                        gents_store::test_support::signed_home_status(
+                            signer.as_ref(),
+                            &gents_protocol::delegation_audience::ReportedDelegationAudience::Absent,
+                            None,
+                            &nonce,
+                        )
+                        .await,
+                    )
+                    .into_response()
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let served = tokio::spawn(async move { axum::serve(listener, edge).await });
     let user = gents_store::test_support::test_identity("update-required-user");
     let capability = gents_store::identity::NodeIdentity::client_signing_capability(&user).unwrap();
     let record = hosted_record(
         std::path::Path::new("."),
-        "did:key:home",
-        &format!("{}/api/v0/graphql", server.uri()),
+        &home_did,
+        &format!("http://{address}/api/v0/graphql"),
     );
     let error = super::fetch_hosted_runtime_status(&record, Some(&capability))
         .await
@@ -647,6 +698,7 @@ async fn a_status_read_refused_at_a_vera_edge_asks_for_an_update() {
         "{error:#}"
     );
     assert!(format!("{error:#}").contains("update Gents"));
+    served.abort();
 }
 
 /// A GraphQL request whose identity token the edge of a Vera home refuses is

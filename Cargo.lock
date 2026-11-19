@@ -6558,6 +6558,7 @@ dependencies = [
  "gents-eval",
  "gents-host",
  "gents-inference",
+ "gents-lean-contract",
  "gents-loop",
  "gents-observe",
  "gents-pack",

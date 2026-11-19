@@ -1,0 +1,4 @@
+---- MODULE MCSettlementApprovalNoRestoration ----
+EXTENDS SettlementApproval
+
+====

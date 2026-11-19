@@ -16,7 +16,15 @@ fn signing_key() -> anyhow::Result<Vec<u8>> {
 #[tokio::test]
 async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
-    let key = signing_key()?;
+    let home = Arc::new(
+        tokio::task::spawn_blocking(|| crate::test_support::test_identity("authentication-home"))
+            .await?,
+    );
+    let key = home
+        .client_signing_capability()?
+        .config
+        .private_key_bytes
+        .to_vec();
     let keyring = Arc::new(defra_node::keyring::FileKeyring::open(
         directory.path().join("keys"),
         b"delegation-fixture",
@@ -57,6 +65,7 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
         .node_identity_did()
         .expect("runtime identity")
         .to_owned();
+    assert_eq!(node_did, crate::identity::NodeIdentity::did(home.as_ref()));
     let metadata = Arc::new(tokio::sync::RwLock::new(serde_json::json!({
         "node_did": node_did,
         "client_authentication": {"kind": "vera", "worker": worker, "deployment": deployment}
@@ -67,10 +76,23 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
         "/status",
         axum::routing::get({
             let metadata = metadata.clone();
-            move || {
-                let metadata = metadata.clone();
+            move |query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                let (metadata, home) = (metadata.clone(), home.clone());
                 async move {
-                    let body = metadata.read().await.clone();
+                    let mut body = metadata.read().await.clone();
+                    if let Some(nonce) = query
+                        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                        .and_then(|nonce| {
+                            gents_protocol::home_attestation::HomeNonce::parse(nonce).ok()
+                        })
+                    {
+                        crate::identity::home_status::attest(
+                            Some(home.as_ref()),
+                            &nonce,
+                            &mut body,
+                        )
+                        .await;
+                    }
                     if let Some(location) = body
                         .get("redirect")
                         .and_then(serde_json::Value::as_str)

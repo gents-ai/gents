@@ -179,6 +179,11 @@ impl ConfigAccess {
                     relation.to_owned(),
                     target.to_owned(),
                 );
+                let deliberate = (!delete
+                    && collection == "Node"
+                    && relation == crate::identity::NODE_ADMINISTRATOR_RELATION)
+                    .then(|| target.clone());
+                let node = local.node().clone();
                 local
                     .run_owned(move |node| async move {
                         if delete {
@@ -202,7 +207,11 @@ impl ConfigAccess {
                         }
                         Ok::<_, ConfigClientError>(())
                     })
-                    .await
+                    .await?;
+                if let Some(member) = deliberate {
+                    crate::identity::close_owed_removal(&node, &member).await?;
+                }
+                Ok(())
             }
             WriteRoute::Http(endpoint) => {
                 if endpoint.is_anonymous() {

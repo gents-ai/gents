@@ -62,6 +62,7 @@ pub(crate) fn state() -> RuntimeHttpState {
         replicated_schema: Default::default(),
         serve_lifecycle: Default::default(),
         document_acp: Default::default(),
+        node_identity: None,
     }
 }
 
@@ -428,6 +429,7 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
             Default::default(),
             Default::default(),
             Default::default(),
+            None,
         )
         .contract;
         let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
@@ -617,6 +619,7 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             Default::default(),
             Default::default(),
             document_acp,
+            None,
         )
         .contract
         .route(
@@ -1011,7 +1014,7 @@ fn p2p_metrics_snapshot_decodes_pinned_live_sync_status() {
 #[tokio::test]
 async fn status_lifecycle_is_starting_until_serve_marks_it_ready() {
     async fn lifecycle(state: &RuntimeHttpState) -> Value {
-        let response = status_handler(State(state.clone()), &state.p2p_graphql).await;
+        let response = status_handler(State(state.clone()), &state.p2p_graphql, None).await;
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("status body");
@@ -1100,7 +1103,7 @@ async fn stalled_liveness_activity_read_does_not_hold_health() {
 
     let started = std::time::Instant::now();
     let (_, status_body) =
-        health_body(status_handler(State(state.clone()), &state.p2p_graphql).await).await;
+        health_body(status_handler(State(state.clone()), &state.p2p_graphql, None).await).await;
     assert!(
         started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
         "/status waited {:?}",
@@ -1116,7 +1119,7 @@ async fn late_core_read_leaves_status_ok_when_activity_stalls() {
 
     let started = std::time::Instant::now();
     let (_, status_body) =
-        health_body(status_handler(State(state.clone()), &state.p2p_graphql).await).await;
+        health_body(status_handler(State(state.clone()), &state.p2p_graphql, None).await).await;
     assert!(
         started.elapsed() < STATUS_PROBE_BUDGET + P2P_METRICS_FETCH_BUDGET,
         "/status waited {:?}",
@@ -1239,4 +1242,53 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "signed: {body}");
     let (status, body) = usage_route(&state, command, Some(owner.as_ref())).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "replay: {body}");
+}
+
+#[tokio::test]
+async fn a_status_read_with_a_nonce_says_whether_the_node_key_signed_it() {
+    let mut state = state();
+    state.graphql = GraphqlEndpoint::anonymous("http://127.0.0.1:9/api/v0/graphql");
+    state.p2p_graphql = state.graphql.clone();
+    let app = Router::new()
+        .route("/status", get(super::status::status_route))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let read = |query: Option<&str>| {
+        let mut request = reqwest::Client::new().get(format!("http://{address}/status"));
+        if let Some(nonce) = query {
+            request = request.query(&[(gents_protocol::home_attestation::HOME_NONCE_QUERY, nonce)]);
+        }
+        request.send()
+    };
+    let field = gents_protocol::home_attestation::STATUS_HOME_ATTESTATION_FIELD;
+
+    let displayed: Value = read(None).await.unwrap().json().await.unwrap();
+    assert!(displayed.get(field).is_none(), "{displayed}");
+
+    let nonce = gents_protocol::home_attestation::HomeNonce::from_bytes([3; 32]);
+    let answered = read(Some(nonce.as_str())).await.unwrap();
+    assert_eq!(
+        answered.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    let answered: Value = answered.json().await.unwrap();
+    assert_eq!(
+        serde_json::from_value::<gents_protocol::home_attestation::HomeAttestation>(
+            answered[field].clone()
+        )
+        .unwrap(),
+        gents_protocol::home_attestation::HomeAttestation::Unsigned {
+            reason: gents_protocol::home_attestation::UnsignedHomeStatus::RuntimeNotReady,
+        },
+        "a runtime that has not started holds no node key to sign with"
+    );
+
+    assert_eq!(
+        read(Some("not-a-nonce")).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
 }
