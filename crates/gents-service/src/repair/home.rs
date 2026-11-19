@@ -211,14 +211,20 @@ pub async fn set_aside_home(home: &Path) -> Result<PathBuf, Blocker> {
 pub async fn set_aside_home_as(home: &Path, label: String) -> Result<PathBuf, Blocker> {
     let from = beside(home);
     let stamp = chrono::Utc::now().format("%Y-%m-%d-%H%M%S").to_string();
+    let store = gents_store::local::home::acquire_home_store(
+        &from,
+        gents_store::local::home::STORE_RELEASE_WAIT,
+    )
+    .await
+    .map_err(|error| match error {
+        HomeError::LockHeld(_) => Blocker::HomeBusy { home: from.clone() },
+        error => Blocker::CannotSetAside {
+            home: from.clone(),
+            reason: error.to_string(),
+        },
+    })?;
     tokio::task::spawn_blocking(move || {
-        let _store = lock_home_store(&from).map_err(|error| match error {
-            HomeError::LockHeld(_) => Blocker::HomeBusy { home: from.clone() },
-            error => Blocker::CannotSetAside {
-                home: from.clone(),
-                reason: error.to_string(),
-            },
-        })?;
+        let _store = store;
         let to = set_aside_target(&from, &label, &stamp);
         fs::rename(&from, &to)
             .map(|()| to)

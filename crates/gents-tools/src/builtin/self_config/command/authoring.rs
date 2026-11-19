@@ -240,7 +240,7 @@ fn ensure_mode(mode: gents_documents::FileToolMode, write: bool, operation: &str
     use gents_documents::FileToolMode;
     match (write, mode) {
         (_, FileToolMode::Off) => bail!(
-            "pack {operation} requires effective file permission on the invoking agent; the effective file tools are Off. Grant file tools, or run pack authoring from the operator CLI"
+            "pack {operation} requires effective file permission on the invoking agent; the effective file tools are Off"
         ),
         (true, FileToolMode::ReadOnly) => bail!(
             "pack {operation} writes inside the tool root, so it requires readwrite file tools, not the current read-only mode"
@@ -282,6 +282,41 @@ impl ConfigCommandTool {
         }
     }
 
+    /// Pack authoring reads and writes as the invoking agent, so a refusal for
+    /// its file mode says which of its saved Tools and this process's ceiling
+    /// narrows it, and names the call that shows both.
+    fn file_mode_refusal(&self, error: &anyhow::Error, effective: &Value) -> anyhow::Error {
+        let mode = |pointer: &str| {
+            effective
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .unwrap_or("Off")
+        };
+        let saved = mode("/runtime_effective/agent_narrowing/requested_file_mode");
+        let effective_mode = mode("/runtime_effective/effective/file_mode");
+        let cause = if saved == effective_mode {
+            format!(
+                "This agent's own Tools save host.files.mode {saved}; a folder granted to it or to another agent does not select file tools. Its Tools must select host.root and the host.files.mode this needs (ReadWrite to scaffold, add, build or test; ReadOnly to check or verify)"
+            )
+        } else {
+            format!(
+                "This agent's Tools save host.files.mode {saved}, which this process's ceiling narrows to {effective_mode}; only the person who starts the node widens the ceiling"
+            )
+        };
+        let next = if self.categories.contains("tools") {
+            json!({"argv": ["tools", "get"]})
+        } else {
+            json!({"argv": ["agent", "get"]})
+        };
+        CommandGuidance {
+            message: format!(
+                "{error:#}. {cause}. A person can instead run pack authoring from the operator CLI"
+            ),
+            next_call: next,
+        }
+        .into()
+    }
+
     pub(super) async fn authoring_paths(
         &self,
         operation: &str,
@@ -297,7 +332,9 @@ impl ConfigCommandTool {
             .map(gents_documents::FileToolMode::parse)
             .transpose()?
             .unwrap_or_default();
-        ensure_mode(mode, write, operation)?;
+        if let Err(error) = ensure_mode(mode, write, operation) {
+            return Err(self.file_mode_refusal(&error, &effective));
+        }
         let root = effective
             .pointer("/runtime_effective/effective/root")
             .and_then(Value::as_str)

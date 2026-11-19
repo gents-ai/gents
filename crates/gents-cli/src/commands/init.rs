@@ -86,17 +86,31 @@ Use --write for sandboxed writes scoped to the tool root.";
 
 /// Takes the store lock for the rest of init; an overwrite wipes the home
 /// under that same lock, keeping the lock file itself, so no runtime can open
-/// the store while it is removed or hold a second lock afterwards.
-pub(crate) fn lock_init_store(
+/// the store while it is removed or hold a second lock afterwards. A previous
+/// holder that declared its release is awaited and a serving one refused
+/// (Lean `StoreHandoff.decide`).
+pub(crate) async fn lock_init_store(
     home_dir: &Path,
     data_dir: &Path,
     overwrite: bool,
 ) -> Result<gents_store::local::home::StoreLock> {
     let user_home = std::env::home_dir();
-    lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref())
+    lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref()).await
 }
 
-pub(crate) fn lock_init_store_for_user(
+async fn acquire_init_store(
+    home_dir: &Path,
+    data_dir: &Path,
+) -> Result<gents_store::local::home::StoreLock> {
+    Ok(gents_store::local::home::acquire_store(
+        home_dir,
+        data_dir,
+        gents_store::local::home::STORE_RELEASE_WAIT,
+    )
+    .await?)
+}
+
+pub(crate) async fn lock_init_store_for_user(
     home_dir: &Path,
     data_dir: &Path,
     overwrite: bool,
@@ -110,12 +124,12 @@ pub(crate) fn lock_init_store_for_user(
     let Some(home) = home else {
         fs::create_dir_all(data_dir)
             .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-        return Ok(gents_store::local::home::lock_store(home_dir, data_dir)?);
+        return acquire_init_store(home_dir, data_dir).await;
     };
     let data_dir = overwrite_data_dir(home_dir, &home, data_dir)?;
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let lock = gents_store::local::home::lock_store(home_dir, &data_dir)?;
+    let lock = acquire_init_store(home_dir, &data_dir).await?;
     let overwritten_encryption = read_init_config(&home)
         .ok()
         .flatten()
@@ -216,7 +230,7 @@ pub(crate) async fn init_home_with_core_packs(
         .data_dir
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
-    let store_lock = lock_init_store(&home_dir, &data_dir, args.dangerously_overwrite)?;
+    let store_lock = lock_init_store(&home_dir, &data_dir, args.dangerously_overwrite).await?;
     let fresh_store = tokio::fs::read_dir(&data_dir)
         .await?
         .next_entry()
@@ -547,17 +561,23 @@ pub(crate) async fn init_home_with_core_packs(
         Ok(output)
     }
     .await;
+    let store_release = held_store_access.begin_store_release();
     if let Err(error) = init_node.shutdown().await {
         tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
     }
     stage("embedded_node_drained");
-    let mut output = result?;
-    // The pack installer opens the home itself, so the store claim and the
-    // node this init held are released first: the node's database lock goes
-    // with its last handle, not with its shutdown.
+    // Init's return, and the pack installer's own open of the home, follow
+    // the release of the store this init held (`tla/StoreHandoff.tla`
+    // `AckedHandoff`); its node handles go first, since the node's database
+    // lock goes with its last handle, not with its shutdown.
     drop(access);
     drop(held_store_access);
     drop(init_node);
+    if let Some(store_release) = store_release {
+        store_release.released().await;
+    }
+    stage("store_released");
+    let mut output = result?;
     if installs_core_packs {
         let engineer = output["default_agent_did"]
             .as_str()
@@ -1975,12 +1995,7 @@ mod tests {
         let owner = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
         let home = temp.path().join("home");
         let data = default_data_dir(&home);
-        let (lock_home, lock_data) = (home.clone(), data.clone());
-        let lock =
-            tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
-                .await
-                .unwrap()
-                .unwrap();
+        let lock = lock_init_store(&home, &data, false).await.unwrap();
         let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
             home: &home,
             node_name: "identity-only",
@@ -2040,13 +2055,16 @@ mod tests {
         );
     }
 
-    fn overwrite(home: &Path, user_home: &Path) -> Result<gents_store::local::home::StoreLock> {
-        lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))
+    async fn overwrite(
+        home: &Path,
+        user_home: &Path,
+    ) -> Result<gents_store::local::home::StoreLock> {
+        lock_init_store_for_user(home, &home.join("data"), true, Some(user_home)).await
     }
 
     #[cfg(unix)]
-    #[test]
-    fn an_overwrite_never_wipes_the_user_home_through_an_alias() {
+    #[tokio::test]
+    async fn an_overwrite_never_wipes_the_user_home_through_an_alias() {
         let temp = tempfile::tempdir().unwrap();
         let user_home = temp.path().join("user");
         fs::create_dir_all(user_home.join("Documents")).unwrap();
@@ -2061,6 +2079,7 @@ mod tests {
             temp.path().to_path_buf(),
         ] {
             let error = overwrite(&alias, &user_home)
+                .await
                 .expect_err("the user home and its ancestors are never overwritten")
                 .to_string();
             assert!(error.contains("user home"), "{alias:?}: {error}");
@@ -2076,8 +2095,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn an_overwrite_refuses_a_data_directory_linked_out_of_the_home() {
+    #[tokio::test]
+    async fn an_overwrite_refuses_a_data_directory_linked_out_of_the_home() {
         let temp = tempfile::tempdir().unwrap();
         let user_home = temp.path().join("user");
         fs::create_dir_all(&user_home).unwrap();
@@ -2088,7 +2107,9 @@ mod tests {
         fs::write(external.join("MANIFEST"), "store").unwrap();
         std::os::unix::fs::symlink(&external, home.join("data")).unwrap();
 
-        let error = overwrite(&home, &user_home).expect_err("a linked data directory is refused");
+        let error = overwrite(&home, &user_home)
+            .await
+            .expect_err("a linked data directory is refused");
         assert!(error.to_string().contains("symlink"), "{error}");
         assert!(external.join("MANIFEST").is_file());
         assert!(fs::symlink_metadata(home.join("data"))
@@ -2098,8 +2119,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn an_overwrite_through_a_linked_home_keeps_one_lock() {
+    #[tokio::test]
+    async fn an_overwrite_through_a_linked_home_keeps_one_lock() {
         let temp = tempfile::tempdir().unwrap();
         let user_home = temp.path().join("user");
         fs::create_dir_all(&user_home).unwrap();
@@ -2109,7 +2130,9 @@ mod tests {
         let link = temp.path().join("link-home");
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
-        let held = overwrite(&link, &user_home).expect("a dedicated linked home is overwritten");
+        let held = overwrite(&link, &user_home)
+            .await
+            .expect("a dedicated linked home is overwritten");
         assert!(!real.join("init.json").exists());
         assert!(real.join("data").is_dir());
         for alias in [link.join("data"), real.join("data")] {
@@ -2121,20 +2144,22 @@ mod tests {
         drop(held);
     }
 
-    #[test]
-    fn an_overwrite_is_refused_when_the_user_home_is_unknown_or_unresolvable() {
+    #[tokio::test]
+    async fn an_overwrite_is_refused_when_the_user_home_is_unknown_or_unresolvable() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(home.join("data")).unwrap();
         fs::write(home.join("init.json"), "{}").unwrap();
         for unknown in [None, Some(Path::new(""))] {
             let error = lock_init_store_for_user(&home, &home.join("data"), true, unknown)
+                .await
                 .expect_err("an overwrite needs a known user home")
                 .to_string();
             assert!(error.contains("cannot be determined"), "{error}");
         }
         let missing = temp.path().join("missing-user-home");
         let error = lock_init_store_for_user(&home, &home.join("data"), true, Some(&missing))
+            .await
             .expect_err("an unresolvable user home is not compared lexically");
         assert!(
             format!("{error:#}").contains("cannot be resolved"),
@@ -2142,15 +2167,18 @@ mod tests {
         );
         assert!(home.join("init.json").is_file(), "nothing was wiped");
         lock_init_store_for_user(&home, &home.join("data"), false, None)
+            .await
             .expect("init without an overwrite does not need the user home");
     }
 
-    #[test]
-    fn init_holds_the_store_lock_until_it_finishes() {
+    #[tokio::test]
+    async fn init_holds_the_store_lock_until_it_finishes() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let data = home.join("data");
-        let held = lock_init_store(&home, &data, false).expect("init locks a fresh store");
+        let held = lock_init_store(&home, &data, false)
+            .await
+            .expect("init locks a fresh store");
         assert!(data.is_dir());
         assert!(
             gents_store::local::home::lock_store(&home, &data).is_err(),
@@ -2160,8 +2188,8 @@ mod tests {
         gents_store::local::home::lock_store(&home, &data).expect("init releases the store");
     }
 
-    #[test]
-    fn an_overwrite_wipes_under_the_lock_and_keeps_excluding_others() {
+    #[tokio::test]
+    async fn an_overwrite_wipes_under_the_lock_and_keeps_excluding_others() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let data = home.join("data");
@@ -2173,13 +2201,15 @@ mod tests {
         fs::create_dir_all(&user_home).unwrap();
         let runtime = gents_store::local::home::lock_store(&home, &data).unwrap();
         assert!(
-            overwrite(&home, &user_home).is_err(),
+            overwrite(&home, &user_home).await.is_err(),
             "a store a runtime has open is not wiped"
         );
         assert!(data.join("MANIFEST").is_file());
         drop(runtime);
 
-        let held = overwrite(&home, &user_home).expect("an idle home is overwritten");
+        let held = overwrite(&home, &user_home)
+            .await
+            .expect("an idle home is overwritten");
         assert!(!data.join("MANIFEST").exists());
         assert!(!home.join("init.json").exists());
         assert!(data.is_dir());
@@ -2571,11 +2601,7 @@ mod tests {
         let stored = read_init_config(&home)?.context("initialized home missing configuration")?;
         let identity = gents_service::home_state::load_initialized_home_identity(&home, &stored)?;
         let data = default_data_dir(&home);
-        let lock_home = home.clone();
-        let lock_data = data.clone();
-        let _claim =
-            tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
-                .await??;
+        let _claim = lock_init_store(&home, &data, false).await?;
         let node = Arc::new(
             crate::persistent_node_builder(&home, &data)
                 .await?
@@ -2622,22 +2648,13 @@ mod tests {
         for case in gents_lean_vocab::families::household_fresh_backend_origin::cases() {
             let directory = tempfile::tempdir()?;
             let data = directory.path().join("data");
-            let lock_home = directory.path().to_owned();
-            let lock_data = data.clone();
-            let lock =
-                tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
-                    .await??;
+            let lock = lock_init_store(directory.path(), &data, false).await?;
             let foreign_home = directory.path().join("foreign");
             let foreign_lock = if case.input.locked {
                 None
             } else {
                 let foreign_data = foreign_home.join("data");
-                Some(
-                    tokio::task::spawn_blocking(move || {
-                        lock_init_store(&foreign_home, &foreign_data, false)
-                    })
-                    .await??,
-                )
+                Some(lock_init_store(&foreign_home, &foreign_data, false).await?)
             };
             assert!(tokio::fs::read_dir(&data)
                 .await?
@@ -2738,7 +2755,7 @@ mod tests {
         let agent = identity::Did::new(initial["default_agent_did"].as_str().unwrap()).unwrap();
         let client_did = identity::Did::new(client.did()).unwrap();
         let data = default_data_dir(&home);
-        let claim = lock_init_store(&home, &data, false).unwrap();
+        let claim = lock_init_store(&home, &data, false).await.unwrap();
         let node = Arc::new(
             crate::persistent_node_builder(&home, &data)
                 .await
@@ -2935,7 +2952,7 @@ mod tests {
             gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
         let agent = identity::Did::new(initial["default_agent_did"].as_str().unwrap()).unwrap();
         let data = default_data_dir(&home);
-        let _claim = lock_init_store(&home, &data, false).unwrap();
+        let _claim = lock_init_store(&home, &data, false).await.unwrap();
         let ceiling = gents_host::tool_ceiling::host_tool_ceiling(
             stored.tool_ceiling,
             stored.tool_root.as_deref().map(Path::new),

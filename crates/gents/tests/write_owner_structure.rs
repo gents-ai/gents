@@ -2587,6 +2587,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-toolcalls/src/call/hook/persistence/helpers.rs", &["BackgroundSlotRefusal::in_failure"]),
     ("crates/gents-tools/src/builtin/self_config/command.rs", &["CommandGuidance::in_error"]),
     ("crates/gents-tools/src/builtin/self_config/command/crud.rs", &["BatchFailure::in_error"]),
+    ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", &["CatalogRefusal::in_error"]),
     ("crates/gents-tools/src/builtin/self_config/ops.rs", &["MissingAgent::in_error", "MissingConfigDocument::in_error"]),
     ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["auth_refusal_of"]),
     ("crates/gents/src/eval/documents.rs", &["already_completed", "already_invalidated", "feedback_off_train"]),
@@ -5181,10 +5182,7 @@ const LEAN_GENERATOR_RUNS: &[&str] = &[
 /// `gents_lean_vocab::snapshot()`, which loads off the runtime, or runs the
 /// generator inside `spawn_blocking`. This allowlist only shrinks.
 #[rustfmt::skip]
-const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
-    ("crates/gents-host/src/http/access_tests.rs", 1),
-];
+const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[];
 
 struct LeanGeneratorVisitor {
     imports_owner: bool,

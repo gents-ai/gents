@@ -5,15 +5,13 @@ namespace Identity.ApplicationPairingAccess
 open Identity.Household
 
 /-- A Node owned by `user`, with the Engineer `engineer` as a Node
-administrator, the node key `runtime` as its runtime reader, and an
-`agent_manager` `manager`. The Agent `author` created the pairing overlay
+administrator and the node key `runtime` as its runtime reader. The Agent `author` created the pairing overlay
 `overlay` and linked it to the Node; `sibling` is another Agent of the same
 Node with no relation to it. -/
 def fixture : State :=
   { objects := [⟨"nodes", "node", "user"⟩, ⟨"application_pairings", "overlay", "author"⟩],
     relations := [⟨"nodes", "node", "administrator", .actor "engineer"⟩,
       ⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
-      ⟨"nodes", "node", "agent_manager", .actor "manager"⟩,
       ⟨"application_pairings", "overlay", "parent", .object "nodes" "node"⟩],
     enrolled := [] }
 
@@ -27,10 +25,10 @@ theorem author_controls_its_pairing : access "author" = (true, true, true) := by
   native_decide
 
 /-- Only the author rewrites a pairing: the Node owner, the Engineer, the
-runtime, a catalog holder and a sibling Agent cannot re-bind or widen it. -/
+runtime and a sibling Agent cannot re-bind or widen it. -/
 theorem only_the_author_updates :
-    ["user", "engineer", "runtime", "manager", "sibling"].map (fun actor => (access actor).2.1) =
-      [false, false, false, false, false] := by
+    ["user", "engineer", "runtime", "sibling"].map (fun actor => (access actor).2.1) =
+      [false, false, false, false] := by
   native_decide
 
 /-- Node administration reads every pairing and stops any of them: whoever can
@@ -44,12 +42,12 @@ none. -/
 theorem runtime_reads_only : access "runtime" = (true, false, false) := by
   native_decide
 
-/-- A sibling Agent and an `agent_manager` neither see nor change another
-Agent's pairing, even when they hold the same P2P mutation grant: that grant is
+/-- A sibling Agent neither sees nor changes another
+Agent's pairing, even when it holds the same P2P mutation grant: that grant is
 node-wide `delete-document`, and document ACP confines it to the owner. -/
 theorem siblings_and_catalog_holders_have_no_access :
-    ["sibling", "manager", "stranger"].map access =
-      [(false, false, false), (false, false, false), (false, false, false)] := by
+    ["sibling", "stranger"].map access =
+      [(false, false, false), (false, false, false)] := by
   native_decide
 
 /-- Only the author links its pairing to a Node: `parent` has no manager

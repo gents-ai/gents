@@ -403,7 +403,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
     let agent = fixture.agent_did();
     let backend = format!("{agent}:backend");
     fixture.grant_agent_schema().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let root = fixture.admitted_workspace_root().await;
     let index = call_config_tool(&tools, vec!["help".into()]).await.unwrap();
     assert!(index.len() < 2_000, "help index is {} chars", index.len());

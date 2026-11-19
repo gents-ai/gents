@@ -1390,6 +1390,10 @@ def caseCoverage : List CoverageEntry :=
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "count_carrier_integer_text")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "count_carrier_obligation_field")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage

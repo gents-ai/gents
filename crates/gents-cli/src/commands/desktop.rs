@@ -146,11 +146,17 @@ async fn reset(
         ),
     }
     let _home_lock = if plan.runtime.is_some() {
-        Some(gents_store::local::home::lock_home_store(&home)?)
+        Some(
+            gents_store::local::home::acquire_home_store(
+                &home,
+                gents_store::local::home::STORE_RELEASE_WAIT,
+            )
+            .await?,
+        )
     } else {
         None
     };
-    let _client_lock = lock_client_state(&desktop)?;
+    let _client_lock = lock_client_state(&desktop).await?;
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
     retire_then_clear(&settled, disposition, backup.as_deref(), retry, || {
