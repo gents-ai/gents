@@ -1090,10 +1090,12 @@ async fn transport_429_usage_cap_reports_reset_time() {
         &url,
         "claude-sonnet-5",
         &echo_request(),
-        &test_account(),
+        MessagesAccount {
+            context: &test_account(),
+            bearer: &bearer,
+            usage: None,
+        },
         RapidHashSet::new(),
-        &bearer,
-        None,
     )
     .await
     .err()
@@ -1145,10 +1147,12 @@ where
                 &url,
                 "claude-sonnet-5",
                 request,
-                account,
+                MessagesAccount {
+                    context: account,
+                    bearer,
+                    usage: None,
+                },
                 RapidHashSet::new(),
-                bearer,
-                None,
             )
             .await;
             handle.await.expect("request")
@@ -1408,14 +1412,16 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
                 &url,
                 "claude-sonnet-5",
                 &echo_request(),
-                &test_account(),
+                MessagesAccount {
+                    context: &test_account(),
+                    bearer: &bearer,
+                    usage: Some(crate::usage_observation::UsageReporter::new(
+                        cache.clone(),
+                        node.clone(),
+                        account.clone(),
+                    )),
+                },
                 RapidHashSet::new(),
-                &bearer,
-                Some(crate::usage_observation::UsageReporter::new(
-                    cache.clone(),
-                    node.clone(),
-                    account.clone(),
-                )),
             )
             .await;
 

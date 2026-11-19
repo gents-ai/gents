@@ -13,7 +13,7 @@ use rig::streaming::RawStreamingChoice;
 
 use super::lock_fixtures_for_test;
 use super::route::{ClaudeRoute, ClaudeRouteError};
-use super::send::stream_messages_routed;
+use super::send::{stream_messages_routed, MessagesAccount};
 use super::tests::echo_request;
 use super::wire_tests::{reply, Server, Wire};
 use crate::clients::claude_subscription::{AccountIdentity, ApiKeyBearer};
@@ -58,10 +58,12 @@ async fn exchange(
         &route,
         MODEL,
         &echo_request(),
-        &account,
+        MessagesAccount {
+            context: &account,
+            bearer: &bearer,
+            usage: None,
+        },
         RapidHashSet::new(),
-        &bearer,
-        None,
     )
     .await
     .expect("200");
@@ -197,10 +199,12 @@ async fn a_signed_in_gateway_marks_its_attribution_from_the_jwt_it_sends() {
         &route,
         MODEL,
         &echo_request(),
-        &account,
+        MessagesAccount {
+            context: &account,
+            bearer: &ApiKeyBearer::new(jwt.clone()),
+            usage: None,
+        },
         RapidHashSet::new(),
-        &ApiKeyBearer::new(jwt.clone()),
-        None,
     )
     .await
     .expect("200");
@@ -311,10 +315,12 @@ async fn claude_platform_on_aws_sends_a_client_request_id_only_on_its_default_ur
         &local,
         MODEL,
         &echo_request(),
-        &account,
+        MessagesAccount {
+            context: &account,
+            bearer: &ApiKeyBearer::new(SECRET),
+            usage: None,
+        },
         RapidHashSet::new(),
-        &ApiKeyBearer::new(SECRET),
-        None,
     )
     .await
     .expect("200");
@@ -375,10 +381,12 @@ async fn a_rejected_credential_is_reported_without_a_second_send() {
         &route,
         MODEL,
         &echo_request(),
-        &account,
+        MessagesAccount {
+            context: &account,
+            bearer: &ApiKeyBearer::new(SECRET),
+            usage: None,
+        },
         RapidHashSet::new(),
-        &ApiKeyBearer::new(SECRET),
-        None,
     )
     .await
     .err()

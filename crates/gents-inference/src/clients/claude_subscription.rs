@@ -21,7 +21,7 @@ use crate::auth::credential::{
     BearerSource, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
 };
 use crate::clients::claude_messages::{
-    non_success_message, open_messages_at, ClaudeRoute, MESSAGES_URI,
+    non_success_message, open_messages_at, ClaudeRoute, MessagesAccount, MESSAGES_URI,
 };
 use crate::usage_observation::now_unix_secs;
 use crate::usage_observation::{RotationFeed, UsageAccount, UsageCache, UsageReporter};
@@ -368,15 +368,17 @@ where
                 let account = self.accounts.first().ok_or_else(|| {
                     CompletionError::ProviderError("Claude client has no account".to_string())
                 })?;
-                crate::clients::claude_messages::open_messages_at(
+                open_messages_at(
                     &self.call,
                     &self.route,
                     &self.model,
                     request,
-                    &account.identity.context(false),
+                    MessagesAccount {
+                        context: &account.identity.context(false),
+                        bearer: account.bearer.as_ref(),
+                        usage: account.usage.clone(),
+                    },
                     surface,
-                    account.bearer.as_ref(),
-                    account.usage.clone(),
                 )
                 .await
                 .map(StreamExt::boxed)
@@ -534,10 +536,12 @@ where
         route,
         model,
         request,
-        &account.identity.context(using_overage),
+        MessagesAccount {
+            context: &account.identity.context(using_overage),
+            bearer: account.bearer.as_ref(),
+            usage: account.usage.clone(),
+        },
         surface,
-        account.bearer.as_ref(),
-        account.usage.clone(),
     )
     .await
     {

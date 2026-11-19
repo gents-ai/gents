@@ -36,10 +36,8 @@ pub async fn stream_messages<S>(
     call: &ProviderCall,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
@@ -54,10 +52,17 @@ where
         request,
         account,
         surface,
-        bearer,
-        usage,
     )
     .await
+}
+
+/// The account a Messages request goes out as: the context its body and
+/// headers are planned for, the bearer that authorizes it, and where its
+/// usage is reported.
+pub struct MessagesAccount<'a, S> {
+    pub context: &'a ClaudeAccountContext,
+    pub bearer: &'a S,
+    pub usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 }
 
 /// A failed open of a Messages stream; `rejected` is set when the provider answered with a non-success status.
@@ -76,16 +81,13 @@ impl From<CompletionError> for MessagesOpenError {
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_messages_at<S>(
     call: &ProviderCall,
     uri: &str,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
@@ -100,22 +102,17 @@ where
         request,
         account,
         surface,
-        bearer,
-        usage,
     )
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_messages_routed<S>(
     call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
@@ -123,7 +120,7 @@ pub(crate) async fn stream_messages_routed<S>(
 where
     S: BearerSource,
 {
-    open_messages_at(call, route, model, request, account, surface, bearer, usage)
+    open_messages_at(call, route, model, request, account, surface)
         .await
         .map_err(|failure| failure.error)
 }
@@ -264,16 +261,13 @@ impl Replay {
 /// Sends the planned request as Claude Code 2.1.311 would: the typed body bytes, the header
 /// set in Claude Code's insertion order, and the [`ClaudeHttpClient`] that writes them with
 /// Bun's casing, order, defaults and gzip.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_messages_at<S>(
     call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     MessagesOpenError,
@@ -284,22 +278,16 @@ where
     // Boxed: the open path (planning, signing, profile listing, the transport and its
     // replays) is a large state machine that would otherwise sit inline in every
     // caller's future, the agent loop's included.
-    Box::pin(open_messages(
-        call, route, model, request, account, surface, bearer, usage,
-    ))
-    .await
+    Box::pin(open_messages(call, route, model, request, account, surface)).await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn open_messages<S>(
     call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
-    account: &ClaudeAccountContext,
+    account: MessagesAccount<'_, S>,
     surface: RapidHashSet<String>,
-    bearer: &S,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     MessagesOpenError,
@@ -307,6 +295,11 @@ async fn open_messages<S>(
 where
     S: BearerSource,
 {
+    let MessagesAccount {
+        context: account,
+        bearer,
+        usage,
+    } = account;
     let bearer_error = |error: anyhow::Error| {
         CompletionError::ProviderError(format!("Claude Messages bearer: {error}"))
     };

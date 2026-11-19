@@ -20,7 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use super::lock_fixtures_for_test;
-use super::send::{stream_messages_at, Replay};
+use super::send::{stream_messages_at, MessagesAccount, Replay};
 use super::tests::{echo_request, test_account};
 use super::transport::{capturing, ClaudeHttpClient};
 use crate::auth::credential::BearerSource;
@@ -234,10 +234,12 @@ async fn open(
         url,
         "claude-sonnet-5",
         &echo_request(),
-        account,
+        MessagesAccount {
+            context: account,
+            bearer,
+            usage: None,
+        },
         RapidHashSet::new(),
-        bearer,
-        None,
     )
     .await
     .map(|_| ())

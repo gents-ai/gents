@@ -22,7 +22,7 @@ use rig::streaming::RawStreamingChoice;
 use super::bedrock::clear_profile_cache_for_test;
 use super::lock_fixtures_for_test;
 use super::route::ClaudeRoute;
-use super::send::stream_messages_routed;
+use super::send::{stream_messages_routed, MessagesAccount};
 use super::tests::echo_request;
 use super::wire_tests::{raw_reply, reply, Reply, Server, Wire};
 use crate::clients::claude_subscription::{AccountIdentity, ApiKeyBearer};
@@ -159,10 +159,12 @@ async fn run(route: &ClaudeRoute, model: &str) -> (Events, Option<String>) {
         route,
         model,
         &echo_request(),
-        &context,
+        MessagesAccount {
+            context: &context,
+            bearer: &ApiKeyBearer::new(BEARER),
+            usage: None,
+        },
         RapidHashSet::new(),
-        &ApiKeyBearer::new(BEARER),
-        None,
     )
     .await
     {
