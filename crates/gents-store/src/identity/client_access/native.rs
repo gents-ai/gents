@@ -63,6 +63,7 @@ struct VeraRuntime {
     candidate_key: RawIdentity,
     candidate: ClientSigningCapability,
     node: Arc<defra_node::Node>,
+    url: String,
     owner_endpoint: crate::config_client::GraphqlEndpoint,
     owner_access: ConfigAccess,
     node_doc: String,
@@ -228,6 +229,7 @@ async fn vera_runtime() -> anyhow::Result<VeraRuntime> {
         candidate_key,
         candidate,
         node,
+        url,
         owner_endpoint,
         owner_access,
         node_doc,
@@ -249,6 +251,7 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
         candidate_key,
         candidate,
         node,
+        url: _,
         owner_endpoint,
         owner_access,
         node_doc,
@@ -601,6 +604,85 @@ async fn a_failed_approval_leaves_no_access_and_a_retry_approves() -> anyhow::Re
         assert!(!administers().await?, "{fail_at}");
     }
     drop(fixture.owner_key);
+    fixture.node.shutdown().await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Standing {
+    Owner,
+    Administrator,
+    RuntimeReader,
+    Unrelated,
+}
+
+/// What an approver observes of a member's exact Node `administrator`
+/// relationship, through the approval path's own access, replays
+/// `Identity.EnrollmentGrant.observeMemberAdministrator` on a live node: a
+/// wildcard relation is never observed as the member's direct one, and only
+/// an approver that may manage the relation observes it at all.
+#[tokio::test]
+async fn administrator_observation_replays_the_lean_model() -> anyhow::Result<()> {
+    use crate::config_client::TransactionFailure as _;
+    use gents_lean_vocab::families::identity_enrollment_grant_observe_member_administrator as family;
+    let fixture = vera_runtime().await?;
+    let runtime = ConfigAccess::local_as(fixture.node.clone(), fixture.runtime.did().parse()?);
+    let (approver_key, approver) = held_client()?;
+    let approver_endpoints = RuntimeEndpoints::new(approver.clone());
+    let approver_endpoint = approver_endpoints.endpoint(fixture.runtime.did(), &fixture.url)?;
+    let approver_did: identity::Did = approver.did().parse()?;
+    crate::identity::GrantSet::OperatorUser
+        .grant(&runtime, &approver_did)
+        .await?;
+    let owner_approver = ConfigAccess::local_as(fixture.node.clone(), fixture.owner.did().parse()?)
+        .with_client_authorization(credential(&fixture.owner_endpoint, &fixture.owner).await?)?;
+    let other_approver = ConfigAccess::local_as(fixture.node.clone(), approver_did.clone())
+        .with_client_authorization(credential(&approver_endpoint, &approver).await?)?;
+    let member: identity::Did = fixture.candidate.did().parse()?;
+    let cases = family::cases::<Standing>();
+    assert_eq!(cases.len(), 16);
+    for case in cases {
+        let mut relations = Vec::new();
+        match case.input.standing {
+            Standing::Administrator => relations.push(("administrator", approver_did.clone())),
+            Standing::RuntimeReader => relations.push(("runtime_reader", approver_did.clone())),
+            Standing::Owner | Standing::Unrelated => {}
+        }
+        if case.input.direct {
+            relations.push(("administrator", member.clone()));
+        }
+        if case.input.wildcard {
+            relations.push(("administrator", identity::Did::wildcard()));
+        }
+        for (relation, subject) in &relations {
+            fixture
+                .owner_access
+                .add_actor_relationship("Node", &fixture.node_doc, relation, subject)
+                .await?;
+        }
+        let observer = if case.input.standing == Standing::Owner {
+            &owner_approver
+        } else {
+            &other_approver
+        };
+        let observed = match observer
+            .observe_actor_relationship("Node", &fixture.node_doc, "administrator", &member)
+            .await
+        {
+            Ok(direct) => Some(direct),
+            Err(error) if error.permission_denied() => None,
+            Err(error) => return Err(error).context(format!("{:?}", case.input)),
+        };
+        for (relation, subject) in relations.iter().rev() {
+            fixture
+                .owner_access
+                .delete_actor_relationship("Node", &fixture.node_doc, relation, subject)
+                .await?;
+        }
+        case.check(observed);
+    }
+    drop((approver_key, fixture.owner_key));
     fixture.node.shutdown().await?;
     Ok(())
 }

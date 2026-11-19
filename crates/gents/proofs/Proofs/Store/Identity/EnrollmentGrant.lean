@@ -596,6 +596,25 @@ theorem exact_administrator_observation_excludes_wildcard :
     observeAdministrator state "owner" "member" = some false := by
   native_decide
 
+/-- The approver's Node with the member's `administrator` relations: a direct
+one naming the member, a wildcard one, both or neither. -/
+def observationState (standing : Standing) (direct wildcard : Bool) : Household.State :=
+  let base := standingState standing
+  { base with relations := base.relations ++
+      (if direct then [⟨"nodes", "node", "administrator", .actor "member"⟩] else []) ++
+      (if wildcard then [⟨"nodes", "node", "administrator", .wildcard⟩] else []) }
+
+/-- What the approver observes of the member's exact `administrator`
+relationship (`observeAdministrator`): `none` when it may not manage the
+relation, otherwise whether the direct tuple exists. A wildcard relation is
+never a direct tuple. Rust owner: `ConfigAccess::observe_actor_relationship`. -/
+def observeMemberAdministrator (standing : Standing) (direct wildcard : Bool) : Option Bool :=
+  observeAdministrator (observationState standing direct wildcard) "approver" "member"
+
+theorem a_wildcard_alone_is_not_observed_as_a_direct_administrator (standing : Standing) :
+    observeMemberAdministrator standing false true ≠ some true := by
+  cases standing <;> native_decide
+
 /-- What an approval does once its grant has run as the approver. -/
 inductive ApprovalStep where
   | approve
