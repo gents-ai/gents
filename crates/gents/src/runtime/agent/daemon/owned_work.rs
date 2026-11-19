@@ -102,9 +102,13 @@ where
     ) -> OwnedWorkOutcome {
         use gents_toolcalls::call::task_hooks::TaskAgentResult;
 
-        let result =
-            Box::pin(self.handle_request(lifecycle, stream_writer, shutdown, interrupt_rx.clone()))
-                .await;
+        // Erased so the agent loop's `Send` proof restarts here: through the
+        // request, inference, tool-call and store futures the inline proof
+        // sits at the trait solver's recursion limit.
+        let work: std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<HandleRequestOutcome>> + Send + '_>,
+        > = Box::pin(self.handle_request(lifecycle, stream_writer, shutdown, interrupt_rx.clone()));
+        let result = work.await;
 
         match result {
             Ok(HandleRequestOutcome::Completed) => {
