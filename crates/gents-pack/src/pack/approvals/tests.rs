@@ -37,7 +37,7 @@ fn approval(digest: &str, subjects: Vec<WireSubject>) -> PackApproval {
 
 fn file(approvals: Vec<PackApproval>) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
-        "version": 2,
+        "version": 3,
         "nodes": [{"node_did": "did:key:node", "approvals": approvals}],
     }))
     .unwrap()

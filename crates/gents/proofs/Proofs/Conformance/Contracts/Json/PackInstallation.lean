@@ -320,6 +320,106 @@ def wireReviewedJobCases : Conformance.Family WireReviewedJobInput (Option (Opti
       ⟨some (some "j1"), none⟩, ⟨some none, none⟩, ⟨none, some "j1"⟩ ]
   model := fun i => Configuration.wireReviewedJob i.approved i.served
 
+/-- An id part as a case writes it: a slot's name, or text. -/
+structure IdPartInput where
+  slot : Bool
+  value : String
+  deriving Lean.ToJson
+
+def IdPartInput.part (input : IdPartInput) : Configuration.IdPart :=
+  if input.slot then .slot input.value else .text input.value
+
+def text (value : String) : IdPartInput := ⟨false, value⟩
+def slot (name : String) : IdPartInput := ⟨true, name⟩
+
+def templates (ids : Option (List (List IdPartInput))) : Option (List (List Configuration.IdPart)) :=
+  ids.map (·.map (·.map IdPartInput.part))
+
+structure ApprovalInput where
+  digest : String
+  coordinate : String
+  yields : Option (List (List IdPartInput))
+  deriving Lean.ToJson
+
+def ApprovalInput.approval (input : ApprovalInput) : Configuration.PackApproval :=
+  ⟨input.digest, input.coordinate, [], templates input.yields⟩
+
+structure WireFilledIdsInput where
+  approved : Option (List (List IdPartInput))
+  agent : Option String
+  served : List String
+  deriving Lean.ToJson
+
+/-- A literal id; a slot id filled with the wired agent; a slot id the runtime
+reports for another agent; a slot id with no agent to fill it, as for a pack
+wired for targets; a literal id beside an unfillable one; and an approval
+that could not derive its ids. -/
+@[conformance_family]
+def wireFilledIdsCases : Conformance.Family WireFilledIdsInput (Option (List String)) where
+  inputs :=
+    let slotted := [slot "worker", text ":tools"]
+    [ ⟨some [[text "a"]], some "did:key:agent", ["a"]⟩,
+      ⟨some [slotted], some "did:key:agent", ["did:key:agent:tools"]⟩,
+      ⟨some [slotted], some "did:key:agent", ["did:key:rogue:tools"]⟩,
+      ⟨some [slotted], none, ["did:key:agent:tools"]⟩,
+      ⟨some [[text "a"], slotted], none, ["a"]⟩,
+      ⟨none, some "did:key:agent", ["a"]⟩ ]
+  model := fun i =>
+    Configuration.wireApprovedIds (Configuration.wireFilledIds (templates i.approved) i.agent)
+      i.served
+
+/-- Two approved versions of `acme/demo`, `p1` yielding `old` and `p2`
+yielding `new`, both yielding `a`, and another pack yielding `other`. -/
+def twoVersions : List ApprovalInput :=
+  [ ⟨"p1", "acme/demo", some [[text "a"], [text "old"]]⟩,
+    ⟨"p2", "acme/demo", some [[text "a"], [text "new"]]⟩,
+    ⟨"q1", "acme/other", some [[text "other"]]⟩ ]
+
+structure WireOwnPackIdsInput where
+  approvals : List ApprovalInput
+  recordDigest : String
+  served : List String
+  deriving Lean.ToJson
+
+/-- The newer version's record with its own ids, with an id only the older
+version yields, and with an id only another pack yields; the older version's
+record with its ids; a record of no approval; and an approval without ids. -/
+@[conformance_family]
+def wireOwnPackIdsCases : Conformance.Family WireOwnPackIdsInput (Option (List String)) where
+  inputs :=
+    [ ⟨twoVersions, "p2", ["a", "new"]⟩, ⟨twoVersions, "p2", ["a", "old"]⟩,
+      ⟨twoVersions, "p2", ["other"]⟩, ⟨twoVersions, "p1", ["old"]⟩, ⟨twoVersions, "p3", ["a"]⟩,
+      ⟨[⟨"p1", "acme/demo", none⟩], "p1", ["a"]⟩ ]
+  model := fun i =>
+    Configuration.wireOwnPackIds (i.approvals.map ApprovalInput.approval)
+      ⟨i.recordDigest, "acme/demo", "acme/tool", "r1"⟩
+      "did:key:agent" i.served
+
+structure WireTargetPackIdsInput where
+  approvals : List ApprovalInput
+  coordinate : String
+  installed : Option String
+  served : List String
+  deriving Lean.ToJson
+
+/-- Of two approved versions, the installed newer one with its ids and with
+an id only the older yields; an installed digest of neither; no installed
+digest; another coordinate's digest; one approved version installed; and a
+slot id, which a target pack never fills. -/
+@[conformance_family]
+def wireTargetPackIdsCases : Conformance.Family WireTargetPackIdsInput (Option (List String)) where
+  inputs :=
+    [ ⟨twoVersions, "acme/demo", some "p2", ["new"]⟩,
+      ⟨twoVersions, "acme/demo", some "p2", ["old"]⟩,
+      ⟨twoVersions, "acme/demo", some "p3", ["a"]⟩,
+      ⟨twoVersions, "acme/demo", none, ["a"]⟩,
+      ⟨twoVersions, "acme/demo", some "q1", ["other"]⟩,
+      ⟨[⟨"p1", "acme/demo", some [[text "a"]]⟩], "acme/demo", some "p1", ["a"]⟩,
+      ⟨[⟨"p1", "acme/demo", some [[slot "worker"]]⟩], "acme/demo", some "p1",
+        ["did:key:agent"]⟩ ]
+  model := fun i =>
+    Configuration.wireTargetPackIds (i.approvals.map ApprovalInput.approval) i.coordinate i.installed i.served
+
 inductive ApprovalsCase where
   | absent
   | oversized

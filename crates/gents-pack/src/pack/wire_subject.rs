@@ -67,7 +67,6 @@ impl WireSubject {
         format!("{}/{}", self.namespace, self.name)
     }
 
-    /// A record carrying only what a plan reads.
     pub fn installed(&self) -> InstalledPlugin {
         InstalledPlugin {
             namespace: self.namespace.clone(),
@@ -93,11 +92,8 @@ impl WireSubject {
 /// (`Configuration.WireRecord`).
 #[derive(Debug, Clone)]
 pub enum WireRecord {
-    /// Inside an install: the pack the client itself just sent.
     SentPack(WireSubject),
-    /// The plugin store of the client's own home, which the runtime serves.
     OwnHome(InstalledPlugin),
-    /// A standalone wire: the record the runtime serves.
     Served(InstalledPlugin),
 }
 
@@ -134,6 +130,43 @@ pub fn wire_approved_ids(approved: Option<&[String]>, served: &[String]) -> Opti
         .iter()
         .all(|target| approved.contains(target))
         .then(|| served.to_vec())
+}
+
+/// One part of a document id a pack's configuration yields
+/// (`Configuration.IdPart`): fixed text, or an agent slot whose DID only the
+/// install fixes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum IdPart {
+    Text(String),
+    Slot(String),
+}
+
+/// `parts` as an id (`Configuration.fillId`): each slot filled with the
+/// wired `agent`; `None` when a slot has no agent to fill it.
+pub fn fill_id(agent: Option<&str>, parts: &[IdPart]) -> Option<String> {
+    parts
+        .iter()
+        .map(|part| match part {
+            IdPart::Text(text) => Some(text.as_str()),
+            IdPart::Slot(_) => agent,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|filled| filled.concat())
+}
+
+/// The ids `approved` yields with its slots filled
+/// (`Configuration.wireFilledIds`).
+pub fn wire_filled_ids(
+    approved: Option<&[Vec<IdPart>]>,
+    agent: Option<&str>,
+) -> Option<Vec<String>> {
+    approved.map(|templates| {
+        templates
+            .iter()
+            .filter_map(|parts| fill_id(agent, parts))
+            .collect()
+    })
 }
 
 /// The job block a client signs for a plugin over a runtime that serves

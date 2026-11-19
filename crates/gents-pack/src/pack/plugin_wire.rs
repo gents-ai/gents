@@ -47,72 +47,68 @@ pub type WireAsClient = fn(
 ) -> futures::future::BoxFuture<'static, Result<Value>>;
 
 /// What a client plans a wire over a runtime from when the runtime serves
-/// another home (`Configuration.wirePlanSubject`): the plugin's record, and
-/// the provenance of each pack whose targets it wires, both from a pack it
-/// sent or approved.
+/// another home (`Configuration.wirePlanSubject`): the plugin's record and
+/// the approvals that vouch for the packs the wire reads.
 #[derive(Debug, Clone)]
 pub struct ClientPlan {
     pub record: crate::plugin::store::InstalledPlugin,
-    /// The packs the plan reads, by coordinate: the plugin's own and each
-    /// it wires targets from. `None` plans from a pack the client just sent,
-    /// whose documents the client vouches for itself.
-    pub packs: Option<std::collections::BTreeMap<String, ApprovedPack>>,
+    /// `None` plans from a pack the client just sent, whose documents the
+    /// client vouches for itself.
+    pub approvals: Option<Vec<crate::pack::approvals::PackApproval>>,
 }
 
-/// What a client knows of a pack it approved: who installed it, and the
-/// document ids it yields when the approval could derive them
-/// (`Configuration.wireApprovedIds`).
-#[derive(Debug, Clone)]
-pub struct ApprovedPack {
-    pub provenance: crate::pack::InstalledVia,
-    pub yields: Option<crate::pack::approvals::PackYield>,
+struct Approved<'a> {
+    approvals: Option<&'a [crate::pack::approvals::PackApproval]>,
+    record_digest: Option<&'a str>,
+    agent: &'a str,
 }
 
-/// The packs of a client plan, vouching for a node's records only by what
-/// the client approved.
-struct Approved(Option<std::collections::BTreeMap<String, ApprovedPack>>);
+const APPROVE_NEXT: &str = "Next: gents config pack approve <pack source>";
 
-impl Approved {
-    fn pack(&self, pack: &str) -> Result<Option<&ApprovedPack>> {
-        let Some(packs) = &self.0 else {
-            return Ok(None);
-        };
-        packs.get(pack).map(Some).with_context(|| {
-            format!("{pack} is not a pack this device sent or approved, so nothing of it is wired. Next: gents config pack approve <pack source>")
-        })
-    }
-}
-
-impl crate::pack::wiring::Vouch for Approved {
-    fn documents(
-        &self,
-        pack: &str,
-        collection: gents_store::collection::Collection,
-        ids: &[String],
-    ) -> Result<()> {
-        use gents_store::collection::Collection;
-        let Some(approved) = self.pack(pack)? else {
+impl crate::pack::wiring::Vouch for Approved<'_> {
+    fn own(&self, pack: &str, collection: Collection, ids: &[String]) -> Result<()> {
+        use crate::pack::approvals::{own_approval, own_pack_ids};
+        let Some(approvals) = self.approvals else {
             return Ok(());
         };
-        let yielded = approved.yields.as_ref().map(|yields| match collection {
-            Collection::Tools => yields.tools.as_slice(),
-            Collection::Skill => yields.skills.as_slice(),
-            Collection::AgentTarget => yields.agent_targets.as_slice(),
-            _ => &[],
-        });
-        crate::pack::wire_subject::wire_approved_ids(yielded, ids)
+        let digest = self.record_digest.unwrap_or_default();
+        let approval = own_approval(approvals, digest).with_context(|| {
+            format!("{pack} at {digest} is not a pack this device approved, so nothing of it is wired. {APPROVE_NEXT}")
+        })?;
+        own_pack_ids(approvals, digest, self.agent, collection, ids)
             .map(drop)
-            .with_context(|| match yielded {
-                Some(_) => format!("the runtime reports {collection:?} documents of {pack} that the pack this device approved does not yield, so nothing is wired"),
-                None => format!("this device could not derive the documents of {pack} when it approved it, so nothing of it is wired. Next: gents config pack approve <pack source> with the install variables the pack reads"),
+            .with_context(|| match approval.yields {
+                Some(_) => format!("the runtime reports {collection:?} documents of {pack} that the version this device approved does not yield for {}, so nothing is wired", self.agent),
+                None => format!("this device could not derive the documents of {pack} when it approved it, so nothing of it is wired. {APPROVE_NEXT} with the install variables the pack reads"),
             })
     }
 
-    fn provenance(&self, pack: &str) -> Result<crate::pack::InstalledVia> {
-        Ok(match self.pack(pack)? {
-            Some(approved) => approved.provenance,
-            None => crate::pack::InstalledVia::Operator,
-        })
+    fn target(
+        &self,
+        pack: &str,
+        installed: Option<&str>,
+        ids: &[String],
+    ) -> Result<crate::pack::InstalledVia> {
+        use crate::pack::approvals::{target_approval, target_pack_ids};
+        let Some(approvals) = self.approvals else {
+            return Ok(crate::pack::InstalledVia::Operator);
+        };
+        let Some(approval) = target_approval(approvals, pack, installed) else {
+            let versions = approvals
+                .iter()
+                .filter(|approval| approval.coordinate == pack)
+                .count();
+            anyhow::bail!(match versions {
+                0 => format!("{pack} is not a pack this device approved, so nothing of it is wired. {APPROVE_NEXT}"),
+                _ => format!("the node records {pack} at a version this device did not approve, so which approval vouches for it is unknown and nothing of it is wired. {APPROVE_NEXT}"),
+            });
+        };
+        target_pack_ids(approvals, pack, installed, ids)
+            .with_context(|| match approval.yields {
+                Some(_) => format!("the runtime reports AgentTarget documents of {pack} that the version this device approved does not yield, so nothing is wired"),
+                None => format!("this device could not derive the documents of {pack} when it approved it, so nothing of it is wired. {APPROVE_NEXT} with the install variables and agent bindings the pack reads"),
+            })?;
+        Ok(approval.provenance())
     }
 }
 
@@ -340,26 +336,25 @@ impl WirePlan {
         client: ClientPlan,
     ) -> Result<Self> {
         let coordinate = format!("{}/{}", client.record.namespace, client.record.name);
-        let reviewed = client
-            .packs
-            .as_ref()
-            .zip(client.record.owner_pack_coordinate.as_ref())
-            .and_then(|(packs, own)| packs.get(own))
-            .map(|approved| {
-                crate::pack::wiring::ReviewedJob::Approved(
-                    approved
-                        .yields
-                        .as_ref()
-                        .map(|yields| yields.jobs.get(&coordinate).cloned()),
-                )
-            });
+        let record_digest = client.record.owner_pack_digest.as_deref();
+        let reviewed = client.approvals.as_deref().map(|approvals| {
+            crate::pack::wiring::ReviewedJob::Approved(
+                crate::pack::approvals::own_approval(approvals, record_digest.unwrap_or_default())
+                    .and_then(|approval| approval.yields.as_ref())
+                    .and_then(|yields| yields.job(&coordinate, &request.agent)),
+            )
+        });
         let mut plan = crate::pack::wiring::PluginWiring::read_with(
             access,
             owner,
             &request.agent,
             client.record.clone(),
             &request.targets_from,
-            &Approved(client.packs),
+            &Approved {
+                approvals: client.approvals.as_deref(),
+                record_digest,
+                agent: &request.agent,
+            },
         )
         .await?;
         plan.reviewed = reviewed.unwrap_or_default();
@@ -498,15 +493,7 @@ pub async fn wire_pack_plugins_consenting(
     signers: WireSigners,
 ) -> Result<Vec<Value>> {
     let sent = crate::pack::wire_subject::WireSubject::of_sent_pack(pack)?;
-    let packs = approval.map(|approval| {
-        std::collections::BTreeMap::from([(
-            approval.coordinate.clone(),
-            ApprovedPack {
-                provenance: approval.provenance(),
-                yields: approval.yields.clone(),
-            },
-        )])
-    });
+    let approvals = approval.map(|approval| vec![approval.clone()]);
     let mut wired = Vec::new();
     for agent in agents {
         for subject in &sent {
@@ -526,7 +513,7 @@ pub async fn wire_pack_plugins_consenting(
             )
             .map(|record| ClientPlan {
                 record,
-                packs: packs.clone(),
+                approvals: approvals.clone(),
             });
             wired.push(wire_in_planned(access, owner, home, &request, plan, signers).await?);
         }
@@ -708,7 +695,6 @@ impl PackEffectApprover for LocalWireApprover {
 /// wiring it (`Configuration.wirePlanSubject`).
 pub const PLUGIN_RECORD_PATH: &str = "/packs/plugins/record";
 
-/// A wire request as a pack session receives it.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WireCommand {

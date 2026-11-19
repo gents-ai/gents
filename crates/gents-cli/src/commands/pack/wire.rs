@@ -62,16 +62,19 @@ pub(crate) async fn approve(args: PackApproveArgs) -> Result<()> {
         &home,
     )
     .await?;
-    let approval = record_approvals(&owner, [&pack], &args.dependency_variables, &[]).await?;
+    let approval = record_approvals(
+        &owner,
+        [&pack],
+        &args.dependency_variables,
+        &args.bind_agents,
+    )
+    .await?;
     crate::print_json(&serde_json::json!({
         "node_did": owner,
         "approved": approval,
     }))
 }
 
-/// Record each of `packs`, which this client sent or resolved itself, as
-/// approved for `owner` on this device, with the AgentTargets each yields
-/// from the install `variables` and agent bindings the client supplies.
 pub(crate) async fn record_approvals<'a>(
     owner: &str,
     packs: impl IntoIterator<Item = &'a ResolvedPack>,
@@ -89,7 +92,6 @@ pub(crate) async fn record_approvals<'a>(
     Ok(recorded)
 }
 
-/// Where this client keeps the packs it approved.
 fn approvals() -> Result<Approvals> {
     Ok(Approvals::under(
         gents_service::home_state::cli_identity_paths()?.root(),

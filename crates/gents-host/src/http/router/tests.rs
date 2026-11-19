@@ -371,11 +371,9 @@ fn forward_explain(
     }
 }
 
-/// What a runtime serving another home reports for `name` of the approved
-/// pack `acme/demo`.
-fn demo_subject(name: &str) -> gents_pack::pack::wire_subject::WireSubject {
+fn demo_subject(digest: &str, name: &str) -> gents_pack::pack::wire_subject::WireSubject {
     gents_pack::pack::wire_subject::WireSubject {
-        owner_pack_digest: format!("sha256:{}", "f".repeat(64)),
+        owner_pack_digest: digest.into(),
         owner_pack_coordinate: "acme/demo".into(),
         namespace: "acme".into(),
         name: name.into(),
@@ -392,10 +390,37 @@ fn demo_subject(name: &str) -> gents_pack::pack::wire_subject::WireSubject {
     }
 }
 
-/// A runtime serving another home answers the client's reads as it likes:
-/// another approved plugin's record for the one asked for, or AgentTargets
-/// of an approved pack that the pack does not yield. The client plans
-/// nothing from either, opens no pack session and so signs nothing.
+fn demo_approval(
+    digest: &str,
+    version: &str,
+    plugins: &[&str],
+    tools: &[&str],
+    agent_targets: &[&str],
+) -> gents_pack::pack::approvals::PackApproval {
+    use gents_pack::pack::wire_subject::IdPart;
+    let ids = |ids: &[&str]| {
+        ids.iter()
+            .map(|id| vec![IdPart::Text((*id).to_owned())])
+            .collect()
+    };
+    gents_pack::pack::approvals::PackApproval {
+        digest: digest.into(),
+        coordinate: "acme/demo".into(),
+        version: version.into(),
+        kind: gents_pack::pack::PackKind::Plugins,
+        approved_at: "2026-11-19T00:00:00Z".into(),
+        subjects: plugins
+            .iter()
+            .map(|name| demo_subject(digest, name))
+            .collect(),
+        yields: Some(gents_pack::pack::approvals::PackYield {
+            tools: ids(tools),
+            agent_targets: ids(agent_targets),
+            ..Default::default()
+        }),
+    }
+}
+
 #[tokio::test]
 async fn a_runtime_answering_with_what_the_client_did_not_approve_gets_nothing_signed() {
     use gents_pack::pack::plugin_wire::WireRequest;
@@ -404,9 +429,15 @@ async fn a_runtime_answering_with_what_the_client_did_not_approve_gets_nothing_s
         tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("unvouched"))
             .await
             .unwrap();
+    let (older, newer, unapproved) = (
+        format!("sha256:{}", "e".repeat(64)),
+        format!("sha256:{}", "f".repeat(64)),
+        format!("sha256:{}", "9".repeat(64)),
+    );
     let served = std::sync::Arc::new(std::sync::Mutex::new(json!({})));
+    let installation = std::sync::Arc::new(std::sync::Mutex::new(json!({})));
     let sessions = std::sync::Arc::new(AtomicUsize::new(0));
-    let (record, opened) = (served.clone(), sessions.clone());
+    let (record, installed, opened) = (served.clone(), installation.clone(), sessions.clone());
     let app = Router::new()
         .route(
             gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH,
@@ -417,14 +448,13 @@ async fn a_runtime_answering_with_what_the_client_did_not_approve_gets_nothing_s
         )
         .route(
             "/api/v0/graphql",
-            post(|| async {
-                axum::Json(json!({"data": {"PackInstallation": [{
-                    "_docID": "bae-demo",
-                    "documents": [
-                        {"collection": "AgentTarget", "id": "a", "digest": "", "created": true},
-                        {"collection": "AgentTarget", "id": "rogue", "digest": "", "created": true},
-                    ],
-                }]}}))
+            post(move || {
+                let installed = installed.clone();
+                async move {
+                    axum::Json(
+                        json!({"data": {"PackInstallation": [installed.lock().unwrap().clone()]}}),
+                    )
+                }
             }),
         )
         .route(
@@ -444,69 +474,113 @@ async fn a_runtime_answering_with_what_the_client_did_not_approve_gets_nothing_s
     let owner = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
     let approvals_root = tempfile::tempdir().unwrap();
     let approvals = gents_pack::pack::approvals::Approvals::under(approvals_root.path());
-    approvals
-        .record(
-            owner,
-            gents_pack::pack::approvals::PackApproval {
-                digest: format!("sha256:{}", "f".repeat(64)),
-                coordinate: "acme/demo".into(),
-                version: "1.0.0".into(),
-                kind: gents_pack::pack::PackKind::Plugins,
-                approved_at: "2026-11-19T00:00:00Z".into(),
-                subjects: vec![demo_subject("tool"), demo_subject("other")],
-                yields: Some(gents_pack::pack::approvals::PackYield {
-                    agent_targets: vec!["a".into()],
-                    ..Default::default()
-                }),
-            },
-        )
-        .await
-        .unwrap();
+    for approval in [
+        demo_approval(
+            &older,
+            "0.9.0",
+            &["tool"],
+            &["old-tools"],
+            &["a", "old-target"],
+        ),
+        demo_approval(&newer, "1.0.0", &["tool", "other"], &[], &["a"]),
+    ] {
+        approvals.record(owner, approval).await.unwrap();
+    }
+    let install = |digest: &str, documents: &[(&str, &str)]| {
+        *installation.lock().unwrap() = json!({
+            "_docID": "bae-demo",
+            "digest": digest,
+            "documents": documents
+                .iter()
+                .map(|(collection, id)| json!({
+                    "collection": collection, "id": id, "digest": "", "created": true
+                }))
+                .collect::<Vec<_>>(),
+        });
+    };
     let request = WireRequest {
         plugin: "acme/tool".into(),
         agent: "did:key:agent".into(),
-        targets_from: Vec::new(),
+        targets_from: vec!["acme/demo".into()],
         remove: false,
         preview: false,
         dynamic_consent: false,
         tool_calls_consent: false,
     };
-
-    *served.lock().unwrap() = serde_json::to_value(demo_subject("other").installed()).unwrap();
-    let another =
-        crate::http::pack_wire_client::served_plan(&endpoint, owner, &request, &approvals)
+    let wire = |request: WireRequest| {
+        let (endpoint, approvals, root) = (endpoint.clone(), &approvals, approvals_root.path());
+        async move {
+            let plan =
+                crate::http::pack_wire_client::served_plan(&endpoint, owner, &request, approvals)
+                    .await?;
+            crate::http::pack_wire_client::wire_as_client(
+                endpoint,
+                owner.to_owned(),
+                root.to_owned(),
+                request,
+                Some(plan),
+            )
             .await
-            .expect_err("another approved plugin's record plans nothing for the one asked for");
+        }
+    };
+
+    *served.lock().unwrap() =
+        serde_json::to_value(demo_subject(&newer, "other").installed()).unwrap();
+    let another = wire(request.clone())
+        .await
+        .expect_err("another approved plugin's record plans nothing for the one asked for");
     assert!(
         format!("{another:#}").contains("gents config pack approve"),
         "{another:#}"
     );
 
-    *served.lock().unwrap() = serde_json::to_value(demo_subject("tool").installed()).unwrap();
-    let targeting = WireRequest {
-        targets_from: vec!["acme/demo".into()],
-        ..request.clone()
-    };
-    let plan = crate::http::pack_wire_client::served_plan(&endpoint, owner, &targeting, &approvals)
-        .await
-        .unwrap();
-    let unvouched = crate::http::pack_wire_client::wire_as_client(
-        endpoint.clone(),
-        owner.to_owned(),
-        approvals_root.path().to_owned(),
-        targeting,
-        Some(plan),
-    )
-    .await
-    .expect_err("an AgentTarget the approved pack does not yield is not wired");
-    assert!(
-        format!("{unvouched:#}").contains("does not yield"),
-        "{unvouched:#}"
-    );
+    *served.lock().unwrap() =
+        serde_json::to_value(demo_subject(&newer, "tool").installed()).unwrap();
+    for (digest, documents, refusal, why) in [
+        (
+            &newer,
+            vec![("AgentTarget", "a"), ("AgentTarget", "rogue")],
+            "does not yield",
+            "an AgentTarget no approved version yields",
+        ),
+        (
+            &newer,
+            vec![("AgentTarget", "a"), ("AgentTarget", "old-target")],
+            "does not yield",
+            "an AgentTarget only the older approved version yields",
+        ),
+        (
+            &newer,
+            vec![("Tools", "old-tools"), ("AgentTarget", "a")],
+            "does not yield",
+            "a Tools document only the older approved version yields",
+        ),
+        (
+            &unapproved,
+            vec![("AgentTarget", "a")],
+            "did not approve",
+            "a version neither approval names",
+        ),
+    ] {
+        install(digest, &documents);
+        let refused = wire(request.clone()).await.expect_err(why);
+        assert!(
+            format!("{refused:#}").contains(refusal),
+            "{why}: {refused:#}"
+        );
+        assert_eq!(
+            sessions.load(Ordering::SeqCst),
+            0,
+            "{why}: nothing reached a pack session"
+        );
+    }
+
+    install(&newer, &[("AgentTarget", "a")]);
+    let _ = wire(request.clone()).await;
     assert_eq!(
         sessions.load(Ordering::SeqCst),
-        0,
-        "nothing reached a pack session"
+        1,
+        "the newer version's own documents wire as far as the pack session"
     );
 }
 
@@ -731,7 +805,7 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             )
             .map(|record| gents_pack::pack::plugin_wire::ClientPlan {
                 record,
-                packs: None,
+                approvals: None,
             })
             .unwrap()
         };
@@ -775,7 +849,7 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
                     ..sent.clone()
                 }
                 .installed(),
-                packs: None,
+                approvals: None,
             }),
         )
         .await;

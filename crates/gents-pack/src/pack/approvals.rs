@@ -7,16 +7,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::pack::home_install::{recorded_provenance, InstalledVia};
 use crate::pack::resolved_pack::ResolvedPack;
-use crate::pack::wire_subject::WireSubject;
+use crate::pack::wire_subject::{wire_approved_ids, wire_filled_ids, WireSubject};
 use crate::pack::PackKind;
 
-/// The file under a client's root that keeps the packs it approved.
+mod yields;
+pub use yields::{PackYield, YieldedJob};
+
 pub const APPROVALS_FILE: &str = "pack-approvals.json";
 
-/// The largest approvals record a client reads.
 pub const MAX_APPROVALS_BYTES: u64 = 1024 * 1024;
 
-const APPROVALS_VERSION: u8 = 2;
+const APPROVALS_VERSION: u8 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalsError {
@@ -50,27 +51,12 @@ pub struct PackApproval {
     pub kind: PackKind,
     pub approved_at: String,
     pub subjects: Vec<WireSubject>,
-    /// The document ids the pack yields on this node, when the approval could
-    /// derive them (`Configuration.wireApprovedIds`).
+    /// `None` when the approval could not derive them
+    /// (`Configuration.wireFilledIds`).
     pub yields: Option<PackYield>,
 }
 
-/// The ids of the documents a pack's configuration yields that a wire reads.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackYield {
-    pub tools: Vec<String>,
-    pub skills: Vec<String>,
-    pub agent_targets: Vec<String>,
-    /// The job block the pack's own Tools carry for each of its plugins
-    /// that has one, by plugin coordinate: the first in the pack's order.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub jobs: BTreeMap<String, gents_protocol::job::PluginJobSettings>,
-}
-
 impl PackApproval {
-    /// What the client approves of `pack`, which it resolved itself, for
-    /// the node `node_did`, given the install `variables` it supplies.
     pub fn of_pack(
         pack: &ResolvedPack,
         node_did: &str,
@@ -80,7 +66,7 @@ impl PackApproval {
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         Ok(Self {
             digest: pack.digest().to_owned(),
-            yields: pack_yield(pack, &coordinate, node_did, variables),
+            yields: yields::derive(pack, &coordinate, node_did, variables),
             coordinate,
             version: manifest.version.clone(),
             kind: manifest.metadata.kind.clone(),
@@ -94,70 +80,6 @@ impl PackApproval {
     pub fn provenance(&self) -> InstalledVia {
         recorded_provenance(self.kind.clone(), Some(None))
     }
-}
-
-/// The Tools, Skill and AgentTarget ids and plugin job blocks `pack`'s
-/// configuration yields on
-/// `node_did` with `variables` and nothing else: `None` when the
-/// configuration does not load from them alone, say because it reads a
-/// variable only the runtime's environment supplies.
-fn pack_yield(
-    pack: &ResolvedPack,
-    coordinate: &str,
-    node_did: &str,
-    variables: &gents_protocol::operations::pack::PackVariables,
-) -> Option<PackYield> {
-    if pack.manifest().config.is_none() {
-        return Some(PackYield::default());
-    }
-    let lookup = |name: &str| {
-        variables
-            .scoped
-            .get(coordinate)
-            .and_then(|scoped| scoped.get(name))
-            .or_else(|| variables.shared.get(name))
-            .cloned()
-    };
-    crate::pack::load_pack_authoring_config(
-        pack.manifest(),
-        &crate::pack::PackInstallOptions {
-            node_did: node_did.to_owned(),
-        },
-        &|path| Ok(pack.asset(path)?.to_vec()),
-        &lookup,
-    )
-    .ok()
-    .map(|authored| PackYield {
-        jobs: authored
-            .documents
-            .tools
-            .iter()
-            .filter_map(|tools| tools.integrations.as_ref()?.plugins.as_ref())
-            .flatten()
-            .filter_map(|entry| Some((entry.plugin.clone(), entry.job.clone()?)))
-            .fold(BTreeMap::new(), |mut jobs, (plugin, job)| {
-                jobs.entry(plugin).or_insert(job);
-                jobs
-            }),
-        tools: authored
-            .documents
-            .tools
-            .into_iter()
-            .map(|tools| tools.tools_id)
-            .collect(),
-        skills: authored
-            .documents
-            .skills
-            .into_iter()
-            .map(|skill| skill.skill_id)
-            .collect(),
-        agent_targets: authored
-            .documents
-            .agent_targets
-            .into_iter()
-            .map(|target| target.target_id)
-            .collect(),
-    })
 }
 
 /// The record, as lists so that a node or digest written twice is seen and
@@ -176,7 +98,6 @@ struct NodeApprovals {
     approvals: Vec<PackApproval>,
 }
 
-/// The approvals a client keeps under its `root`.
 pub struct Approvals {
     path: PathBuf,
 }
@@ -211,7 +132,6 @@ impl Approvals {
         .await?
     }
 
-    /// The subjects a served record may match for `node`.
     pub async fn subjects(&self, node: &str) -> Result<Vec<WireSubject>, ApprovalsError> {
         Ok(self
             .for_node(node)
@@ -269,6 +189,68 @@ impl Approvals {
         })
         .await?
     }
+}
+
+/// The approval that vouched for a planned record whose pack digest is
+/// `record_digest` (`Configuration.wireOwnApproval`).
+pub fn own_approval<'a>(
+    approvals: &'a [PackApproval],
+    record_digest: &str,
+) -> Option<&'a PackApproval> {
+    approvals
+        .iter()
+        .find(|approval| approval.digest == record_digest)
+}
+
+/// The approval of `coordinate` whose digest the node's installation record
+/// names (`Configuration.wireTargetApproval`).
+pub fn target_approval<'a>(
+    approvals: &'a [PackApproval],
+    coordinate: &str,
+    installed: Option<&str>,
+) -> Option<&'a PackApproval> {
+    approvals.iter().find(|approval| {
+        approval.coordinate == coordinate && Some(approval.digest.as_str()) == installed
+    })
+}
+
+/// The `served` `collection` ids of the plugin's own pack a client signs for
+/// (`Configuration.wireOwnPackIds`).
+pub fn own_pack_ids(
+    approvals: &[PackApproval],
+    record_digest: &str,
+    agent: &str,
+    collection: gents_store::collection::Collection,
+    served: &[String],
+) -> Option<Vec<String>> {
+    let approval = own_approval(approvals, record_digest)?;
+    let yielded = wire_filled_ids(
+        approval
+            .yields
+            .as_ref()
+            .map(|yields| yields.ids(collection)),
+        Some(agent),
+    );
+    wire_approved_ids(yielded.as_deref(), served)
+}
+
+/// The `served` AgentTarget ids of a pack a wire takes targets from
+/// (`Configuration.wireTargetPackIds`).
+pub fn target_pack_ids(
+    approvals: &[PackApproval],
+    coordinate: &str,
+    installed: Option<&str>,
+    served: &[String],
+) -> Option<Vec<String>> {
+    let approval = target_approval(approvals, coordinate, installed)?;
+    let yielded = wire_filled_ids(
+        approval
+            .yields
+            .as_ref()
+            .map(|yields| yields.ids(gents_store::collection::Collection::AgentTarget)),
+        None,
+    );
+    wire_approved_ids(yielded.as_deref(), served)
 }
 
 fn read(path: &Path) -> Result<Stored, ApprovalsError> {

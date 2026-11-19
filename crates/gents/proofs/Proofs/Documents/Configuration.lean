@@ -863,6 +863,58 @@ theorem wired_ids_are_approved_ids (ids served planned : List String)
     simpa using (List.all_eq_true.mp all) target mem
   · cases wired
 
+/-- One part of a document id a pack's configuration yields: text the pack,
+the node and the install variables the client supplied fix, or the DID of an
+agent slot the install provisions, which the approval cannot know. A slot the
+client bound to an agent at approval is text. -/
+inductive IdPart where
+  | text (value : String)
+  | slot (name : String)
+  deriving DecidableEq, Repr
+
+def IdPart.fill (agent : String) : IdPart → String
+  | .text value => value
+  | .slot _ => agent
+
+def IdPart.isSlot : IdPart → Bool
+  | .text _ => false
+  | .slot _ => true
+
+/-- Decision (gents#3980 review): an id a pack's configuration derives from an
+agent slot's DID (`${GENTS_PACK_AGENT_DID.worker}:tools`) is fixed only once
+the install provisions that agent. The client never takes that DID from the
+runtime: it fills a slot only with the agent it names itself, the agent the
+wire attaches the plugin to (`agent`), and only for the plugin's own pack; a
+pack it wires targets from fills no slot (`agent = none`), so an id of such a
+slot yields nothing. -/
+def fillId (agent : Option String) (parts : List IdPart) : Option String :=
+  match agent with
+  | some agent => some (String.join (parts.map (IdPart.fill agent)))
+  | none => if parts.any IdPart.isSlot then none else some (String.join (parts.map (IdPart.fill "")))
+
+/-- The ids an approval yields once its slots are filled (`fillId`); an id
+that cannot be filled is not yielded. -/
+def wireFilledIds (approved : Option (List (List IdPart))) (agent : Option String) :
+    Option (List String) :=
+  approved.map (·.filterMap (fillId agent))
+
+theorem a_slot_id_fills_nothing_without_the_wired_agent (parts : List IdPart)
+    (slotted : parts.any IdPart.isSlot = true) : fillId none parts = none := by
+  simp [fillId, slotted]
+
+theorem a_filled_id_puts_only_the_wired_agent_in_its_slots (agent : String)
+    (parts : List IdPart) :
+    fillId (some agent) parts = some (String.join (parts.map (IdPart.fill agent))) :=
+  rfl
+
+theorem wired_filled_ids_are_approved_templates (templates : List (List IdPart))
+    (agent : Option String) (served planned : List String)
+    (wired : wireApprovedIds (wireFilledIds (some templates) agent) served = some planned) :
+    ∀ id ∈ planned, ∃ parts ∈ templates, fillId agent parts = some id := by
+  intro id mem
+  have := wired_ids_are_approved_ids _ served planned wired id mem
+  simpa using List.mem_filterMap.mp this
+
 /-- Decision (gents#3962): over a runtime that serves another home, the job
 block a wire writes for a plugin is the one its own pack's Tools carry for
 it, which the client reads from the node. The client signs it only when it is
@@ -899,8 +951,8 @@ structure PackApproval where
   coordinate : String
   subjects : List WireSubject
   /-- The Tools, Skill and AgentTarget ids the pack yields, when the
-  approval could derive them (`wireApprovedIds`). -/
-  yields : Option (List String)
+  approval could derive them (`wireFilledIds`). -/
+  yields : Option (List (List IdPart))
   deriving DecidableEq, Repr
 
 /-- What a client finds where it keeps the packs it approved for a node. -/
@@ -955,6 +1007,113 @@ theorem an_approved_subject_names_its_approval (approvals : List PackApproval)
     simp at this
     exact ⟨this.1, this.2⟩
   · cases read
+
+/-- Decision (gents#3980 review): a client may approve several versions of a
+pack, each by its digest. The approval that vouches for the plugin's own
+pack, its Tools and Skill ids and the reviewed job (`wireReviewedJob`), is
+the one whose digest the planned record names, the approval that
+vouched for the record (`wirePlanSubject`); another version's approval of
+the same coordinate never does. -/
+def wireOwnApproval (approvals : List PackApproval) (subject : WireSubject) :
+    Option PackApproval :=
+  approvals.find? (·.packDigest = subject.packDigest)
+
+/-- Decision (gents#3980 review): the approval that vouches for a pack a wire
+takes targets from is the one whose digest the node's installation record of
+that coordinate names (`installed`). The client picks no version itself: when
+the record names no digest it approved for that coordinate, however many it
+approved, the pack is refused. -/
+def wireTargetApproval (approvals : List PackApproval) (coordinate : String)
+    (installed : Option String) : Option PackApproval :=
+  approvals.find? fun approval =>
+    approval.coordinate = coordinate ∧ some approval.packDigest = installed
+
+/-- The Tools and Skill ids of the plugin's own pack a client signs for: the
+`served` ids only when the approval that vouched for the record yields each,
+its slots filled with the wired `agent`. -/
+def wireOwnPackIds (approvals : List PackApproval) (subject : WireSubject) (agent : String)
+    (served : List String) : Option (List String) :=
+  (wireOwnApproval approvals subject).bind fun approval =>
+    wireApprovedIds (wireFilledIds approval.yields (some agent)) served
+
+/-- The AgentTarget ids of a pack a client wires targets from: the `served`
+ids only when the approval of the installed digest yields each, filling no
+slot. -/
+def wireTargetPackIds (approvals : List PackApproval) (coordinate : String)
+    (installed : Option String) (served : List String) : Option (List String) :=
+  (wireTargetApproval approvals coordinate installed).bind fun approval =>
+    wireApprovedIds (wireFilledIds approval.yields none) served
+
+theorem the_own_pack_is_vouched_for_by_the_records_approval (approvals : List PackApproval)
+    (subject : WireSubject) (approval : PackApproval)
+    (chosen : wireOwnApproval approvals subject = some approval) :
+    approval ∈ approvals ∧ approval.packDigest = subject.packDigest := by
+  unfold wireOwnApproval at chosen
+  exact ⟨List.mem_of_find?_eq_some chosen, by simpa using List.find?_some chosen⟩
+
+theorem another_version_never_vouches_for_the_record (approvals : List PackApproval)
+    (subject : WireSubject) (other : PackApproval)
+    (version : other.packDigest ≠ subject.packDigest) :
+    wireOwnApproval approvals subject ≠ some other := fun chosen =>
+  version (the_own_pack_is_vouched_for_by_the_records_approval approvals subject other chosen).2
+
+theorem a_target_pack_is_vouched_for_by_its_installed_digest (approvals : List PackApproval)
+    (coordinate : String) (installed : Option String) (approval : PackApproval)
+    (chosen : wireTargetApproval approvals coordinate installed = some approval) :
+    approval ∈ approvals ∧ approval.coordinate = coordinate
+      ∧ some approval.packDigest = installed := by
+  unfold wireTargetApproval at chosen
+  exact ⟨List.mem_of_find?_eq_some chosen, by simpa using List.find?_some chosen⟩
+
+theorem a_target_pack_whose_installed_digest_is_not_approved_is_refused
+    (approvals : List PackApproval) (coordinate : String) (installed : Option String)
+    (unapproved : ∀ approval ∈ approvals,
+      approval.coordinate = coordinate → some approval.packDigest ≠ installed) :
+    wireTargetApproval approvals coordinate installed = none := by
+  unfold wireTargetApproval
+  rw [List.find?_eq_none]
+  intro approval mem
+  simpa using unapproved approval mem
+
+theorem own_pack_ids_come_from_the_records_approval (approvals : List PackApproval)
+    (subject : WireSubject) (agent : String) (served planned : List String)
+    (wired : wireOwnPackIds approvals subject agent served = some planned) :
+    ∃ approval ∈ approvals, approval.packDigest = subject.packDigest ∧
+      ∀ id ∈ planned, ∃ parts ∈ approval.yields.getD [], fillId (some agent) parts = some id := by
+  unfold wireOwnPackIds at wired
+  cases chosen : wireOwnApproval approvals subject with
+  | none => simp [chosen] at wired
+  | some approval =>
+    rw [chosen] at wired
+    simp only [Option.bind] at wired
+    obtain ⟨mem, digest⟩ := the_own_pack_is_vouched_for_by_the_records_approval _ _ _ chosen
+    refine ⟨approval, mem, digest, ?_⟩
+    cases yields : approval.yields with
+    | none => simp [yields, wireFilledIds, wireApprovedIds] at wired
+    | some templates =>
+      rw [yields] at wired
+      simpa using wired_filled_ids_are_approved_templates templates _ served planned wired
+
+theorem target_pack_ids_come_from_the_installed_approval (approvals : List PackApproval)
+    (coordinate : String) (installed : Option String) (served planned : List String)
+    (wired : wireTargetPackIds approvals coordinate installed served = some planned) :
+    ∃ approval ∈ approvals, approval.coordinate = coordinate ∧
+      some approval.packDigest = installed ∧
+      ∀ id ∈ planned, ∃ parts ∈ approval.yields.getD [], fillId none parts = some id := by
+  unfold wireTargetPackIds at wired
+  cases chosen : wireTargetApproval approvals coordinate installed with
+  | none => simp [chosen] at wired
+  | some approval =>
+    rw [chosen] at wired
+    simp only [Option.bind] at wired
+    obtain ⟨mem, named, digest⟩ :=
+      a_target_pack_is_vouched_for_by_its_installed_digest _ _ _ _ chosen
+    refine ⟨approval, mem, named, digest, ?_⟩
+    cases yields : approval.yields with
+    | none => simp [yields, wireFilledIds, wireApprovedIds] at wired
+    | some templates =>
+      rw [yields] at wired
+      simpa using wired_filled_ids_are_approved_templates templates _ served planned wired
 
 /-- Plugin-only hosted installation preserves existing pack documents. Its
   installed plugin records are staged by the host from the reviewed archive;

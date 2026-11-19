@@ -9,8 +9,8 @@ use serde_json::Value;
 use super::home_install::recorded_provenance;
 use super::plugin_lifecycle::InstalledPlugin;
 use super::{
-    consent_tool_calls, installed_pack_documents, read_home_install, unwire_plugin, wire_plugin,
-    InstalledVia, PackKind, WireReport,
+    consent_tool_calls, installed_pack_documents, installed_pack_record, read_home_install,
+    unwire_plugin, wire_plugin, InstalledVia, PackKind, WireReport,
 };
 use gents_documents::{
     apply_desired_state_plan, load_agent_context_and_tools_in_txn,
@@ -19,26 +19,31 @@ use gents_documents::{
 use gents_store::collection::Collection;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
-/// What a wiring plan takes of a node's word about the packs it reads, and
-/// how its caller vouches for it.
+/// What a wiring plan takes of a node's word about the packs it reads.
 pub trait Vouch: Sync {
-    /// Refuse `ids`, the `collection` documents the node records `pack` as
-    /// having installed, unless the caller can vouch for each.
-    fn documents(&self, pack: &str, collection: Collection, ids: &[String]) -> Result<()>;
-    /// Who installed `pack`.
-    fn provenance(&self, pack: &str) -> Result<InstalledVia>;
+    /// Refuses the `collection` `ids` the node records the plugin's own
+    /// `pack` as having installed unless the caller vouches for each.
+    fn own(&self, pack: &str, collection: Collection, ids: &[String]) -> Result<()>;
+    /// Refuses the AgentTarget `ids` the node records `pack`, at the
+    /// `installed` digest, as having installed unless the caller vouches for
+    /// each; otherwise who installed it.
+    fn target(&self, pack: &str, installed: Option<&str>, ids: &[String]) -> Result<InstalledVia>;
 }
 
-/// What a home's own install records say: the node is the home's, so its
-/// records are vouched for.
+/// The node is the home's, so its own install records vouch for it.
 struct HomeRecords<'a>(&'a std::path::Path);
 
 impl Vouch for HomeRecords<'_> {
-    fn documents(&self, _pack: &str, _collection: Collection, _ids: &[String]) -> Result<()> {
+    fn own(&self, _pack: &str, _collection: Collection, _ids: &[String]) -> Result<()> {
         Ok(())
     }
 
-    fn provenance(&self, pack: &str) -> Result<InstalledVia> {
+    fn target(
+        &self,
+        pack: &str,
+        _installed: Option<&str>,
+        _ids: &[String],
+    ) -> Result<InstalledVia> {
         let record = read_home_install(self.0, pack)?;
         Ok(recorded_provenance(
             record
@@ -73,14 +78,11 @@ pub struct PluginWiring {
     /// The caller's own command that shows why an agent's Tools or Context
     /// cannot be read, named when they cannot.
     pub next_step: String,
-    /// Where the plugin's reviewed job comes from.
     pub reviewed: ReviewedJob,
 }
 
-/// Where a wiring takes the plugin's reviewed job from.
 #[derive(Debug, Clone, Default)]
 pub enum ReviewedJob {
-    /// Its pack's Tools on the node, a home the caller vouches for.
     #[default]
     Read,
     /// Its pack's Tools on the node, signed only when they carry the job
@@ -130,20 +132,20 @@ impl PluginWiring {
                     _ => {}
                 }
             }
-            vouch.documents(pack, Collection::Tools, &tools_ids)?;
-            vouch.documents(pack, Collection::Skill, &skill_ids)?;
+            vouch.own(pack, Collection::Tools, &tools_ids)?;
+            vouch.own(pack, Collection::Skill, &skill_ids)?;
         }
         let mut targets = Vec::new();
         for pack in targets_from {
-            let target_ids: Vec<String> = installed_pack_documents(access, owner, pack)
-                .await?
+            let (installed, documents) = installed_pack_record(access, owner, pack).await?;
+            let target_ids: Vec<String> = documents
                 .into_iter()
                 .filter(|(collection, _)| *collection == Collection::AgentTarget)
                 .map(|(_, id)| id)
                 .collect();
             anyhow::ensure!(!target_ids.is_empty(), "{pack} ships no AgentTarget");
-            vouch.documents(pack, Collection::AgentTarget, &target_ids)?;
-            targets.push((pack.clone(), target_ids, vouch.provenance(pack)?));
+            let provenance = vouch.target(pack, installed.as_deref(), &target_ids)?;
+            targets.push((pack.clone(), target_ids, provenance));
         }
         Ok(Self {
             owner: owner.to_owned(),
