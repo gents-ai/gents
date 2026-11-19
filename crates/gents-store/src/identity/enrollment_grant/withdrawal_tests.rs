@@ -107,6 +107,7 @@ async fn home(provider: Provider) -> anyhow::Result<Home> {
     );
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+    let grants = crate::config_client::OwnerStagedRoute::new();
     let mut builder = defra_node::Node::builder()
         .with_node_acp_owner(owner.did())
         .with_signing_key(defra_node::SigningKey::Ed25519(
@@ -114,12 +115,14 @@ async fn home(provider: Provider) -> anyhow::Result<Home> {
         ))
         .with_node_acp_enabled()
         .with_http(
-            defra_node::HttpConfig::with_listener(listener)?.with_authenticated_routes(status),
+            defra_node::HttpConfig::with_listener(listener)?
+                .with_authenticated_routes(status.merge(grants.router())),
         );
     if provider == Provider::Vera {
         builder = builder.with_embedded_vera(vera(directory.path(), &runtime)?);
     }
     let node = Arc::new(builder.build().await?);
+    grants.serve(&node, runtime.clone());
     let as_owner = defra_core::RequestContext::default().with_identity(Some(owner.did().into()));
     for permission in crate::identity::node_runtime_permissions() {
         node.add_nac_actor_relationship_as(&as_owner, permission.as_str(), runtime.did())
@@ -589,11 +592,16 @@ async fn an_owed_member_is_refused_node_permissions(provider: Provider) -> anyho
     let home = home(provider).await?;
     let (_member_key, member) = enrolled_client().await?;
     home.approve("first", &member).await?;
-    home.withdraw_as_node(Trigger::Denied, &member).await?;
     let runtime = home.runtime()?;
+    let gate = crate::identity::enrollment_decision_gate(&home.node);
+    let withdrawal = gate.lock().await;
+    let grant = runtime.grant_node_permission(&member, NodePermission::DocumentRead);
+    tokio::pin!(grant);
+    assert!(futures::poll!(&mut grant).is_pending());
+    home.withdraw_as_node(Trigger::Denied, &member).await?;
+    drop(withdrawal);
     let pending = |error: &ConfigClientError| matches!(error, ConfigClientError::AdministrationRemovalPending { member: pending } if pending == member.as_str());
-    let direct = runtime
-        .grant_node_permission(&member, NodePermission::DocumentRead)
+    let direct = grant
         .await
         .expect_err("a direct permission waits for the owed removal");
     assert!(pending(&direct), "{provider:?}: {direct:?}");
@@ -629,8 +637,7 @@ async fn a_deliberate_grant_closes_the_owed_removal(provider: Provider) -> anyho
     let (_member_key, member) = enrolled_client().await?;
     home.approve("first", &member).await?;
     home.withdraw_as_node(Trigger::Denied, &member).await?;
-    home.owner()
-        .await?
+    ConfigAccess::Graphql(home.owner_endpoint.clone())
         .add_actor_relationship("Node", &home.node_doc, "administrator", &member)
         .await?;
     assert!(

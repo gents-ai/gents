@@ -182,7 +182,7 @@ impl ConfigAccess {
                 let deliberate = (!delete
                     && collection == "Node"
                     && relation == crate::identity::NODE_ADMINISTRATOR_RELATION)
-                    .then(|| target.clone());
+                    .then(|| (doc_id.clone(), target.clone()));
                 let node = local.node().clone();
                 local
                     .run_owned(move |node| async move {
@@ -208,8 +208,8 @@ impl ConfigAccess {
                         Ok::<_, ConfigClientError>(())
                     })
                     .await?;
-                if let Some(member) = deliberate {
-                    crate::identity::close_owed_removal(&node, &member).await?;
+                if let Some((doc, member)) = deliberate {
+                    crate::identity::close_owed_removal(&node, &doc, &member).await?;
                 }
                 Ok(())
             }
@@ -217,10 +217,15 @@ impl ConfigAccess {
                 if endpoint.is_anonymous() {
                     return Err(ConfigClientError::RelationshipActorRequired);
                 }
-                let url = format!(
-                    "{}/acp/document/relationship",
-                    graphql_api_base(endpoint.url())?
-                );
+                let path = if !delete
+                    && collection == "Node"
+                    && relation == crate::identity::NODE_ADMINISTRATOR_RELATION
+                {
+                    super::owner_staged_route::ADMIN_GRANT_PATH
+                } else {
+                    "/acp/document/relationship"
+                };
+                let url = format!("{}{path}", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
                 let method = if delete {
                     reqwest::Method::DELETE
