@@ -501,15 +501,6 @@ pub fn arming_sink(kind: CaptureScopeKind) -> RenderedRequestSink {
     })
 }
 
-pub fn scope_from_factory(
-    context: RenderedRequestContext,
-    factory: Option<&super::RenderedRequestCaptureFactory>,
-) -> Option<Arc<RequestCaptureScope>> {
-    let factory = factory?;
-    let sink = factory(context.clone());
-    Some(Arc::new(RequestCaptureScope::new(context, sink)))
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum CaptureBodyError {
     #[error(transparent)]
