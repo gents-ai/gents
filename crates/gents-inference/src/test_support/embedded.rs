@@ -336,51 +336,6 @@ async fn test_db_at_with_tool_policy(
     tool_policy: Arc<dyn ToolSourcePolicy>,
 ) -> Result<TestDb> {
     let path = path.to_path_buf();
-    if p2p.is_none() && !path.join("node.key").exists() && !path.join("data").exists() {
-        super::store_template::copy_into(&path).await?;
-    }
-    let OpenedHome {
-        identity,
-        data_path,
-        store_lock,
-        key,
-    } = open_or_initialize_home(&path).await?;
-    let (node, endpoint) = start(
-        &data_path,
-        &key,
-        &store_lock,
-        identity.clone(),
-        p2p,
-        &composition,
-        tool_policy.clone(),
-    )
-    .await?;
-    gents_store::schema::ensure_runtime_schemas(&node).await?;
-    Ok(TestDb {
-        node,
-        node_identity: identity,
-        process_generation: 0,
-        composition,
-        tool_policy,
-        endpoint,
-        data_path,
-        store_key: key,
-        store_lock: Some(store_lock),
-        tempdir: None,
-    })
-}
-
-pub(super) struct OpenedHome {
-    pub(super) identity: Arc<dyn NodeIdentity>,
-    pub(super) data_path: PathBuf,
-    pub(super) store_lock: gents_store::local::home::StoreLock,
-    pub(super) key: StoreKey,
-}
-
-/// Opens the store in the home at `path`, initializing it when the home has
-/// none: the node key, the store key, an owner and the protected backend.
-pub(super) async fn open_or_initialize_home(path: &Path) -> Result<OpenedHome> {
-    let path = path.to_path_buf();
     let identity_path = path.join("node.key");
     let identity: Arc<dyn NodeIdentity> = Arc::new(
         tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(identity_path, None))
@@ -423,11 +378,28 @@ pub(super) async fn open_or_initialize_home(path: &Path) -> Result<OpenedHome> {
             .await?;
         key
     };
-    Ok(OpenedHome {
-        identity,
+    let (node, endpoint) = start(
+        &data_path,
+        &key,
+        &store_lock,
+        identity.clone(),
+        p2p,
+        &composition,
+        tool_policy.clone(),
+    )
+    .await?;
+    gents_store::schema::ensure_runtime_schemas(&node).await?;
+    Ok(TestDb {
+        node,
+        node_identity: identity,
+        process_generation: 0,
+        composition,
+        tool_policy,
+        endpoint,
         data_path,
-        store_lock,
-        key,
+        store_key: key,
+        store_lock: Some(store_lock),
+        tempdir: None,
     })
 }
 
