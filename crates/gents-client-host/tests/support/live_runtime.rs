@@ -353,7 +353,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         }).await?;
         ensure!(live["sessionId"] == session, "live output crossed the selected session");
         }
-        ensure!(wait_for_request_terminal(&access, request, WAIT).await == "completed");
+        ensure!(wait_for_request_terminal(&access, request,).await == "completed");
         let mut projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({
             "nodeDid":node,"sessionId":session,"timelineLimit":40,
         }), |projection| projection["turnState"] == "completed" && projection["timelineItems"].as_array().is_some_and(|items|
@@ -390,7 +390,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             id += 1;
             let resumed_request = resumed["requestId"].as_str().context("resumed goal request")?;
             ensure!(resumed["goalId"] == seeded.goal_id && resumed_request != request);
-            ensure!(wait_for_request_terminal(&access, resumed_request, WAIT).await == "completed");
+            ensure!(wait_for_request_terminal(&access, resumed_request,).await == "completed");
             wait_goal(&mut client, &mut updates, &mut id, node, session, "complete").await?;
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == resumed_request && value["turnState"] == "completed").await?;
         }
@@ -407,7 +407,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
                     let sent = client.try_call(id, "desktop_chat_send", json!({"request":{"nodeDid":node,"agentDid":agent,"sessionId":session,"content":prompt,"delivery":"queue"}})).await?;
                     id += 1;
                     let request = sent["requestId"].as_str().context("inventory request receipt")?;
-                    ensure!(wait_for_request_terminal(&access, request, WAIT).await == "completed");
+                    ensure!(wait_for_request_terminal(&access, request,).await == "completed");
                     projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == request && value["turnState"] == "completed").await?;
                 }
             }
@@ -421,7 +421,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
                     id += 1;
                     ensure!(sent["sessionId"] == session);
                     let request = sent["requestId"].as_str().context("history request receipt")?;
-                    ensure!(wait_for_request_terminal(&access, request, WAIT).await == "completed");
+                    ensure!(wait_for_request_terminal(&access, request,).await == "completed");
                     projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == request && value["turnState"] == "completed").await?;
                 }
                 tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
@@ -477,7 +477,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             gents_store::identity::request_receipt::verify_request_receipt_signature(submitted)?;
             ensure!(submitted.admission_signer_did.as_deref() == Some(client_did.as_str()));
             ensure!(rows.iter().all(|row| row.content.as_deref() != evidence["draft"].as_str()), "the retained editor draft was submitted");
-            ensure!(wait_for_request_terminal(&access, &submitted.request_id, WAIT).await == "completed");
+            ensure!(wait_for_request_terminal(&access, &submitted.request_id,).await == "completed");
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == submitted.request_id && value["turnState"] == "completed").await?;
             }
         }

@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::support::agent_requests::submit_user_request;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, terminal_assistant_answer, wait_for_request_terminal,
@@ -24,12 +22,7 @@ async fn target_backend_probes_healthy_and_completes() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            &actors.fixture.access,
-            "req-live-client",
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&actors.fixture.access, "req-live-client").await,
         "completed"
     );
     assert!(

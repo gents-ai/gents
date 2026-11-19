@@ -1,6 +1,5 @@
 use anyhow::{ensure, Context, Result};
 use serde_json::Value;
-use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 use super::cli_core_fixture::LiveCli;
@@ -48,17 +47,11 @@ async fn start_paused_goal(
         r#"{{AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash_unrestricted"}}}}) {{lifecycle_state}}}}"#,
         crate::support::escape_graphql_string(&predecessor)
     );
-    gents::support::live_inference::wait_for_rows(
-        &live.access,
-        "AgentToolCall",
-        &query,
-        Duration::from_secs(30),
-        |data| {
-            data["AgentToolCall"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
-        },
-    )
+    gents::support::live_inference::rows_when(&live.access, "AgentToolCall", &query, |data| {
+        data["AgentToolCall"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
+    })
     .await;
     let mut args = vec![
         "automation",

@@ -60,13 +60,12 @@ async fn usage_wiring_codex_client_records_under_its_account_key() {
         let _ = futures::StreamExt::next(&mut stream).await;
     }
 
-    let stored = crate::clients::provider_http::tests::stored_usage_eventually(
+    let stored = crate::clients::provider_http::tests::stored_usage_when_recorded(
         &cache,
         &node,
         &crate::usage_observation::UsageAccount::for_credential(&row),
     )
-    .await
-    .unwrap();
+    .await;
     assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }
 
@@ -110,14 +109,22 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
         "auth": { "kind": "node_oauth" },
     }))
     .unwrap();
-    let stored = crate::usage_observation::usage_for_backend(
+    let access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
+    let stored = crate::clients::provider_http::tests::when_usage_recorded(
         &cache,
-        &crate::auth::credential::runtime_credential_access(&node, did).unwrap(),
-        did,
-        &backend,
+        "both observations recorded, read for the backend",
+        async || {
+            if *cache.subscribe_records().borrow() < 2 {
+                return None;
+            }
+            Some(
+                crate::usage_observation::usage_for_backend(&cache, &access, did, &backend)
+                    .await
+                    .unwrap()
+                    .expect("usage for the backend"),
+            )
+        },
     )
-    .await
-    .unwrap()
-    .expect("usage for the backend");
+    .await;
     assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }

@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_documents::{AgentTools, FileToolMode, FileTools, HostTools, InferenceProfile, Tools};
 use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
@@ -8,8 +6,8 @@ use serde_json::json;
 
 use crate::support::fixtures::{agent_target, configure_agent_tools_as};
 use crate::support::live_inference::{
-    boot_live_agent_with_ceiling, live_target, wait_for_request_terminal, wait_for_rows,
-    LiveAgentSpec, LiveUser,
+    boot_live_agent_with_ceiling, live_target, rows_when, wait_for_request_terminal, LiveAgentSpec,
+    LiveUser,
 };
 use crate::support::test_db;
 
@@ -125,7 +123,7 @@ async fn live_child_without_an_execution_limit_completes_a_six_step_read() {
         json!({"agent":"chain-worker", "prompt":worker_prompt}),
     )).await;
     assert_eq!(
-        wait_for_request_terminal(&live, PARENT_REQUEST, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&live, PARENT_REQUEST).await,
         "completed"
     );
     let query = format!(
@@ -133,17 +131,11 @@ async fn live_child_without_an_execution_limit_completes_a_six_step_read() {
         escape_graphql_string(PARENT_REQUEST),
         escape_graphql_string(&child),
     );
-    let rows = wait_for_rows(
-        &live,
-        "AgentRequest",
-        &query,
-        Duration::from_secs(120),
-        |data| {
-            data["AgentRequest"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "completed"))
-        },
-    )
+    let rows = rows_when(&live, "AgentRequest", &query, |data| {
+        data["AgentRequest"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "completed"))
+    })
     .await;
     let request = rows["AgentRequest"]
         .as_array()
