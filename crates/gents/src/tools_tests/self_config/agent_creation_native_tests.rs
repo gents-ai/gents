@@ -573,7 +573,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                 "options":{"display-name":"Child", "system-prompt":"Work", "profile":"profile"}
             })
             .to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await
         .is_err());

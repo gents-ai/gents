@@ -2859,7 +2859,7 @@ async fn the_engineer_clones_an_agent_and_an_agent_without_node_administration_i
     .to_string();
     let attempt = |tool: Box<dyn ToolDyn>, args: String| async move {
         match tool
-            .call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .call(args, &gents_loop::tool::ToolCallEnvelope::default())
             .await
         {
             Ok(answer) => answer,
