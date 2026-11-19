@@ -253,7 +253,7 @@ mod tests {
         let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
         let context = gents_loop::tool::ToolCallEnvelope::ambient();
         let call = executor.call_data_bound_for(
-&record, json!({"script": "let sum=0; for(let i=0;i<3;i++) sum += (await tools.query({})).ordinal; await sleep(1); return {sum};"}), crate::plugin::executor::ToolInvocation { tool_root: None, tool_calls: true, context: &context }, None);
+&record, json!({"script": "let sum=0; for(let i=0;i<3;i++) sum += (await tools.query({})).ordinal; await sleep(1); return {sum};"}), crate::plugin::executor::ToolInvocation { tool_root: None, own_folder: None, tool_calls: true, context: &context }, None);
         let result = gents_loop::tool_effects::scope(Some(Arc::new(Tools)), call)
             .await
             .unwrap();
@@ -270,6 +270,7 @@ mod tests {
                 json!({"script":"return typeof tools", "tool_calls":true}),
                 crate::plugin::executor::ToolInvocation {
                     tool_root: None,
+                    own_folder: None,
                     tool_calls: false,
                     context: &gents_loop::tool::ToolCallEnvelope::ambient(),
                 },
@@ -314,6 +315,7 @@ mod tests {
                 input,
                 crate::plugin::executor::ToolInvocation {
                     tool_root: None,
+                    own_folder: None,
                     tool_calls: grant,
                     context: &gents_loop::tool::ToolCallEnvelope::ambient(),
                 },

@@ -2649,7 +2649,6 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-migration/src/error.rs", &["Error::in_chain"]),
     ("crates/gents-p2p/src/p2p_reconcile/enrollment_store.rs", &["EnrollmentDecisionRefusal::in_chain"]),
     ("crates/gents-p2p/src/p2p_reconcile/trait_def.rs", &["RemoteP2pAdminError::in_error"]),
-    ("crates/gents-pack/src/pack/core_packs.rs", &["plugin_interface_refusal"]),
     ("crates/gents-pack/src/pack/registry.rs", &["RegistryError::in_chain"]),
     ("crates/gents-pack/src/plugin.rs", &["GuestTrap::in_chain", "GuestTrap::raised_by"]),
     ("crates/gents-pack/src/plugin/http_calls.rs", &["InternalAddress::in_chain"]),

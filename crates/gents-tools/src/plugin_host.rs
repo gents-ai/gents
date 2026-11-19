@@ -56,11 +56,13 @@ pub trait PluginHost: Send + Sync {
         actor: Option<identity::Did>,
     ) -> Result<Box<dyn ToolDyn>>;
 
-    /// The tool a plugin tool reference resolves to, bound to the calling agent.
+    /// The tool a plugin tool reference resolves to, bound to the calling
+    /// agent. `own_folder` is the root the agent's file-writing tools write.
     fn plugin_tool(
         self: Arc<Self>,
         plugin: &PluginToolRef,
         read_root: Option<PathBuf>,
+        own_folder: Option<PathBuf>,
         node: Arc<EmbeddedNode>,
         node_did: &str,
         agent_did: Option<&str>,
@@ -127,6 +129,7 @@ impl PluginHost for NoPluginHost {
         self: Arc<Self>,
         _plugin: &PluginToolRef,
         _read_root: Option<PathBuf>,
+        _own_folder: Option<PathBuf>,
         _node: Arc<EmbeddedNode>,
         _node_did: &str,
         _agent_did: Option<&str>,
