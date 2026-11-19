@@ -983,7 +983,7 @@ mod tests {
     /// its config, store key and a fresh protected store whose provenance
     /// names the runtime.
     async fn initialized_home_with_store(temp: &Path) -> PathBuf {
-        gents_service::home_state::client_identity_for_new_node()
+        let client = gents_service::home_state::client_identity_for_new_node()
             .await
             .unwrap();
         let home = initialized_home(temp);
@@ -1001,6 +1001,7 @@ mod tests {
             .initialize(
                 &key,
                 &identity,
+                &identity::Did::new(client.did()).unwrap(),
                 gents_store::local::document_acp::DocumentAcp::Local,
             )
             .await

@@ -235,9 +235,14 @@ async fn signed_account_delete_requires_user_document_delete_permission() {
         .await
         .unwrap();
 
-    remove(&access, node_did, &credential_id)
-        .await
-        .expect_err("deletion without DocumentDelete must be refused");
+    let error = remove(&access, node_did, &credential_id).await.unwrap_err();
+    let refused = gents_protocol::error_chain::find_source::<
+        gents_protocol::database_error::GraphqlFailure,
+    >(error.as_ref());
+    assert!(
+        refused.is_some(),
+        "a delete without delete-document must be refused by the database: {error:#}"
+    );
     assert_eq!(
         rows(&access, node_did, CLAUDE_OAUTH_PROVIDER).await.len(),
         1

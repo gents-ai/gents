@@ -90,7 +90,13 @@ pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOp
         .send()
         .await
     {
-        Ok(response) => response.status().is_success(),
+        Ok(response) => {
+            response.status().is_success()
+                || matches!(
+                    response.status(),
+                    reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+                )
+        }
         Err(_) => false,
     }
 }
@@ -349,12 +355,18 @@ pub fn graphql_error_is_retryable(error: &(dyn std::error::Error + 'static)) -> 
 /// Auto-commit reads must use this rather than [`graphql_error_is_retryable`]:
 /// DefraDB's HTTP handler already retried their store conflicts.
 ///
+#[cfg(feature = "native")]
+pub fn graphql_transport_error_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
+    graphql_transport_source(error).is_some_and(graphql_transport_error_is_retryable)
+}
+
 /// External premise: an HTTP transport failure is a `reqwest::Error`, which
 /// callers carry erased in the chain.
 #[cfg(feature = "native")]
-pub fn graphql_transport_error_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
+pub fn graphql_transport_source<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a reqwest::Error> {
     crate::error_chain::find_source::<reqwest::Error>(error)
-        .is_some_and(graphql_transport_error_is_retryable)
 }
 
 #[cfg(feature = "native")]

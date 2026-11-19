@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use crate::error::BridgeError;
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
+use gents_store::client_error::BridgeError;
 
 /// Native processes live in the owning runtime, not in the client's replica.
 /// The endpoint authenticates the client's identity.
 pub async fn process_control(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     request: &OperatorProcessControlRequest,
 ) -> Result<ProcessControlOutcome, BridgeError> {
     let access = core
@@ -21,5 +21,5 @@ pub async fn process_control(
         (&request.session_id, &request.tool_call_id),
     )
     .await
-    .map_err(BridgeError::from)
+    .map_err(crate::error::control_send_error)
 }

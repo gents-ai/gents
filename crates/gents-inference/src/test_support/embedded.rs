@@ -181,13 +181,20 @@ async fn start(
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
     let http = defra_node::HttpConfig::with_listener(listener.into_std()?)?
-        .with_extra_routes(agent_identity_routes(served.clone()).merge(owner_staged.router()));
+        .with_authenticated_routes(
+            agent_identity_routes(served.clone()).merge(owner_staged.router()),
+        );
     let (node, _admission) = protected
         .start_node_with_projection(
             key,
             identity.clone(),
-            Some(http),
-            p2p,
+            move |mut builder| {
+                builder = builder.with_http(http);
+                if let Some(p2p) = p2p {
+                    builder = builder.with_p2p(p2p);
+                }
+                builder
+            },
             tool_policy,
             Vec::new(),
             composition,
@@ -357,10 +364,15 @@ async fn test_db_at_with_tool_policy(
         )
         .await?;
         let key = store_key(&path, &data_path).await?;
+        let owner_path = path.join("owner.key");
+        let owner =
+            tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(owner_path, None))
+                .await??;
         fresh
             .initialize(
                 &key,
                 &identity,
+                &owner.did().parse()?,
                 gents_store::local::document_acp::DocumentAcp::Local,
             )
             .await?;

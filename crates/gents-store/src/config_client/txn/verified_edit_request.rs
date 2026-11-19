@@ -51,7 +51,7 @@ impl ConfigApplyTxn<'_> {
         if created != expected {
             return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
         }
-        let context = defra_core::RequestContext::default().with_identity(Some(signer.to_string()));
+        let context = self.request_context(Some(signer.clone()));
         let stored = self.stored_create(&created);
         let relations =
             super::super::stored_create::request_relations(create, session_doc, agent_doc)?;

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use gents_desktop_core::inference::load_inference_setup_state;
+use gents_observe::client_inference::load_inference_setup_state;
 use gents_pack::pack::{PackChangeError, SlotBindingError};
 use gents_pack::plugin::authority::GrantError;
 use gents_shell::sample::Tone;

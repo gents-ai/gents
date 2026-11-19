@@ -10,6 +10,7 @@ structure StepInput where
   request : String
   member : String
   tuple : String
+  issued : Nat
   deriving ToJson
 
 structure CaseInput where
@@ -47,6 +48,9 @@ def applyStep (s : State) (step : StepInput) : State :=
   if step.action == "grant" then grant s step.request step.member
   else if step.action == "independent" then grantIndependent s ⟨step.member, tupleOf step.tuple⟩
   else if step.action == "revoke_member" then revokeMember s step.member
+  else if step.action == "grant_interrupted" then
+    grantInterrupted s step.request step.member step.issued
+  else if step.action == "abandon" then abandon s step.request
   else revoke s step.request
 
 def observe (subjects : List String) (s : State) : StepObservation :=
@@ -62,16 +66,30 @@ def trace (subjects : List String) (s : State) : List StepInput → List StepObs
       observe subjects next :: trace subjects next rest
 
 def grantStep (request member : String) : StepInput :=
-  { action := "grant", request, member, tuple := "" }
+  { action := "grant", request, member, tuple := "", issued := 0 }
 
 def independentStep (member tuple : String) : StepInput :=
-  { action := "independent", request := "", member, tuple }
+  { action := "independent", request := "", member, tuple, issued := 0 }
 
 def revokeStep (request : String) : StepInput :=
-  { action := "revoke", request, member := "", tuple := "" }
+  { action := "revoke", request, member := "", tuple := "", issued := 0 }
 
 def revokeMemberStep (member : String) : StepInput :=
-  { action := "revoke_member", request := "", member, tuple := "" }
+  { action := "revoke_member", request := "", member, tuple := "", issued := 0 }
+
+def interruptedStep (request member : String) (issued : Nat) : StepInput :=
+  { action := "grant_interrupted", request, member, tuple := "", issued }
+
+def abandonStep (request : String) : StepInput :=
+  { action := "abandon", request, member := "", tuple := "", issued := 0 }
+
+/-- An approval failing at each point its issuing can fail at, abandoned, then
+retried. -/
+def abandonedAtEveryPoint : List (String × List StepInput) :=
+  issuePoints.map fun k =>
+    (s!"approval-abandoned-after-{k}-tuples-then-retried",
+      [independentStep "member" "read-document", grantStep "other-request" "other",
+       interruptedStep "a" "member" k, abandonStep "a", grantStep "a" "member", revokeStep "a"])
 
 def traceCases : List (String × List StepInput) :=
   [("grant-then-revoke-restores",
@@ -90,7 +108,18 @@ def traceCases : List (String × List StepInput) :=
        grantStep "renewal" "member", revokeMemberStep "member"]),
    ("revoking-a-membership-preserves-independent-and-other-members",
       [independentStep "member" "read-document", grantStep "a" "member",
-       grantStep "b" "other", revokeMemberStep "member"])]
+       grantStep "b" "other", revokeMemberStep "member"]),
+   ("abandon-keeps-another-approvals-tuples",
+      [grantStep "a" "member", interruptedStep "b" "member" 3, abandonStep "b", revokeStep "b",
+       revokeStep "a"]),
+   ("abandoned-retry-of-a-live-receipt-reissues",
+      [interruptedStep "a" "member" 1, abandonStep "a", interruptedStep "a" "member" 2,
+       abandonStep "a", grantStep "a" "member"]),
+   ("abandon-without-receipt-changes-nothing",
+      [independentStep "member" "update-document", abandonStep "a"]),
+   ("revoked-request-is-not-reissued",
+      [grantStep "a" "member", revokeStep "a", interruptedStep "a" "member" 2,
+       grantStep "a" "member"])] ++ abandonedAtEveryPoint
 
 @[conformance_family]
 def cases : Family CaseInput TraceOutput where

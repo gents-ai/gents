@@ -101,11 +101,11 @@ describe("canonical chat submission acceptance", () => {
 
     const deployment = {
       nodeDid: "agent-b",
-      source: "enrollment",
-      dialSucceeded: true,
+      local: false,
+
       runtimeConnection: "connected",
       chatSafe: true,
-      lastError: null,
+
       runtime: null,
       node: { nodeDid: "agent-b", defaultAgentDid: "coding" },
       nodeReadiness: {

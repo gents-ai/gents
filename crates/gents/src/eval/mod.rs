@@ -5,8 +5,8 @@ pub mod documents;
 pub mod outcome;
 pub mod scoring;
 
-#[cfg(test)]
-pub(crate) mod test_support;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_support;
 
 pub use documents::{
     already_completed, already_invalidated, append_verdict, complete_trial, create_run,

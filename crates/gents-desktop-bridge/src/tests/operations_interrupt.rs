@@ -1,10 +1,9 @@
+use crate::client_runtime::ClientRuntime;
 use crate::interrupt::interrupt_request;
 use crate::tests::support::{
     reject_admission, served_desktop, served_desktop_pair, submit_request,
 };
 use crate::types::DesktopInterruptRequest;
-use gents_desktop_core::client::ClientCore;
-use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 
 fn user_cancel(request_id: &str, node: Option<&str>) -> DesktopInterruptRequest {
@@ -15,15 +14,7 @@ fn user_cancel(request_id: &str, node: Option<&str>) -> DesktopInterruptRequest 
     }
 }
 
-async fn seed(access: &ConfigAccess, node: &str, request: &str, session: &str, state: &str) {
-    access.write("test.interrupt.seed", &format!(
-        "mutation {{ create_AgentRequest(input: {{ purpose: \"normal\", request_id: \"{}\", node_did: \"{}\", agent_did: \"did:test:agent\", session_id: \"{}\", content: \"interrupt fixture\", lifecycle_state: \"{}\", created_at: \"2026-11-04T00:00:00Z\" }}) {{ _docID }} }}",
-        escape_graphql_string(request), escape_graphql_string(node),
-        escape_graphql_string(session), escape_graphql_string(state),
-    )).await.unwrap();
-}
-
-async fn latch(core: &ClientCore, node: &str, request: &str) -> Option<String> {
+async fn latch(core: &ClientRuntime, node: &str, request: &str) -> Option<String> {
     core.operator_access(node).unwrap().execute(&format!(
         "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ interrupt_requested_at }} }}",
         escape_graphql_string(request),
@@ -118,15 +109,13 @@ async fn interrupt_routes_same_logical_id_to_the_explicit_runtime() {
 #[tokio::test]
 async fn interrupt_refuses_a_missing_runtime_without_using_the_client_store() {
     let (core, _directory) = crate::tests::support::boot_core().await;
-    // A stray client-store row the owner must never consult.
-    seed(
-        &ConfigAccess::local(core.node_arc()),
-        "did:test:missing",
-        "local-only",
-        "stale",
-        "processing",
-    )
-    .await;
+    assert!(!core
+        .node()
+        .get_all_collection_versions()
+        .await
+        .unwrap()
+        .iter()
+        .any(|collection| collection.name == "AgentRequest"));
     assert!(
         interrupt_request(&core, &user_cancel("local-only", Some("did:test:missing")))
             .await

@@ -1,94 +1,81 @@
+use super::emit_config_update_and_snapshot;
+use crate::state::current_core;
+use crate::state::DesktopAppState;
+use crate::types::ClientAccessRequestView;
+use crate::types::DesktopClientSnapshot;
+use crate::types::RuntimeAccessConnectRequest;
+use crate::types::RuntimeRemoveResponse;
+use gents_store::client_error::BridgeError;
 use tauri::{AppHandle, Runtime, State};
 
-use crate::error::BridgeError;
-
-use super::emit_config_update_and_snapshot;
-use crate::commands::{remove_peer, rename_peer};
-use crate::state::{current_core, DesktopAppState};
-use crate::types::{
-    DesktopClientSnapshot, EnrollmentInviteRequest, EnrollmentRequestView, EnrollmentStatusRequest,
-    PeerRemoveResponse,
-};
-
 #[tauri::command]
-pub async fn desktop_peer_enroll_status(
-    request: EnrollmentStatusRequest,
+pub async fn desktop_runtime_access_request(
+    request: RuntimeAccessConnectRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<EnrollmentRequestView, BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-    crate::commands::request_status_enrollment(&core, request).await
+) -> Result<ClientAccessRequestView, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::request_runtime_access(&core, request).await
 }
 
 #[tauri::command]
-pub async fn desktop_peer_enroll_invite(
-    request: EnrollmentInviteRequest,
-    state: State<'_, DesktopAppState>,
-) -> Result<EnrollmentRequestView, BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-    crate::commands::request_invite_enrollment(&core, request).await
-}
-
-#[tauri::command]
-pub async fn desktop_peer_remove<R>(
+pub async fn desktop_runtime_remove<R>(
     app: AppHandle<R>,
-    peer_id: String,
+    node_did: String,
     state: State<'_, DesktopAppState>,
-) -> Result<PeerRemoveResponse, BridgeError>
+) -> Result<RuntimeRemoveResponse, BridgeError>
 where
     R: Runtime,
 {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-
-    let mutation = remove_peer(core.as_ref(), peer_id)
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    let removed = crate::commands::forget_runtime(&core, node_did)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let snapshot = emit_config_update_and_snapshot(&app, &core, &state).await?;
-    Ok(PeerRemoveResponse::new(snapshot, mutation))
+    Ok(RuntimeRemoveResponse { snapshot, removed })
 }
 
 #[tauri::command]
-pub async fn desktop_peer_rename<R>(
+pub async fn desktop_runtime_rename<R>(
     app: AppHandle<R>,
-    peer_id: String,
+    node_did: String,
     label: String,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError>
 where
     R: Runtime,
 {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-
-    rename_peer(core.as_ref(), peer_id, label)
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::rename_runtime(&core, node_did, label)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
-/// Forgets that this desktop's access to a joined node ended, once the person
-/// has seen it.
 #[tauri::command]
-pub async fn desktop_ended_access_dismiss<R>(
-    app: AppHandle<R>,
+pub async fn desktop_runtime_access_list(
     node_did: String,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError>
-where
-    R: Runtime,
-{
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-
-    core.dismiss_ended_access(&node_did)
+) -> Result<Vec<ClientAccessRequestView>, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    core.list_runtime_access_requests(&node_did)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    emit_config_update_and_snapshot(&app, &core, &state).await
+        .map(|requests| requests.into_iter().map(Into::into).collect())
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+}
+
+#[tauri::command]
+pub async fn desktop_runtime_access_decide(
+    request: crate::types::RuntimeAccessDecisionRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<ClientAccessRequestView, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    core.decide_runtime_access(&request.node_did, &request.request_id, request.decision)
+        .await
+        .map(Into::into)
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))
 }

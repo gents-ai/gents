@@ -1,11 +1,9 @@
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::{
-    client::DesktopPaths,
-    home_reset::{
-        lock_client_state, lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home,
-        HomeResetDisposition, HomeResetPlan, ManagedServerResetResult,
-    },
+use gents_desktop_core::home_reset::{
+    lock_client_state, lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home,
+    HomeResetDisposition, HomeResetPlan, ManagedServerResetResult,
 };
+use gents_store::client_journal::paths::DesktopPaths;
 
 use crate::cli::DesktopCommand;
 use gents_service::native_service::NativeServiceConfig;
@@ -74,7 +72,7 @@ async fn reset(
 ) -> Result<ManagedServerResetResult> {
     let desktop = select_desktop(
         desktop_home,
-        std::env::var_os(gents_desktop_core::client::DESKTOP_HOME_ENV),
+        std::env::var_os(gents_store::client_journal::paths::DESKTOP_HOME_ENV),
         &std::env::current_dir().context("resolving current directory")?,
     )?;
     let explicit_home = home.or_else(|| {

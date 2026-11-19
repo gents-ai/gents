@@ -81,7 +81,7 @@ impl EmbeddedRemoteP2pAdmin {
     }
 
     fn p2p(&self) -> RemoteP2pAdminResult<Arc<dyn defra_p2p_adapter::P2POperations>> {
-        gents_store::identity::node_p2p(&self.node).ok_or_else(|| {
+        crate::node_access::operations(&self.node).ok_or_else(|| {
             RemoteP2pAdminError::LocalError("embedded node has no P2P transport".into())
         })
     }
@@ -210,7 +210,7 @@ pub(super) async fn push_documents_to_peer(
         .map(|document| document.collection.clone())
         .collect::<Vec<_>>();
     admin.require_protocol_collections(&collections)?;
-    let p2p = gents_store::identity::node_p2p(node)
+    let p2p = crate::node_access::operations(node)
         .context("embedded node has no P2P transport for document delivery")?;
     p2p.push_documents_to_peer(peer_id, documents)
         .await

@@ -1,0 +1,198 @@
+use gents_protocol::delegation_audience::ReportedHome;
+use std::sync::{Arc, RwLock};
+
+use gents_protocol::client_authentication::ClientAuthentication;
+use rapidhash::RapidHashMap;
+
+use super::{ClientSigningCapability, ConfigClientError, GraphqlEndpoint, Result};
+
+#[derive(Debug)]
+pub(super) enum EndpointAuthentication {
+    Fixed(ClientAuthentication),
+    Runtime {
+        node: String,
+        current: tokio::sync::Mutex<Option<ClientAuthentication>>,
+    },
+}
+
+impl PartialEq for EndpointAuthentication {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Fixed(left), Self::Fixed(right)) => left == right,
+            (Self::Runtime { node: left, .. }, Self::Runtime { node: right, .. }) => left == right,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for EndpointAuthentication {}
+
+pub struct RuntimeEndpoints {
+    capability: ClientSigningCapability,
+    endpoints: RwLock<RapidHashMap<(String, String), GraphqlEndpoint>>,
+}
+
+impl RuntimeEndpoints {
+    pub fn new(capability: ClientSigningCapability) -> Self {
+        Self {
+            capability,
+            endpoints: RwLock::default(),
+        }
+    }
+
+    pub fn endpoint(&self, node: &str, url: &str) -> Result<GraphqlEndpoint> {
+        let key = (node.to_owned(), url.to_owned());
+        let mut endpoints = self
+            .endpoints
+            .write()
+            .map_err(|_| ConfigClientError::RuntimeEndpointCache)?;
+        if let Some(endpoint) = endpoints.get(&key) {
+            return Ok(endpoint.clone());
+        }
+        let mut endpoint = GraphqlEndpoint::as_principal(url, self.capability.did())
+            .with_client_signing_capability(self.capability.clone())?;
+        endpoint.client_authentication = Arc::new(EndpointAuthentication::Runtime {
+            node: node.to_owned(),
+            current: tokio::sync::Mutex::new(None),
+        });
+        endpoints.insert(key, endpoint.clone());
+        Ok(endpoint)
+    }
+}
+
+impl GraphqlEndpoint {
+    pub async fn refresh_runtime_authentication(&self) -> Result<()> {
+        if let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication {
+            let mut current = current.lock().await;
+            *current = None;
+            *current = Some(self.discover_runtime_authentication(node).await?);
+        }
+        Ok(())
+    }
+
+    pub(super) async fn runtime_authentication(&self) -> Result<ClientAuthentication> {
+        match &*self.client_authentication {
+            EndpointAuthentication::Fixed(authentication) => Ok(authentication.clone()),
+            EndpointAuthentication::Runtime { node, current } => {
+                let mut current = current.lock().await;
+                if let Some(authentication) = &*current {
+                    return Ok(authentication.clone());
+                }
+                let authentication = self.discover_runtime_authentication(node).await?;
+                *current = Some(authentication.clone());
+                Ok(authentication)
+            }
+        }
+    }
+
+    async fn discover_runtime_authentication(&self, node: &str) -> Result<ClientAuthentication> {
+        let (authentication, reported) = self.fetch_runtime_status(node).await?;
+        self.delegation_audience.observe(reported);
+        Ok(authentication)
+    }
+
+    pub(super) async fn reread_runtime_home(&self) -> Option<ReportedHome> {
+        let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication else {
+            return None;
+        };
+        let mut current = current.lock().await;
+        let (authentication, reported) = self.fetch_runtime_status(node).await.ok()?;
+        *current = Some(authentication);
+        Some(reported)
+    }
+
+    pub async fn observe_runtime_status(&self, status: &serde_json::Value) -> Result<()> {
+        if let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication {
+            let mut current = current.lock().await;
+            let (authentication, reported) = Self::decode_runtime_status(node, status)?;
+            self.delegation_audience.observe(reported);
+            *current = Some(authentication);
+        }
+        Ok(())
+    }
+
+    async fn fetch_runtime_status(
+        &self,
+        node: &str,
+    ) -> Result<(ClientAuthentication, ReportedHome)> {
+        let base = self
+            .url()
+            .trim()
+            .strip_suffix("/api/v0/graphql")
+            .ok_or_else(|| ConfigClientError::GraphqlApiBase {
+                graphql: self.to_string(),
+            })?;
+        let response = discovery_client()
+            .await?
+            .get(format!("{base}/status"))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(ConfigClientError::RuntimeAuthenticationHttp)?;
+        if !response.status().is_success() {
+            return Err(ConfigClientError::RuntimeAuthenticationStatus(
+                response.status(),
+            ));
+        }
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(ConfigClientError::RuntimeAuthenticationHttp)?;
+        Self::decode_runtime_status(node, &body)
+    }
+
+    fn decode_runtime_status(
+        node: &str,
+        body: &serde_json::Value,
+    ) -> Result<(ClientAuthentication, ReportedHome)> {
+        if body.get("node_did").and_then(serde_json::Value::as_str) != Some(node) {
+            return Err(ConfigClientError::RuntimeAuthenticationIdentity);
+        }
+        let authentication: ClientAuthentication = serde_json::from_value(
+            body.get(gents_protocol::client_authentication::STATUS_FIELD)
+                .cloned()
+                .ok_or(ConfigClientError::RuntimeAuthenticationUnavailable)?,
+        )?;
+        if authentication == ClientAuthentication::Unavailable {
+            return Err(ConfigClientError::RuntimeAuthenticationUnavailable);
+        }
+        use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
+        let mut reported = ReportedHome::of_home(body, node);
+        match (&authentication, &reported.audience) {
+            (
+                ClientAuthentication::Vera { worker, deployment },
+                ReportedDelegationAudience::Absent,
+            ) => {
+                reported.audience = ReportedDelegationAudience::Named(DelegationAudience {
+                    worker: worker.clone(),
+                    deployment: *deployment,
+                    genesis_id: None,
+                });
+            }
+            (ClientAuthentication::Local, ReportedDelegationAudience::Absent) => {}
+            (
+                ClientAuthentication::Vera { worker, deployment },
+                ReportedDelegationAudience::Named(audience),
+            ) if worker == &audience.worker && deployment == &audience.deployment => {}
+            _ => return Err(ConfigClientError::RuntimeAuthenticationUnavailable),
+        }
+        Ok((authentication, reported))
+    }
+}
+
+pub(super) async fn discovery_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+    CLIENT
+        .get_or_try_init(|| async {
+            tokio::task::spawn_blocking(|| {
+                reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .map_err(ConfigClientError::HttpClientBuild)
+            })
+            .await
+            .map_err(ConfigClientError::HttpClientJoin)?
+        })
+        .await
+}

@@ -108,7 +108,7 @@ async fn validate_scope(access: &ConfigAccess, request: &ProviderRecoveryRequest
         },
     )
     .await
-    .map_err(gents_desktop_core::error::request_operation_failure)?;
+    .map_err(gents_store::client_error::request_operation_failure)?;
     anyhow::ensure!(
         stopped.session_id.as_deref() == Some(request.session_id.as_str()),
         "stopped request no longer belongs to the selected session"

@@ -1,6 +1,6 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 
-use gents_desktop_core::client::{ClientStore, TaskRecentRuns};
+use gents_observe::client_projection::store::{ClientStore, TaskRecentRuns};
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::AgentSession;
 
@@ -99,7 +99,7 @@ pub(crate) fn session_summaries(
     tasks: &[TaskView],
     triggers: &[TriggerView],
 ) -> Vec<SessionSummary> {
-    gents_desktop_core::client::session_summary_entries(sessions, requests, node_did)
+    gents_observe::client_projection::store::session_summary_entries(sessions, requests, node_did)
         .into_iter()
         .map(|entry| {
             let session = entry.session;

@@ -47,16 +47,27 @@ def backendDiscovery : Family BackendDiscoveryInput Bool where
   model := fun i => Configuration.backendDiscoveryMayPublish i.authorized i.sameDoc i.sameConnection i.committed
 
 structure BackendProbeInput where
+  nativeRead : Bool
   sameDoc : Bool
   sameConnection : Bool
   committed : Bool
   deriving ToJson
 
-@[conformance_family]
 def backendProbe : Family BackendProbeInput Bool where
-  inputs := [(true, true, true), (false, true, true), (true, false, true), (true, true, false)].map
-    fun (sameDoc, sameConnection, committed) => { sameDoc, sameConnection, committed }
-  model := fun i => Configuration.backendProbeMayPublish i.sameDoc i.sameConnection i.committed
+  inputs := [(true, true, true, true), (false, true, true, true), (true, false, true, true),
+    (true, true, false, true), (true, true, true, false)].map
+    fun (nativeRead, sameDoc, sameConnection, committed) => { nativeRead, sameDoc, sameConnection, committed }
+  model := fun i => Configuration.backendProbeMayPublish i.nativeRead i.sameDoc i.sameConnection i.committed
+
+@[conformance_family]
+def backendProbeAccess : Family BackendProbeInput Bool where
+  inputs := backendProbe.inputs.filter fun i => i.sameDoc && i.sameConnection && i.committed
+  model := backendProbe.model
+
+@[conformance_family]
+def backendProbeRace : Family BackendProbeInput Bool where
+  inputs := backendProbe.inputs.filter fun i => i.nativeRead
+  model := backendProbe.model
 
 structure BackendRemovalInput where
   authorized : Bool

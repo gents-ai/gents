@@ -1426,7 +1426,12 @@ mod data_calls {
     const AGENT: &str = "did:key:z6Mkagent";
 
     async fn node_with(rows: &[(&str, &str)]) -> Arc<defra_node::Node> {
-        let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+        let node = Arc::new(
+            gents_store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         node.add_collection("type Note { owner: String body: String }")
             .await
             .unwrap();

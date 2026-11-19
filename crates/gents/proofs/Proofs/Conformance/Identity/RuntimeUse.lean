@@ -23,7 +23,7 @@ structure RevocationObserved where
 def revocationObserved (i : RevocationInput) : RevocationObserved :=
   match RuntimeUse.all.find? (·.wire == i.runtimeUse) with
   | some use =>
-    { hostingRead := hostingRuntimeReads use i.revokeNodeReader i.revokeCredentialWriter
+    { hostingRead := hostingRuntimeReads false use i.revokeNodeReader i.revokeCredentialWriter
     , mayUse := runtimeMayUseFor use i.revokeNodeReader i.revokeCredentialWriter }
   | none => { hostingRead := false, mayUse := false }
 

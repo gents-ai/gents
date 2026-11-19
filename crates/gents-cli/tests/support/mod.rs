@@ -195,10 +195,11 @@ impl UserSeededHome {
             (Some("readwrite"), Some(root)) => gents_tools::surface::ToolCeiling::readwrite(root),
             other => anyhow::bail!("identity-only init output has no tool ceiling: {other:?}"),
         };
-        let client = gents_desktop_core::client::PrincipalIdentity::load_existing(
-            &graphql::cli_client_paths(cwd, &[]),
-        )
-        .context("loading the CLI User key")?;
+        let client =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+                &graphql::cli_client_paths(cwd, &[]),
+            )
+            .context("loading the CLI User key")?;
         let data = gents_store::local::home::default_data_dir(node_home);
         let claim = gents_store::local::home::lock_store(node_home, &data)?;
         let key = gents_store::local::store_key::open_home_store_key(node_home, &data).await?;

@@ -143,7 +143,7 @@ async fn query_once(
     variables: Option<&Value>,
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
-    let authorization = endpoint.authorization()?;
+    let authorization = endpoint.runtime_authorization().await?;
     Ok(match variables {
         Some(variables) => {
             gents_protocol::graphql::execute_graphql_with_variables_async(
@@ -275,7 +275,8 @@ pub(super) async fn txn_commit(
 ) -> std::result::Result<(), TxnCommitError> {
     let api_base = graphql_api_base(endpoint.url()).map_err(TxnCommitError::CleanupRequired)?;
     let response = endpoint
-        .authorize(client.post(format!("{api_base}/tx/{id}")))
+        .authorize_runtime(client.post(format!("{api_base}/tx/{id}")))
+        .await
         .map_err(TxnCommitError::CleanupRequired)?
         .send()
         .await
@@ -341,7 +342,8 @@ pub(super) async fn txn_discard(
     client: &reqwest::Client,
 ) -> Result<()> {
     let response = endpoint
-        .authorize(client.delete(format!("{}/tx/{id}", graphql_api_base(endpoint.url())?)))?
+        .authorize_runtime(client.delete(format!("{}/tx/{id}", graphql_api_base(endpoint.url())?)))
+        .await?
         .send()
         .await
         .map_err(|source| ConfigClientError::PostTxDiscard {

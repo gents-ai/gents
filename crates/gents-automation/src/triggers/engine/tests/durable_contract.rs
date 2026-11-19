@@ -983,6 +983,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
         for permission in [
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
             NodePermission::DacRelationDelete,
@@ -1323,6 +1324,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
         for permission in [
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
             NodePermission::DacRelationDelete,

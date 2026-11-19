@@ -778,7 +778,7 @@ impl P2pTool {
                 let network_id = projection.network_id.context(
                     "this node has no enrollment Network; the running server creates it at startup",
                 )?;
-                let p2p = gents_store::identity::node_p2p(&self.node)
+                let p2p = gents_p2p::node_access::operations(&self.node)
                     .context("P2P is not running on this node")?;
                 let validity = options.get("valid_for_secs").map_or(
                     Ok(gents_p2p::p2p_reconcile::enrollment_offer::DEFAULT_OFFER_VALIDITY),
@@ -928,6 +928,7 @@ impl P2pTool {
                             gents_store::identity::EnrollmentApproval {
                                 approver,
                                 runtime: &runtime,
+                                nac_owner: &runtime,
                                 node: actor.as_ref(),
                                 request: &request,
                                 expected: None,

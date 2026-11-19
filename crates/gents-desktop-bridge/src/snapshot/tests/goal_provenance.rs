@@ -10,7 +10,7 @@ use gents_store::identity::NodeIdentity as _;
 /// A served runtime after every modeled opening-provenance case has been
 /// checked before transcript publication and after reload.
 struct GoalProvenance {
-    runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    runtime: gents::client_test_support::ServedRuntimeHome,
     access: ConfigAccess,
     opening_doc: String,
     observed: Vec<AgentRequestRow>,
@@ -20,7 +20,7 @@ struct GoalProvenance {
 async fn goal_provenance_cases() -> GoalProvenance {
     // A served runtime whose User published a real provisioned Agent; a
     // guest may write the Agent's sessions.
-    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start().await;
+    let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
     let binding = runtime.publish_chat_agent().await;
     let identity = runtime.runtime().clone();
     let user = runtime.user().clone();

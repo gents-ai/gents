@@ -79,7 +79,7 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
     let state = app.state::<DesktopAppState>();
     let core = current_core(&state).unwrap();
     let client_did = core.node_identity().did().to_owned();
-    let released = core.store_release().expect("a claimed client");
+    let released = core.store_release();
     drop(core);
     let stream = local::connect(&paths).await.unwrap();
     let mut client = LengthDelimitedCodec::builder().new_framed(stream);
