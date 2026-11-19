@@ -70,6 +70,17 @@ See `../README.md` for how this fits the broader formal-verification model.
   order and breaks `OwnerPublishes`; `MarginSpent` spends half a lease and
   breaks `LeaseHeld`; `Unfenced` drops the deadline check and breaks
   `SingleWriter`.
+- `RetryBackoffLease` — one request's execution lease while its owner backs
+  off a failed provider call, beside the drive's lease poll, the renewal task,
+  recovery and the e2e fixture that expires the lease. The wake decision is
+  Lean `RequestExecutionLease.retryWakeDispatches`. `DispatchOnlyLive` holds
+  only when the wake is authorized against the lease (`Fenced`); `Unfenced`
+  is the product before the fix, where an expiry after the drive's last poll
+  and before the wake dispatches the retry under an expired lease. The
+  fixture's observations hold with an unreached backoff and a
+  generation-only expiry write (green); `WallClock` (a backoff shorter than a
+  slow fixture) and `DeadlineCas` (a renewal between the fixture's read and
+  write) are the test's accidents.
 - `ClientSubmissionContention` — a User's optimistic chat send (Lean
   `ClientOptimisticSend`) racing writes to the documents it reads. The client
   picks the request identity, shows the message pending, keeps its payload
@@ -470,6 +481,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   the answer, a reset or a failed keepalive. `WedgedProgress` (a published
   commit step) and `DroppedAnswerQueried` (a transaction outcome query) are
   green designs DefraDB does not offer yet.
+- `OfflineAccessRouting` — a CLI command against a home another process
+  holds: a server claims the store, binds its port and publishes
+  `runtime.json` only once ready; the command routes to a published runtime
+  and otherwise tries the store lock, which `StoreHandoff.decide` refuses
+  while the holder serves. `AssertionHolds`: the outcome is the one the test
+  expects. Green waits for the publication and expects the server's answer,
+  or holds the store itself and expects the refusal. RED: `PortWait` and
+  `PortWaitAnswered` wait only for the port, where both outcomes are
+  reachable (the `cli_session` fork test on CI).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking

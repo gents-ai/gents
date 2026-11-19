@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -16,7 +14,8 @@ use serde_json::Value;
 
 use crate::support::agent_requests::{canonical_now, submit_user_request, RequestActors};
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, terminal_assistant_answer, wait_for_request_terminal,
+    bind_target, boot_live_agent, live_target, terminal_assistant_answer,
+    wait_for_request_terminal, STALL_CEILING,
 };
 use crate::support::test_db;
 
@@ -104,7 +103,7 @@ async fn explicitly_promoted_queue_input_reaches_the_same_request_after_a_tool()
         QueueDelivery::Queue,
     )
     .await;
-    tokio::time::timeout(Duration::from_secs(60), held.wait())
+    tokio::time::timeout(STALL_CEILING, held.wait())
         .await
         .expect("the live model reaches the held tool");
     let selected = submit_user_request(
@@ -180,7 +179,7 @@ async fn explicitly_promoted_queue_input_reaches_the_same_request_after_a_tool()
     held.release();
     for id in ["promote-active", queued.request_id.as_str()] {
         assert_eq!(
-            wait_for_request_terminal(&actors.fixture.access, id, Duration::from_secs(60)).await,
+            wait_for_request_terminal(&actors.fixture.access, id).await,
             "completed"
         );
     }
@@ -245,21 +244,11 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         .await
         .unwrap();
     assert_eq!(
-        wait_for_request_terminal(
-            &actors.fixture.access,
-            "legitimate-slot",
-            Duration::from_secs(60)
-        )
-        .await,
+        wait_for_request_terminal(&actors.fixture.access, "legitimate-slot").await,
         "completed"
     );
     assert_eq!(
-        wait_for_request_terminal(
-            &actors.fixture.access,
-            "forged-slot",
-            Duration::from_secs(60)
-        )
-        .await,
+        wait_for_request_terminal(&actors.fixture.access, "forged-slot").await,
         "failed"
     );
     let rejected = request_row(&actors, &forged_doc).await;

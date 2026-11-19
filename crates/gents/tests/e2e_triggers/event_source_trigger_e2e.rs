@@ -364,12 +364,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     );
     assert!(request.content.as_deref().unwrap().contains(EXTERNAL_ID));
     assert_eq!(
-        wait_for_request_terminal(
-            &fixture.access,
-            &request.request_id,
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&fixture.access, &request.request_id).await,
         "completed"
     );
     assert!(

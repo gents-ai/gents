@@ -60,6 +60,15 @@ struct SessionReduction<'a> {
     assembly_attempt: i32,
 }
 
+pub(super) struct LoadedAdmission {
+    pub(super) resume_from_history: bool,
+    pub(super) resume_same_request: bool,
+    pub(super) aggregate_token_budget: Option<AggregateTokenBudget>,
+    pub(super) context_calibration: ContextCalibration,
+    /// The call sequence this execution continues: zero for a fresh claim.
+    pub(super) last_call_seq: u64,
+}
+
 impl<M> AgentDaemon<M>
 where
     M: gents_inference::llm::rig_compat::ProviderModel,
@@ -68,7 +77,7 @@ where
         &self,
         request: &AgentRequest,
         resumed_from_backend: bool,
-    ) -> Result<(bool, bool, Option<AggregateTokenBudget>, ContextCalibration)> {
+    ) -> Result<LoadedAdmission> {
         if let Some(guard) = &self.root_execution_guard {
             guard
                 .validate(&self.node, self.agent_config.agent_identity.as_ref())
@@ -94,12 +103,18 @@ where
             &request.session_id,
         )
         .await;
-        Ok((
+        let last_call_seq = if resumed_from_backend {
+            gents_inference::admission::last_recorded_call_seq(&access, request).await?
+        } else {
+            0
+        };
+        Ok(LoadedAdmission {
             resume_from_history,
             resume_same_request,
             aggregate_token_budget,
             context_calibration,
-        ))
+            last_call_seq,
+        })
     }
 
     pub(super) async fn request_capture_scope(
