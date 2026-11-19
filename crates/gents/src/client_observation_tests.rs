@@ -13,8 +13,6 @@ use gents_protocol::schemas::{
 use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 use std::{sync::Arc, time::Duration};
 
-/// The User's observer of a served runtime, with the runtime's Node
-/// published by the User.
 async fn served_observer(
     home: &crate::client_test_support::ServedRuntimeHome,
 ) -> (tempfile::TempDir, Arc<ObservedStores>, ObserverHandle) {
@@ -286,7 +284,6 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
         &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
-    // Catalog discovery is the runtime's own observation.
     let observer = runtime.runtime_access();
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
         let catalog: gents_documents::BackendModelCatalog =
