@@ -610,32 +610,60 @@ async fn runtime_status_uses_the_caller_and_rejects_another_node() {
 /// present is told as an update of Gents, never as a raw refusal.
 #[tokio::test]
 async fn a_status_read_refused_at_a_vera_edge_asks_for_an_update() {
-    use wiremock::matchers::{header_exists, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/status"))
-        .and(header_exists("authorization"))
-        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
-            "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
-            "error": "refused",
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "node_did": "did:key:home",
-            "client_authentication":{"kind":"local"},
-        })))
-        .mount(&server)
-        .await;
+    let home = std::sync::Arc::new(gents_store::test_support::test_identity(
+        "update-required-home",
+    ));
+    let home_did = gents_store::identity::NodeIdentity::did(home.as_ref()).to_owned();
+    let signer = home.clone();
+    let edge = axum::Router::new().route(
+        "/status",
+        axum::routing::get(
+            move |headers: axum::http::HeaderMap,
+                  query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                let signer = signer.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    if headers.contains_key(axum::http::header::AUTHORIZATION) {
+                        return (
+                            axum::http::StatusCode::UNAUTHORIZED,
+                            axum::Json(json!({
+                                "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+                                "error": "refused",
+                            })),
+                        )
+                            .into_response();
+                    }
+                    let Some(nonce) = query
+                        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                        .and_then(|nonce| {
+                            gents_protocol::home_attestation::HomeNonce::parse(nonce).ok()
+                        })
+                    else {
+                        return axum::http::StatusCode::BAD_REQUEST.into_response();
+                    };
+                    axum::Json(
+                        gents_store::test_support::signed_home_status(
+                            signer.as_ref(),
+                            &gents_protocol::delegation_audience::ReportedDelegationAudience::Absent,
+                            None,
+                            &nonce,
+                        )
+                        .await,
+                    )
+                    .into_response()
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let served = tokio::spawn(async move { axum::serve(listener, edge).await });
     let user = gents_store::test_support::test_identity("update-required-user");
     let capability = gents_store::identity::NodeIdentity::client_signing_capability(&user).unwrap();
     let record = hosted_record(
         std::path::Path::new("."),
-        "did:key:home",
-        &format!("{}/api/v0/graphql", server.uri()),
+        &home_did,
+        &format!("http://{address}/api/v0/graphql"),
     );
     let error = super::fetch_hosted_runtime_status(&record, Some(&capability))
         .await
@@ -647,6 +675,7 @@ async fn a_status_read_refused_at_a_vera_edge_asks_for_an_update() {
         "{error:#}"
     );
     assert!(format!("{error:#}").contains("update Gents"));
+    served.abort();
 }
 
 /// A GraphQL request whose identity token the edge of a Vera home refuses is
