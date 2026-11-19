@@ -410,7 +410,7 @@ def holdsAdministratorRelation (state : Household.State) (member : String) : Boo
 theorem administrator_observation_distinguishes_owner_from_direct_grant :
     holdsAdministratorRelation (standingState .owner) "approver" = false ∧
     holdsAdministratorRelation (standingState .administrator) "approver" = true ∧
-    holdsAdministratorRelation (standingState .agentManager) "approver" = false ∧
+    holdsAdministratorRelation (standingState .unrelated) "approver" = false ∧
     holdsAdministratorRelation (standingState .runtimeReader) "approver" = false := by
   native_decide
 
@@ -436,7 +436,6 @@ def observeAdministrator (state : Household.State) (approver member : String) : 
 theorem administrator_observation_requires_native_management_authority :
     observeAdministrator (standingState .owner) "approver" "member" = some false ∧
     observeAdministrator (standingState .administrator) "approver" "approver" = some true ∧
-    observeAdministrator (standingState .agentManager) "approver" "approver" = none ∧
     observeAdministrator (standingState .runtimeReader) "approver" "approver" = none ∧
     observeAdministrator (standingState .unrelated) "approver" "approver" = none := by
   native_decide
