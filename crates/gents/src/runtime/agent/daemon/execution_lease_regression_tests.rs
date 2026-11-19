@@ -5,6 +5,7 @@ const ACTIVE_STREAM_INTERVAL: Duration = Duration::from_millis(300);
 
 #[derive(Clone)]
 struct RecoveringProvider {
+    call: gents_loop::provider_call::ProviderCall,
     available: Arc<AtomicBool>,
     /// The connection fails once the opened stream is first read, as an HTTP
     /// client does, instead of before the attempt is opened.
@@ -12,8 +13,11 @@ struct RecoveringProvider {
 }
 
 impl gents_loop::provider_call::ForCall for RecoveringProvider {
-    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
     }
 }
 
@@ -38,7 +42,7 @@ impl CompletionModel for RecoveringProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "backend-recovery")
+        gents_inference::test_support::capture_scripted_provider_request(&self.call, &request, "backend-recovery")
             .await?;
         if !self.available.load(Ordering::SeqCst) {
             let error = CompletionError::ProviderError("HTTP status 503: unavailable".into());
@@ -90,7 +94,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(RecoveringProvider {
+        model: Arc::new(RecoveringProvider { call: Default::default(),
             available: available.clone(),
             fails_on_first_read,
         }),
@@ -201,6 +205,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
 
 #[derive(Clone)]
 struct NonTerminalProvider {
+    call: gents_loop::provider_call::ProviderCall,
     empty_forever: bool,
     active_chunks: Option<usize>,
     reasoning_prefix: bool,
@@ -210,16 +215,22 @@ struct NonTerminalProvider {
 }
 
 #[derive(Clone)]
-struct LeaseLossProvider;
+struct LeaseLossProvider {
+    call: gents_loop::provider_call::ProviderCall,
+}
 
 #[derive(Clone)]
 struct BufferedReasoningShutdownProvider {
+    call: gents_loop::provider_call::ProviderCall,
     processed_two: Arc<tokio::sync::Notify>,
 }
 
 impl gents_loop::provider_call::ForCall for BufferedReasoningShutdownProvider {
-    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
     }
 }
 
@@ -230,7 +241,7 @@ impl CompletionModel for BufferedReasoningShutdownProvider {
     type Client = ();
 
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self {
+        Self { call: Default::default(),
             processed_two: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -246,7 +257,7 @@ impl CompletionModel for BufferedReasoningShutdownProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "shutdown-reasoning")
+        gents_inference::test_support::capture_scripted_provider_request(&self.call, &request, "shutdown-reasoning")
             .await?;
         let processed_two = self.processed_two.clone();
         let events: rig::streaming::StreamingResult<()> =
@@ -289,7 +300,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = BufferedReasoningShutdownProvider {
+    let model = BufferedReasoningShutdownProvider { call: Default::default(),
         processed_two: Arc::new(tokio::sync::Notify::new()),
     };
     let prompt = LayeredPromptBuilder::for_agent(
@@ -608,8 +619,10 @@ async fn graceful_shutdown_after_lease_expiry_does_not_claim_lost_output() {
 }
 
 impl gents_loop::provider_call::ForCall for LeaseLossProvider {
-    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+        }
     }
 }
 
@@ -619,7 +632,7 @@ impl CompletionModel for LeaseLossProvider {
     type StreamingResponse = ();
     type Client = ();
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self
+        Self { call: Default::default() }
     }
     async fn completion(
         &self,
@@ -631,7 +644,7 @@ impl CompletionModel for LeaseLossProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "lease-loss").await?;
+        gents_inference::test_support::capture_scripted_provider_request(&self.call, &request, "lease-loss").await?;
         let events = vec![
             Ok(RawStreamingChoice::ToolCall(
                 rig::streaming::RawStreamingToolCall::new(
@@ -706,7 +719,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(LeaseLossProvider),
+        model: Arc::new(LeaseLossProvider { call: Default::default() }),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool { entered: None })
             as Box<dyn gents_loop::tool::ToolDyn>]),
@@ -768,8 +781,11 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
 }
 
 impl gents_loop::provider_call::ForCall for NonTerminalProvider {
-    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
     }
 }
 
@@ -780,7 +796,7 @@ impl CompletionModel for NonTerminalProvider {
     type Client = ();
 
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self {
+        Self { call: Default::default(),
             empty_forever: false,
             active_chunks: None,
             reasoning_prefix: false,
@@ -803,7 +819,7 @@ impl CompletionModel for NonTerminalProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        gents_inference::test_support::capture_scripted_provider_request(&self.call, &request, "scripted").await?;
 
         self.stream_calls.fetch_add(1, Ordering::SeqCst);
         if self.reasoning_prefix {
@@ -876,7 +892,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         .stream_liveness_timeout = Duration::from_secs(5);
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = NonTerminalProvider {
+    let model = NonTerminalProvider { call: Default::default(),
         empty_forever,
         active_chunks: None,
         reasoning_prefix: false,
@@ -1130,7 +1146,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(LeaseLossProvider),
+        model: Arc::new(LeaseLossProvider { call: Default::default() }),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
             entered: Some(tool_entered.clone()),
@@ -1285,7 +1301,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = NonTerminalProvider {
+    let model = NonTerminalProvider { call: Default::default(),
         empty_forever: false,
         active_chunks: Some(ACTIVE_CHUNKS),
         reasoning_prefix: false,
@@ -1405,7 +1421,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = NonTerminalProvider {
+    let model = NonTerminalProvider { call: Default::default(),
         empty_forever: false,
         active_chunks: None,
         reasoning_prefix: true,

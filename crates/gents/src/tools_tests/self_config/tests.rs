@@ -10,14 +10,18 @@ use gents_tools::builtin::self_config::test_support::{
 
 #[derive(Clone)]
 struct RootReadModel {
+    call: gents_loop::provider_call::ProviderCall,
     path: String,
     turns: Arc<std::sync::atomic::AtomicUsize>,
     provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl gents_loop::provider_call::ForCall for RootReadModel {
-    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
     }
 }
 
@@ -47,8 +51,10 @@ impl rig::completion::CompletionModel for RootReadModel {
     {
         use std::sync::atomic::Ordering;
 
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-            .await?;
+        gents_inference::test_support::capture_scripted_provider_request(
+            &self.call, &request, "scripted",
+        )
+        .await?;
         if !request.tools.iter().any(|tool| tool.name == "read_file") {
             let stream: rig::streaming::StreamingResult<()> = Box::pin(futures::stream::iter([
                 Ok(rig::streaming::RawStreamingChoice::Message(
@@ -679,6 +685,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             surface.clone(),
             &runtime,
             RootReadModel {
+                call: Default::default(),
                 path,
                 turns: turns.clone(),
                 provider_inputs: provider_inputs.clone(),

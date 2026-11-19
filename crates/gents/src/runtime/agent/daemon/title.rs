@@ -9,6 +9,7 @@ use tokio::sync::watch;
 
 use super::{AgentDaemon, ShutdownDrainFailure};
 use gents_loop::provider_call::admission::{AdmissionCallContext, CallKind};
+use gents_loop::provider_call::ProviderCall;
 use gents_protocol::row::AgentRequest;
 use gents_session::request::lifecycle::{
     ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
@@ -28,8 +29,11 @@ const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
 const TITLE_GENERATION_TIMEOUT_SECS: u64 = 10;
 const TITLE_VISIBLE_MAX_TOKENS: u64 = 24;
 
-async fn flush_received_title_partial(context: &str) -> Result<()> {
-    super::request::flush_received_preparation_partial(&format!("title {context}")).await
+async fn flush_received_title_partial(
+    capture: Option<&Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
+    context: &str,
+) -> Result<()> {
+    super::request::flush_received_preparation_partial(capture, &format!("title {context}")).await
 }
 
 #[derive(Clone)]
@@ -196,7 +200,8 @@ struct TitleGeneration<'a> {
     prompt: &'a str,
     config: crate::runtime::agent::loop_stream::LoopConfig,
     parent_requester_did: Option<String>,
-    admission: &'a AdmissionCallContext,
+    /// The request's own call context: its capture scope and admission.
+    call: &'a ProviderCall,
 }
 
 impl<M> AuxiliaryTask<M>
@@ -443,19 +448,23 @@ where
                     self.agent_config.openai_wire_api,
                 ),
             ));
-        let admission_context = AdmissionCallContext::for_request(
-            &request,
-            &self.agent_config.agent_did,
-            self.agent_config.backend_id.clone().unwrap_or_default(),
-        );
-        gents_inference::rendered_request::scope::scope_request(capture_scope, async {
+        let request_call = ProviderCall {
+            capture: Some(capture_scope),
+            admission: Some(AdmissionCallContext::for_request(
+                &request,
+                &self.agent_config.agent_did,
+                self.agent_config.backend_id.clone().unwrap_or_default(),
+            )),
+            ..Default::default()
+        };
+        async {
             lifecycle.begin_owned_execution(writer).await?;
             if request.purpose == RequestPurpose::AccessReview {
                 return self
                     .execute_review(
                         &request,
                         &parent,
-                        &admission_context,
+                        &request_call,
                         review,
                         shutdown,
                         &mut interrupt_rx,
@@ -553,13 +562,13 @@ where
                     prompt: &prompt,
                     config,
                     parent_requester_did: parent.requester_did,
-                    admission: &admission_context,
+                    call: &request_call,
                 },
                 shutdown,
                 &mut interrupt_rx,
             )
             .await
-        })
+        }
         .await
     }
 
@@ -577,7 +586,7 @@ where
             prompt,
             config,
             parent_requester_did,
-            admission,
+            call,
         } = generation;
         let mut last_error = None;
         for attempt in 1..=TITLE_GENERATION_MAX_ATTEMPTS {
@@ -585,8 +594,13 @@ where
                 return Ok(AuxiliaryResult::Interrupted);
             }
             let mut attempt_config = config.clone();
-            attempt_config.provider_call.admission =
-                Some(admission.for_call(CallKind::OneOff, attempt));
+            attempt_config.provider_call = ProviderCall {
+                admission: call
+                    .admission
+                    .as_ref()
+                    .map(|admission| admission.for_call(CallKind::OneOff, attempt)),
+                ..call.clone()
+            };
             let run = Box::pin(crate::runtime::agent::loop_stream::run_loop_to_text::<M>(
                 (*self.model).clone(),
                 gents_inference::llm::message::Message::user(prompt.to_string()),
@@ -599,7 +613,7 @@ where
                 _ = async {
                     let _ = shutdown.wait_for(|value| *value).await;
                 } => {
-                    flush_received_title_partial("shutdown").await?;
+                    flush_received_title_partial(call.capture.as_ref(), "shutdown").await?;
                     return Ok(AuxiliaryResult::Interrupted);
                 }
                 result = super::request::prepare_unless_interrupted(
@@ -608,7 +622,7 @@ where
                 ) => match result {
                     Some(result) => result,
                     None => {
-                        flush_received_title_partial("interrupt").await?;
+                        flush_received_title_partial(call.capture.as_ref(), "interrupt").await?;
                         return Ok(AuxiliaryResult::Interrupted);
                     }
                 },
@@ -621,7 +635,7 @@ where
                     })
                 }
                 Ok(Err(error)) => {
-                    flush_received_title_partial("provider error").await?;
+                    flush_received_title_partial(call.capture.as_ref(), "provider error").await?;
                     if !title_attempt_is_retryable(&error) {
                         return Err(anyhow::Error::from(error)
                             .context("title audit provider/output invariant failed"));
@@ -629,7 +643,7 @@ where
                     last_error = Some(anyhow::Error::from(error));
                 }
                 Err(_) => {
-                    flush_received_title_partial("provider timeout").await?;
+                    flush_received_title_partial(call.capture.as_ref(), "provider timeout").await?;
                     last_error = Some(anyhow::anyhow!(
                         "title inference timed out after {}s",
                         TITLE_GENERATION_TIMEOUT_SECS

@@ -637,7 +637,7 @@ mod tests {
     /// only composing the real stack catches it.
     #[tokio::test]
     async fn the_captured_row_carries_the_store_false_grok_injects() {
-        use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
+        use crate::rendered_request::scope::{arm, test_scope, CaptureScopeKind};
         use crate::rendered_request::transport::CountingInner;
         use crate::rendered_request::{
             AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest,
@@ -675,8 +675,13 @@ mod tests {
             sink,
         );
 
-        scope_request(scope, async {
+        async {
+            let call = gents_loop::provider_call::ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
             arm(
+                call.capture.as_ref(),
                 CaptureScopeKind::Inference,
                 0,
                 0,
@@ -694,14 +699,10 @@ mod tests {
                     .expect("assembled body"),
                 ))
                 .expect("request");
-            let _ = gents_loop::rig_compat::http::Transport::send_streaming(
-                &client,
-                &Default::default(),
-                req,
-            )
-            .await
-            .expect("send");
-        })
+            let _ = gents_loop::rig_compat::http::Transport::send_streaming(&client, &call, req)
+                .await
+                .expect("send");
+        }
         .await;
 
         let seen = seen.lock().expect("seen");

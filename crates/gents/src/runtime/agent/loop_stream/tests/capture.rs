@@ -137,7 +137,7 @@ async fn rendered_capture_follows_the_lean_model() {
         let sink_for_loop = sink.clone();
         let mut loop_config = config(0);
         loop_config.on_rendered_request =
-            Some(Arc::new(move |_turn_index, _attempt, _request, _trace| {
+            Some(Arc::new(move |_call, _turn_index, _attempt, _request, _trace| {
                 let sink = sink_for_loop.clone();
                 let delivery = delivery.clone();
                 let captured = captured_for_sink.clone();

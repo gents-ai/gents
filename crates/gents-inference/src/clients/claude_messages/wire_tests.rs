@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use gents_claude::request::RequestHead;
 use gents_claude::retry::{DEFAULT_MAX_RETRIES, OAUTH_REFRESH_ATTEMPTS};
+use gents_loop::provider_call::ProviderCall;
 use rapidhash::{HashSetExt, RapidHashSet};
 use rig::completion::CompletionError;
 use rig::http_client::{MultipartForm, Request};
@@ -223,12 +224,13 @@ impl BearerSource for ScriptedBearer {
 }
 
 async fn open(
+    call: &ProviderCall,
     url: &str,
     account: &ClaudeAccountContext,
     bearer: &ScriptedBearer,
 ) -> Result<(), CompletionError> {
     stream_messages_at(
-        &Default::default(),
+        call,
         url,
         "claude-sonnet-5",
         &echo_request(),
@@ -246,9 +248,14 @@ async fn a_main_turn_goes_out_with_bun_s_exact_head() {
     let _guard = lock_fixtures_for_test().await;
     let server = Server::start(vec![reply("200 OK", SSE_DONE)]).await;
     let bearer = ScriptedBearer::new(&[Ok("access-A")]);
-    open(&server.url(), &test_account(), &bearer)
-        .await
-        .expect("200");
+    open(
+        &ProviderCall::default(),
+        &server.url(),
+        &test_account(),
+        &bearer,
+    )
+    .await
+    .expect("200");
 
     let wire = &server.requests()[0];
     assert_eq!(wire.request_line, "POST /v1/messages?beta=true HTTP/1.1");
@@ -318,12 +325,9 @@ fn routed(latch: &Arc<AtomicBool>, port: u16) -> ClaudeHttpClient {
     ClaudeHttpClient::new(None).with_test_route(latch.clone(), "127.0.0.1", port)
 }
 
-/// Runs `future` under an armed capture scope whose sink counts the bodies it was given.
-async fn with_capture<F>(future: F) -> usize
-where
-    F: std::future::Future<Output = ()>,
-{
-    use crate::rendered_request::scope::{arm, scope_request, test_scope};
+/// A call whose capture scope is armed, and the count of bodies its sink was given.
+fn armed_capture() -> (ProviderCall, Arc<AtomicUsize>) {
+    use crate::rendered_request::scope::{arm, test_scope};
     use crate::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, CaptureScopeKind, RenderedRequestCaptureSink,
         RenderedRequestContext,
@@ -348,18 +352,19 @@ where
         },
         sink,
     );
-    scope_request(scope, async {
-        arm(
-            CaptureScopeKind::Inference,
-            0,
-            0,
-            AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
-        )
-        .expect("arm capture");
-        future.await;
-    })
-    .await;
-    captured.load(Ordering::SeqCst)
+    let call = ProviderCall {
+        capture: Some(scope),
+        ..Default::default()
+    };
+    arm(
+        call.capture.as_ref(),
+        CaptureScopeKind::Inference,
+        0,
+        0,
+        AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
+    )
+    .expect("arm capture");
+    (call, captured)
 }
 
 #[tokio::test]
@@ -368,12 +373,17 @@ async fn a_large_first_party_body_goes_gzipped_with_padding_after_capture() {
     let server = Server::start(vec![reply("200 OK", SSE_DONE)]).await;
     let latch = Arc::new(AtomicBool::new(false));
     let client = capturing(None, routed(&latch, server.port));
-    let captured = with_capture(async {
-        client
-            .send_streaming(&Default::default(), first_party_request(server.port, &body))
-            .await
-            .expect("200");
-    })
+    let captured = async {
+        let (call, captured) = armed_capture();
+        async {
+            client
+                .send_streaming(&call, first_party_request(server.port, &body))
+                .await
+                .expect("200");
+        }
+        .await;
+        captured.load(Ordering::SeqCst)
+    }
     .await;
     // Capture parses the body as JSON, which a gzip stream would fail.
     assert_eq!(captured, 1);
@@ -449,11 +459,16 @@ async fn a_refreshed_token_replays_the_same_body_with_new_credentials() {
     let _guard = lock_fixtures_for_test().await;
     let server = Server::start(vec![UNAUTHORIZED, reply("200 OK", SSE_DONE)]).await;
     let bearer = ScriptedBearer::new(&[Ok("access-OLD"), Ok("access-NEW")]);
-    let captured = with_capture(async {
-        open(&server.url(), &test_account(), &bearer)
-            .await
-            .expect("the replay succeeds");
-    })
+    let captured = async {
+        let (call, captured) = armed_capture();
+        async {
+            open(&call, &server.url(), &test_account(), &bearer)
+                .await
+                .expect("the replay succeeds");
+        }
+        .await;
+        captured.load(Ordering::SeqCst)
+    }
     .await;
     assert_eq!(captured, 1, "the resend reuses the durable capture");
 
@@ -479,9 +494,14 @@ async fn an_unchanged_token_fails_after_the_refresh_attempts() {
     let _guard = lock_fixtures_for_test().await;
     let server = Server::start(vec![UNAUTHORIZED, UNAUTHORIZED, reply("200 OK", SSE_DONE)]).await;
     let bearer = ScriptedBearer::new(&[Ok("access-STALE")]);
-    let error = open(&server.url(), &test_account(), &bearer)
-        .await
-        .expect_err("401");
+    let error = open(
+        &ProviderCall::default(),
+        &server.url(),
+        &test_account(),
+        &bearer,
+    )
+    .await
+    .expect_err("401");
     assert!(error.to_string().contains("401"), "{error}");
     assert_eq!(server.requests().len(), OAUTH_REFRESH_ATTEMPTS as usize);
     assert_eq!(
@@ -500,7 +520,7 @@ async fn an_api_key_401_is_not_replayed() {
         api_key: true,
         ..test_account()
     };
-    let error = open(&server.url(), &account, &bearer)
+    let error = open(&ProviderCall::default(), &server.url(), &account, &bearer)
         .await
         .expect_err("401");
     assert!(error.to_string().contains("401"), "{error}");
@@ -512,9 +532,14 @@ async fn a_refresh_failure_ends_the_request_with_its_error() {
     let _guard = lock_fixtures_for_test().await;
     let server = Server::start(vec![UNAUTHORIZED, reply("200 OK", SSE_DONE)]).await;
     let bearer = ScriptedBearer::new(&[Ok("access-OLD"), Err("the Claude account is on hold")]);
-    let error = open(&server.url(), &test_account(), &bearer)
-        .await
-        .expect_err("hold");
+    let error = open(
+        &ProviderCall::default(),
+        &server.url(),
+        &test_account(),
+        &bearer,
+    )
+    .await
+    .expect_err("hold");
     assert!(error.to_string().contains("on hold"), "{error}");
     assert_eq!(server.requests().len(), 1);
 }

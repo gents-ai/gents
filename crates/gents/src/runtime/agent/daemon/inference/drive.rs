@@ -37,6 +37,8 @@ pub(super) struct StreamDrive<'a> {
     pub(super) request_deadline: RequestDeadline,
     pub(super) terminal_failure_reason: &'a std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pub(super) max_turns_provenance: MaxTurnsProvenance,
+    pub(super) capture:
+        Option<&'a std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
 }
 
 pub(super) async fn drive_inference_stream<S>(
@@ -64,6 +66,7 @@ where
         trigger_context,
         request_deadline,
         terminal_failure_reason,
+        capture,
         ..
     } = drive;
     let mut processor = crate::runtime::agent::stream_processor::StreamProcessor::new(
@@ -72,7 +75,8 @@ where
         lifecycle,
         doc_id,
         provider_profile,
-    );
+    )
+    .with_capture(capture.cloned());
     let mut lease_poll = tokio::time::interval(Duration::from_secs(1));
     lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut stream_error = None;

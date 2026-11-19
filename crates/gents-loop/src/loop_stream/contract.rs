@@ -155,6 +155,7 @@ impl Drop for EstimateSeedGuard {
 
 pub type RenderedRequestSink = Arc<
     dyn Fn(
+            &crate::provider_call::ProviderCall,
             usize,
             u32,
             CompletionRequest,

@@ -40,10 +40,13 @@ pub(super) async fn prepare_unless_interrupted<T>(
     }
 }
 
-pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<()> {
+pub(super) async fn flush_received_preparation_partial(
+    capture: Option<&std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
+    context: &str,
+) -> Result<()> {
     match tokio::time::timeout(
         gents_store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        gents_inference::rendered_request::scope::flush_received_auxiliary_partial(),
+        gents_inference::rendered_request::scope::flush_received_auxiliary_partial(capture),
     ).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(super::ShutdownDrainFailure {
@@ -165,8 +168,8 @@ where
         );
         // One capture scope for the whole request: the pre-request compaction
         // summarizer issues real provider calls whose input is the entire
-        // pre-truncated transcript, so scoping only the inference block left
-        // those calls with no ambient scope and no durable record. It must
+        // pre-truncated transcript, so capturing only the inference loop left
+        // those calls with no capture scope and no durable record. It must
         // stay a single scope instance: the per-kind sequence keeping the
         // inference loop, the summarizer, and its JSON fallback from colliding
         // on `(turn 0, attempt 0)` lives in the scope.
@@ -207,10 +210,15 @@ where
                 resume_from_history,
                 resume_same_request,
                 admission: &admission_context,
+                capture: capture_scope.as_ref(),
             });
             let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
             else {
-                flush_received_preparation_partial("interrupted request preparation").await?;
+                flush_received_preparation_partial(
+                    capture_scope.as_ref(),
+                    "interrupted request preparation",
+                )
+                .await?;
                 return Ok(HandleRequestOutcome::Interrupted(
                     RequestInterruptionSource::Preparation,
                 ));
@@ -250,6 +258,7 @@ where
                     folded_prompts,
                     context_calibration,
                     &admission_context,
+                    capture_scope.as_ref(),
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",
@@ -280,12 +289,7 @@ where
                 .await
         };
 
-        match capture_scope {
-            Some(scope) => {
-                gents_inference::rendered_request::scope::scope_request(scope, handled).await
-            }
-            None => handled.await,
-        }
+        handled.await
     }
 }
 

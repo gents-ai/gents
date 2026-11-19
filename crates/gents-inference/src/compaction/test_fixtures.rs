@@ -164,11 +164,13 @@ pub struct ScriptedSummaryModel {
     pub calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub script: Arc<Mutex<std::collections::VecDeque<Vec<RawStreamingChoice<()>>>>>,
     pub requests: Arc<Mutex<Vec<CompletionRequest>>>,
+    call: gents_loop::provider_call::ProviderCall,
 }
 
 impl ScriptedSummaryModel {
     pub fn new(script: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
         Self {
+            call: Default::default(),
             calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             script: Arc::new(Mutex::new(script.into_iter().collect())),
             requests: Arc::new(Mutex::new(Vec::new())),
@@ -210,8 +212,11 @@ impl ScriptedSummaryModel {
 }
 
 impl gents_loop::provider_call::ForCall for ScriptedSummaryModel {
-    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
     }
 }
 
@@ -241,7 +246,7 @@ impl CompletionModel for ScriptedSummaryModel {
         // Stand in for the capturing transport: a real send claims the armed
         // capture, without which the owned loop's fence fires. No-op outside a
         // capture scope.
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
         let turn = self
             .script
             .lock()

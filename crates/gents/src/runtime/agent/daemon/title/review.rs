@@ -8,7 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{AgentDaemon, AuxiliaryResult, AuxiliaryTask};
 use crate::runtime::agent::loop_stream::AggregateTokenBudget;
-use gents_loop::provider_call::admission::{AdmissionCallContext, CallKind};
+use gents_loop::provider_call::admission::CallKind;
+use gents_loop::provider_call::ProviderCall;
 use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]
@@ -292,7 +293,7 @@ where
         &self,
         request: &AgentRequest,
         parent: &AgentRequest,
-        admission: &AdmissionCallContext,
+        call: &ProviderCall,
         execution: Option<ReviewExecution>,
         mut shutdown: watch::Receiver<bool>,
         interrupt: &mut watch::Receiver<Option<gents_session::request::interrupt::InterruptIntent>>,
@@ -346,7 +347,14 @@ where
         config.retry_policy = gents_loop::completion_retry::CompletionRetryPolicy::no_retry();
         config.aggregate_token_budget = execution.aggregate_token_budget;
         let mut budget_guard = ReviewBudgetGuard(config.aggregate_token_budget.clone());
-        config.provider_call.admission = Some(admission.for_call(CallKind::OneOff, 1));
+        let capture = call.capture.clone();
+        config.provider_call = ProviderCall {
+            admission: call
+                .admission
+                .as_ref()
+                .map(|admission| admission.for_call(CallKind::OneOff, 1)),
+            ..call.clone()
+        };
         let call = Box::pin(crate::runtime::agent::loop_stream::run_loop_to_text::<M>(
             (*self.model).clone(),
             gents_inference::llm::message::Message::user(request.content.clone()),
@@ -364,8 +372,11 @@ where
             ) => result,
         };
         let Some(result) = result else {
-            super::super::request::flush_received_preparation_partial("access review cancellation")
-                .await?;
+            super::super::request::flush_received_preparation_partial(
+                capture.as_ref(),
+                "access review cancellation",
+            )
+            .await?;
             return Ok(AuxiliaryResult::Interrupted);
         };
         match result {
@@ -378,13 +389,19 @@ where
                 }
             }
             Ok(Err(error)) => {
-                super::super::request::flush_received_preparation_partial("access review failure")
-                    .await?;
+                super::super::request::flush_received_preparation_partial(
+                    capture.as_ref(),
+                    "access review failure",
+                )
+                .await?;
                 Err(error.into())
             }
             Err(error) => {
-                super::super::request::flush_received_preparation_partial("access review timeout")
-                    .await?;
+                super::super::request::flush_received_preparation_partial(
+                    capture.as_ref(),
+                    "access review timeout",
+                )
+                .await?;
                 Err(error.into())
             }
         }

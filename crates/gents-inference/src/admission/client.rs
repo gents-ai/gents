@@ -34,8 +34,8 @@ pub struct AdmittedCompletionModel<M> {
     pub(crate) profile_id: Option<String>,
     pub(crate) separate_reasoning: bool,
     pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
-    /// The admission of the call this model was built for.
-    call_admission: Option<AdmissionCallContext>,
+    /// The call this model was built for.
+    call: ProviderCall,
 }
 
 impl<M> ForCall for AdmittedCompletionModel<M>
@@ -51,7 +51,7 @@ where
             profile_id: self.profile_id.clone(),
             separate_reasoning: self.separate_reasoning,
             agent_signer: self.agent_signer.clone(),
-            call_admission: call.admission.clone(),
+            call: call.clone(),
         }
     }
 }
@@ -66,7 +66,7 @@ impl<M> AdmittedCompletionModel<M> {
             profile_id: None,
             separate_reasoning: false,
             agent_signer: None,
-            call_admission: None,
+            call: ProviderCall::default(),
         }
     }
 
@@ -83,7 +83,7 @@ impl<M> AdmittedCompletionModel<M> {
         let mut permit = self
             .admission
             .acquire_call_with_signer(
-                self.call_admission.as_ref(),
+                self.call.admission.as_ref(),
                 &self.connection,
                 self.model_name.as_deref(),
                 self.profile_id.as_deref(),
@@ -93,11 +93,14 @@ impl<M> AdmittedCompletionModel<M> {
             .map_err(AdmittedCallError::Admission)?;
         if observe_provider_activity {
             permit.observe_provider_activity(
-                crate::rendered_request::scope::current_attempt_activity(),
+                crate::rendered_request::scope::current_attempt_activity(
+                    self.call.capture.as_ref(),
+                ),
             );
         }
         let result = match self
-            .call_admission
+            .call
+            .admission
             .as_ref()
             .and_then(|context| context.inference_token().cloned())
         {

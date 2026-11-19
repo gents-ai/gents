@@ -150,6 +150,7 @@ fn compact_turn(
             .expect("admission call scope requires request context")
             .for_call(CallKind::Compaction, 1);
         options.provider_call.admission = Some(call_admission.clone());
+        options.provider_call.capture = compaction_request.provider_call.capture.clone();
         let result = compactor
             .reduce(
                 native_messages,

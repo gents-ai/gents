@@ -182,7 +182,7 @@ impl HttpClientExt for StatusInjectingClient {
 
 #[tokio::test]
 async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized() {
-    use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
+    use crate::rendered_request::scope::{arm, test_scope, CaptureScopeKind};
     use crate::rendered_request::transport::CountingInner;
     use crate::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest, RenderedRequestCaptureSink,
@@ -232,8 +232,13 @@ async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized()
         "max_output_tokens": 4096,
     });
 
-    scope_request(scope, async {
+    async {
+        let call = ProviderCall {
+            capture: Some(scope),
+            ..Default::default()
+        };
         arm(
+            call.capture.as_ref(),
             CaptureScopeKind::Inference,
             0,
             0,
@@ -247,10 +252,10 @@ async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized()
                 serde_json::to_vec(&assembled).expect("assembled body"),
             ))
             .expect("request");
-        let _ = Transport::send_streaming(&client, &Default::default(), req)
+        let _ = Transport::send_streaming(&client, &call, req)
             .await
             .expect("send");
-    })
+    }
     .await;
 
     let seen = seen.lock().expect("seen");

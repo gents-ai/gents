@@ -466,6 +466,7 @@ where
                             pre_compaction_input_tokens,
                         ));
                         on_rendered_request(
+                            &config.provider_call,
                             turn_index,
                             attempt,
                             dispatch_request.clone(),
@@ -479,10 +480,18 @@ where
                             })?;
                     }
                     let audit_receiver =
-                        crate::rendered_request::scope::take_audit_receiver(turn_index, attempt);
+                        crate::rendered_request::scope::take_audit_receiver(
+                            config.provider_call.capture.as_ref(),
+                            turn_index,
+                            attempt,
+                        );
 
                     let activity =
-                        crate::rendered_request::scope::attempt_activity(turn_index, attempt);
+                        crate::rendered_request::scope::attempt_activity(
+                            config.provider_call.capture.as_ref(),
+                            turn_index,
+                            attempt,
+                        );
                     if let Some(hook) = &hook {
                         hook.observe_provider(crate::session_hook::ProviderObservation::Attempt {
                             turn: turn_index,
@@ -661,6 +670,7 @@ where
                 };
 
             let attempt_capture_scope = if let Some(scope) = crate::rendered_request::scope::armed_capture_scope(
+                config.provider_call.capture.as_ref(),
                 turn_index,
                 attempt,
             ) {
@@ -741,7 +751,7 @@ where
                     match next {
                         (Some(Some(observation)), _) => {
                             if !saw_stream_item {
-                                ensure_rendered_request_was_captured(turn_index, attempt)?;
+                                ensure_rendered_request_was_captured(config.provider_call.capture.as_ref(), turn_index, attempt)?;
                             }
                             saw_stream_item = true;
                             if let ClaudeAuditEvent::BlockStart { index, ref kind } = observation.event {
@@ -765,7 +775,7 @@ where
                         crate::provider_audit::try_recv_one(receiver)
                     {
                         if !saw_stream_item {
-                            ensure_rendered_request_was_captured(turn_index, attempt)?;
+                            ensure_rendered_request_was_captured(config.provider_call.capture.as_ref(), turn_index, attempt)?;
                         }
                         saw_stream_item = true;
                         if let ClaudeAuditEvent::BlockStart { index, ref kind } = observation.event {
@@ -781,7 +791,7 @@ where
                 let item = match item {
                     Ok(item) => {
                         if !saw_stream_item {
-                            ensure_rendered_request_was_captured(turn_index, attempt)?;
+                            ensure_rendered_request_was_captured(config.provider_call.capture.as_ref(), turn_index, attempt)?;
                         }
                         saw_stream_item = true;
                         item
@@ -1096,7 +1106,7 @@ where
             };
 
             if !saw_stream_item {
-                ensure_rendered_request_was_captured(turn_index, attempt)?;
+                ensure_rendered_request_was_captured(config.provider_call.capture.as_ref(), turn_index, attempt)?;
             }
 
             if let Some(budget) = aggregate_token_budget
@@ -1785,10 +1795,11 @@ fn current_rag_text(prompt: &Message, history: &[Message], prior: &[Message]) ->
 }
 
 fn ensure_rendered_request_was_captured(
+    capture: Option<&Arc<crate::rendered_request::scope::RequestCaptureScope>>,
     turn_index: usize,
     attempt: u32,
 ) -> Result<(), StreamingError> {
-    if crate::rendered_request::scope::pending_is_armed() {
+    if crate::rendered_request::scope::pending_is_armed(capture) {
         return Err(StreamingError::Completion(CompletionError::ProviderError(
             format!(
                 "provider response for turn {turn_index} attempt {attempt} \

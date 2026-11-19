@@ -21,6 +21,7 @@ mod provider_finish_tests;
 struct ScriptedModel {
     turns: Arc<Mutex<Vec<Vec<RawStreamingChoice<()>>>>>,
     requests: Arc<Mutex<Vec<String>>>,
+    call: crate::provider_call::ProviderCall,
 }
 
 impl ScriptedModel {
@@ -28,13 +29,17 @@ impl ScriptedModel {
         Self {
             turns: Arc::new(Mutex::new(turns.into_iter().rev().collect())),
             requests: Arc::default(),
+            call: Default::default(),
         }
     }
 }
 
 impl crate::provider_call::ForCall for ScriptedModel {
-    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
     }
 }
 
@@ -63,7 +68,7 @@ impl CompletionModel for ScriptedModel {
             .lock()
             .unwrap()
             .push(serde_json::to_string(&request.chat_history).unwrap());
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
         let items = self
             .turns
             .lock()
@@ -443,10 +448,14 @@ async fn a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent() {
     struct Model {
         open: Arc<AtomicBool>,
         emitted: Arc<AtomicBool>,
+        call: crate::provider_call::ProviderCall,
     }
     impl crate::provider_call::ForCall for Model {
-        fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
-            self.clone()
+        fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+            Self {
+                call: call.clone(),
+                ..self.clone()
+            }
         }
     }
 
@@ -471,7 +480,7 @@ async fn a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent() {
             &self,
             _: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            let _ = crate::rendered_request::scope::claim_pending();
+            let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
             Ok(StreamingCompletionResponse::stream(Box::pin(GatedChunk {
                 open: self.open.clone(),
                 emitted: self.emitted.clone(),
@@ -480,6 +489,7 @@ async fn a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent() {
     }
 
     let model = Model {
+        call: Default::default(),
         open: Arc::new(AtomicBool::new(false)),
         emitted: Arc::new(AtomicBool::new(false)),
     };
@@ -620,9 +630,7 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
             ..Default::default()
         };
         let observed_hook = hook.clone();
-        use crate::rendered_request::scope::{
-            ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
-        };
+        use crate::rendered_request::scope::{arming_sink, test_scope, CaptureScopeKind};
         let scope = test_scope(
             crate::rendered_request::RenderedRequestContext {
                 request_doc_id: "dispatch-doc".into(),
@@ -638,40 +646,46 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
             Arc::new(|_| Box::pin(async { Ok(()) })),
         );
         let mut config = test_loop_config();
-        config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
-        let failure = scope_request(scope, async {
-            let stream = crate::loop_stream::run_loop_stream(
-                model,
-                Some(hook),
-                TaggedMessage::unassociated(Message::user("echo hi")),
-                Vec::new(),
-                tools,
-                config,
-            );
-            futures::pin_mut!(stream);
-            let mut failure = None;
-            while let Some(item) = stream.next().await {
-                match item {
-                    Ok(crate::loop_stream::LoopStreamItem::AuthoredInputReady {
-                        reply, ..
-                    })
-                    | Ok(crate::loop_stream::LoopStreamItem::SteeringBoundary { reply }) => {
-                        reply.send(Ok(Vec::new())).unwrap();
+        config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
+        let failure = {
+            config.provider_call.capture = Some(scope);
+            async {
+                let stream = crate::loop_stream::run_loop_stream(
+                    model,
+                    Some(hook),
+                    TaggedMessage::unassociated(Message::user("echo hi")),
+                    Vec::new(),
+                    tools,
+                    config,
+                );
+                futures::pin_mut!(stream);
+                let mut failure = None;
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(crate::loop_stream::LoopStreamItem::AuthoredInputReady {
+                            reply,
+                            ..
+                        })
+                        | Ok(crate::loop_stream::LoopStreamItem::SteeringBoundary { reply }) => {
+                            reply.send(Ok(Vec::new())).unwrap();
+                        }
+                        Ok(crate::loop_stream::LoopStreamItem::FinishOrIntake {
+                            reply, ..
+                        }) => {
+                            reply
+                                .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
+                                .ok();
+                        }
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                        _ => {}
                     }
-                    Ok(crate::loop_stream::LoopStreamItem::FinishOrIntake { reply, .. }) => {
-                        reply
-                            .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
-                            .ok();
-                    }
-                    Err(error) => {
-                        failure = Some(error);
-                        break;
-                    }
-                    _ => {}
                 }
+                failure
             }
-            failure
-        })
+        }
         .await;
         let recorded = observed_hook.calls();
         let elections = recorded
@@ -692,9 +706,8 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
     }
 }
 
-async fn with_steering_capture_scope(future: impl std::future::Future<Output = ()>) {
-    use crate::rendered_request::scope::{scope_request, test_scope};
-    let scope = test_scope(
+fn steering_capture_scope() -> Arc<crate::rendered_request::scope::RequestCaptureScope> {
+    crate::rendered_request::scope::test_scope(
         crate::rendered_request::RenderedRequestContext {
             request_doc_id: "steering-doc".into(),
             request_commit_cid: "steering-cid".into(),
@@ -707,14 +720,14 @@ async fn with_steering_capture_scope(future: impl std::future::Future<Output = (
             provider_family: None,
         },
         Arc::new(|_| Box::pin(async { Ok(()) })),
-    );
-    scope_request(scope, future).await;
+    )
 }
 
 fn steering_loop_config() -> LoopConfig {
-    use crate::rendered_request::scope::{ambient_arming_sink, CaptureScopeKind};
+    use crate::rendered_request::scope::{arming_sink, CaptureScopeKind};
     let mut config = test_loop_config();
-    config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
+    config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
+    config.provider_call.capture = Some(steering_capture_scope());
     config
 }
 
@@ -750,7 +763,7 @@ async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
         None,
         None,
         None,
-        with_steering_capture_scope(async {
+        async {
             let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
                 model,
                 Some(hook),
@@ -776,7 +789,7 @@ async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
             }
             drop(next);
             drop(stream);
-        }),
+        },
     )
     .await;
     assert_eq!(*gate.request_id.lock().unwrap(), Some("request".into()));
@@ -814,11 +827,8 @@ async fn failed_input_publication_prevents_provider_dispatch() {
 
 #[tokio::test]
 async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication() {
-    with_steering_capture_scope(
-        modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication_scoped(
-        ),
-    )
-    .await;
+    modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication_scoped()
+        .await;
 }
 
 async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication_scoped(
@@ -934,12 +944,16 @@ impl rig::completion::GetTokenUsage for RequestIdResponse {
 
 #[derive(Clone)]
 struct RequestIdModel {
+    call: crate::provider_call::ProviderCall,
     request_id: Option<String>,
 }
 
 impl crate::provider_call::ForCall for RequestIdModel {
-    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
     }
 }
 
@@ -964,7 +978,7 @@ impl CompletionModel for RequestIdModel {
         &self,
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
         let items = vec![
             Ok(RawStreamingChoice::Message("answer".into())),
             Ok(RawStreamingChoice::MessageId("msg_1".into())),
@@ -980,10 +994,11 @@ impl CompletionModel for RequestIdModel {
 
 #[tokio::test]
 async fn the_accepted_assistant_message_records_the_final_responses_request_id() {
-    with_steering_capture_scope(async {
+    async {
         for reported in [Some("req_abc"), None] {
             let stream = crate::loop_stream::run_loop_stream(
                 RequestIdModel {
+                    call: Default::default(),
                     request_id: reported.map(str::to_owned),
                 },
                 Some(RecordingHook::default()),
@@ -1019,15 +1034,13 @@ async fn the_accepted_assistant_message_records_the_final_responses_request_id()
             assert_eq!(id.as_deref(), Some("msg_1"));
             assert_eq!(request_id.as_deref(), reported);
         }
-    })
+    }
     .await;
 }
 
 #[tokio::test]
 async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without_invoking() {
-    use crate::rendered_request::scope::{
-        ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
-    };
+    use crate::rendered_request::scope::{arming_sink, test_scope, CaptureScopeKind};
     use crate::tool::{BoxFuture, ToolError, ToolFootprint};
     use futures::StreamExt;
 
@@ -1099,49 +1112,53 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
                 Arc::new(|_| Box::pin(async { Ok(()) })),
             );
             let mut config = test_loop_config();
-            config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
-            scope_request(scope, async {
-                let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
-                    model,
-                    Some(hook),
-                    TaggedMessage::unassociated(Message::user("work")),
-                    Vec::new(),
-                    tools,
-                    config,
-                ));
-                loop {
-                    match stream
-                        .next()
-                        .await
-                        .expect("stream item")
-                        .expect("stream succeeds")
-                    {
-                        crate::loop_stream::LoopStreamItem::AuthoredInputReady {
-                            reply, ..
+            config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
+            {
+                config.provider_call.capture = Some(scope);
+                async {
+                    let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
+                        model,
+                        Some(hook),
+                        TaggedMessage::unassociated(Message::user("work")),
+                        Vec::new(),
+                        tools,
+                        config,
+                    ));
+                    loop {
+                        match stream
+                            .next()
+                            .await
+                            .expect("stream item")
+                            .expect("stream succeeds")
+                        {
+                            crate::loop_stream::LoopStreamItem::AuthoredInputReady {
+                                reply,
+                                ..
+                            }
+                            | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                                reply.send(Ok(Vec::new())).unwrap();
+                            }
+                            crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
+                            _ => {}
                         }
-                        | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
-                            reply.send(Ok(Vec::new())).unwrap();
-                        }
-                        crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
-                        _ => {}
                     }
+                    assert!(
+                        !observed
+                            .calls()
+                            .iter()
+                            .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
+                        "turn publication precedes admission"
+                    );
+                    let mut next = Box::pin(stream.next());
+                    tokio::select! {
+                        () = gate.entered.notified() => {},
+                        result = &mut next => panic!("hook did not hold admission: {result:?}"),
+                    }
+                    drop(next);
+                    drop(stream);
+                    gate.release.notify_one();
                 }
-                assert!(
-                    !observed
-                        .calls()
-                        .iter()
-                        .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
-                    "turn publication precedes admission"
-                );
-                let mut next = Box::pin(stream.next());
-                tokio::select! {
-                    () = gate.entered.notified() => {},
-                    result = &mut next => panic!("hook did not hold admission: {result:?}"),
-                }
-                drop(next);
-                drop(stream);
-                gate.release.notify_one();
-            })
+            }
             .await;
             invocations.push(invoked.load(std::sync::atomic::Ordering::SeqCst) != 0);
         }
@@ -1179,11 +1196,13 @@ async fn empty_output_is_retried_through_the_owned_loop() {
 }
 
 #[derive(Clone)]
-struct UnavailableModel;
+struct UnavailableModel {
+    call: crate::provider_call::ProviderCall,
+}
 
 impl crate::provider_call::ForCall for UnavailableModel {
-    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+        Self { call: call.clone() }
     }
 }
 
@@ -1194,7 +1213,9 @@ impl CompletionModel for UnavailableModel {
     type Client = ();
 
     fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
-        Self
+        Self {
+            call: Default::default(),
+        }
     }
 
     async fn completion(
@@ -1208,7 +1229,7 @@ impl CompletionModel for UnavailableModel {
         &self,
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
         Err(CompletionError::ProviderError(
             "HTTP status 503: unavailable".into(),
         ))
@@ -1224,7 +1245,9 @@ async fn exhausted_backend_failure_retains_its_typed_availability_verdict() {
         _,
         crate::session_hook::NoopSessionHook,
     >(
-        UnavailableModel,
+        UnavailableModel {
+            call: Default::default(),
+        },
         None,
         TaggedMessage::unassociated(Message::user("hello")),
         Vec::new(),

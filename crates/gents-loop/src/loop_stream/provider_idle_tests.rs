@@ -20,9 +20,7 @@ use crate::error::InferenceError;
 use crate::loop_stream::{run_loop_stream, LoopConfig, LoopStreamItem, TaggedMessage};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
-use crate::rendered_request::scope::{
-    ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
-};
+use crate::rendered_request::scope::{arming_sink, test_scope, CaptureScopeKind};
 use crate::rendered_request::transport::RenderedRequestCapturingHttpClient;
 use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
 use crate::session_hook::NoopSessionHook;
@@ -164,11 +162,13 @@ impl HttpClientExt for ScriptedWire {
 struct WireModel {
     client: RenderedRequestCapturingHttpClient<ScriptedWire>,
     finalize_delays: Arc<Mutex<VecDeque<Duration>>>,
+    call: crate::provider_call::ProviderCall,
 }
 
 impl WireModel {
     fn new(wire: &ScriptedWire, attempts: &[WireAttempt]) -> Self {
         Self {
+            call: Default::default(),
             client: RenderedRequestCapturingHttpClient::new(wire.clone()),
             finalize_delays: Arc::new(Mutex::new(
                 attempts
@@ -181,8 +181,11 @@ impl WireModel {
 }
 
 impl crate::provider_call::ForCall for WireModel {
-    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
-        self.clone()
+    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
     }
 }
 
@@ -225,7 +228,7 @@ impl CompletionModel for WireModel {
             .expect("request");
         let response = crate::rig_compat::http::Transport::send_streaming(
             &self.client,
-            &Default::default(),
+            &self.call,
             request,
         )
         .await?;
@@ -292,7 +295,7 @@ fn config(retry_policy: CompletionRetryPolicy) -> LoopConfig {
         structured_output: None,
         tool_choice: None,
         configuration_guard: None,
-        on_rendered_request: Some(ambient_arming_sink(CaptureScopeKind::Inference)),
+        on_rendered_request: Some(arming_sink(CaptureScopeKind::Inference)),
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
@@ -359,14 +362,18 @@ async fn run(attempts: Vec<WireAttempt>, policy: CompletionRetryPolicy) -> Run {
     let model = WireModel::new(&wire, &attempts);
     let dropped = wire.dropped_bodies.clone();
     let started = tokio::time::Instant::now();
-    let observed = scope_request(test_scope(context(), accepting_sink()), async move {
+    let observed = async move { let capture = test_scope(context(), accepting_sink());
         let stream = run_loop_stream::<_, NoopSessionHook>(
             model,
             None,
             TaggedMessage::unassociated(Message::user("hello")),
             Vec::new(),
             Arc::new(Vec::new()),
-            config(policy),
+            {
+                let mut config = config(policy);
+                config.provider_call.capture = Some(capture);
+                config
+            },
         );
         futures::pin_mut!(stream);
         let mut observed = Vec::new();
@@ -398,7 +405,7 @@ async fn run(attempts: Vec<WireAttempt>, policy: CompletionRetryPolicy) -> Run {
             }
         }
         observed
-    })
+    }
     .await;
     Run {
         observed,

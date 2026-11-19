@@ -31,6 +31,9 @@ pub(super) struct RequestInputs<'a> {
     pub(super) resume_same_request: bool,
     /// The request's admission, from which its calls are admitted.
     pub(super) admission: &'a AdmissionCallContext,
+    /// The request's capture scope, which its provider calls are captured in.
+    pub(super) capture:
+        Option<&'a std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
 }
 
 pub(super) struct PreparedRequestInput {
@@ -492,6 +495,7 @@ where
             context_calibration,
             effective_seed,
             admission: admission_context,
+            capture,
             ..
         } = inputs;
         let SessionReduction {
@@ -526,6 +530,7 @@ where
             self.agent_config.context_window,
         )?;
         options.provider_call.admission = Some(admission_context.for_call(CallKind::Compaction, 1));
+        options.provider_call.capture = capture.cloned();
         let result = self
             .compactor
             .reduce(

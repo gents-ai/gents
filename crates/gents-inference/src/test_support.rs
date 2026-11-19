@@ -11,6 +11,7 @@ use gents_documents::test_support::{
 use gents_store::test_support::held_runtime_identity;
 
 pub async fn capture_scripted_provider_request(
+    call: &gents_loop::provider_call::ProviderCall,
     request: &rig::completion::CompletionRequest,
     model: &str,
 ) -> Result<(), rig::completion::CompletionError> {
@@ -34,13 +35,9 @@ pub async fn capture_scripted_provider_request(
             |error| rig::completion::CompletionError::ProviderError(error.to_string()),
         )?))
         .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    gents_loop::rig_compat::http::Transport::send_streaming(
-        &transport,
-        &Default::default(),
-        outbound,
-    )
-    .await
-    .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+    gents_loop::rig_compat::http::Transport::send_streaming(&transport, call, outbound)
+        .await
+        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
     assert_eq!(
         inner.send_count(),
         1,

@@ -81,9 +81,7 @@ impl CompactionFixture {
 
 #[tokio::test]
 async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
-    use gents_inference::rendered_request::scope::{
-        armed_labels, scope_request, test_scope, CaptureScopeKind,
-    };
+    use gents_inference::rendered_request::scope::{armed_labels, test_scope, CaptureScopeKind};
     use gents_inference::rendered_request::RenderedRequestCaptureSink;
 
     let model = ScriptedSummaryModel::new(vec![
@@ -94,9 +92,9 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
         ScriptedSummaryModel::summary_turn(),
     ]);
     let mut config = scheduled_origin_config();
-    config.on_rendered_request = Some(
-        gents_inference::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Compaction),
-    );
+    config.on_rendered_request = Some(gents_inference::rendered_request::scope::arming_sink(
+        CaptureScopeKind::Compaction,
+    ));
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
     let mut fixture = CompactionFixture::new(
@@ -131,7 +129,8 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
             GROUPED_PROFILE,
         ));
 
-    let labels = scope_request(scope, async move {
+    let labels = async move {
+        let capture = scope;
         compactor
             .reduce(
                 summary_worthy_messages(),
@@ -140,14 +139,18 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
                     keep_recent_tokens: 50,
                     mode: ReductionMode::Summarize,
                     summary_max_output_tokens: 512,
+                    provider_call: gents_loop::provider_call::ProviderCall {
+                        capture: Some(capture.clone()),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 test_reduction_admission(),
             )
             .await
             .expect("the strict JSON fallback recovers");
-        armed_labels()
-    })
+        armed_labels(Some(&capture))
+    }
     .await;
 
     assert_eq!(

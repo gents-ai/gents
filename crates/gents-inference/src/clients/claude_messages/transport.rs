@@ -601,8 +601,8 @@ pub(super) fn capturing(
     RenderedRequestCapturingHttpClient::new(MessagesTransport { fixture, live })
 }
 
-/// The capture layer decides at this future's first poll, so it is awaited
-/// in the task that armed the capture.
+/// The capture layer claims the capture `call` armed at this future's first
+/// poll.
 pub(super) fn send_capturing(
     call: &ProviderCall,
     fixture: Option<String>,

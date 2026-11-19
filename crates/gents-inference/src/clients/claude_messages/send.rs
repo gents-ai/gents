@@ -435,8 +435,9 @@ where
             rejected: true,
         });
     }
-    let audit_sender = gents_loop::rendered_request::scope::current_audit_sender();
-    if gents_loop::rendered_request::scope::current_scope().is_some() && audit_sender.is_none() {
+    let audit_sender =
+        gents_loop::rendered_request::scope::current_audit_sender(call.capture.as_ref());
+    if call.capture.is_some() && audit_sender.is_none() {
         return Err(CompletionError::ProviderError(
             "Claude Messages response has no exact provider audit attempt".into(),
         )

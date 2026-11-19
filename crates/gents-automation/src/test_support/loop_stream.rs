@@ -154,6 +154,7 @@ impl CompletionModel for ScriptedModel {
         }
         if self.capture_requests {
             gents_inference::test_support::capture_scripted_provider_request(
+                &self.call,
                 &request,
                 "test-model",
             )
@@ -363,13 +364,26 @@ pub fn config(max_turns: usize) -> LoopConfig {
     }
 }
 
+/// A config whose calls are captured, into a sink that keeps nothing.
 pub fn owned_config(max_turns: usize) -> LoopConfig {
     let mut config = config(max_turns);
-    config.on_rendered_request = Some(
-        gents_inference::rendered_request::scope::ambient_arming_sink(
-            gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
-        ),
-    );
+    config.on_rendered_request = Some(gents_inference::rendered_request::scope::arming_sink(
+        gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
+    ));
+    config.provider_call.capture = Some(gents_inference::rendered_request::scope::test_scope(
+        gents_inference::rendered_request::RenderedRequestContext {
+            request_doc_id: "owned-test-doc".into(),
+            request_commit_cid: String::new(),
+            request_id: "owned-test-request".into(),
+            node_did: "did:test:node".into(),
+            requester_did: String::new(),
+            agent_did: "general".into(),
+            session_id: "owned-test-session".into(),
+            model_name: "test-model".into(),
+            provider_family: None,
+        },
+        Arc::new(|_| Box::pin(async { Ok(()) })),
+    ));
     config
 }
 
@@ -451,33 +465,6 @@ pub async fn collect_owned_scripted_stream<S>(
 where
     S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
 {
-    collect_owned_scripted_stream_with_capture_scope(stream, hook, writer, lifecycle, profile, None)
-        .await
-}
-
-pub async fn collect_owned_scripted_stream_with_capture_scope<S>(
-    stream: S,
-    hook: &DefraSessionHook,
-    writer: &gents_session::request::streaming::DefraStreamWriter,
-    lifecycle: &mut gents_session::request::lifecycle::RequestLifecycle,
-    profile: gents_loop::provider_input::ProviderInputProfile,
-    capture_scope: Option<Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
-) -> CollectedScriptedStream
-where
-    S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
-{
-    let scope = capture_scope.unwrap_or_else(|| {
-        let context = gents_inference::rendered_request::context_for_claimed_request(
-            lifecycle.request(),
-            "",
-            "test-model".into(),
-            None,
-        );
-        gents_inference::rendered_request::scope::test_scope(
-            context,
-            Arc::new(|_| Box::pin(async { Ok(()) })),
-        )
-    });
     let deadline = lifecycle.claimed_deadline_at();
     let request = lifecycle.request();
     let session_id = request.session_id.clone();
@@ -486,7 +473,7 @@ where
     let agent_did = request.agent_did.clone();
     let request_id = request.request_id.clone();
     let inherited = gents_tools::runtime_context::current_tool_runtime_context().is_some();
-    let collection = gents_inference::rendered_request::scope::scope_request(scope, async move {
+    let collection = async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
         let mut processor = gents_loop::stream_processor::StreamProcessor::new(
@@ -526,7 +513,7 @@ where
             }
         }
         collected
-    });
+    };
     if inherited {
         collection.await
     } else {
