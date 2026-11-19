@@ -318,7 +318,6 @@ fn bounded_structured_output_preview(raw: &str) -> String {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum LoopStreamItem {
     Text(String),
     Reasoning(gents_protocol::message::Reasoning),
