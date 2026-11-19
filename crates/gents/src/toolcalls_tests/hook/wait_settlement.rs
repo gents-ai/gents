@@ -42,7 +42,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             if during_completion {
                 let reached = Arc::new(tokio::sync::Notify::new());
                 let release = Arc::new(tokio::sync::Notify::new());
-                let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+                let envelope = gents_loop::tool::ToolCallEnvelope::default();
                 let mut pending = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_at(
                     2,
                     reached.clone(),
@@ -61,7 +61,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
                 drop(pending);
             } else {
                 let handles = hook.in_flight_lifecycles.lock().await;
-                let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+                let envelope = gents_loop::tool::ToolCallEnvelope::default();
                 let mut pending =
                     Box::pin(hook.on_tool_call("wait_process", None, call, args, &envelope));
                 let committed = async {

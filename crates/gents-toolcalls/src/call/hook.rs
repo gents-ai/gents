@@ -2265,7 +2265,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         ordinal: u32,
         tool_name: &str,
         arguments: &str,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<String, String> {
         let parents = self.in_flight_lifecycles.lock().await;
         let parent = parents
@@ -2282,7 +2282,13 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             gents_protocol::tool_call::AwaitMode::Foreground
         };
         let child = parent
-            .admit_plugin_effect_with_mode(ordinal, tool_name, arguments, await_mode)
+            .admit_plugin_effect_with_mode(
+                ordinal,
+                tool_name,
+                arguments,
+                await_mode,
+                context.runtime().and_then(|runtime| runtime.deadline_at),
+            )
             .await
             .map_err(|error| format!("cannot admit plugin effect: {error:#}"))?;
         let internal_id = child.plugin_effect_internal_id().to_owned();

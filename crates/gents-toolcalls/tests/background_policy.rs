@@ -417,7 +417,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
             None,
             "call-selected",
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -443,7 +443,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
             None,
             "call-native",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue

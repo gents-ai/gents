@@ -14,7 +14,11 @@ impl ToolDyn for SuccessfulProbe {
     fn emits_command_envelope(&self) -> bool {
         true
     }
-    fn footprint(&self, _args: &str) -> ToolFootprint {
+    fn footprint(
+        &self,
+        _args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> ToolFootprint {
         ToolFootprint::Read
     }
     fn definition<'a>(
@@ -99,7 +103,7 @@ async fn check(batched_tail: bool) {
         TaggedMessage::unassociated(Message::user("observe the tool")),
         Vec::new(),
         tools,
-        owned_config(32),
+        owned_config_for(32, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,

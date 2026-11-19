@@ -531,7 +531,7 @@ impl Step0 {
                 None,
                 call_id,
                 args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
         let ToolCallHookAction::Skip { reason } = action else {
@@ -1147,7 +1147,7 @@ async fn refused_dispatches_name_their_policy_and_next_help() {
                         None,
                         "call-1",
                         args,
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     )
                     .await;
                 let ToolCallHookAction::Skip { reason } = action else {
@@ -1443,7 +1443,7 @@ async fn pinned_step0_terminal_adopts_and_settles_in_one_transaction() {
             None,
             "call-1",
             ARGS,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     let ToolCallHookAction::Skip { reason } = action else {

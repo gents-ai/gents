@@ -58,16 +58,20 @@ impl ToolCallLifecycle {
             name,
             arguments,
             gents_protocol::tool_call::AwaitMode::Foreground,
+            None,
         )
         .await
     }
 
+    /// `call_deadline` is the deadline of the call the child serves, if any;
+    /// the child's deadline is the earlier of it and the parent's.
     pub(crate) async fn admit_plugin_effect_with_mode(
         &self,
         ordinal: u32,
         name: &str,
         arguments: &str,
         mode: gents_protocol::tool_call::AwaitMode,
+        call_deadline: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Self> {
         anyhow::ensure!(
             self.state == ToolCallState::Running && self.plugin_effect.is_none(),
@@ -93,9 +97,8 @@ impl ToolCallLifecycle {
         let name = name.to_owned();
         let arguments = arguments.to_owned();
         let sequence = self.message_sequence;
-        let deadline = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()
-            .and_then(|context| context.deadline_at)
-            .map_or(self.deadline_at, |deadline| deadline.min(self.deadline_at));
+        let deadline =
+            call_deadline.map_or(self.deadline_at, |deadline| deadline.min(self.deadline_at));
         let key = PluginEffectBinding::internal_id(&binding.tool_call_doc_id, ordinal);
         let internal_id = key.clone();
         let mode = mode.as_str();
@@ -690,6 +693,7 @@ mod tests {
                     &payload(&input.arguments),
                     gents_protocol::tool_call::AwaitMode::from_persisted(&input.child.await_mode)
                         .unwrap(),
+                    None,
                 )
                 .await;
             if let Ok(child) = &result {
@@ -733,6 +737,7 @@ mod tests {
                     "query",
                     "{}",
                     gents_protocol::tool_call::AwaitMode::Background,
+                    None,
                 )
                 .await
                 .unwrap();

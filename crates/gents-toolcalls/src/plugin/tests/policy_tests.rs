@@ -162,7 +162,7 @@ async fn run(tool: &dyn ToolDyn, argv: Value) -> std::result::Result<Value, Valu
     match tool
         .call(
             argv.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     {

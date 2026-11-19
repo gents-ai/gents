@@ -204,7 +204,7 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
             Tool::call(
                 &tool,
                 BoundedWriteParams(args),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await?
         }
@@ -215,7 +215,7 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
             Tool::call(
                 &tool,
                 BoundedQueryParams(args),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await?
         }

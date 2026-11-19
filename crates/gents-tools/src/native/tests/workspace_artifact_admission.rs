@@ -8,9 +8,7 @@ use gents_session::workspace::overlay::overlay_tests::artifact_alternate_owner;
 #[tokio::test]
 async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy() {
     use crate::native::CommandConstraints;
-    use crate::runtime_context::{
-        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
-    };
+    use crate::runtime_context::ToolWorkspaceScope;
     use gents_loop::tool_policy::CommandNetworkMode;
 
     async fn execute(node: &defra_node::Node, mutation: &str) {
@@ -117,10 +115,8 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
             deny_all_argv: false,
             deny_git_metadata_writes: true,
         };
-        let result = scope_request_tool_execution_with_workspace_overlay(
-            None,
-            None,
-            tokio_util::sync::CancellationToken::new(),
+        let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(root.clone()),
@@ -128,12 +124,17 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
                 workspace_authority: authority,
                 workspace_artifact: grant,
             },
-            None,
-            None,
-            None,
-            Default::default(),
-            false,
-            crate::native::prepare_managed_command(&root, "/bin/echo", &[], &constraints),
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let result = crate::native::prepare_managed_command(
+            &scope_call,
+            &root,
+            "/bin/echo",
+            &[],
+            &constraints,
         )
         .await;
         let observed_mode = result.as_ref().ok().map(|_| effective.mode.as_str());

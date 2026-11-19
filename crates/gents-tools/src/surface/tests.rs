@@ -2517,7 +2517,7 @@ async fn configured_command_output_caps_bound_bash_and_cli_results() {
         ]
     );
     let built = config.host_tools().build_native_tools().unwrap();
-    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+    let envelope = gents_loop::tool::ToolCallEnvelope::default();
     let call = |name: &str, args: serde_json::Value| {
         let tool = built.iter().find(|tool| tool.name() == name).unwrap();
         tool.call(args.to_string(), &envelope)
@@ -2800,7 +2800,7 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
         let raw = tool("read_file")
             .call(
                 args.to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
