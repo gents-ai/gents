@@ -62,6 +62,7 @@ pub(crate) fn state() -> RuntimeHttpState {
         replicated_schema: Default::default(),
         serve_lifecycle: Default::default(),
         document_acp: Default::default(),
+        node_identity: None,
     }
 }
 
@@ -428,6 +429,7 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
             Default::default(),
             Default::default(),
             Default::default(),
+            None,
         )
         .contract;
         let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
@@ -617,6 +619,7 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             Default::default(),
             Default::default(),
             document_acp,
+            None,
         )
         .contract
         .route(

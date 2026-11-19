@@ -166,10 +166,12 @@ async fn attest_status(
     let Some(nonce) = nonce else {
         return;
     };
-    let identity = state
-        .activation_runtime
-        .get()
-        .map(|runtime| runtime.runtime_node().identity.clone());
+    let identity = state.node_identity.clone().or_else(|| {
+        state
+            .activation_runtime
+            .get()
+            .map(|runtime| runtime.runtime_node().identity.clone())
+    });
     gents_store::identity::home_status::attest(identity.as_deref(), nonce, body).await;
 }
 
@@ -246,7 +248,14 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
         )
         .await
         .unwrap_or(gents_protocol::client_authentication::ClientAuthentication::Unavailable),
-        None => gents_protocol::client_authentication::ClientAuthentication::Unavailable,
+        None => match state.document_acp {
+            gents_store::local::document_acp::DocumentAcp::Local => {
+                gents_protocol::client_authentication::ClientAuthentication::Local
+            }
+            gents_store::local::document_acp::DocumentAcp::Vera => {
+                gents_protocol::client_authentication::ClientAuthentication::Unavailable
+            }
+        },
     };
     if let Some(map) = body.as_object_mut() {
         map.insert(
