@@ -276,39 +276,50 @@ pub async fn install_documents_pack_resolved(
     roots: &dyn InstallerRoots,
 ) -> Result<serde_json::Value, PackChangeError> {
     install_documents_pack_resolved_inner(
-        access,
-        owner,
+        &DocumentsInstallNode {
+            access,
+            owner,
+            local: None,
+        },
         pack,
         args,
         explicit,
         dependencies,
-        None,
         roots,
         false,
     )
     .await
 }
 
-/// [`install_documents_pack_resolved`], writing through `local`'s stores
-/// when the install holds the node's own Node. With
+/// The node a documents-pack install writes to: `owner`, reached through
+/// `access`, and through `local`'s stores when the install holds the node's
+/// own Node.
+#[derive(Clone, Copy)]
+pub struct DocumentsInstallNode<'a> {
+    pub access: &'a gents_store::config_client::ConfigAccess,
+    pub owner: &'a str,
+    pub local: Option<&'a LocalPackAccess>,
+}
+
+/// [`install_documents_pack_resolved`], writing through `node.local`'s
+/// stores when the install holds the node's own Node. With
 /// `refuse_unapproved_root`, a first install whose agents would be granted
 /// reader on the installer's published root is refused, writing nothing,
 /// unless it was given `grant_authority`.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the install inputs each entry point supplies, and whether it asks approval for a root grant"
-)]
 pub async fn install_documents_pack_resolved_inner(
-    access: &gents_store::config_client::ConfigAccess,
-    owner: &str,
+    node: &DocumentsInstallNode<'_>,
     pack: &ResolvedPack,
     args: &DocumentsInstallRequest,
     explicit: bool,
     dependencies: Vec<ResolvedPack>,
-    local: Option<&LocalPackAccess>,
     roots: &dyn InstallerRoots,
     refuse_unapproved_root: bool,
 ) -> Result<serde_json::Value, PackChangeError> {
+    let DocumentsInstallNode {
+        access,
+        owner,
+        local,
+    } = *node;
     let home = args.home.clone();
     let requested = parse_inference_slots(&args.inference_slots)?;
     let supplied = supplied_variables(&args.dependency_variables, &args.bind_agents)?;
@@ -362,30 +373,34 @@ pub async fn install_documents_pack_resolved_inner(
         .iter()
         .map(ResolvedPack::archive)
         .collect::<Vec<_>>();
+    let graph = crate::pack::PackGraphInputs {
+        dependencies: &dependency_archives,
+        requested: &requested,
+        environment: &environment,
+        overrides: &overrides,
+    };
     let prepared = if let Some(local) = local {
         crate::pack::prepare_document_pack_archive_with_runtime(
-            access,
-            owner,
+            &crate::pack::InstallTarget {
+                access,
+                owner,
+                plugin_home: Some(home.as_path()),
+            },
             pack.archive(),
-            &requested,
-            &dependency_archives,
-            Some(home.as_path()),
-            &environment,
+            &graph,
             local.runtime.as_ref(),
-            &overrides,
         )
         .await
     } else {
         crate::pack::prepare_document_pack_archive(
-            access,
-            owner,
+            &crate::pack::InstallTarget {
+                access,
+                owner,
+                plugin_home: (!args.remote).then_some(home.as_path()),
+            },
             pack.archive(),
-            &requested,
-            &dependency_archives,
+            &graph,
             crate::pack::InstalledVia::Operator,
-            (!args.remote).then_some(home.as_path()),
-            &environment,
-            &overrides,
         )
         .await
     };
@@ -572,15 +587,19 @@ pub async fn install_documents_pack_resolved_inner(
             .await
             .context("pack install schemas")?;
     let (apply, plugins) = crate::pack::install_prepared_document_graph(
-        writer,
-        owner,
+        &crate::pack::InstallTarget {
+            access: writer,
+            owner,
+            plugin_home: (!args.remote).then_some(home.as_path()),
+        },
         pack.archive(),
         &prepared,
-        drift_policy(args.edited),
-        (!args.remote).then_some(home.as_path()),
+        crate::pack::DocumentGraphPolicy {
+            drift: drift_policy(args.edited),
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
         args.grant_authority,
         explicit,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     let root_coordinate = format!(

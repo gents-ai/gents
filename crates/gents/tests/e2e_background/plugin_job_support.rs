@@ -194,31 +194,39 @@ pub(crate) async fn install_job_fixture(
     .expect("load the job fixture pack config");
     let access = &fixture.access;
     let prepared = prepare_document_pack_install(
-        access,
-        &did,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner: &did,
+            plugin_home: Some(plugin_home),
+        },
         archive.manifest(),
         &config,
-        &PackInferenceBindings::new(),
-        &[],
-        InstalledVia::Operator,
-        Some(plugin_home),
         Some(&archive),
-        &|_| None,
-        &Default::default(),
+        &gents_pack::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &PackInferenceBindings::new(),
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
+        InstalledVia::Operator,
     )
     .await
     .expect("prepare the job fixture install");
     install_prepared_document_pack(
-        access,
-        &did,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner: &did,
+            plugin_home: Some(plugin_home),
+        },
         &archive,
         &[],
         &prepared,
-        Some(plugin_home),
         false,
         InstalledVia::Operator,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        gents_pack::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
     .expect("install the job fixture pack");

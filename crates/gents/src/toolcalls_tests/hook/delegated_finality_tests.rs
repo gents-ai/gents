@@ -184,12 +184,14 @@ async fn fixture(name: &str) -> Fixture {
             node.clone(),
             &mut owner,
             runtime.did(),
-            0,
-            gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
-            "finality-tool",
-            json!({"agent":"child", "prompt":"work"}),
-            AwaitMode::Background,
-            false,
+            gents_toolcalls::call::lifecycle::admission_fixture::AcceptedFixtureCall {
+                turn: 0,
+                tool_name: gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
+                tool_call_id: "finality-tool",
+                arguments: json!({"agent":"child", "prompt":"work"}),
+                await_mode: AwaitMode::Background,
+                start_running: false,
+            },
         )
         .await
         .unwrap();
@@ -1055,17 +1057,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 .unwrap();
         }
         let mut tool =
-            gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
-                fixture.node.clone(),
-                &mut fixture._owner,
-                fixture.runtime.did(),
-                1,
-                gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
-                "followup-tool",
-                json!({"session_id":first.session_id.clone(),"message":"follow up"}),
-                AwaitMode::Background,
-                false,
-            )
+            gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(fixture.node.clone(), &mut fixture._owner, fixture.runtime.did(), gents_toolcalls::call::lifecycle::admission_fixture::AcceptedFixtureCall { turn: 1, tool_name: gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME, tool_call_id: "followup-tool", arguments: json!({"session_id":first.session_id.clone(),"message":"follow up"}), await_mode: AwaitMode::Background, start_running: false })
             .await
             .unwrap();
         let mut cause = fixture.cause.clone();

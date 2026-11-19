@@ -398,7 +398,7 @@ async fn job_chain(
 ) {
     use crate::call::lifecycle::admission_fixture::{
         materialize_session_message, pending_client_fixture_request,
-        publish_accepted_on_claimed_request,
+        publish_accepted_on_claimed_request, AcceptedFixtureCall,
     };
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -438,12 +438,14 @@ async fn job_chain(
             db.node.clone(),
             &mut current,
             db.node_identity.did(),
-            0,
-            "agent_new",
-            &format!("ancestor-{level}"),
-            json!({}),
-            gents_protocol::tool_call::AwaitMode::Background,
-            false,
+            AcceptedFixtureCall {
+                turn: 0,
+                tool_name: "agent_new",
+                tool_call_id: &format!("ancestor-{level}"),
+                arguments: json!({}),
+                await_mode: gents_protocol::tool_call::AwaitMode::Background,
+                start_running: false,
+            },
         )
         .await
         .unwrap();

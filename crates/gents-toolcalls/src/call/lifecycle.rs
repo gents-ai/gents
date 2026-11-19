@@ -302,52 +302,6 @@ impl ToolCallLifecycle {
         self.doc_id.as_deref()
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        node: Arc<EmbeddedNode>,
-        actor: identity::Did,
-        request_id: String,
-        session_id: String,
-        node_did: String,
-        tool_call_id: String,
-        message_sequence: u32,
-        tool_name: String,
-        _args: String,
-        deadline_at: chrono::DateTime<chrono::Utc>,
-    ) -> Self {
-        Self {
-            actor,
-            agent_signer: None,
-            node,
-            request_id,
-            request_doc_id: None,
-            session_id,
-            node_did,
-            requester_did: None,
-            tool_call_id,
-            call_id: None,
-            message_sequence,
-            kind: ToolRowKind::of(&tool_name),
-            tool_name,
-            accepted_header_doc_id: None,
-            arguments: None,
-            execution_generation: None,
-            plugin_receipt: None,
-            plugin_writes: None,
-            file_capture: None,
-            spawned_by_tool_call_doc_id: None,
-            plugin_effect: None,
-            doc_id: None,
-            deadline_at,
-            state: ToolCallState::Pending,
-            started_at: None,
-            failure_class: None,
-            cancel_cause: None,
-            selected_tool_identity: None,
-            await_mode: AwaitMode::Foreground,
-        }
-    }
-
     pub fn with_requester_did(mut self, requester_did: Option<String>) -> Self {
         self.requester_did = requester_did.and_then(|did| {
             let did = did.trim();
@@ -372,52 +326,6 @@ impl ToolCallLifecycle {
             });
         }
         self
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_background_tool(
-        node: Arc<EmbeddedNode>,
-        actor: identity::Did,
-        request_id: String,
-        session_id: String,
-        node_did: String,
-        tool_call_id: String,
-        message_sequence: u32,
-        tool_name: String,
-        _args: String,
-        deadline_at: chrono::DateTime<chrono::Utc>,
-    ) -> Self {
-        Self {
-            actor,
-            agent_signer: None,
-            node,
-            request_id,
-            request_doc_id: None,
-            session_id,
-            node_did,
-            requester_did: None,
-            tool_call_id,
-            call_id: None,
-            message_sequence,
-            kind: ToolRowKind::of(&tool_name),
-            tool_name,
-            accepted_header_doc_id: None,
-            arguments: None,
-            execution_generation: None,
-            plugin_receipt: None,
-            plugin_writes: None,
-            file_capture: None,
-            spawned_by_tool_call_doc_id: None,
-            plugin_effect: None,
-            doc_id: None,
-            deadline_at,
-            state: ToolCallState::Pending,
-            started_at: None,
-            failure_class: None,
-            cancel_cause: None,
-            selected_tool_identity: None,
-            await_mode: AwaitMode::Background,
-        }
     }
 
     /// Deadline expiry is inclusive; fresh output admission uses `now > deadline`.
@@ -616,40 +524,17 @@ impl ToolCallLifecycle {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
-        let node_db = gents_inference::test_support::test_db(
-            "tool-row-kind-is-session-message-for-age",
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = node_db.node.clone();
-        let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
-        let kind_of = |tool_name: &str| {
-            ToolCallLifecycle::new(
-                node.clone(),
-                identity::Did::new(node_db.node_identity.did()).unwrap(),
-                "request".into(),
-                "session".into(),
-                "did:test:owner".into(),
-                "call".into(),
-                0,
-                tool_name.into(),
-                "{}".into(),
-                deadline,
-            )
-            .kind()
-        };
+    #[test]
+    fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
         assert_eq!(
-            kind_of(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME),
+            ToolRowKind::of(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME),
             ToolRowKind::SessionMessage
         );
         assert_eq!(
-            kind_of(gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME),
+            ToolRowKind::of(gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME),
             ToolRowKind::SessionMessage
         );
-        assert_eq!(kind_of("tool"), ToolRowKind::Native);
-        node.shutdown().await.expect("shut down test node");
+        assert_eq!(ToolRowKind::of("tool"), ToolRowKind::Native);
     }
 }
 #[cfg(test)]

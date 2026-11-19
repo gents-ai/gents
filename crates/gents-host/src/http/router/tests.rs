@@ -386,15 +386,21 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
     plugin.name = "tool".into();
     let installed = gents_pack::plugin::install::install_from_pack(
         plugin_home.path(),
-        "acme",
-        "acme/wire_acceptance",
-        "1.0.0",
-        &format!("sha256:{}", "a".repeat(64)),
-        &plugin,
-        &artifact,
-        None,
-        Default::default(),
-        Default::default(),
+        &gents_pack::plugin::install::OwningPack {
+            namespace: "acme",
+            coordinate: "acme/wire_acceptance",
+            version: "1.0.0",
+            digest: &format!("sha256:{}", "a".repeat(64)),
+            gents_version: None,
+        },
+        gents_pack::plugin::install::ShippedPlugin {
+            declaration: &plugin,
+            artifact: &artifact,
+            instructions: None,
+            data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
+            data_collection_schemas: Default::default(),
+        },
         false,
     )
     .unwrap();
@@ -582,15 +588,21 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
         let plugin_home = tempfile::tempdir().unwrap();
         let installed = gents_pack::plugin::install::install_from_pack(
             plugin_home.path(),
-            "acme",
-            "acme/client_wire",
-            "1.0.0",
-            &format!("sha256:{}", "b".repeat(64)),
-            &plugin,
-            &artifact,
-            None,
-            Default::default(),
-            Default::default(),
+            &gents_pack::plugin::install::OwningPack {
+                namespace: "acme",
+                coordinate: "acme/client_wire",
+                version: "1.0.0",
+                digest: &format!("sha256:{}", "b".repeat(64)),
+                gents_version: None,
+            },
+            gents_pack::plugin::install::ShippedPlugin {
+                declaration: &plugin,
+                artifact: &artifact,
+                instructions: None,
+                data_unique_keys: Default::default(),
+                data_collection_fields: Default::default(),
+                data_collection_schemas: Default::default(),
+            },
             false,
         )
         .unwrap();
