@@ -412,6 +412,20 @@ See `../README.md` for how this fits the broader formal-verification model.
   each tool's output observed at the wall clock and was refused by the claim
   deadline before any notification ran; `NoGate` loses a notifier to aborted
   attempts; `NoGateNoConflict` creates two wakes.
+- `BackgroundEnvelopeProjection` — a session transcript where two background
+  completions, their coalesced wake request and a person's look-alike inputs
+  (the wake text and a quoted envelope) arrive in any order
+  (`live_background_completions_project_as_tool_attributed_activity`). The
+  worker claims in arrival order and publishes each input with its claim or
+  fold; the projection classifies by Lean
+  `TranscriptInputOrigin.classification` over the authoring request's facts.
+  The observer stops once the notifications and every input, the wake's and
+  each submitted one, are published; then `TestPasses` (the person's inputs
+  render as a person's, the wake as a wake, the notifications as results)
+  holds. `NoInputWait` is the observer before the fix: jobs that finish
+  before the quote is submitted put the wake ahead of it, and the observer
+  stops with the quote still pending. `ByText` classifies by the input's
+  text and fails even the waiting observer.
 - `StreamDelivery` — streamed provider text reaching a subscribed client
   while the provider pauses (#2131, #3803): the provider's chunks and its
   gated completion, the owned drive loop and stream writer (flush on the
