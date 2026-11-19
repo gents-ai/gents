@@ -28,3 +28,23 @@ pub enum OwedStanding {
 pub struct OwedSettlementReport {
     pub standings: Vec<OwedStanding>,
 }
+
+/// Where a client reads the Node administration removals its home owes that
+/// the caller may complete (Lean `Identity.EnrollmentGrant.settlementStep`).
+pub const OWED_REMOVALS_PATH: &str = "/owed/removals";
+
+/// One member whose Node administration removal waits for a client of the
+/// Node owner or a Node administrator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwedRemoval {
+    pub member_did: String,
+    /// The member still holds the `administrator` relation.
+    pub administrator_held: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwedRemovalsReport {
+    pub removals: Vec<OwedRemoval>,
+}
