@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_automation::goal::{load_canonical_goal_in_txn, seed_goal_from_access};
 use gents_protocol::goal_status::GoalStatus;
 use gents_store::graphql::escape_graphql_string;
@@ -89,7 +87,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(reader, initial_request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(reader, initial_request_id).await,
         "completed"
     );
     assert!(
@@ -116,7 +114,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     let child = wait_for_goal_child(reader, &goal.goal_id).await;
     assert_eq!(child.session_id, session_id);
     assert_eq!(
-        wait_for_request_terminal(reader, &child.request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(reader, &child.request_id).await,
         "completed"
     );
     let answer = wait_for_assistant_answer(reader, &child.request_id, STALL_CEILING).await;

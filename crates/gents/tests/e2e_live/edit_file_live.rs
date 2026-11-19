@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents::{DocumentRuntimeOptions, Gents};
 use gents_documents::FileToolMode;
@@ -79,7 +78,7 @@ async fn edit_file_live_model_preserves_other_content_and_line_endings() {
     )
     .await;
 
-    let terminal = wait_for_request_terminal(reader, request_id, Duration::from_secs(300)).await;
+    let terminal = wait_for_request_terminal(reader, request_id).await;
     assert_eq!(terminal, "completed", "live edit run must complete");
 
     let bytes = std::fs::read(workspace.path().join("profile.json")).unwrap();

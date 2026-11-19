@@ -1,10 +1,12 @@
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use crate::client_runtime::ClientRuntime;
+use gents_store::client_journal::paths::DesktopPaths;
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::TaskDeleteRequest;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 struct DenyingRuntime {
-    core: std::sync::Arc<ClientCore>,
+    core: std::sync::Arc<ClientRuntime>,
     node_did: String,
     _server: wiremock::MockServer,
     _home: tempfile::TempDir,
@@ -13,9 +15,9 @@ struct DenyingRuntime {
 impl DenyingRuntime {
     async fn start() -> Self {
         let home = tempfile::tempdir().unwrap();
-        let core = ClientCore::start_with_paths_and_options(
+        let core = ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(home.path()),
-            ClientCoreOptions::local_simulated_route(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap();
@@ -33,13 +35,14 @@ impl DenyingRuntime {
             .to_string(),
         )
         .unwrap();
-        core.add_local_standard_peer_route_for_test(
-            "Denying runtime",
-            "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-            &node_did,
-            &graphql,
-            runtime_home.to_str().unwrap(),
-        )
+        core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+            node_did: node_did.to_string(),
+            label: ("Denying runtime").to_string(),
+            graphql: graphql.to_string(),
+            local_node_home: Some((runtime_home.to_str().unwrap()).to_string()),
+            access_request: None,
+            access_state: None,
+        })
         .await
         .unwrap();
         wiremock::Mock::given(wiremock::matchers::any())

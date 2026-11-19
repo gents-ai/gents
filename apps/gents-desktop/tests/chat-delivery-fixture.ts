@@ -2,6 +2,7 @@ import type { ChatSendRequest, ChatSendResult } from "@source-inc/gents-desktop-
 
 export function acceptedChat(request: ChatSendRequest): ChatSendResult {
   return {
+    publication: "delivered",
     nodeDid: request.nodeDid,
     requestId: request.requestId!,
     sessionId: request.sessionId!,

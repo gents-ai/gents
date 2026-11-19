@@ -1,0 +1,4 @@
+---- MODULE MCOwedSettlementNoHandIn ----
+EXTENDS OwedSettlement
+
+====

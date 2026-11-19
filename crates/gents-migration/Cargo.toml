@@ -24,6 +24,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+hex = "0.4"
 rapidhash = { workspace = true }
 
 [dev-dependencies]

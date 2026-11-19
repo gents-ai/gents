@@ -1,11 +1,9 @@
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::{
-    client::DesktopPaths,
-    home_reset::{
-        lock_client_state, lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home,
-        HomeResetDisposition, HomeResetPlan, ManagedServerResetResult,
-    },
+use gents_desktop_core::home_reset::{
+    lock_client_state, lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home,
+    HomeResetDisposition, HomeResetPlan, ManagedServerResetResult,
 };
+use gents_store::client_journal::paths::DesktopPaths;
 
 use crate::cli::DesktopCommand;
 use gents_service::native_service::NativeServiceConfig;
@@ -74,7 +72,7 @@ async fn reset(
 ) -> Result<ManagedServerResetResult> {
     let desktop = select_desktop(
         desktop_home,
-        std::env::var_os(gents_desktop_core::client::DESKTOP_HOME_ENV),
+        std::env::var_os(gents_store::client_journal::paths::DESKTOP_HOME_ENV),
         &std::env::current_dir().context("resolving current directory")?,
     )?;
     let explicit_home = home.or_else(|| {
@@ -146,11 +144,17 @@ async fn reset(
         ),
     }
     let _home_lock = if plan.runtime.is_some() {
-        Some(gents_store::local::home::lock_home_store(&home)?)
+        Some(
+            gents_store::local::home::acquire_home_store(
+                &home,
+                gents_store::local::home::STORE_RELEASE_WAIT,
+            )
+            .await?,
+        )
     } else {
         None
     };
-    let _client_lock = lock_client_state(&desktop)?;
+    let _client_lock = lock_client_state(&desktop).await?;
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
     retire_then_clear(&settled, disposition, backup.as_deref(), retry, || {

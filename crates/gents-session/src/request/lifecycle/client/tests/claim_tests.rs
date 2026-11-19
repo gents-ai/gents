@@ -30,6 +30,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
         let subject = ::identity::Did::new(binding.agent_did.as_str()).unwrap();
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
@@ -354,6 +355,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     for did in [collaborator.did(), agent.did()] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,

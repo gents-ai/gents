@@ -1,10 +1,10 @@
-use crate::error::BridgeError;
+use gents_store::client_error::BridgeError;
 
 use anyhow::Context;
 use std::sync::Arc;
 
+use crate::client_runtime::ClientRuntime;
 use chrono::Utc;
-use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::{JobControlOutcome, JobState, JobView};
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
 use gents_store::config_client::ConfigAccess;
@@ -42,8 +42,7 @@ where
         .ok_or_else(|| BridgeError::untyped("no node selected; pass nodeDid explicitly"))?;
 
     let endpoint = core
-        .operator_observation_endpoint(&node_did)
-        .await
+        .operator_observation_graphql(&node_did)
         .ok_or_else(|| {
             BridgeError::untyped(format!(
                 "runtime {node_did} has no authenticated database endpoint"
@@ -52,9 +51,15 @@ where
     let access = ConfigAccess::Graphql(endpoint.clone());
     let (tool_call_rows, status) = tokio::join!(
         fetch_background_tool_calls(&access, &node_did),
-        gents_desktop_core::local_runtime::fetch_runtime_status_for_node(&endpoint, &node_did),
+        gents::client_runtime::fetch_runtime_status_for_node(&endpoint, &node_did),
     );
     let tool_call_rows = tool_call_rows?;
+    if let Ok(status) = &status {
+        endpoint
+            .observe_runtime_status(status)
+            .await
+            .map_err(|error| BridgeError::classify_transport_error(error.into()))?;
+    }
     let liveness = status.and_then(|status| {
         serde_json::from_value::<RuntimeLivenessView>(
             status
@@ -287,13 +292,12 @@ where
 
 /// The backends of `node_did`, the calling window's node.
 pub async fn list_backends_with_health_for_core(
-    core: Arc<ClientCore>,
+    core: Arc<ClientRuntime>,
     node_did: Option<String>,
 ) -> Result<Vec<BackendHealthView>, BridgeError> {
     let node_did = node_did.ok_or_else(|| BridgeError::untyped("no runtime selected"))?;
     let endpoint = core
-        .operator_observation_endpoint(&node_did)
-        .await
+        .operator_observation_graphql(&node_did)
         .ok_or_else(|| {
             BridgeError::untyped(format!(
                 "runtime {node_did} has no authenticated database endpoint"
@@ -430,7 +434,7 @@ where
 
 /// The MCP services of `node_did`, the calling window's node.
 pub async fn list_mcp_services_with_health_for_core(
-    core: Arc<ClientCore>,
+    core: Arc<ClientRuntime>,
     node_did: Option<String>,
 ) -> Result<Vec<MCPServiceHealthView>, BridgeError> {
     load_mcp_services_with_health(core.as_ref(), node_did.as_deref())
@@ -450,7 +454,7 @@ pub async fn desktop_probe_mcp_service(
 }
 
 pub(crate) async fn probe_mcp_service_for_core(
-    core: Arc<ClientCore>,
+    core: Arc<ClientRuntime>,
     request: DesktopProbeMcpServiceRequest,
 ) -> Result<McpServiceProbeResult, BridgeError> {
     probe_mcp_service(core.as_ref(), &request.node_did, &request.service_id)

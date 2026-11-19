@@ -14,7 +14,7 @@ owners; a datastore tool may never write them, even when the collection
 exists on the node. -/
 def protectedCollections : List String :=
   ["EvalDefinition", "EvalRun", "EvalTrial", "EvalVerdict", "OptimizationJob",
-   "PendingChatSubmission"]
+   "PendingChatSubmission", "ClientAuthoredSubmission", "ClientOutboxSequence"]
 
 inductive Fill where
   | caller

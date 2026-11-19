@@ -43,6 +43,8 @@ bs58 = "0.5"
 chrono.workspace = true
 crypto.workspace = true
 defra-core.workspace = true
+defra-http.workspace = true
+reqwest.workspace = true
 gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
 defra-node.workspace = true
@@ -75,5 +77,4 @@ gents-toolcalls = { workspace = true, features = ["test-fixtures"] }
 axum = { version = "0.8", features = ["ws"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
-reqwest.workspace = true
 gents-callback-fixture-create-workspace = { path = "../gents-callbacks/fixture_create_workspace" }

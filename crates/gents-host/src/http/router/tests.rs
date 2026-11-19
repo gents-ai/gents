@@ -20,7 +20,7 @@ use crate::http::prometheus::MetricsRuntimeRow;
 
 fn desktop_endpoint(
     url: impl Into<String>,
-    identity: &gents_desktop_core::client::PrincipalIdentity,
+    identity: &gents_store::client_journal::principal_identity::PrincipalIdentity,
 ) -> GraphqlEndpoint {
     GraphqlEndpoint::as_principal(url, identity.did())
         .with_client_signing_capability(
@@ -32,9 +32,10 @@ fn desktop_endpoint(
         .unwrap()
 }
 
-fn state() -> RuntimeHttpState {
+pub(crate) fn state() -> RuntimeHttpState {
     let (activation_runtime, activation_observation) = empty_activation_state();
     RuntimeHttpState {
+        client_access_decisions: Default::default(),
         graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
             "http://127.0.0.1:9181/api/v0/graphql",
         ),
@@ -60,6 +61,7 @@ fn state() -> RuntimeHttpState {
         activation_observation,
         replicated_schema: Default::default(),
         serve_lifecycle: Default::default(),
+        document_acp: Default::default(),
     }
 }
 
@@ -120,11 +122,12 @@ async fn backend_discovery_requires_authenticated_identity() {
 
 #[tokio::test]
 async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_observed_build() {
-    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::serve_lifecycle::control::{
         RuntimeControlCommand, RuntimeControlDisposition, RuntimeControlReceipt, RuntimeOperation,
         RUNTIME_CONTROL_PATH, RUNTIME_CONTROL_VERSION,
     };
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
     let temp = tempfile::tempdir().unwrap();
     // Runtime control admits only the Node's own signer; the enrolled User
     // configures the Agent the runtime starts over its fresh backend admission.
@@ -235,7 +238,8 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     assert!(response.status().is_client_error());
     let foreign_endpoint = desktop_endpoint(&graphql, &foreign);
     let response = foreign_endpoint
-        .authorize(client.post(&url))
+        .authorize_runtime(client.post(&url))
+        .await
         .unwrap()
         .json(&retire)
         .send()
@@ -245,7 +249,8 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     let mut other_node = retire.clone();
     other_node.node_did = foreign.did().to_owned();
     let response = endpoint
-        .authorize(client.post(&url))
+        .authorize_runtime(client.post(&url))
+        .await
         .unwrap()
         .json(&other_node)
         .send()
@@ -256,7 +261,8 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         expected_build: "0".repeat(64),
     });
     let refused: RuntimeControlReceipt = endpoint
-        .authorize(client.post(&url))
+        .authorize_runtime(client.post(&url))
+        .await
         .unwrap()
         .json(&changed)
         .send()
@@ -271,7 +277,8 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
 
     node.shutdown().await.expect("node shutdown");
     let response = endpoint
-        .authorize(client.post(format!("http://{addr}/runtime/operator/starting")))
+        .authorize_runtime(client.post(format!("http://{addr}/runtime/operator/starting")))
+        .await
         .unwrap()
         .json(&retire)
         .send()
@@ -287,7 +294,8 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     );
     assert!(admission.is_retiring().unwrap());
     let repeated: RuntimeControlReceipt = endpoint
-        .authorize(client.post(&url))
+        .authorize_runtime(client.post(&url))
+        .await
         .unwrap()
         .json(&retire)
         .send()
@@ -419,6 +427,7 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
             activation_observation,
             Default::default(),
             Default::default(),
+            Default::default(),
         )
         .contract;
         let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
@@ -442,7 +451,8 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
             GraphqlEndpoint::as_principal(&graphql, identity.did())
                 .with_client_signing_capability(identity.client_signing_capability().unwrap())
                 .unwrap()
-                .authorize(request)
+                .authorize_runtime(request)
+                .await
                 .unwrap()
         } else {
             request
@@ -481,13 +491,190 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
     }
 }
 
+/// The home's GraphQL beside the contract routes, as one runtime serves
+/// both: the request keeps its `Host`, which its credential names.
+fn forward_graphql(
+    upstream: String,
+) -> impl Fn(
+    axum::http::HeaderMap,
+    axum::body::Bytes,
+) -> futures::future::BoxFuture<'static, axum::response::Response>
+       + Clone
+       + Send
+       + Sync
+       + 'static {
+    move |headers, body| {
+        let upstream = upstream.clone();
+        Box::pin(async move {
+            let mut request = reqwest::Client::new().post(&upstream).body(body);
+            for name in [header::AUTHORIZATION, header::HOST, header::CONTENT_TYPE] {
+                if let Some(value) = headers.get(&name) {
+                    request = request.header(name, value);
+                }
+            }
+            let response = request.send().await.unwrap();
+            let status = response.status();
+            let bytes = response.bytes().await.unwrap();
+            (status, bytes).into_response()
+        })
+    }
+}
+
+/// A User wires an installed plugin through the runtime of a home whatever
+/// decides its access: the runtime holds the plugin store and runs the
+/// transaction, the client signs each write with its own key, and the
+/// runtime never loads a User key of its own.
+#[tokio::test]
+async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself() {
+    use gents_pack::pack::plugin_wire::WireRequest;
+    use gents_store::local::document_acp::DocumentAcp;
+    let home = crate::test_support::ClientHome::new().await;
+    let identity = home.home.identity.clone();
+    let owner = identity.did().to_owned();
+    let binding = home.agent("fixture").await;
+    home.mark_backend_healthy(&binding).await;
+    let configuration: gents_documents::PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": owner},
+        "tools": [{"node_did": owner, "tools_id": "client-wire-tools"}],
+        "contexts": [{"node_did": owner, "context_id": "client-wire-context", "tools_id": "client-wire-tools"}],
+        "agents": [{"node_did": owner, "agent_did": binding.agent_did,
+            "creation_nonce": binding.creation_nonce, "context_id": "client-wire-context",
+            "inference_profile_id": format!("{}:inference", binding.agent_did), "enabled": true}]
+    }))
+    .unwrap();
+    let plan = gents_documents::DesiredStateApplyPlan::from_pack_config(&configuration).unwrap();
+    home.access
+        .transact_write("test.client_wire.context", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    let runtime = gents::Gents::builder()
+        .node(home.node().clone())
+        .backend_admission(home.home.backend_admission())
+        .identity(identity.clone())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
+        .agent("fixture")
+        .identity_binding(binding.clone())
+        .backend_id(format!("{}:backend", binding.agent_did))
+        .model_name("test-model")
+        .done()
+        .build()
+        .await
+        .unwrap();
+    let (mut plugin, artifact) = gents_pack::plugin::test_fixtures::build_plugin_pack(
+        "client_wire",
+        &gents_pack::plugin::test_fixtures::constant_output_wat(br#"{}"#),
+        None,
+    );
+    plugin.name = "tool".into();
+    for document_acp in [DocumentAcp::Local, DocumentAcp::Vera] {
+        let plugin_home = tempfile::tempdir().unwrap();
+        let installed = gents_pack::plugin::install::install_from_pack(
+            plugin_home.path(),
+            "acme",
+            "acme/client_wire",
+            "1.0.0",
+            &format!("sha256:{}", "b".repeat(64)),
+            &plugin,
+            &artifact,
+            None,
+            Default::default(),
+            Default::default(),
+            false,
+        )
+        .unwrap();
+        let (activation_runtime, activation_observation) = empty_activation_state();
+        assert!(activation_runtime.set(runtime.clone()).is_ok());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let graphql = format!("http://{addr}/api/v0/graphql");
+        let app = runtime_contract_router(
+            graphql.clone(),
+            GraphqlEndpoint::anonymous(graphql.clone()),
+            "client-wire".into(),
+            owner.clone(),
+            "readwrite".into(),
+            Ok(None),
+            Vec::new(),
+            Some(plugin_home.path().display().to_string()),
+            None,
+            None,
+            None,
+            None,
+            crate::http::enrollment::empty_issuer_handle(),
+            crate::http::enrollment::empty_decision_service_handle(),
+            activation_runtime,
+            activation_observation,
+            Default::default(),
+            Default::default(),
+            document_acp,
+        )
+        .contract
+        .route(
+            "/api/v0/graphql",
+            post(forward_graphql(
+                home.home.graphql_endpoint().unwrap().to_owned(),
+            )),
+        );
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let report = crate::http::pack_wire_client::wire_as_client(
+            crate::test_support::user_endpoint(&graphql, &home.user),
+            owner.clone(),
+            plugin_home.path().to_owned(),
+            WireRequest {
+                plugin: "acme/tool".into(),
+                agent: binding.agent_did.clone(),
+                targets_from: Vec::new(),
+                remove: false,
+                preview: false,
+                dynamic_consent: false,
+                tool_calls_consent: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(report["preview"], false, "{document_acp:?}: {report}");
+        let rows = home
+            .access
+            .execute("{ Tools { tools_id integrations } }")
+            .await
+            .unwrap();
+        assert!(
+            rows["data"]["Tools"].as_array().unwrap().iter().any(|row| {
+                row["tools_id"] == "client-wire-tools"
+                    && row["integrations"]["plugins"]
+                        .as_array()
+                        .is_some_and(|plugins| {
+                            plugins.iter().any(|entry| {
+                                entry["plugin"] == "acme/tool"
+                                    && entry["digest"] == installed.digest
+                            })
+                        })
+            }),
+            "{document_acp:?}: {rows}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn operator_inventory_authenticates_and_reads_native_metadata() {
-    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::file_inventory::{
         DirectFileInventoryRequest, FileInventoryObservation, FileInventoryReadAction,
         FILE_INVENTORY_OPERATOR_PATH,
     };
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
 
     let temp = tempfile::tempdir().unwrap();
     // The enrolled User holds the operator grants and configures the Node
@@ -575,7 +762,8 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
     assert!(response.status().is_client_error());
     let wrong_audience =
         crate::test_support::user_endpoint("http://other.invalid/api/v0/graphql", user)
-            .authorization()
+            .runtime_authorization()
+            .await
             .unwrap()
             .unwrap();
     let response = client
@@ -587,7 +775,8 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
         .unwrap();
     assert!(response.status().is_client_error());
     let response = foreign_endpoint
-        .authorize(client.post(&url))
+        .authorize_runtime(client.post(&url))
+        .await
         .unwrap()
         .json(&demand)
         .send()
@@ -602,7 +791,8 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
     let mut retained = None;
     for _ in 0..2 {
         let response = endpoint
-            .authorize(client.post(&url))
+            .authorize_runtime(client.post(&url))
+            .await
             .unwrap()
             .json(&demand)
             .send()
@@ -627,7 +817,8 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
     let mut wrong_runtime = demand.clone();
     wrong_runtime.node_did = foreign.did().into();
     let response = endpoint
-        .authorize(client.post(&url))
+        .authorize_runtime(client.post(&url))
+        .await
         .unwrap()
         .json(&wrong_runtime)
         .send()
@@ -637,7 +828,8 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
     let mut missing = demand.clone();
     missing.session_id.push_str("-missing");
     let response = endpoint
-        .authorize(client.post(&url))
+        .authorize_runtime(client.post(&url))
+        .await
         .unwrap()
         .json(&missing)
         .send()
@@ -656,10 +848,9 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
 
 #[tokio::test]
 async fn inference_settings_authenticates_the_client_before_reading_configuration() {
-    use gents_desktop_core::{
-        client::{DesktopPaths, PrincipalIdentity},
-        inference::INFERENCE_SETTINGS_PATH,
-    };
+    use gents_observe::client_inference::INFERENCE_SETTINGS_PATH;
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
     let temp = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(temp.path());
     paths.ensure_root_dirs().await.unwrap();
@@ -688,7 +879,8 @@ async fn inference_settings_authenticates_the_client_before_reading_configuratio
         .unwrap();
     assert!(response.status().is_client_error());
     let foreign_audience = desktop_endpoint("http://other.invalid/api/v0/graphql", &identity)
-        .authorization()
+        .runtime_authorization()
+        .await
         .unwrap()
         .unwrap();
     let response = client
@@ -700,7 +892,8 @@ async fn inference_settings_authenticates_the_client_before_reading_configuratio
     assert!(response.status().is_client_error());
     let endpoint = desktop_endpoint(format!("http://{addr}/api/v0/graphql"), &identity);
     let response = endpoint
-        .authorize(client.get(&url))
+        .authorize_runtime(client.get(&url))
+        .await
         .unwrap()
         .send()
         .await
@@ -970,7 +1163,8 @@ async fn usage_route(
         GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), identity.did())
             .with_client_signing_capability(identity.client_signing_capability().unwrap())
             .unwrap()
-            .authorize(request)
+            .authorize_runtime(request)
+            .await
             .unwrap()
     } else {
         request

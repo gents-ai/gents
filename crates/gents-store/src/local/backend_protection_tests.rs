@@ -3,9 +3,9 @@ use super::{home, store_key::StoreKey};
 use crate::identity::NodeIdentity;
 use anyhow::Context;
 
-/// A store created before the Agent baseline gained `get-collection` carries
-/// the previous lineage marker. It is refused as an older home before any
-/// node opens it.
+/// A store created before `agent_manager` took only the Node administrators'
+/// userset carries the previous lineage marker. It is refused as an older home
+/// before any node opens it.
 #[tokio::test]
 async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyhow::Result<()> {
     use super::backend_protection::{BackendProtectionError, FreshBackendStore, PROVENANCE_MARKER};
@@ -29,14 +29,24 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
         },
     )
     .await??;
+    let owner_path = home.join("owner.key");
+    let owner = tokio::task::spawn_blocking(move || {
+        crate::identity::KeyIdentity::load_or_create(owner_path, None)
+    })
+    .await??;
     FreshBackendStore::observe(&data, &lock)
         .await?
-        .initialize(&key, &node, super::document_acp::DocumentAcp::Local)
+        .initialize(
+            &key,
+            &node,
+            &identity::Did::new(owner.did())?,
+            super::document_acp::DocumentAcp::Local,
+        )
         .await?;
-    assert!(PROVENANCE_MARKER.ends_with("-v2"));
+    assert!(PROVENANCE_MARKER.ends_with("-v3"));
     std::fs::rename(
         data.join(PROVENANCE_MARKER),
-        data.join(".gents-private-backend-v1"),
+        data.join(".gents-private-backend-v2"),
     )?;
     drop(lock);
     // Every file under the home, the store lock's own file included.
@@ -78,7 +88,7 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
     // A store with this version's marker, and one with no marker, pass to
     // the lock.
     std::fs::rename(
-        data.join(".gents-private-backend-v1"),
+        data.join(".gents-private-backend-v2"),
         data.join(PROVENANCE_MARKER),
     )?;
     super::backend_protection::refuse_earlier_lineage(&data)?;
@@ -149,10 +159,21 @@ async fn an_uncheckable_copy_leaves_the_original_store_untouched() -> anyhow::Re
         },
     )
     .await??;
+    let owner_path = home.join("owner.key");
+    let owner = tokio::task::spawn_blocking(move || {
+        crate::identity::KeyIdentity::load_or_create(owner_path, None)
+            .map(|key| key.did().to_owned())
+    })
+    .await??;
     let key = StoreKey::from_host(&[19; 32])?;
     super::backend_protection::FreshBackendStore::observe(&data, &lock)
         .await?
-        .initialize(&key, &identity, super::document_acp::DocumentAcp::Local)
+        .initialize(
+            &key,
+            &identity,
+            &identity::Did::new(owner)?,
+            super::document_acp::DocumentAcp::Local,
+        )
         .await?;
     ProtectedBackendStore::open(&data, &key, &lock)
         .await?

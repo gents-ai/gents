@@ -387,6 +387,7 @@ async fn typed_actions_are_the_closed_schema_and_argv_remains_accepted() {
             error.contains("next call: p2p {\"action\":\"help\""),
             "{args}: {error}"
         );
+        assert_eq!(error.matches("next call:").count(), 1, "{args}: {error}");
     }
 }
 

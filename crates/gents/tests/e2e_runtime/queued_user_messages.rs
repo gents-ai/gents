@@ -144,7 +144,7 @@ async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
     held.release();
     for id in ["active", "first", "second"] {
         assert_eq!(
-            wait_for_request_terminal(&actors.fixture.access, id, Duration::from_secs(120)).await,
+            wait_for_request_terminal(&actors.fixture.access, id).await,
             "completed"
         );
     }

@@ -1,0 +1,3 @@
+---- MODULE MCClientAccessRecoveryExpiredReplay ----
+EXTENDS ClientAccessRecovery
+====

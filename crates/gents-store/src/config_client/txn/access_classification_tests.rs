@@ -21,6 +21,26 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
     let boxed = || Box::new(failure.error());
     let response = || GraphqlResponseError::Access(Box::new(failure.error()));
     match wrapper {
+        "journal_schema_error_access" => classify_erased(
+            erasure,
+            crate::schema::journal::JournalSchemaError::Access(access),
+        ),
+        "outbox_error_access" => classify_erased(
+            erasure,
+            crate::client_journal::outbox::OutboxError::Access(access),
+        ),
+        "outbox_error_response" => classify_erased(
+            erasure,
+            crate::client_journal::outbox::OutboxError::Response(response()),
+        ),
+        "client_access_error_access" => classify_erased(
+            erasure,
+            crate::identity::client_access::ClientAccessError::Access(access),
+        ),
+        "runtime_access_error_configuration" => classify_erased(
+            erasure,
+            crate::config_client::runtime_access::RuntimeAccessError::Configuration(access),
+        ),
         "view_error_execute" => classify_owner(erasure, ViewError::Execute(access)),
         "pack_evidence_error_config" => classify_owner(erasure, PackEvidenceError::Config(boxed())),
         "document_decide_error_authorize" => {
@@ -75,6 +95,14 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
             erasure,
             EnrollmentGrantError::Issue {
                 tuple: "node admin",
+                source: access,
+            },
+        ),
+        "enrollment_grant_error_issue_not_abandoned" => classify_owner(
+            erasure,
+            EnrollmentGrantError::IssueNotAbandoned {
+                tuple: "node admin",
+                removing: "node admin",
                 source: access,
             },
         ),

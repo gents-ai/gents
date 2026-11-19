@@ -1,5 +1,6 @@
 import Proofs.Conformance.Identity.Conformance
 import Proofs.Conformance.Family
+import Proofs.Store.Identity.GrantSets
 
 namespace Conformance.HouseholdC
 

@@ -1425,11 +1425,10 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
             )
             .await;
 
-            let stored = crate::clients::provider_http::tests::stored_usage_eventually(
+            let stored = crate::clients::provider_http::tests::stored_usage_when_recorded(
                 &cache, &node, &account,
             )
-            .await
-            .expect("usage recorded");
+            .await;
             let window = &stored.report.windows[0];
             assert_eq!((window.label.as_str(), window.used_pct), ("5h", 25.0));
         });

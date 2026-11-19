@@ -5,6 +5,7 @@ mod permit;
 mod persistence;
 mod recovery;
 mod registry;
+mod resumed;
 mod slot_accounting;
 pub(crate) mod stream_guard;
 
@@ -17,6 +18,7 @@ pub use config::{document_configured_from_fields, BackendAdmissionConfig};
 pub(crate) use persistence::ProviderCallUsage;
 pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub use registry::AdmissionRegistry;
+pub use resumed::last_recorded_call_seq;
 pub use slot_accounting::call_state_holds_backend_slot;
 
 /// The recovery and persistence owners' items that full-request tests above

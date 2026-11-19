@@ -306,7 +306,7 @@ mod tests {
 
     async fn spawn_runtime_router(
         acp: LocalDocumentACP,
-        owner: &gents_desktop_core::client::PrincipalIdentity,
+        owner: &gents_store::client_journal::principal_identity::PrincipalIdentity,
     ) -> anyhow::Result<SocketAddr> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
@@ -339,6 +339,7 @@ mod tests {
             activation_observation,
             Default::default(),
             Default::default(),
+            Default::default(),
         )
         .contract
         .merge(
@@ -354,7 +355,7 @@ mod tests {
 
     async fn post_identity_decide(
         runtime_addr: SocketAddr,
-        owner: &gents_desktop_core::client::PrincipalIdentity,
+        owner: &gents_store::client_journal::principal_identity::PrincipalIdentity,
         actor: &str,
         permission: &str,
         resource: &str,
@@ -372,7 +373,8 @@ mod tests {
                         owner.private_key_bytes(),
                     )?,
                 )?
-                .authorization()?
+                .runtime_authorization()
+                .await?
                 .expect("operator authorization"),
             )
             .json(&json!({
@@ -392,10 +394,15 @@ mod tests {
     async fn identity_decide_endpoint_matches_resolved_lean_permission_cases() -> anyhow::Result<()>
     {
         let temp = tempfile::tempdir()?;
-        let paths =
-            gents_desktop_core::client::DesktopPaths::from_root(temp.path().join("operator"));
+        let paths = gents_store::client_journal::paths::DesktopPaths::from_root(
+            temp.path().join("operator"),
+        );
         paths.ensure_root_dirs().await?;
-        let owner = gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
+        let owner =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &paths,
+            )
+            .await?;
         for case in gents_lean_vocab::families::agent_identity_permission_decide::cases() {
             let input = &case.input;
             let runtime_addr =

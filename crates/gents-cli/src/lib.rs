@@ -580,12 +580,6 @@ pub(crate) async fn resolve_config_access_under_plugin_store(
     Ok((access, home))
 }
 
-/// How long an offline command waits for a previous holder of the home's
-/// store that declared its release, such as the node an earlier command in
-/// this process shut down (Lean `StoreHandoff.decide`); a serving runtime is
-/// refused at once.
-const OFFLINE_STORE_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
-
 pub(crate) async fn resolve_pack_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
@@ -627,6 +621,11 @@ async fn resolve_config_access_inner(
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
             let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql).await?;
+            gents_store::config_client::owed::spawn_settlement(
+                endpoint.clone(),
+                runtime_state.node_did,
+                |failed| tracing::warn!("{failed}"),
+            );
             return Ok((
                 ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
                 home_dir,
@@ -649,7 +648,7 @@ async fn resolve_config_access_inner(
     let claim = gents_store::local::home::acquire_store(
         &home_dir,
         &data_dir,
-        OFFLINE_STORE_RELEASE_WAIT,
+        gents_store::local::home::STORE_RELEASE_WAIT,
     )
     .await
     .map_err(|error| {
@@ -720,6 +719,12 @@ async fn resolve_config_access_inner(
             .await?
         }
     };
+    let endpoint = endpoint.with_reported_delegation_audience(
+        gents_store::local::document_acp::status_reports(
+            config.document_acp,
+            gents_store::local::document_acp::node_delegation_audience(&node),
+        ),
+    )?;
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
         node.clone(),
@@ -978,7 +983,7 @@ mod tests {
     /// its config, store key and a fresh protected store whose provenance
     /// names the runtime.
     async fn initialized_home_with_store(temp: &Path) -> PathBuf {
-        gents_service::home_state::client_identity_for_new_node()
+        let client = gents_service::home_state::client_identity_for_new_node()
             .await
             .unwrap();
         let home = initialized_home(temp);
@@ -996,6 +1001,7 @@ mod tests {
             .initialize(
                 &key,
                 &identity,
+                &identity::Did::new(client.did()).unwrap(),
                 gents_store::local::document_acp::DocumentAcp::Local,
             )
             .await

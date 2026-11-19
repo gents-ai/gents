@@ -66,19 +66,9 @@ pub struct ManagedServerResetRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct EnrollmentStatusRequest {
-    pub server_address: String,
-    #[serde(default)]
-    #[ts(optional)]
-    pub candidate_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EnrollmentInviteRequest {
-    pub invite: String,
-    pub candidate_name: Option<String>,
+pub struct RuntimeAccessConnectRequest {
+    pub server_address: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -707,4 +697,12 @@ pub struct SessionContextDetailsRequest {
     pub session_id: String,
     pub request_id: String,
     pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeAccessDecisionRequest {
+    pub node_did: String,
+    pub request_id: String,
+    pub decision: gents_protocol::client_access::ClientAccessDecision,
 }

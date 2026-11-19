@@ -147,16 +147,23 @@ impl Drop for ConsoleOutput {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn console_interrupt_releases_the_native_installation() -> Result<()> {
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+    use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+    use gents_store::client_journal::paths::DesktopPaths;
     use std::sync::Arc;
 
     let temp = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(temp.path().join("client"));
     let seed = Arc::new(
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
-            .await?,
+        ClientRuntime::start_with_paths_and_options(
+            paths.clone(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
+        )
+        .await?,
     );
-    let peer = seed.local_peer_id().to_owned();
+    anyhow::ensure!(seed.node().p2p().is_none());
     let seed_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
     drop(seed);
@@ -188,9 +195,16 @@ async fn console_interrupt_releases_the_native_installation() -> Result<()> {
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait()).await??;
     anyhow::ensure!(status.success(), "console fixture exited with {status}");
     let reopened = Arc::new(
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?,
+        ClientRuntime::start_with_paths_and_options(
+            paths,
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
+        )
+        .await?,
     );
-    anyhow::ensure!(reopened.local_peer_id() == peer);
+    anyhow::ensure!(reopened.node().p2p().is_none());
     reopened.shutdown().await?;
     Ok(())
 }

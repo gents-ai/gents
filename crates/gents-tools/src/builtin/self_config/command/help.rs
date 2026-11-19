@@ -392,10 +392,10 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "read back to confirm the targets are gone.",
         },
         "policy" => Page {
-            what: "node permissions and document relationships granted to or held by an identity, acting as this agent.",
+            what: "node permissions and document relationships and permissions granted to or held by an identity, acting as this agent.",
             commands: &[
                 "policy get  options: subject (self or an agent DID), collection and doc to list a document's relationships",
-                "policy check  options: subject, and permission NAME or collection, doc, relation",
+                "policy check  options: subject, and permission NAME (a node permission, or a relation or permission of this Node's document such as manage_agents), or collection, doc and relation or permission",
                 "policy explain  same options as check; when denied, names the grant that would allow it",
                 "policy grant | revoke  same options as check; acts as this agent",
             ],

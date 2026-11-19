@@ -331,22 +331,48 @@ async fn usage_client(
     )
 }
 
-pub(crate) async fn stored_usage_eventually(
+/// Resolves with the first `Some` that `read` returns, re-running it after
+/// each observation `cache` records and failing with `what` once none has been
+/// recorded for the suite's `STALL_CEILING`. The subscription opens before the
+/// first read, so a record landing between two reads is never missed
+/// (TLA+ `UsageRecordObservation`).
+pub(crate) async fn when_usage_recorded<T, F>(
+    cache: &crate::usage_observation::UsageCache,
+    what: &str,
+    mut read: F,
+) -> T
+where
+    F: AsyncFnMut() -> Option<T>,
+{
+    use gents_store::test_support::STALL_CEILING;
+    let mut records = cache.subscribe_records();
+    loop {
+        let seen = *records.borrow_and_update();
+        if let Some(value) = read().await {
+            return value;
+        }
+        match tokio::time::timeout(STALL_CEILING, records.changed()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => panic!("{what}: the usage cache closed after {seen} records"),
+            Err(_) => {
+                panic!("{what}: no usage recorded for {STALL_CEILING:?} after {seen} records")
+            }
+        }
+    }
+}
+
+pub(crate) async fn stored_usage_when_recorded(
     cache: &crate::usage_observation::UsageCache,
     node: &std::sync::Arc<defra_node::Node>,
     account: &crate::usage_observation::UsageAccount,
-) -> Option<crate::usage_observation::UsageObservation> {
+) -> crate::usage_observation::UsageObservation {
     let access = gents_store::config_client::ConfigAccess::local(node.clone());
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let stored = crate::usage_observation::load_usage(cache, &access, account)
+    when_usage_recorded(cache, &format!("usage for {account:?}"), async || {
+        crate::usage_observation::load_usage(cache, &access, account)
             .await
-            .expect("load usage");
-        if stored.is_some() || tokio::time::Instant::now() >= deadline {
-            return stored;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+            .expect("load usage")
+    })
+    .await
 }
 
 const CODEX_USAGE_HEADERS: &[(&str, &str)] = &[
@@ -364,9 +390,7 @@ async fn usage_capture_success_send_records_header_windows() {
         .await
         .expect("200");
 
-    let stored = stored_usage_eventually(&cache, &db.node, &account)
-        .await
-        .expect("usage recorded");
+    let stored = stored_usage_when_recorded(&cache, &db.node, &account).await;
     let window = &stored.report.windows[0];
     assert_eq!((window.label.as_str(), window.used_pct), ("primary", 12.0));
     assert_eq!(
@@ -387,9 +411,7 @@ async fn usage_capture_streaming_success_records_header_windows() {
     let mut body = response.into_body();
     while body.next().await.is_some() {}
 
-    let stored = stored_usage_eventually(&cache, &db.node, &account)
-        .await
-        .expect("usage recorded");
+    let stored = stored_usage_when_recorded(&cache, &db.node, &account).await;
     assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }
 
@@ -418,9 +440,7 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
         "{error}"
     );
 
-    let stored = stored_usage_eventually(&cache, &db.node, &account)
-        .await
-        .expect("usage recorded");
+    let stored = stored_usage_when_recorded(&cache, &db.node, &account).await;
     let window = &stored.report.windows[0];
     assert_eq!(window.used_pct, 100.0);
     assert_eq!(window.source, gents_loop::account_usage::UsageSource::Error);
@@ -455,9 +475,7 @@ async fn usage_capture_requires_no_persistent_schema() {
         response.into_body().await.expect("body"),
         Bytes::from_static(br#"{"ok":true}"#)
     );
-    let stored = stored_usage_eventually(&cache, &node, &account)
-        .await
-        .expect("usage recorded without schemas");
+    let stored = stored_usage_when_recorded(&cache, &node, &account).await;
     assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }
 

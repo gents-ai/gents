@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_documents::default_inference_profile_id_for_agent;
 use gents_documents::{AgentContext, CompactionConfig, InferenceSampling};
 use gents_inference::compaction::CompactionStrategy;
@@ -76,8 +74,7 @@ async fn seeded_profile_completes_requests_and_compacts_retained_history() {
         .expect("boot live agent");
 
     for request_id in [profile_request_id, second_request_id, compaction_request_id] {
-        let terminal =
-            wait_for_request_terminal(reader, request_id, Duration::from_secs(120)).await;
+        let terminal = wait_for_request_terminal(reader, request_id).await;
         assert_eq!(
             terminal, "completed",
             "target {} must accept and complete seeded request {request_id}",

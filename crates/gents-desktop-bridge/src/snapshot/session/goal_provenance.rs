@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use gents_desktop_core::client::CanonicalTranscriptDependencies;
+use gents_observe::client_projection::query::CanonicalTranscriptDependencies;
 use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::output::{
     origin::{resolve_origin, ObservedMessage},

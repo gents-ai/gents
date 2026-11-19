@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::{ClientCore, CLIENT_START_STALL_TIMEOUT};
+use crate::client_runtime::ClientRuntime;
+use gents_desktop_core::client::journal::CLIENT_START_STALL_TIMEOUT;
 use tokio::sync::watch;
 
 use super::ClientLifecycleGuard;
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 const CLIENT_START_STACK_SIZE: usize = 16 * 1024 * 1024;
 pub(super) const NO_STAGE_COMPLETED: &str = "none";
@@ -39,10 +41,10 @@ pub(super) type ClientStartFailure = (
     reason = "dedicated large-stack OS thread outside the runtime workers; the caller awaits a oneshot"
 )]
 pub(super) async fn start_client_core_async(
-    paths: gents_desktop_core::client::DesktopPaths,
+    paths: gents_store::client_journal::paths::DesktopPaths,
     store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
     lifecycle: ClientLifecycleGuard,
-) -> Result<(ClientCore, ClientLifecycleGuard), ClientStartFailure> {
+) -> Result<(ClientRuntime, ClientLifecycleGuard), ClientStartFailure> {
     let node_data_dir = paths.node_data_dir().to_path_buf();
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (stage_tx, stage_rx) = watch::channel(NO_STAGE_COMPLETED);
@@ -51,13 +53,14 @@ pub(super) async fn start_client_core_async(
         .stack_size(CLIENT_START_STACK_SIZE)
         .spawn(move || {
             tauri::async_runtime::block_on(async move {
-                let options = gents_desktop_core::client::ClientCoreOptions {
+                let options = crate::client_runtime::ClientRuntimeOptions {
                     store_key_custody,
                     ..Default::default()
                 };
                 let result =
-                    ClientCore::start_with_paths_reporting_stages(paths, options, stage_tx).await;
-                deliver_client_start(tx, result, lifecycle, |core: ClientCore| async move {
+                    ClientRuntime::start_with_paths_reporting_stages(paths, options, stage_tx)
+                        .await;
+                deliver_client_start(tx, result, lifecycle, |core: ClientRuntime| async move {
                     Arc::new(core).shutdown().await
                 })
                 .await;

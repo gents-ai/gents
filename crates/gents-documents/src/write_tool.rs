@@ -304,6 +304,7 @@ impl WriteToolDecl {
             |error| anyhow::anyhow!("invalid collection {:?}: {error}", self.collection),
         )?;
         reject_protected_collection_name(&self.collection)?;
+        reject_managed_collection_name(&self.collection)?;
         reject_workspace_datastore_write(&self.collection)?;
         for (index, field) in self.fields.iter().enumerate() {
             if field.name.trim().is_empty() {
@@ -462,6 +463,8 @@ pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::EVAL_VERDICT_NAME,
     gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
     gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME,
+    gents_protocol::schemas::CLIENT_AUTHORED_SUBMISSION_NAME,
+    gents_protocol::schemas::CLIENT_OUTBOX_SEQUENCE_NAME,
 ];
 
 /// These collections require the workspace publication owner to stage native
@@ -489,6 +492,28 @@ pub fn reject_protected_collection_name(collection: &str) -> Result<()> {
     if PROTECTED_DATASTORE_COLLECTIONS.contains(&collection) {
         anyhow::bail!(
             "collection {collection:?} is protected and cannot be exposed through a datastore tool"
+        );
+    }
+    Ok(())
+}
+
+/// `Documents.DatastoreProtection.writeDeclarationRefused`.
+pub fn write_declaration_refused(protected: bool, managed: bool, mailbox: bool) -> bool {
+    protected || (managed && !mailbox)
+}
+
+fn reject_managed_collection_name(collection: &str) -> Result<()> {
+    let managed = gents_store::schema::migration::DEFAULT_REGISTRY
+        .managed_names()
+        .any(|name| name == collection)
+        || gents_protocol::schemas::is_replicated_protocol_collection(collection);
+    if write_declaration_refused(
+        PROTECTED_DATASTORE_COLLECTIONS.contains(&collection),
+        managed,
+        collection == gents_protocol::row::MAILBOX_COLLECTION,
+    ) {
+        anyhow::bail!(
+            "collection {collection:?} is managed by Gents; a write tool declares application collections only"
         );
     }
     Ok(())
@@ -591,6 +616,33 @@ mod tests {
             super::reject_protected_collection_name(&case.collection)
                 .is_err_and(|error| format!("{error:#}").contains("protected"))
         });
+    }
+
+    #[test]
+    fn write_declaration_refusal_follows_the_model() {
+        gents_lean_vocab::families::documents_datastore_protection_write_declaration_refused::replay(
+            |case| super::write_declaration_refused(case.protected, case.managed, case.mailbox),
+        );
+    }
+
+    #[test]
+    fn a_write_tool_declares_no_collection_gents_manages_but_the_mailbox() {
+        let managed = gents_store::schema::migration::DEFAULT_REGISTRY
+            .managed_names()
+            .chain(
+                gents_protocol::schemas::REPLICATED_PROTOCOL_COLLECTION_NAMES
+                    .iter()
+                    .copied(),
+            );
+        for collection in managed {
+            let refused = super::reject_managed_collection_name(collection);
+            assert_eq!(
+                refused.is_err(),
+                collection != gents_protocol::row::MAILBOX_COLLECTION,
+                "{collection}"
+            );
+        }
+        assert!(super::reject_managed_collection_name("Notes").is_ok());
     }
 
     #[test]

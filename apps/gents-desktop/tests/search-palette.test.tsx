@@ -267,7 +267,7 @@ describe("the search palette", () => {
         node({
           nodeDid: "did:key:juno",
           label: "Juno",
-          source: "enrollment",
+          local: false,
           node: { ...node().node, nodeDid: "did:key:juno", displayName: null },
         }),
       ],
@@ -297,7 +297,7 @@ describe("the search palette", () => {
         node({
           nodeDid: "did:key:juno",
           label: "Juno",
-          source: "enrollment",
+          local: false,
           nodeConfig: { node_did: "did:key:juno", avatar: "12" },
           node: { ...node().node, nodeDid: "did:key:juno", displayName: null },
         }),

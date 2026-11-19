@@ -105,6 +105,33 @@ def policyGrantBound : Family PolicyGrantBoundInput Bool where
     ({ Grants.bot with policy := i.candidatePolicy } : Grants).boundedBy
       { Grants.bot with policy := i.storedPolicy } { Grants.bot with policy := i.heldPolicy }
 
+structure PolicyWordInput where
+  word : String
+  deriving Lean.ToJson
+
+structure PolicyWordName where
+  resource : String
+  isPermission : Bool
+  deriving Lean.ToJson
+
+structure PolicyWordOutput where
+  names : List PolicyWordName
+  catalogRefusal : Bool
+  deriving Lean.ToJson
+
+/-- Every word the Household policy declares, bare and as `resource#name`, with
+what the policy tool resolves it to and whether the catalog refusal says it;
+then words that name nothing, which the tool refuses. -/
+@[conformance_family]
+def policyToolWords : Family PolicyWordInput PolicyWordOutput where
+  inputs := ((policyNames.map (·.name)).eraseDups ++
+    policyNames.map (fun n => n.resource ++ "#" ++ n.name) ++
+    ["#", "agent-manager", "manage-agents", "nodes#", "#manage_agents", "nodes#read-document",
+      "node#manage_agents", "nodes#manage_agents#x", "read-document"]).map fun word => { word }
+  model := fun i =>
+    { names := (resolvePolicyName i.word).map (fun n => ⟨n.resource, n.isPermission⟩)
+      catalogRefusal := catalogRefusalWords.contains i.word }
+
 structure LockoutRow where
   permission : String
   delete : Bool

@@ -214,7 +214,8 @@ async fn user_signed_node(
     let request = defra_http::client_signed_create::websocket_request(
         url.as_str(),
         &endpoint
-            .authorization()?
+            .runtime_authorization()
+            .await?
             .context("test user authorization missing")?,
     )?;
     let (socket, _) = tokio_tungstenite::connect_async_with_config(
@@ -423,15 +424,6 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             })
         })
         .await?;
-    user_access
-        .transact_write("test.agent_creator.catalog", |txn| {
-            let creator = &creator;
-            let runtime = &runtime;
-            Box::pin(async move {
-                gents_documents::grant_agent_catalog(txn, runtime.did(), &creator.agent_did).await
-            })
-        })
-        .await?;
     let tools_id = format!("{}:tools", creator.agent_did);
     tool.call(
         json!({"argv":["tools","update"],"set":{"display_name":"configured"}}).to_string(),
@@ -471,6 +463,16 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         creator_access.execute("{ Node { _docID } }").await?["data"]["Node"],
         json!([])
     );
+    user_access
+        .transact_write("test.agent_creator.catalog", |txn| {
+            let creator = &creator;
+            let runtime = &runtime;
+            Box::pin(async move {
+                gents_documents::grant_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
+            })
+        })
+        .await?;
     let listed: Value = serde_json::from_str(
         &tool
             .call(
@@ -524,10 +526,11 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         case.check(result.is_ok());
     }
     user_access
-        .transact_write("test.agent_creator.revoke_catalog", |txn| {
+        .transact_write("test.agent_creator.revoke_node_administration", |txn| {
             let (runtime, creator) = (&runtime, &creator);
             Box::pin(async move {
-                gents_documents::revoke_agent_catalog(txn, runtime.did(), &creator.agent_did).await
+                gents_documents::revoke_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
             })
         })
         .await?;
@@ -543,12 +546,41 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .await
         .is_err());
     user_access
-        .transact_write("test.agent_creator.restore_catalog", |txn| {
+        .transact_write("test.agent_creator.restore_node_administration", |txn| {
             let (runtime, creator) = (&runtime, &creator);
             Box::pin(async move {
-                gents_documents::grant_agent_catalog(txn, runtime.did(), &creator.agent_did).await
+                gents_documents::grant_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
             })
         })
+        .await?;
+    // With the catalog held, revoking the Node's `runtime_reader` refuses the
+    // create end to end: the hosting node key reads only what document ACP
+    // grants it (`GrantSets.node_runtime_does_not_read_past_dac`), so
+    // it neither reads the Node nor uses it to admit or provision the Agent
+    // (gents#3935, `Identity.Household.runtimeMayUse`).
+    let runtime_actor = identity::Did::new(runtime.did())?;
+    user_access
+        .delete_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
+        .await?;
+    let hosting_read = admin.execute("{ Node { _docID } }").await?;
+    assert_eq!(
+        hosting_read["data"]["Node"].as_array().map(Vec::len),
+        Some(0)
+    );
+    assert!(tool
+        .call(
+            json!({
+                "argv":["agent","create"],
+                "options":{"display-name":"Child", "system-prompt":"Work", "profile":"profile"}
+            })
+            .to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await
+        .is_err());
+    user_access
+        .add_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
         .await?;
     let create = ConfigureAgentParams {
         action: "create".into(),
@@ -621,6 +653,16 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID display_name }} }}"#,
         gents_store::graphql::escape_graphql_string(&sibling.agent_did)
     );
+    user_access
+        .transact_write("test.agent_creator.catalog_revoked", |txn| {
+            let creator = &creator;
+            let runtime = &runtime;
+            Box::pin(async move {
+                gents_documents::revoke_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
+            })
+        })
+        .await?;
     let sibling_before = user_access.execute(&sibling_query).await?;
     assert!(tool
         .call(
@@ -1859,7 +1901,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         std::fs::write(directory.path().join("config.json"), serde_json::to_vec(&config)?)?;
         std::fs::write(directory.path().join("README.md"), "# Fixture\n\n## Usage\nFixture")?;
         let (bytes, _) = gents_pack::pack::archive::pack_dir(directory.path())?;
-        gents_pack::pack::archive::PackArchive::from_bytes(&bytes)
+        Ok(gents_pack::pack::archive::PackArchive::from_bytes(&bytes)?)
     }).await??;
     let distribution = gents_pack::pack::node_packs::Distribution::stored(
         archive,
@@ -1923,6 +1965,16 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .len(),
         1
     );
+    user_access
+        .transact_write("test.agent_creator.catalog_restored", |txn| {
+            let creator = &creator;
+            let runtime = &runtime;
+            Box::pin(async move {
+                gents_documents::grant_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
+            })
+        })
+        .await?;
     let creator_did = identity::Did::new(signer.did())?;
     // The creator holds `add-dac-relation` and `update-document` through its
     // projected baseline as well as any direct grant, so revoking the direct

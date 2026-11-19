@@ -97,6 +97,13 @@ impl AdmissionCallContext {
         }
     }
 
+    /// Continue the request's call sequence after `last_call_seq`, the
+    /// largest sequence its earlier executions recorded.
+    pub fn resumed_after(mut self, last_call_seq: u64) -> Self {
+        self.call_seq = Arc::new(AtomicU64::new(last_call_seq));
+        self
+    }
+
     /// The calls of one kind and attempt under this request: the request's
     /// identity, cancellation and call sequence, with a join slot of their own.
     pub fn for_call(&self, call_kind: CallKind, attempt: i64) -> Self {

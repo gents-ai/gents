@@ -78,6 +78,7 @@ impl Default for Options {
 
 struct Step0 {
     db: gents_inference::test_support::TestDb,
+    user: gents_store::identity::KeyIdentity,
     owner: gents_store::config_client::ConfigAccess,
     caller: Arc<dyn NodeIdentity>,
     home: tempfile::TempDir,
@@ -369,6 +370,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         .await;
     Step0 {
         db,
+        user,
         owner,
         caller,
         home,
@@ -1594,11 +1596,13 @@ async fn non_job_pause_ends_an_own_running_job_completed_paused() {
 }
 
 /// How the runtime Node shows its hop cap to a later step whose Agent cannot
-/// see that Node.
+/// see that Node: a cap the runtime may use, or a Node whose `runtime_reader`
+/// is revoked, which the hosting runtime still reads but may not use
+/// (`Identity.Household.runtimeMayUse`).
 #[derive(Clone, Copy, Debug)]
 enum NodeHopCap {
     Hidden(Option<u32>),
-    Unreadable,
+    Unusable,
 }
 
 impl Step0 {
@@ -1639,25 +1643,25 @@ impl Step0 {
                     .await
                     .unwrap();
             }
-            NodeHopCap::Unreadable => {
-                let node = self.owner.execute("{ Node { _docID } }").await.unwrap();
-                let doc = node["data"]["Node"][0]["_docID"].as_str().unwrap();
+            NodeHopCap::Unusable => {
                 gents_store::config_client::ConfigAccess::local_as(
                     self.node.clone(),
                     node_did.parse().unwrap(),
                 )
                 .grant_node_permission(
-                    &self.owner.actor_did().unwrap().parse().unwrap(),
-                    gents_store::config_client::NodePermission::DocumentDelete,
+                    &self.user.did().parse().unwrap(),
+                    gents_store::config_client::NodePermission::DacRelationDelete,
                 )
                 .await
                 .unwrap();
+                let node = self.owner.execute("{ Node { _docID } }").await.unwrap();
                 self.owner
-                    .transact_write("test.plugin_job_hop_cap.remove_node", |txn| {
-                        Box::pin(
-                            async move { txn.delete_configuration_document("Node", doc).await },
-                        )
-                    })
+                    .delete_actor_relationship(
+                        "Node",
+                        node["data"]["Node"][0]["_docID"].as_str().unwrap(),
+                        "runtime_reader",
+                        &node_did.parse().unwrap(),
+                    )
                     .await
                     .unwrap();
             }
@@ -1885,8 +1889,8 @@ async fn step0_adoptions_suffix_handles_and_keep_scratch_by_call_as_the_lean_mod
     }
 }
 
-/// A later step reads the runtime Node's hop cap as the runtime: the Agent's
-/// own Node visibility is not an unset cap, and a Node the runtime cannot read
+/// A later step uses the runtime Node's hop cap as the runtime: the Agent's
+/// own Node visibility is not an unset cap, and a Node the runtime may not use
 /// bounds every spawn at hop 0.
 #[tokio::test]
 async fn later_steps_read_the_runtime_hop_cap_as_the_lean_model_says() {
@@ -1895,10 +1899,10 @@ async fn later_steps_read_the_runtime_hop_cap_as_the_lean_model_says() {
 
     for case in gents_lean_vocab::families::plugin_job_dispatch_later_step::cases() {
         let input = &case.input;
-        let cap = if input.cap_readable {
+        let cap = if input.node_usable {
             NodeHopCap::Hidden(input.cap.map(|cap| u32::try_from(cap).unwrap()))
         } else {
-            NodeHopCap::Unreadable
+            NodeHopCap::Unusable
         };
         let step = step0(
             adopting(),

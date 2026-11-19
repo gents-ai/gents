@@ -571,6 +571,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                                     attempt += 1;
                                 }
                                 PreStreamDirective::Repair => {
@@ -841,6 +842,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                                     attempt += 1;
                                     continue 'attempts;
                                 }
@@ -976,6 +978,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                                 attempt += 1;
                                 continue 'attempts;
                             }
@@ -1214,6 +1217,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                         attempt += 1;
                         continue 'attempts;
                     }
@@ -1275,6 +1279,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                         attempt += 1;
                         continue 'attempts;
                     }

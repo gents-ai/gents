@@ -18,6 +18,7 @@ wat = { version = "1.254", optional = true }
 gents-store.workspace = true
 gents-documents.workspace = true
 gents-inference.workspace = true
+gents-core-packs.workspace = true
 acp.workspace = true
 async-trait = "0.1"
 schema.workspace = true

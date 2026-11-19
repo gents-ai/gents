@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -25,6 +25,7 @@ pub struct BackendDiscoveryRequest {
 pub async fn discover_backend(
     State(state): State<RuntimeHttpState>,
     identity: ExtractIdentity,
+    headers: HeaderMap,
     Json(request): Json<BackendDiscoveryRequest>,
 ) -> Response {
     let Some(actor) = identity.did() else {
@@ -41,7 +42,29 @@ pub async fn discover_backend(
             "The selected runtime is unavailable.",
         );
     };
-    let access = ConfigAccess::local_as(runtime.observation_node().clone(), actor.clone());
+    let authorization =
+        match gents_store::config_client::client_authentication::ClientAuthorization::from_http(
+            &identity, &headers,
+        ) {
+            Ok(authorization) => authorization,
+            Err(_) => {
+                return failure(
+                    StatusCode::UNAUTHORIZED,
+                    "The client authorization is unavailable.",
+                )
+            }
+        };
+    let access = match ConfigAccess::local_as(runtime.observation_node().clone(), actor.clone())
+        .with_client_authorization(authorization)
+    {
+        Ok(access) => access,
+        Err(_) => {
+            return failure(
+                StatusCode::FORBIDDEN,
+                "The client authorization does not match this request.",
+            )
+        }
+    };
     match gents_inference::operations::discover_for_authenticated_request(
         &access,
         &request.node_did,
@@ -79,9 +102,10 @@ fn unavailable(error: &InferenceOperationError) -> bool {
 pub async fn read(
     State(state): State<RuntimeHttpState>,
     identity: ExtractIdentity,
+    headers: HeaderMap,
     Json(key): Json<InferenceKey>,
 ) -> Response {
-    let mut response = read_authorized(state, identity, key).await;
+    let mut response = read_authorized(state, identity, headers, key).await;
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         header::HeaderValue::from_static("no-store"),
@@ -92,9 +116,10 @@ pub async fn read(
 async fn read_authorized(
     state: RuntimeHttpState,
     identity: ExtractIdentity,
+    headers: HeaderMap,
     key: InferenceKey,
 ) -> Response {
-    let Some(actor) = identity.did() else {
+    let Some(_actor) = identity.did() else {
         return failure(
             StatusCode::UNAUTHORIZED,
             "Connect this client to the runtime.",
@@ -110,8 +135,20 @@ async fn read_authorized(
             "The runtime is unavailable.",
         );
     };
+    let authorization =
+        match gents_store::config_client::client_authentication::ClientAuthorization::from_http(
+            &identity, &headers,
+        ) {
+            Ok(authorization) => authorization,
+            Err(_) => {
+                return failure(
+                    StatusCode::UNAUTHORIZED,
+                    "The client authorization is unavailable.",
+                )
+            }
+        };
     match runtime
-        .read_inference_observation(actor.clone(), &key)
+        .read_inference_observation(authorization, &key)
         .await
     {
         Ok(InferenceObservationRead::Visible(observation)) => Json(observation).into_response(),

@@ -46,6 +46,8 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) owner_staged_revocations: Mutex<super::OwnerStagedRevocations>,
     /// The runtime key's derivation proof this transaction's access carried.
     pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,
+    pub(super) client_authorization:
+        Option<crate::config_client::client_authentication::ClientAuthorization>,
     /// The apply's owner authorized rerunning its callback after PLAN
     /// (`Identity.OwnerStaged.applyOverHttp`).
     pub(super) planned_replay_authorized: AtomicBool,
@@ -54,6 +56,13 @@ pub struct ConfigApplyTxn<'a> {
     /// The node whose own loopback endpoint carries this HTTP transaction,
     /// when an embedded access routed its client-signed writes through it.
     pub(super) loopback_node: Option<Arc<EmbeddedNode>>,
+    /// The Vera delegation of the direct request this embedded transaction
+    /// serves for its User actor.
+    pub(super) presented_delegation: Option<crate::config_client::user_write::PresentedDelegation>,
+    /// The request-bound credentials a stored command carries for each
+    /// document it creates for its User, by that document, once admitted.
+    pub(super) stored_creates:
+        Mutex<rapidhash::RapidHashMap<String, Arc<crate::config_client::user_write::StoredCreate>>>,
 }
 
 pub(super) enum EmbeddedTransactionPurpose {
@@ -69,6 +78,24 @@ impl<'a> ConfigApplyTxn<'a> {
             TxnBackend::Embedded { node, .. } => Some(node),
             TxnBackend::Http { .. } => self.loopback_node.as_ref(),
         }
+    }
+
+    pub(super) fn request_context(
+        &self,
+        actor: Option<identity::Did>,
+    ) -> defra_core::RequestContext {
+        crate::config_client::client_authentication::ClientAuthorization::request_context(
+            self.client_authorization.as_ref(),
+            actor,
+        )
+    }
+
+    pub(super) fn with_client_authorization(
+        mut self,
+        authorization: Option<crate::config_client::client_authentication::ClientAuthorization>,
+    ) -> Self {
+        self.client_authorization = authorization;
+        self
     }
 
     pub fn has_local_node(&self) -> bool {
@@ -253,10 +280,13 @@ impl<'a> ConfigApplyTxn<'a> {
             rerun_notes: Vec::new(),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
             agent_proof: None,
+            client_authorization: None,
             planned_replay_authorized: AtomicBool::new(false),
             publication_observer: None,
             pack_approval: None,
             loopback_node: None,
+            presented_delegation: None,
+            stored_creates: Default::default(),
             operation: Some(operation.as_str()),
         })
     }
@@ -379,10 +409,13 @@ impl<'a> ConfigApplyTxn<'a> {
                 rerun_notes: Vec::new(),
                 owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
                 agent_proof: None,
+                client_authorization: None,
                 planned_replay_authorized: AtomicBool::new(false),
                 publication_observer: None,
                 pack_approval: None,
                 loopback_node: None,
+                presented_delegation: None,
+                stored_creates: Default::default(),
                 operation: None,
             });
         }
@@ -408,10 +441,13 @@ impl<'a> ConfigApplyTxn<'a> {
             rerun_notes: Vec::new(),
             owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
             agent_proof: None,
+            client_authorization: None,
             planned_replay_authorized: AtomicBool::new(false),
             publication_observer: None,
             pack_approval: None,
             loopback_node: None,
+            presented_delegation: None,
+            stored_creates: Default::default(),
             operation: None,
         };
         Ok(txn)

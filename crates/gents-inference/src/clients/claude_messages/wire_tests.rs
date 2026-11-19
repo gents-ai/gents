@@ -606,10 +606,10 @@ async fn usage_headers_are_observed_on_success_and_on_error() {
         let _ = client
             .send_streaming(&Default::default(), first_party_request(server.port, "{}"))
             .await;
-        let stored =
-            crate::clients::provider_http::tests::stored_usage_eventually(&cache, &node, &account)
-                .await
-                .expect("usage recorded");
+        let stored = crate::clients::provider_http::tests::stored_usage_when_recorded(
+            &cache, &node, &account,
+        )
+        .await;
         let window = &stored.report.windows[0];
         assert_eq!((window.label.as_str(), window.used_pct), ("5h", 50.0));
         assert_eq!(window.source, source);

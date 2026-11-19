@@ -137,8 +137,7 @@ async fn scheduled_live_fire_completes_and_persists_trigger_writeback() {
     assert_eq!(
         wait_for_request_terminal(
             &actors.agent_access,
-            request["request_id"].as_str().unwrap(),
-            Duration::from_secs(120)
+            request["request_id"].as_str().unwrap()
         )
         .await,
         "completed"
