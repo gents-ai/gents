@@ -118,3 +118,61 @@ async fn a_status_counts_for_its_home_as_the_lean_model_says() {
         });
     }
 }
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Advertised {
+    Local,
+    Vera,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Reconciled {
+    Kept,
+    Unavailable,
+    Contradictory,
+}
+
+#[test]
+fn a_signed_status_is_reconciled_as_the_lean_model_says() {
+    gents_lean_vocab::families::identity_held_audience_reconcile::replay::<
+        Advertised,
+        Reconciled,
+        Reported,
+    >(|input| {
+        let authentication = match input.advertised {
+            Advertised::Local => ClientAuthentication::Local,
+            Advertised::Vera => ClientAuthentication::Vera {
+                worker: WORKER.into(),
+                deployment: 2,
+            },
+            Advertised::Unavailable => ClientAuthentication::Unavailable,
+        };
+        let audience = match input.stated {
+            Reported::Absent => ReportedDelegationAudience::Absent,
+            Reported::Named => ReportedDelegationAudience::Named(DelegationAudience {
+                worker: WORKER.into(),
+                deployment: if input.same_deployment { 2 } else { 3 },
+                genesis_id: Some("0x01".into()),
+            }),
+            Reported::Unavailable => ReportedDelegationAudience::Unavailable,
+        };
+        let home = super::AuthenticatedHome {
+            authentication,
+            reported: gents_protocol::delegation_audience::ReportedHome {
+                audience,
+                provider_time: None,
+            },
+        };
+        match home.resolved() {
+            Ok(Some(_)) => Reconciled::Kept,
+            Ok(None) => Reconciled::Unavailable,
+            Err(gents_protocol::home_attestation::HomeStatusRefusal::Contradictory) => {
+                Reconciled::Contradictory
+            }
+            Err(refusal) => panic!("reconciling refuses only a contradiction: {refusal}"),
+        }
+    });
+}

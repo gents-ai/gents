@@ -261,4 +261,8 @@ pub enum HomeStatusRefusal {
     OtherVersion(u8),
     #[error("the home's status is not signed by the saved home's node key")]
     BadSignature,
+    /// Its client authentication and its audience name different homes
+    /// (`Identity.HeldAudience.reconcile`).
+    #[error("the home's signed status contradicts itself; update Gents on the home")]
+    Contradictory,
 }

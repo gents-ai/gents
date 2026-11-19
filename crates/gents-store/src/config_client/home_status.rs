@@ -23,10 +23,14 @@ impl AuthenticatedHome {
     }
 
     /// The audience a client mints for at this home, named by its client
-    /// authentication when its status names none; `None` when the home
-    /// advertises no usable client authentication.
-    pub(super) fn resolved(mut self) -> Option<Self> {
+    /// authentication when its status names none
+    /// (`Identity.HeldAudience.reconcile`): `None` when the home reports no
+    /// audience a client can mint for yet, refused when the status contradicts
+    /// itself.
+    pub(super) fn resolved(mut self) -> Result<Option<Self>, HomeStatusRefusal> {
         match (&self.authentication, &self.reported.audience) {
+            (ClientAuthentication::Unavailable, _)
+            | (_, ReportedDelegationAudience::Unavailable) => return Ok(None),
             (
                 ClientAuthentication::Vera { worker, deployment },
                 ReportedDelegationAudience::Absent,
@@ -42,9 +46,11 @@ impl AuthenticatedHome {
                 ClientAuthentication::Vera { worker, deployment },
                 ReportedDelegationAudience::Named(audience),
             ) if worker == &audience.worker && deployment == &audience.deployment => {}
-            _ => return None,
+            (ClientAuthentication::Vera { .. } | ClientAuthentication::Local, _) => {
+                return Err(HomeStatusRefusal::Contradictory)
+            }
         }
-        Some(self)
+        Ok(Some(self))
     }
 }
 

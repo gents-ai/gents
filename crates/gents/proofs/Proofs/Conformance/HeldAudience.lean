@@ -5,10 +5,11 @@ import Proofs.Conformance.TransactionReplay
 
 namespace Identity.HeldAudience
 
-deriving instance Lean.ToJson for Held, Change, Refusal, Answer, Told, UnitStage, Recovery
+deriving instance Lean.ToJson for Held, Change, Refusal, Answer, Told, UnitStage, Recovery,
+  Advertised, Reconciled
 
 attribute [conformance_function] change resend refusalOf told resendUnit rereadBeforeRequestBound
-  recovery
+  recovery reconcile
 
 end Identity.HeldAudience
 

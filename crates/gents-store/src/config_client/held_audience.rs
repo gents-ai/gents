@@ -200,8 +200,10 @@ impl GraphqlEndpoint {
             Some((node, resolver)) => tokio::spawn(async move {
                 let nonce = home_status::fresh_nonce();
                 let status = resolver.resolve(&nonce).await?;
-                match home_status::authenticate(&status, &node, &nonce) {
-                    Ok(home) => home.resolved().map(Ok),
+                match home_status::authenticate(&status, &node, &nonce)
+                    .and_then(|home| home.resolved())
+                {
+                    Ok(home) => home.map(Ok),
                     Err(refusal) => Some(Err(refusal)),
                 }
             }),
@@ -408,6 +410,95 @@ mod tests {
                 )
             })
         }
+    }
+
+    /// The home's status, signed by its node key for each read, naming one
+    /// Vera deployment in its client authentication and another in its
+    /// audience.
+    struct Contradictory {
+        node: crate::identity::KeyIdentity,
+        reads: AtomicUsize,
+    }
+
+    impl ResolveAudience for Contradictory {
+        fn resolve<'a>(
+            &'a self,
+            nonce: &'a gents_protocol::home_attestation::HomeNonce,
+        ) -> BoxFuture<'a, Option<serde_json::Value>> {
+            use crate::identity::NodeIdentity as _;
+            use gents_protocol::home_attestation::{
+                AttestedAudience, HomeAttestation, HomeStatement, HOME_ATTESTATION_VERSION,
+                STATUS_HOME_ATTESTATION_FIELD,
+            };
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                let statement = HomeStatement {
+                    version: HOME_ATTESTATION_VERSION,
+                    nonce: nonce.as_str().to_owned(),
+                    node_did: self.node.did().to_owned(),
+                    client_authentication:
+                        gents_protocol::client_authentication::ClientAuthentication::Vera {
+                            worker: audience(2).worker,
+                            deployment: 2,
+                        },
+                    delegation_audience: AttestedAudience::Named {
+                        audience: DelegationAudience {
+                            genesis_id: Some("0x03".into()),
+                            ..audience(3)
+                        },
+                    },
+                    provider_time: Some(1_000),
+                };
+                let signature = self.node.sign(&statement.signing_payload()).await.unwrap();
+                Some(serde_json::json!({
+                    "node_did": self.node.did(),
+                    STATUS_HOME_ATTESTATION_FIELD: HomeAttestation::signed(statement, &signature),
+                }))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_signed_status_that_contradicts_itself_is_refused_not_read_as_absent() {
+        use crate::identity::NodeIdentity as _;
+        let node = home_key().await;
+        let user =
+            tokio::task::spawn_blocking(|| crate::test_support::test_identity("contradicted-user"))
+                .await
+                .unwrap();
+        let home = node.did().to_owned();
+        let status = Arc::new(Contradictory {
+            node,
+            reads: AtomicUsize::new(0),
+        });
+        let held = DelegationAudience {
+            genesis_id: Some("0x02".into()),
+            ..audience(2)
+        };
+        let endpoint =
+            GraphqlEndpoint::as_principal("http://127.0.0.1:1/api/v0/graphql", user.did())
+                .with_client_signing_capability(user.client_signing_capability().unwrap())
+                .unwrap()
+                .with_reported_delegation_audience(ReportedDelegationAudience::Named(held))
+                .unwrap()
+                .with_audience_resolver(home, status.clone());
+        let refused = endpoint.request_bound_audience().await;
+        assert!(
+            matches!(
+                refused,
+                Err(
+                    crate::config_client::ConfigClientError::HomeStatusUnauthenticated(
+                        gents_protocol::home_attestation::HomeStatusRefusal::Contradictory
+                    )
+                )
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(status.reads.load(Ordering::SeqCst), 1);
+        assert!(refused
+            .unwrap_err()
+            .to_string()
+            .contains("update Gents on the home"));
     }
 
     async fn home_key() -> crate::identity::KeyIdentity {

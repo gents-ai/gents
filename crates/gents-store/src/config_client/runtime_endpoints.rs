@@ -87,11 +87,12 @@ impl GraphqlEndpoint {
     }
 
     async fn discover_runtime_authentication(&self, node: &str) -> Result<ClientAuthentication> {
-        let (authentication, home) = self.fetch_runtime_status(node).await?;
-        if let Ok(home) = home {
-            self.delegation_audience.observe(&home);
-        }
-        Ok(authentication)
+        let home = self
+            .fetch_runtime_status(node)
+            .await?
+            .map_err(ConfigClientError::HomeStatusUnauthenticated)?;
+        self.delegation_audience.observe(&home);
+        Ok(home.authentication().clone())
     }
 
     pub(super) async fn reread_runtime_home(&self) -> Option<Home> {
@@ -99,15 +100,14 @@ impl GraphqlEndpoint {
             return None;
         };
         let mut current = current.lock().await;
-        let (authentication, home) = self.fetch_runtime_status(node).await.ok()?;
-        *current = Some(authentication);
+        let home = self.fetch_runtime_status(node).await.ok()?;
+        if let Ok(home) = &home {
+            *current = Some(home.authentication().clone());
+        }
         Some(home)
     }
 
-    /// Read the runtime's public status with a fresh nonce, so what it
-    /// reports is kept only when the saved node signed it for this read
-    /// (`Identity.HeldAudience.authentic`).
-    async fn fetch_runtime_status(&self, node: &str) -> Result<(ClientAuthentication, Home)> {
+    async fn fetch_runtime_status(&self, node: &str) -> Result<Home> {
         let base = self
             .url()
             .trim()
@@ -140,26 +140,14 @@ impl GraphqlEndpoint {
         node: &str,
         nonce: &HomeNonce,
         body: &serde_json::Value,
-    ) -> Result<(ClientAuthentication, Home)> {
+    ) -> Result<Home> {
         if body.get("node_did").and_then(serde_json::Value::as_str) != Some(node) {
             return Err(ConfigClientError::RuntimeAuthenticationIdentity);
         }
-        let advertised: ClientAuthentication = serde_json::from_value(
-            body.get(gents_protocol::client_authentication::STATUS_FIELD)
-                .cloned()
-                .ok_or(ConfigClientError::RuntimeAuthenticationUnavailable)?,
-        )?;
-        if advertised == ClientAuthentication::Unavailable {
-            return Err(ConfigClientError::RuntimeAuthenticationUnavailable);
-        }
-        match home_status::authenticate(body, node, nonce) {
-            Ok(home) => {
-                let home = home
-                    .resolved()
-                    .ok_or(ConfigClientError::RuntimeAuthenticationUnavailable)?;
-                Ok((home.authentication().clone(), Ok(home)))
-            }
-            Err(refusal) => Ok((advertised, Err(refusal))),
+        match home_status::authenticate(body, node, nonce).and_then(|home| home.resolved()) {
+            Ok(Some(home)) => Ok(Ok(home)),
+            Ok(None) => Err(ConfigClientError::RuntimeAuthenticationUnavailable),
+            Err(refusal) => Ok(Err(refusal)),
         }
     }
 }

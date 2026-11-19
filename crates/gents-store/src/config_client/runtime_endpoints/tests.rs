@@ -15,8 +15,12 @@ use crate::identity::{KeyIdentity, NodeIdentity};
 enum Answering {
     /// The home, signing for each read.
     Home,
-    /// Anything naming the home's node, unsigned.
+    /// Anything naming the home's node as a home on the node's own store,
+    /// unsigned.
     Unsigned,
+    /// The home, signing for each read a status whose client authentication
+    /// and audience name different deployments.
+    Contradictory,
     /// Anything naming the home's node, signed by another key.
     OtherKey,
     /// The home's own status, signed for an earlier read.
@@ -27,6 +31,7 @@ struct Address {
     graphql: String,
     status_reads: Arc<AtomicUsize>,
     delegations: Arc<AtomicUsize>,
+    requests: Arc<AtomicUsize>,
 }
 
 fn presents_delegation(headers: &HeaderMap) -> Option<u64> {
@@ -50,9 +55,13 @@ async fn address(answering: Answering, home: Arc<KeyIdentity>, other: Arc<KeyIde
         deployment: 2,
         genesis_id: None,
     };
-    let (status_reads, delegations) =
-        (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-    let (reads, presented) = (status_reads.clone(), delegations.clone());
+    let (status_reads, delegations, requests) = (
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let (reads, presented, sent_requests) =
+        (status_reads.clone(), delegations.clone(), requests.clone());
     let router = axum::Router::new()
         .route(
             "/status",
@@ -68,7 +77,7 @@ async fn address(answering: Answering, home: Arc<KeyIdentity>, other: Arc<KeyIde
                             .expect("a client keeping what the status reports sends a nonce");
                         let reports = ReportedDelegationAudience::Named(audience);
                         let mut status = match answering {
-                            Answering::Home | Answering::Unsigned => {
+                            Answering::Home => {
                                 crate::test_support::signed_home_status(
                                     home.as_ref(),
                                     &reports,
@@ -77,6 +86,16 @@ async fn address(answering: Answering, home: Arc<KeyIdentity>, other: Arc<KeyIde
                                 )
                                 .await
                             }
+                            Answering::Unsigned => {
+                                crate::test_support::signed_home_status(
+                                    home.as_ref(),
+                                    &ReportedDelegationAudience::Absent,
+                                    None,
+                                    &sent,
+                                )
+                                .await
+                            }
+                            Answering::Contradictory => contradictory(home.as_ref(), &sent).await,
                             Answering::OtherKey => {
                                 let mut status = crate::test_support::signed_home_status(
                                     other.as_ref(),
@@ -110,6 +129,7 @@ async fn address(answering: Answering, home: Arc<KeyIdentity>, other: Arc<KeyIde
         )
         .fallback(move |headers: HeaderMap| {
             let presented = presented.clone();
+            sent_requests.fetch_add(1, Ordering::SeqCst);
             async move {
                 match presents_delegation(&headers) {
                     Some(2) => {
@@ -139,7 +159,39 @@ async fn address(answering: Answering, home: Arc<KeyIdentity>, other: Arc<KeyIde
         graphql: format!("http://{local}/api/v0/graphql"),
         status_reads,
         delegations,
+        requests,
     }
+}
+
+/// A status the home signs whose client authentication names deployment 2
+/// and whose audience names deployment 3.
+async fn contradictory(home: &KeyIdentity, nonce: &HomeNonce) -> serde_json::Value {
+    use gents_protocol::home_attestation::{
+        AttestedAudience, HomeAttestation, HomeStatement, HOME_ATTESTATION_VERSION,
+        STATUS_HOME_ATTESTATION_FIELD,
+    };
+    let statement = HomeStatement {
+        version: HOME_ATTESTATION_VERSION,
+        nonce: nonce.as_str().to_owned(),
+        node_did: home.did().to_owned(),
+        client_authentication: gents_protocol::client_authentication::ClientAuthentication::Vera {
+            worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
+            deployment: 2,
+        },
+        delegation_audience: AttestedAudience::Named {
+            audience: DelegationAudience {
+                worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
+                deployment: 3,
+                genesis_id: None,
+            },
+        },
+        provider_time: Some(1_000),
+    };
+    let signature = home.sign(&statement.signing_payload()).await.unwrap();
+    serde_json::json!({
+        "node_did": home.did(),
+        STATUS_HOME_ATTESTATION_FIELD: HomeAttestation::signed(statement, &signature),
+    })
 }
 
 #[tokio::test]
@@ -156,6 +208,7 @@ async fn a_status_naming_the_saved_node_with_an_audience_it_did_not_sign_mints_n
     let capability = user.client_signing_capability().unwrap();
     for answering in [
         Answering::Unsigned,
+        Answering::Contradictory,
         Answering::OtherKey,
         Answering::Replayed,
         Answering::Home,
@@ -198,6 +251,11 @@ async fn a_status_naming_the_saved_node_with_an_audience_it_did_not_sign_mints_n
         );
         assert!(!endpoint.mints_delegations(), "{answering:?}: no record");
         assert_eq!(endpoint.delegation_audience.get(), None);
-        assert_eq!(address.status_reads.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            address.requests.load(Ordering::SeqCst),
+            0,
+            "{answering:?}: no credential is sent to a home whose status is not its own"
+        );
+        assert_eq!(address.status_reads.load(Ordering::SeqCst), 1);
     }
 }

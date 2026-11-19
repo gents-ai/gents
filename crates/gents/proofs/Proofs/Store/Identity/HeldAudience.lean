@@ -331,6 +331,66 @@ theorem a_signed_status_is_kept_as_it_reports (home : String) (nonce clock : Nat
         = observe held (report.status clock) := by
   simp [reportedOfHome, authentic]
 
+/-- Decision (gents#3964): a status that is not the home's lets no credential
+be sent to the home's endpoint, at the client's first read of it as at every
+later one: it reports nothing, and a status that reports nothing resolves to a
+refusal (`UserDelegation.resolve`), never to the identity token an unsigned
+status could ask for. -/
+theorem an_unauthenticated_status_lets_no_credential_be_sent (home : String) (nonce : Nat)
+    (status : SignedStatus) (unsigned : authentic home nonce status = false) :
+    resolve (reportedOfHome home nonce status).reported = .refused := by
+  simp [reportedOfHome, unsigned, Report.unavailable, Report.reported, resolve]
+
+/-- What a home's status says of how its clients authenticate: with the
+identity token of a home on the node's own store, with delegations for its
+Vera deployment, or not at all yet. -/
+inductive Advertised where
+  | local
+  | vera
+  | unavailable
+  deriving DecidableEq, Repr
+
+/-- What a client makes of a status the home signed. -/
+inductive Reconciled where
+  /-- Its report is kept. -/
+  | kept
+  /-- It reports no audience a client can mint for yet. -/
+  | unavailable
+  /-- It contradicts itself. -/
+  | contradictory
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3964): a signed status states how its clients authenticate
+and which audience it mints for, and the two must agree: a home on the node's
+own store names no audience, and a Vera home names its own deployment or
+none, which its client authentication then names. A signed status whose two
+statements disagree is the home's contradiction, refused as such: it is never
+read as a status that reported nothing, which would leave a client minting
+for the audience it held before at its own clock. `sameDeployment` is whether
+the audience names the deployment the client authentication names. -/
+def reconcile (advertised : Advertised) (stated : Reported) (sameDeployment : Bool) :
+    Reconciled :=
+  match advertised, stated with
+  | .unavailable, _ => .unavailable
+  | _, .unavailable => .unavailable
+  | .local, .absent => .kept
+  | .local, .named => .contradictory
+  | .vera, .absent => .kept
+  | .vera, .named => if sameDeployment then .kept else .contradictory
+
+/-- A status counts as the home's when the home signed it and it does not
+contradict itself; a contradictory one is refused as an unauthenticated one is
+(`recovery`). -/
+def homeStatus (signed : Bool) (reconciled : Reconciled) : Bool :=
+  signed && reconciled != .contradictory
+
+theorem a_home_on_the_node_store_names_no_audience (sameDeployment : Bool) :
+    reconcile .local .named sameDeployment = .contradictory
+      ∧ reconcile .local .absent sameDeployment = .kept := ⟨rfl, rfl⟩
+
+theorem a_vera_home_naming_another_deployment_contradicts_itself :
+    reconcile .vera .named false = .contradictory := rfl
+
 /-- Why a node refused a client's request, as far as its credential goes. -/
 inductive Refusal where
   /-- The edge of a Vera home refused an identity token (`UserDelegation.edge`). -/
@@ -414,6 +474,11 @@ theorem an_unauthenticated_status_never_sends_again (resent : Bool) (refusal : R
     (record : Change) : recovery resent refusal false record ≠ .resend := by
   unfold recovery
   split <;> simp
+
+theorem a_contradictory_status_never_sends_again (resent : Bool) (refusal : Refusal)
+    (record : Change) (signed : Bool) :
+    recovery resent refusal (homeStatus signed .contradictory) record ≠ .resend := by
+  simpa [homeStatus] using an_unauthenticated_status_never_sends_again resent refusal record
 
 theorem an_authenticated_status_recovers_as_before (resent : Bool) (refusal : Refusal)
     (record : Change) :
