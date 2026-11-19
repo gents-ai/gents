@@ -71,7 +71,7 @@ async fn auto_commit_once(
     endpoint: &GraphqlEndpoint,
     body: &Value,
 ) -> Result<(Result<Value>, bool)> {
-    let client = write_http_client().await?;
+    let client = http_client().await?;
     let (response, resent) = endpoint
         .send_counting_resends(|endpoint| {
             Ok(endpoint.authorize(client.post(endpoint.url()))?.json(body))
