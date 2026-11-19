@@ -26,16 +26,24 @@ struct Home {
     lock: StoreLock,
     key: StoreKey,
     node: Arc<dyn NodeIdentity>,
+    /// The init User, who owns the home's node access control.
+    owner: identity::Did,
 }
 
 async fn home(root: &Path, name: &str) -> anyhow::Result<Home> {
     let home = root.join(name);
     let data = home.join("data");
-    let (lock_home, lock_data, key_path) = (home.clone(), data.clone(), home.join("node.key"));
-    let (lock, node) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+    let (lock_home, lock_data, key_path, owner_path) = (
+        home.clone(),
+        data.clone(),
+        home.join("node.key"),
+        home.join("owner.key"),
+    );
+    let (lock, node, owner) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         std::fs::create_dir_all(&lock_data)?;
         let node: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(key_path, None)?);
-        Ok((home::lock_store(&lock_home, &lock_data)?, node))
+        let owner = identity::Did::new(KeyIdentity::load_or_create(owner_path, None)?.did())?;
+        Ok((home::lock_store(&lock_home, &lock_data)?, node, owner))
     })
     .await??;
     Ok(Home {
@@ -43,6 +51,7 @@ async fn home(root: &Path, name: &str) -> anyhow::Result<Home> {
         lock,
         key: StoreKey::from_host(&[7; 32])?,
         node,
+        owner,
     })
 }
 
@@ -57,8 +66,7 @@ async fn start(
         .start_node_with_projection(
             &home.key,
             home.node.clone(),
-            None,
-            None,
+            std::convert::identity,
             Arc::new(crate::surface::ToolCeiling::meta_only()),
             Vec::new(),
             &gents_session::test_support::no_lifecycle_plugins(),
@@ -115,7 +123,7 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
 
     FreshBackendStore::observe(&home.data, &home.lock)
         .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Vera)
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Vera)
         .await?;
 
     let node = start(&home, DocumentAcp::Vera).await?;
@@ -169,7 +177,7 @@ async fn a_home_that_did_not_opt_in_starts_no_vera_node() -> anyhow::Result<()> 
     let home = home(directory.path(), "local").await?;
     FreshBackendStore::observe(&home.data, &home.lock)
         .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Local)
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Local)
         .await?;
     let node = start(&home, DocumentAcp::Local).await?;
     assert!(node.vera_acp().is_none());
@@ -207,7 +215,7 @@ async fn opted_in_home_with_a_document(root: &Path, name: &str) -> anyhow::Resul
     let owner = identity::Did::new(home.node.did())?;
     FreshBackendStore::observe(&home.data, &home.lock)
         .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Vera)
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Vera)
         .await?;
     let node = start(&home, DocumentAcp::Vera).await?;
     node.document_acp()
@@ -268,7 +276,7 @@ async fn a_home_whose_vera_directory_is_swapped_for_another_deployment_is_refuse
     assert_eq!(twin.node.did(), home.node.did());
     FreshBackendStore::observe(&twin.data, &twin.lock)
         .await?
-        .initialize(&twin.key, &twin.node, DocumentAcp::Vera)
+        .initialize(&twin.key, &twin.node, &twin.owner, DocumentAcp::Vera)
         .await?;
 
     let vera = home.data.join("vera");
@@ -299,7 +307,7 @@ async fn an_opted_in_home_is_refused_under_another_deployment_identity() -> anyh
     let mut home = home(directory.path(), "another-identity").await?;
     FreshBackendStore::observe(&home.data, &home.lock)
         .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Vera)
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Vera)
         .await?;
     home.node = {
         let path = directory.path().join("another.key");
@@ -340,13 +348,15 @@ async fn serve(
         .start_node_with_projection(
             &home.key,
             home.node.clone(),
-            Some(
-                defra_node::HttpConfig::with_listener(listener)?.with_router_transform(Arc::new({
-                    let edge = HttpEdge::new(document_acp, home.node.did());
-                    move |router| edge.wrap(router)
-                })),
-            ),
-            None,
+            {
+                let http = defra_node::HttpConfig::with_listener(listener)?.with_router_transform(
+                    Arc::new({
+                        let edge = HttpEdge::new(document_acp, home.node.did());
+                        move |router| edge.wrap(router)
+                    }),
+                );
+                move |builder: defra_node::NodeBuilder| builder.with_http(http)
+            },
             Arc::new(crate::surface::ToolCeiling::meta_only()),
             Vec::new(),
             &gents_session::test_support::no_lifecycle_plugins(),
@@ -391,16 +401,33 @@ async fn create_task(access: &ConfigAccess, task: &str) -> anyhow::Result<String
     Ok(gents_store::graphql::created_doc_id(&created, "Task")?)
 }
 
-async fn tasks(node: &Arc<defra_node::Node>) -> anyhow::Result<Vec<String>> {
-    let read = ConfigAccess::local(node.clone())
-        .execute("{ Task { task_id } }")
-        .await?;
-    Ok(read["data"]["Task"]
+/// The values of `field` across every row of `collection`, read as the
+/// home's NAC owner, whom native NAC lets read past document ACP: what the
+/// store holds, whoever owns each row.
+async fn stored(
+    node: &defra_node::Node,
+    owner: &identity::Did,
+    collection: &str,
+    field: &str,
+) -> anyhow::Result<Vec<String>> {
+    let response = node
+        .execute_request(
+            query::QueryRequest::new(format!("{{ {collection} {{ {field} }} }}"))
+                .with_identity(Some(owner.clone())),
+        )
+        .await;
+    anyhow::ensure!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.unwrap_or_default();
+    Ok(data[collection]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|task| task["task_id"].as_str().map(str::to_owned))
+        .filter_map(|row| row[field].as_str().map(str::to_owned))
         .collect())
+}
+
+async fn tasks(node: &defra_node::Node, owner: &identity::Did) -> anyhow::Result<Vec<String>> {
+    stored(node, owner, "Task", "task_id").await
 }
 
 /// The owner Vera itself records, beneath the registrations DefraDB still owes.
@@ -436,20 +463,18 @@ async fn reads_task(
 #[tokio::test]
 async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
-    let home = home(directory.path(), "opted-in").await?;
-    FreshBackendStore::observe(&home.data, &home.lock)
-        .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Vera)
-        .await?;
-    let (node, url) = serve(&home, DocumentAcp::Vera).await?;
+    let mut home = home(directory.path(), "opted-in").await?;
     let user = client_key(directory.path(), "user.key").await?;
     let stranger = client_key(directory.path(), "stranger.key").await?;
     let user_did = identity::Did::new(user.did())?;
+    home.owner = user_did.clone();
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Vera)
+        .await?;
+    let (node, url) = serve(&home, DocumentAcp::Vera).await?;
     let stranger_did = identity::Did::new(stranger.did())?;
     assert!(defra_core::signing::get_identity(user.did()).is_none());
-    ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?)
-        .grant_node_admin(&user_did)
-        .await?;
 
     let audience = gents_store::local::document_acp::node_delegation_audience(&node)
         .expect("a Vera node names its delegation audience");
@@ -492,10 +517,10 @@ async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyho
     )?);
     assert!(create_task(&stale, "expired").await.is_err());
 
-    assert_eq!(tasks(&node).await?, Vec::<String>::new());
+    assert_eq!(tasks(&node, &home.owner).await?, Vec::<String>::new());
 
     let created = create_task(&as_user(&url, &user, reported)?, "delegated").await?;
-    assert_eq!(tasks(&node).await?, ["delegated"]);
+    assert_eq!(tasks(&node, &home.owner).await?, ["delegated"]);
     assert_eq!(
         owner_on_vera(&node, &created).await?,
         Some(user_did.clone())
@@ -521,7 +546,7 @@ async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyho
         refused.is_err(),
         "an identity token is refused on a Vera home"
     );
-    assert_eq!(tasks(&node).await?, ["delegated", "by-node"]);
+    assert_eq!(tasks(&node, &home.owner).await?, ["delegated", "by-node"]);
 
     node.shutdown().await?;
     Ok(())
@@ -530,18 +555,16 @@ async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyho
 #[tokio::test]
 async fn a_user_writes_over_http_on_the_node_store_as_before() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
-    let home = home(directory.path(), "local").await?;
-    FreshBackendStore::observe(&home.data, &home.lock)
-        .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Local)
-        .await?;
-    let (node, url) = serve(&home, DocumentAcp::Local).await?;
+    let mut home = home(directory.path(), "local").await?;
     let user = client_key(directory.path(), "user.key").await?;
     let stranger = client_key(directory.path(), "stranger.key").await?;
     let user_did = identity::Did::new(user.did())?;
-    ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?)
-        .grant_node_admin(&user_did)
+    home.owner = user_did.clone();
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Local)
         .await?;
+    let (node, url) = serve(&home, DocumentAcp::Local).await?;
 
     let audience = gents_store::local::document_acp::node_delegation_audience(&node);
     assert_eq!(audience, None);
@@ -549,7 +572,7 @@ async fn a_user_writes_over_http_on_the_node_store_as_before() -> anyhow::Result
     assert_eq!(reported, ReportedDelegationAudience::Absent);
 
     let created = create_task(&as_user(&url, &user, reported)?, "identity-token").await?;
-    assert_eq!(tasks(&node).await?, ["identity-token"]);
+    assert_eq!(tasks(&node, &home.owner).await?, ["identity-token"]);
     assert!(reads_task(&node, &user_did, &created).await?);
     assert!(!reads_task(&node, &identity::Did::new(stranger.did())?, &created).await?);
 
@@ -622,18 +645,16 @@ fn refusal(error: &ConfigClientError) -> Option<UserWriteRefusal> {
 async fn a_client_signed_create_in_the_runtime_process_is_owned_by_its_user_on_vera(
 ) -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
-    let home = home(directory.path(), "in-process").await?;
-    FreshBackendStore::observe(&home.data, &home.lock)
-        .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Vera)
-        .await?;
-    let node = start(&home, DocumentAcp::Vera).await?;
+    let mut home = home(directory.path(), "in-process").await?;
     let user = client_key(directory.path(), "user.key").await?;
     let stranger = client_key(directory.path(), "stranger.key").await?;
     let user_did = identity::Did::new(user.did())?;
-    ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?)
-        .grant_node_admin(&user_did)
+    home.owner = user_did.clone();
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Vera)
         .await?;
+    let node = start(&home, DocumentAcp::Vera).await?;
     let audience = gents_store::local::document_acp::node_delegation_audience(&node)
         .expect("a Vera node names its delegation audience");
     let lifetime = gents_store::config_client::VERA_DELEGATION_LIFETIME;
@@ -692,7 +713,7 @@ async fn a_client_signed_create_in_the_runtime_process_is_owned_by_its_user_on_v
         .await
         .expect_err("another identity's delegation does not carry this User's write");
     assert_eq!(refusal(&lifted), Some(UserWriteRefusal::DelegationRequired));
-    assert_eq!(tasks(&node).await?, Vec::<String>::new());
+    assert_eq!(tasks(&node, &home.owner).await?, Vec::<String>::new());
 
     let token =
         gents_store::config_client::mint_with_lifetime_for_test(&user, &audience, lifetime)?;
@@ -705,7 +726,7 @@ async fn a_client_signed_create_in_the_runtime_process_is_owned_by_its_user_on_v
     )
     .await?;
     assert!(defra_core::signing::get_identity(user.did()).is_none());
-    assert_eq!(tasks(&node).await?, ["in-process"]);
+    assert_eq!(tasks(&node, &home.owner).await?, ["in-process"]);
     assert_eq!(
         owner_on_vera(&node, &created).await?,
         Some(user_did.clone())
@@ -721,19 +742,17 @@ async fn a_client_signed_create_in_the_runtime_process_is_owned_by_its_user_on_v
 async fn a_client_signed_create_in_the_runtime_process_on_the_node_store_is_unchanged(
 ) -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
-    let home = home(directory.path(), "in-process-local").await?;
-    FreshBackendStore::observe(&home.data, &home.lock)
-        .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Local)
-        .await?;
-    let node = start(&home, DocumentAcp::Local).await?;
+    let mut home = home(directory.path(), "in-process-local").await?;
     let user = client_key(directory.path(), "user.key").await?;
     let user_did = identity::Did::new(user.did())?;
-    ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?)
-        .grant_node_admin(&user_did)
+    home.owner = user_did.clone();
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Local)
         .await?;
+    let node = start(&home, DocumentAcp::Local).await?;
     let created = create_task_in_process(&node, &home, &user, None, "no-delegation").await?;
-    assert_eq!(tasks(&node).await?, ["no-delegation"]);
+    assert_eq!(tasks(&node, &home.owner).await?, ["no-delegation"]);
     assert!(reads_task(&node, &user_did, &created).await?);
     node.shutdown().await?;
     Ok(())

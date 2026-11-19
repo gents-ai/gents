@@ -169,16 +169,8 @@ where
         .await
 }
 
-async fn requests(node: &Arc<defra_node::Node>) -> anyhow::Result<Vec<String>> {
-    let read = ConfigAccess::local(node.clone())
-        .execute("{ AgentRequest { request_id } }")
-        .await?;
-    Ok(read["data"]["AgentRequest"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|request| request["request_id"].as_str().map(str::to_owned))
-        .collect())
+async fn requests(node: &defra_node::Node, owner: &identity::Did) -> anyhow::Result<Vec<String>> {
+    super::stored(node, owner, "AgentRequest", "request_id").await
 }
 
 async fn owner(node: &defra_node::Node, document: &str) -> anyhow::Result<Option<identity::Did>> {
@@ -218,20 +210,18 @@ pub(super) struct Fixture {
 
 pub(super) async fn fixture(name: &str) -> anyhow::Result<Fixture> {
     let directory = tempfile::tempdir()?;
-    let home = home(directory.path(), name).await?;
-    FreshBackendStore::observe(&home.data, &home.lock)
-        .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Vera)
-        .await?;
-    let node = start(&home, DocumentAcp::Vera).await?;
+    let mut home = home(directory.path(), name).await?;
     let user = client_user(directory.path(), "user.key").await?;
     let stranger = client_user(directory.path(), "stranger.key").await?;
+    home.owner = identity::Did::new(user.did())?;
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Vera)
+        .await?;
+    let node = start(&home, DocumentAcp::Vera).await?;
     let binding = gents_store::identity::provision_agent_identity(home.node.as_ref())?;
     let agent = gents_store::identity::resolve_agent_identity(home.node.as_ref(), &binding)?;
     let as_node = ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?);
-    as_node
-        .grant_node_admin(&identity::Did::new(user.did())?)
-        .await?;
     for permission in [
         NodePermission::CollectionGet,
         NodePermission::DocumentRead,
@@ -306,7 +296,7 @@ async fn a_stored_create_runs_under_the_request_bound_credentials_its_client_sig
         .await?,
         Err(UserWriteRefusal::DelegationForAnotherWrite)
     );
-    assert_eq!(requests(&node).await?, Vec::<String>::new());
+    assert_eq!(requests(&node, &home.owner).await?, Vec::<String>::new());
 
     let signed = prepare(&user, request(&home, &user, agent.did(), "signed").await?).await?;
     let credentials = client
@@ -321,7 +311,7 @@ async fn a_stored_create_runs_under_the_request_bound_credentials_its_client_sig
         .await?
         .expect("the create its client signed for is admitted");
     assert_eq!(created, signed.doc_id);
-    assert_eq!(requests(&node).await?, ["signed"]);
+    assert_eq!(requests(&node, &home.owner).await?, ["signed"]);
     assert_eq!(
         owner(&node, &created).await?,
         Some(identity::Did::new(user.did())?)
@@ -366,7 +356,7 @@ async fn a_stored_create_whose_credentials_lapse_before_it_is_sent_is_settled_by
     })
     .await?
     .expect("the create is admitted while its credentials are current");
-    assert_eq!(requests(&node).await?, ["lapsed"]);
+    assert_eq!(requests(&node, &home.owner).await?, ["lapsed"]);
     assert_eq!(
         owner(&node, &created).await?,
         None,
@@ -477,7 +467,7 @@ async fn a_stored_create_from_a_device_whose_clock_is_minutes_off_is_admitted() 
         );
         assert!(working_agent_reads(&node, agent.did(), &created).await?);
     }
-    assert_eq!(requests(&node).await?.len(), 2);
+    assert_eq!(requests(&node, &home.owner).await?.len(), 2);
     let caller = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
     assert!(node.owed_acp_as(&caller, user.did()).await?.is_empty());
 
