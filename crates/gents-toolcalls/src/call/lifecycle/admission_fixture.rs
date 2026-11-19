@@ -74,6 +74,7 @@ pub fn fixture_job_pin() -> gents_protocol::job::JobPin {
 }
 
 /// Write [`fixture_job_pin`] onto the tool-call row `tool_doc_id`.
+#[cfg(test)]
 pub(crate) async fn write_fixture_job_pin(
     node: &Arc<EmbeddedNode>,
     tool_doc_id: &str,
@@ -86,7 +87,8 @@ pub(crate) async fn write_fixture_job_pin(
     write_fixture_job_pin_with_access(&access, &mutation).await
 }
 
-/// [`write_fixture_job_pin`] as `access`'s actor, for a row an Agent owns.
+/// Write [`fixture_job_pin`] onto the tool-call row `tool_doc_id` as
+/// `access`'s actor, for a row an Agent owns.
 pub async fn write_fixture_job_pin_as(
     access: &gents_store::config_client::ConfigAccess,
     tool_doc_id: &str,

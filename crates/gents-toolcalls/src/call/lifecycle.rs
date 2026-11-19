@@ -44,7 +44,6 @@ pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
-#[allow(dead_code)]
 pub mod admission_fixture;
 mod recovery;
 mod session_message_call;

@@ -9,14 +9,9 @@ use gents_store::identity::NodeIdentity as _;
 use gents_toolcalls::call::control::client::{submit, ClientControlError};
 use serde_json::Value;
 
-#[path = "../../../../../gents/tests/support/streaming_backend.rs"]
-#[expect(
-    dead_code,
-    reason = "The shared backend also supports stream gates and counters used by other test binaries."
-)]
-mod streaming_backend;
-
-use streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
+use gents::support::streaming_backend::{
+    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
+};
 
 #[cfg(unix)]
 #[tokio::test]
