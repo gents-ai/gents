@@ -200,50 +200,13 @@ fn config(
     }
 }
 
-pub(super) fn request(request_id: &str) -> AgentRequest {
-    AgentRequest {
-        retry_parent_request_doc_id: None,
-        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
-        doc_id: format!("doc-{request_id}"),
-        request_id: request_id.to_string(),
-        node_did: "did:test:test".to_string(),
-        requester_did: None,
-        agent_did: "default".to_string(),
-        session_id: format!("session-{request_id}"),
-        content: "hello".to_string(),
-        max_total_tokens: None,
-        input: Default::default(),
-        execution_origin: None,
-        created_at: "2026-04-15T00:00:00Z".to_string(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_lease_secs: None,
-        request_hop: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_node_did: None,
-        workspace_seal_hash: None,
-        executed_model_name: None,
-        executed_reasoning_effort: None,
-        executed_service_tier: None,
-        executed_inference_profile_id: None,
-        executed_runtime_generation: None,
-    }
-}
-
 #[tokio::test]
 async fn a_minted_call_carries_its_requests_identity() {
-    let context = AdmissionCallContext::for_request(&request("req-x"), "default", "backend-1");
+    let context = AdmissionCallContext::for_request(
+        &crate::test_support::agent_request("req-x"),
+        "default",
+        "backend-1",
+    );
     let pending = super::client::next_call(&context, "runtime-test", None, None, None);
     assert_eq!(pending.request_id, "req-x");
     assert_eq!(pending.request_doc_id, "doc-req-x");
@@ -256,7 +219,11 @@ async fn a_minted_call_carries_its_requests_identity() {
 
 #[tokio::test]
 async fn current_call_join_reflects_the_minted_call() {
-    let context = AdmissionCallContext::for_request(&request("req-j"), "default", "backend-1");
+    let context = AdmissionCallContext::for_request(
+        &crate::test_support::agent_request("req-j"),
+        "default",
+        "backend-1",
+    );
     assert!(context.current_join().is_none());
 
     let first = super::client::next_call(&context, "runtime-test", None, None, None);
@@ -273,7 +240,11 @@ async fn current_call_join_reflects_the_minted_call() {
 
 #[tokio::test]
 async fn concurrent_call_contexts_return_their_own_exact_join() {
-    let context = AdmissionCallContext::for_request(&request("req-scopes"), "default", "backend-1");
+    let context = AdmissionCallContext::for_request(
+        &crate::test_support::agent_request("req-scopes"),
+        "default",
+        "backend-1",
+    );
     let compaction_context = context.for_call(CallKind::Compaction, 1);
     let title_context = context.for_call(CallKind::OneOff, 1);
     let compaction =
