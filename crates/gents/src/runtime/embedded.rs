@@ -50,7 +50,6 @@ pub struct EmbeddedHome {
     store_lock: Option<gents_store::local::home::StoreLock>,
     backend_admission: gents_store::local::backend_protection::BackendAdmission,
     p2p: Option<P2PConfigForPath>,
-    #[allow(dead_code)]
     tempdir: Option<TempDir>,
 }
 

@@ -42,7 +42,6 @@ pub use chat::{
     request_output, retry_request, send_chat_message, session_file_inventory, set_session_archived,
     steer_pending_message, tool_file_changes,
 };
-#[cfg_attr(test, allow(unused_imports))]
 pub use config::{
     apply_config_components, delete_agent_config, delete_backend_config, delete_context_config,
     delete_inference_profile_config, delete_schedule_config, delete_skill_config,
