@@ -8,7 +8,8 @@ mod settlement;
 
 pub use settlement::{
     after_removal, lapse_clock, membership_lapsed, owed_removals, permission_grant_admitted,
-    settle_owed_withdrawals, settlement_step, AfterRemoval, SettlementStep,
+    restoration_step, settle_owed_withdrawals, settlement_step, AfterRemoval, RestorationStep,
+    SettlementStep,
 };
 pub(crate) use settlement::{close_owed_removal, owed_removal_receipts};
 
@@ -65,6 +66,9 @@ pub struct EnrollmentGrantReceipt {
     /// The withdrawal of the member's Node `administrator` relation is owed
     /// (Lean `Receipt.owed`).
     pub owed: bool,
+    /// The relation's restoration is owed after a takeover (Lean
+    /// `Receipt.restore`).
+    pub restore: bool,
 }
 
 impl EnrollmentGrantReceipt {
@@ -187,6 +191,7 @@ fn decode_receipts(response: &Value) -> Result<Vec<EnrollmentGrantReceipt>, Enro
                 tuples,
                 withdrawn: !row["withdrawn_at"].is_null(),
                 owed: !row["withdrawal_owed_at"].is_null(),
+                restore: !row["restoration_owed_at"].is_null(),
             })
         })
         .collect()
@@ -206,7 +211,8 @@ pub async fn load_enrollment_grant_receipts(
             .field(fields::MEMBER_DID)
             .field(fields::TUPLES)
             .field(fields::WITHDRAWN_AT)
-            .field(fields::WITHDRAWAL_OWED_AT),
+            .field(fields::WITHDRAWAL_OWED_AT)
+            .field(fields::RESTORATION_OWED_AT),
     )
     .filter(Filter::eq(fields::MEMBER_DID, member))
     .render();
@@ -443,7 +449,7 @@ where
         .transact_signed_conflict_rebuild("enrollment_grant.record", |txn| {
             let (input, taken_over) = (&input, &taken_over);
             Box::pin(async move {
-                close_owed_in_txn(txn, taken_over).await?;
+                take_over_in_txn(txn, taken_over).await?;
                 let result = txn
                     .execute_client_signed_create(
                         "mutation($input: NetworkEnrollmentGrantMutationInputArg!) { create_NetworkEnrollmentGrant(input: $input) { _docID } }",
@@ -467,6 +473,7 @@ where
         tuples: recorded.clone(),
         withdrawn: false,
         owed: false,
+        restore: false,
     };
     let mut receipts = receipts;
     receipts.push(receipt.clone());
@@ -680,8 +687,30 @@ async fn update_receipt_in_txn(
     Ok(())
 }
 
-/// Close the owed withdrawals of `receipt_doc_ids`: issued, or taken over by
-/// a new receipt (Lean `clearOwed`).
+/// Take the owed withdrawals of `receipt_doc_ids` over (Lean `takeOver`):
+/// they stop owing the removal and owe the relation's restoration instead,
+/// in the same write.
+pub(crate) async fn take_over_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    receipt_doc_ids: &[&str],
+) -> Result<(), EnrollmentGrantError> {
+    use gents_protocol::document_query::{fields::network_enrollment_grant as fields, Input};
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    for receipt_doc_id in receipt_doc_ids {
+        update_receipt_in_txn(
+            txn,
+            receipt_doc_id,
+            Input::new()
+                .set_null(fields::WITHDRAWAL_OWED_AT)
+                .set(fields::RESTORATION_OWED_AT, now.as_str()),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Close the owed withdrawals of `receipt_doc_ids` once issued (Lean
+/// `clearOwed`).
 pub(crate) async fn close_owed_in_txn(
     txn: &ConfigApplyTxn<'_>,
     receipt_doc_ids: &[&str],

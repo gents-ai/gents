@@ -31,9 +31,10 @@ pub use enrollment_approval::{
 pub use enrollment_grant::{
     administration_owed, after_removal, grant_enrollment_authority, lapse_clock,
     load_enrollment_grant_receipts, membership_lapsed, owed_removals, permission_grant_admitted,
-    plan_grant, plan_membership_withdrawal, plan_owing, plan_withdrawal, settle_owed_withdrawals,
-    settlement_step, AfterRemoval, EnrollmentGrantError, EnrollmentGrantOutcome,
-    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal, SettlementStep,
+    plan_grant, plan_membership_withdrawal, plan_owing, plan_withdrawal, restoration_step,
+    settle_owed_withdrawals, settlement_step, AfterRemoval, EnrollmentGrantError,
+    EnrollmentGrantOutcome, EnrollmentGrantReceipt, EnrollmentGrantTuple,
+    EnrollmentGrantWithdrawal, RestorationStep, SettlementStep,
 };
 pub(crate) use enrollment_grant::{
     close_owed_removal, owed_removal_receipts, NODE_ADMINISTRATOR_RELATION,
