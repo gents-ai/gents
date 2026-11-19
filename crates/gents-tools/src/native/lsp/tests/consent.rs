@@ -109,14 +109,16 @@ impl Fixture {
         .unwrap()
         .unwrap()
         .with_reviewer(reviewer);
-        workspace::scope(
-            Some(scope),
-            super::super::edits::apply_prepared_edits(
-                &gents_loop::tool::ToolCallEnvelope::default(),
-                &self.context,
-                self.lease.client(),
-                edits,
-            ),
+        let approval_call = crate::runtime_context::ToolHostContext {
+            approval: Some(scope.clone()),
+            ..Default::default()
+        }
+        .call();
+        super::super::edits::apply_prepared_edits(
+            &approval_call,
+            &self.context,
+            self.lease.client(),
+            edits,
         )
         .await
     }

@@ -264,7 +264,7 @@ fn generated_approval_deliveries_recheck_the_workspace_grant() {
             )
             .unwrap();
         }
-        let (delivered, refused) = match read_decision(home, &request) {
+        let (delivered, refused) = match read_decision(None, home, &request) {
             Ok(delivered) => (delivered, false),
             Err(_) => (None, true),
         };

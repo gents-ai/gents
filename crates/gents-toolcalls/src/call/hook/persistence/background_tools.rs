@@ -288,51 +288,65 @@ impl DefraSessionHook {
             dispatcher.clone(),
             process_tool,
         );
-        tokio::spawn(gents_tools::plugin::approval::workspace::carry(
-            async move {
-                let execution = AssertUnwindSafe(
-                            async {
-                                if process_tool {
-                                    gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
-                                        target_tool.as_ref(), target_args, &envelope, |outcome| {
-                                            if let Some(outcome) = outcome.filter(|outcome| gents_session::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
-                                                executions.set_stop_receipt(&execution_call_id, &execution_tool_doc_id, crate::call::hook::RetainedStopReceipt::from_outcome(outcome));
-                                            }
-                                            executions.live_process_evidence(&execution_call_id, &execution_tool_doc_id)
-                                                != gents_session::exec::ownership::LiveProcessEvidence::NeverSpawned
-                                        },
-                                    ).await
-                                } else {
-                                    gents_loop::tool_call_lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args, &envelope).await
-                                }
-                            },
-                )
+        tokio::spawn(async move {
+            let execution = AssertUnwindSafe(async {
+                if process_tool {
+                    gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
+                        target_tool.as_ref(),
+                        target_args,
+                        &envelope,
+                        |outcome| {
+                            if let Some(outcome) = outcome.filter(|outcome| {
+                                gents_session::exec::ownership::native_terminal_needs_confirmation(
+                                    Some(outcome),
+                                )
+                            }) {
+                                executions.set_stop_receipt(
+                                    &execution_call_id,
+                                    &execution_tool_doc_id,
+                                    crate::call::hook::RetainedStopReceipt::from_outcome(outcome),
+                                );
+                            }
+                            executions
+                                .live_process_evidence(&execution_call_id, &execution_tool_doc_id)
+                                != gents_session::exec::ownership::LiveProcessEvidence::NeverSpawned
+                        },
+                    )
+                    .await
+                } else {
+                    gents_loop::tool_call_lifecycle::runtime::call_tool_managed(
+                        target_tool.as_ref(),
+                        target_args,
+                        &envelope,
+                    )
+                    .await
+                }
+            })
             .catch_unwind()
             .await;
 
-                // Cancellation, lifetime expiry and a guest failure all drop the
-                // in-flight child call, so its row is settled here, before the
-                // background owner publishes its own terminal.
-                if let Some(children) = stopped_children {
-                    let panicked = gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled;
-                    let stop = execution.as_ref().unwrap_or(&panicked);
-                    if let Err(error) = children.settle_stopped(stop).await {
-                        tracing::warn!(%error, tool_call_id = %lifecycle.tool_call_id(),
+            // Cancellation, lifetime expiry and a guest failure all drop the
+            // in-flight child call, so its row is settled here, before the
+            // background owner publishes its own terminal.
+            if let Some(children) = stopped_children {
+                let panicked = gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled;
+                let stop = execution.as_ref().unwrap_or(&panicked);
+                if let Err(error) = children.settle_stopped(stop).await {
+                    tracing::warn!(%error, tool_call_id = %lifecycle.tool_call_id(),
                         "background invocation left an unsettled child");
-                    }
                 }
+            }
 
-                finish_background_execution(
-                    lifecycle,
-                    node,
-                    live_outputs,
-                    executions,
-                    execution_reservation,
-                    execution,
-                )
-                .await;
-            },
-        ));
+            finish_background_execution(
+                lifecycle,
+                node,
+                live_outputs,
+                executions,
+                execution_reservation,
+                execution,
+            )
+            .await;
+        });
 
         Ok(self.skip_tool_result(SPAWN_PROCESS_TOOL_NAME, receipt))
     }

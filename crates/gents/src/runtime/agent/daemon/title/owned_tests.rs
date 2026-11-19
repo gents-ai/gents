@@ -451,10 +451,15 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
     let argv: Vec<String> = std::iter::once(program.to_owned())
         .chain(arguments.iter().cloned())
         .collect();
-    workspace::scope(Some(context), async {
+    let approval_call = gents_tools::runtime_context::ToolHostContext {
+        approval: Some(context.clone()),
+        ..Default::default()
+    }
+    .call();
+    async {
         if launch {
             let output = gents_tools::native::run_command_for_test(
-                &gents_loop::tool::ToolCallEnvelope::default(),
+                &approval_call,
                 &tool_context,
                 "bash_unrestricted",
                 program,
@@ -476,7 +481,7 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
             );
         } else {
             workspace::authorize_command(
-                &gents_loop::tool::ToolCallEnvelope::default(),
+                &approval_call,
                 &argv,
                 &key.path,
                 &tool_root,
@@ -486,7 +491,7 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
             .await
             .unwrap();
         }
-    })
+    }
     .await;
     drain_reviews(&tasks, true).await;
     assert!(reviewer.take_failure().is_none());
@@ -582,9 +587,14 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
     .with_reviewer(reviewer.callback.clone());
     let home_path = home.path().to_owned();
     let project_path = key.path.clone();
-    let consent = tokio::spawn(workspace::scope(Some(context), async move {
+    let approval_call = gents_tools::runtime_context::ToolHostContext {
+        approval: Some(context.clone()),
+        ..Default::default()
+    }
+    .call();
+    let consent = tokio::spawn(async move {
         workspace::authorize_command(
-            &gents_loop::tool::ToolCallEnvelope::default(),
+            &approval_call,
             &["echo".into(), "fixture".into()],
             &project_path,
             &project_path,
@@ -592,7 +602,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
             &gents_tools::native::CommandExecutionPolicy::write_capable(),
         )
         .await
-    }));
+    });
     tokio::time::timeout(Duration::from_secs(10), entered.notified())
         .await
         .unwrap();
@@ -716,10 +726,15 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
     let argv: Vec<String> = std::iter::once(program.clone())
         .chain(arguments.iter().cloned())
         .collect();
+    let approval_call = gents_tools::runtime_context::ToolHostContext {
+        approval: Some(context.clone()),
+        ..Default::default()
+    }
+    .call();
     let run = || async {
         if launch {
             gents_tools::native::run_command_for_test(
-                &gents_loop::tool::ToolCallEnvelope::default(),
+                &approval_call,
                 &tool_context,
                 "bash_unrestricted",
                 &program,
@@ -734,18 +749,11 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
             .map(|_| ())
             .map_err(anyhow::Error::new)
         } else {
-            workspace::authorize_command(
-                &gents_loop::tool::ToolCallEnvelope::default(),
-                &argv,
-                &key.path,
-                &key.path,
-                None,
-                &policy,
-            )
-            .await
+            workspace::authorize_command(&approval_call, &argv, &key.path, &key.path, None, &policy)
+                .await
         }
     };
-    workspace::scope(Some(context), async {
+    async {
         let changed = config
             .call(
                 serde_json::json!({
@@ -753,7 +761,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
                     "set":{"prompt_template":"Allow the requested project changes."}
                 })
                 .to_string(),
-                &gents_loop::tool::ToolCallEnvelope::default(),
+                &approval_call,
             )
             .await
             .unwrap();
@@ -790,7 +798,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
         )
         .unwrap();
         run().await.unwrap();
-    })
+    }
     .await;
     drain_reviews(&tasks, true).await;
     assert!(reviewer.take_failure().is_none());
@@ -851,17 +859,18 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
     .with_reviewer(reviewer.callback.clone());
     let scope_call =
         gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, cancellation.clone())
-            .call();
-    let result = workspace::scope(
-        Some(context),
-        workspace::authorize_command(
-            &scope_call,
-            &["echo".into(), "fixture".into()],
-            &key.path,
-            &key.path,
-            None,
-            &gents_tools::native::CommandExecutionPolicy::write_capable(),
-        ),
+            .call()
+            .with_extension(gents_tools::runtime_context::ToolHostContext {
+                approval: Some(context),
+                ..Default::default()
+            });
+    let result = workspace::authorize_command(
+        &scope_call,
+        &["echo".into(), "fixture".into()],
+        &key.path,
+        &key.path,
+        None,
+        &gents_tools::native::CommandExecutionPolicy::write_capable(),
     )
     .await;
     assert!(result.is_err());

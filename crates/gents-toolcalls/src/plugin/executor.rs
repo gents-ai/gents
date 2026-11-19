@@ -353,12 +353,20 @@ impl PluginExecutor {
                 "Runtime permission files cannot be shared with a plugin.".into(),
             ));
         }
-        let scope = approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
-            .map_err(|error| refuse(format!("{error:#}")))?;
+        let approval_context = gents_tools::runtime_context::host(call).approval;
+        let approval_context = approval_context.as_ref();
+        let scope = approval::workspace::allowed_scope(
+            approval_context,
+            home,
+            context.workdir,
+            user_home.as_deref(),
+        )
+        .map_err(|error| refuse(format!("{error:#}")))?;
         let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
         let route = approval::workspace::binding_route(
+            approval_context,
             home,
             || {
                 Ok(approval::workspace::BindingAction::Plugin {
@@ -370,7 +378,7 @@ impl PluginExecutor {
                     access,
                 })
             },
-            covered || approval::workspace::within_workspace(&resolved.target),
+            covered || approval::workspace::within_workspace(approval_context, &resolved.target),
             || Ok(input.clone()),
         )
         .map_err(|error| refuse(format!("{error:#}")))?;
@@ -379,6 +387,7 @@ impl PluginExecutor {
             let allowed = match route {
                 Some(decision) => {
                     let binding = decision.binding.clone();
+                    let consent_context = decision.context().clone();
                     let allowed = approval::workspace::consent_binding(
                         call,
                         home,
@@ -388,7 +397,11 @@ impl PluginExecutor {
                     )
                     .await
                     .map_err(|error| refuse(format!("{error:#}")))?;
-                    consent = Some(approval::workspace::action_consent(home, binding));
+                    consent = Some(approval::workspace::action_consent(
+                        &consent_context,
+                        home,
+                        binding,
+                    ));
                     allowed
                 }
                 None => match approval::consent(context.interactive) {
@@ -397,7 +410,7 @@ impl PluginExecutor {
                         let session_id = context.session_id.map(str::to_owned);
                         let request =
                             approval::Request::new(&plugin, &resolved, access, session_id);
-                        approval::ask(home, &request, approval::WAIT)
+                        approval::ask(approval_context, home, &request, approval::WAIT)
                             .await
                             .map_err(|error| refuse(format!("{error:#}")))?
                     }
@@ -413,11 +426,15 @@ impl PluginExecutor {
                 )));
             }
         }
-        let folder_allowed =
-            approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
-                .map_err(|error| refuse(format!("{error:#}")))?
-                .granted(resolved.folder())
-                .is_some();
+        let folder_allowed = approval::workspace::allowed_scope(
+            approval_context,
+            home,
+            context.workdir,
+            user_home.as_deref(),
+        )
+        .map_err(|error| refuse(format!("{error:#}")))?
+        .granted(resolved.folder())
+        .is_some();
         allowed::bind(&resolved, access, folder_allowed)
             .map(|bound| {
                 bound.with_consent(consent.map(|consent| {

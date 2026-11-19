@@ -42,18 +42,14 @@ async fn run(
     } else {
         CommandExecutionPolicy::write_capable().with_mode(mode)
     };
-    let launch = workspace::scope(
-        scope,
-        prepare_command_launch(
-            &gents_loop::tool::ToolCallEnvelope::default(),
-            root,
-            command,
-            args,
-            &policy,
-        ),
-    )
-    .await
-    .unwrap();
+    let approval_call = crate::runtime_context::ToolHostContext {
+        approval: scope.clone(),
+        ..Default::default()
+    }
+    .call();
+    let launch = prepare_command_launch(&approval_call, root, command, args, &policy)
+        .await
+        .unwrap();
     let mut environment = launch.environment;
     environment.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
     environment.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
@@ -245,11 +241,12 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
         )
         .unwrap();
         let args = serde_json::json!({"argv": ["-c", "printf '%s' \"$FIXTURE_WORD\" > \"$1\"", "fixture", target]}).to_string();
-        let result = workspace::scope(
-            scope,
-            tool.call(args, &gents_loop::tool::ToolCallEnvelope::default()),
-        )
-        .await;
+        let approval_call = crate::runtime_context::ToolHostContext {
+            approval: scope.clone(),
+            ..Default::default()
+        }
+        .call();
+        let result = tool.call(args, &approval_call).await;
         if allowed {
             result.unwrap();
         }

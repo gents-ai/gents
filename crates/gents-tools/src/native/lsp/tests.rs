@@ -1269,14 +1269,14 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         None,
     )
     .unwrap();
-    workspace::scope(scope, async {
+    let approval_call = crate::runtime_context::ToolHostContext {
+        approval: scope.clone(),
+        ..Default::default()
+    }
+    .call();
+    async {
         let initial = pool
-            .get_or_start(
-                &gents_loop::tool::ToolCallEnvelope::default(),
-                key.clone(),
-                &server,
-                &config,
-            )
+            .get_or_start(&approval_call, key.clone(), &server, &config)
             .await
             .unwrap();
         assert_eq!(
@@ -1295,18 +1295,11 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             workspace::WorkspaceKey::canonical("node", "requester", &config.agent_did, &root)
                 .unwrap();
         workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
-        assert!(pool
-            .get_ready(&gents_loop::tool::ToolCallEnvelope::default(), &key)
-            .await
-            .is_none());
-        assert!(
-            !pool
-                .has_ready(&gents_loop::tool::ToolCallEnvelope::default(), &key)
-                .await
-        );
+        assert!(pool.get_ready(&approval_call, &key).await.is_none());
+        assert!(!pool.has_ready(&approval_call, &key).await);
         assert!(pool
             .inspect_session(
-                &gents_loop::tool::ToolCallEnvelope::default(),
+                &approval_call,
                 &config.session_id,
                 &config.agent_did,
                 &root,
@@ -1316,12 +1309,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             .unwrap()
             .is_empty());
         let error = pool
-            .get_or_start(
-                &gents_loop::tool::ToolCallEnvelope::default(),
-                key.clone(),
-                &server,
-                &config,
-            )
+            .get_or_start(&approval_call, key.clone(), &server, &config)
             .await
             .err()
             .unwrap();
@@ -1332,12 +1320,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             ..key.clone()
         };
         let guarded = pool
-            .get_or_start(
-                &gents_loop::tool::ToolCallEnvelope::default(),
-                guarded_key.clone(),
-                &server,
-                &config,
-            )
+            .get_or_start(&approval_call, guarded_key.clone(), &server, &config)
             .await
             .unwrap();
         assert!(!std::ptr::eq(initial.client(), guarded.client()));
@@ -1367,13 +1350,10 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         );
         let alias = root.join("permission-alias");
         std::fs::hard_link(&private, &alias).unwrap();
-        assert!(pool
-            .get_ready(&gents_loop::tool::ToolCallEnvelope::default(), &guarded_key)
-            .await
-            .is_none());
+        assert!(pool.get_ready(&approval_call, &guarded_key).await.is_none());
         let states = pool
             .inspect_session(
-                &gents_loop::tool::ToolCallEnvelope::default(),
+                &approval_call,
                 &config.session_id,
                 &config.agent_did,
                 &root,
@@ -1386,28 +1366,20 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             Some(super::pool::PoolServerState::Failed(error)) if error.contains("hard-link alias")
         ));
         let error = pool
-            .get_or_start(
-                &gents_loop::tool::ToolCallEnvelope::default(),
-                guarded_key.clone(),
-                &server,
-                &config,
-            )
+            .get_or_start(&approval_call, guarded_key.clone(), &server, &config)
             .await
             .err()
             .unwrap();
         assert!(error.contains("hard-link alias"), "{error}");
         std::fs::remove_file(alias).unwrap();
-        let cached = pool
-            .get_ready(&gents_loop::tool::ToolCallEnvelope::default(), &guarded_key)
-            .await
-            .unwrap();
+        let cached = pool.get_ready(&approval_call, &guarded_key).await.unwrap();
         assert!(std::ptr::eq(guarded.client(), cached.client()));
         drop(cached);
         drop(initial);
         drop(guarded);
         pool.retire(&key, None).await;
         pool.retire(&guarded_key, None).await;
-    })
+    }
     .await;
 }
 
@@ -1454,7 +1426,12 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
         None,
     )
     .unwrap();
-    workspace::scope(scope, async {
+    let approval_call = crate::runtime_context::ToolHostContext {
+        approval: scope.clone(),
+        ..Default::default()
+    }
+    .call();
+    async {
         let selection_changed = async {
             tokio::time::timeout(std::time::Duration::from_secs(10), async {
                 while !ready.exists() {
@@ -1469,7 +1446,7 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
             workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
             std::fs::write(&release, "continue").unwrap();
         };
-        let ambient_call_1529 = gents_loop::tool::ToolCallEnvelope::default();
+        let ambient_call_1529 = approval_call.clone();
         let (started, ()) = tokio::join!(
             pool.get_or_start(&ambient_call_1529, key.clone(), &server, &config),
             selection_changed
@@ -1491,17 +1468,12 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
         assert_eq!(pool.live_count().await, 0);
         std::fs::remove_file(workspace::preferences_file(&home)).unwrap();
         let retried = pool
-            .get_or_start(
-                &gents_loop::tool::ToolCallEnvelope::default(),
-                key.clone(),
-                &server,
-                &config,
-            )
+            .get_or_start(&approval_call, key.clone(), &server, &config)
             .await
             .expect("admission changes must not create initialization backoff");
         drop(retried);
         pool.shutdown().await;
-    })
+    }
     .await;
 }
 

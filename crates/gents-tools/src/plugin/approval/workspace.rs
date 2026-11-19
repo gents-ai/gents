@@ -14,10 +14,9 @@ mod file;
 mod review_task;
 pub(crate) use command::guard_home as command_guard_home;
 pub use command::{authorize_command, writable_root as command_writable_root};
-pub use context::carry;
 #[cfg(target_os = "macos")]
 pub(crate) use context::current_home as command_context_home;
-pub use context::{for_request, scope, Context, ReviewInvocation, Reviewer};
+pub use context::{for_request, Context, ReviewInvocation, Reviewer};
 pub(crate) use file::authorize_file_mutation;
 pub use review_task::{
     default_review_task, review_task_is_eligible, review_task_matches_selection,
@@ -270,17 +269,33 @@ impl BindingAction {
 
 pub(crate) type Binding = Grant<WorkspaceKey, BindingAction>;
 
-#[derive(Clone, Debug)]
+/// A consent holds the approval context of the request that obtained it, so a
+/// recheck reads that request's settings wherever it runs, including on the
+/// blocking thread a bound plugin directory rechecks it on (Lean
+/// `WorkspacePermissions.governingSettings`).
+#[derive(Clone)]
 pub struct ActionConsent {
+    context: Context,
     home: PathBuf,
     binding: Binding,
+}
+
+impl std::fmt::Debug for ActionConsent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ActionConsent")
+            .field("home", &self.home)
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ActionConsent {
     /// Consent can outlive an approval wait or a plugin host round. Recheck
     /// the captured workspace revision and action before each mutation or run.
     pub(crate) fn validate(&self) -> Result<()> {
-        validate_binding(&self.home, &self.binding).map_err(BindingError::into_anyhow)?;
+        validate_binding(Some(&self.context), &self.home, &self.binding)
+            .map_err(BindingError::into_anyhow)?;
         Ok(())
     }
 
@@ -321,22 +336,31 @@ impl gents_pack::plugin::InvocationConsent for ActionConsent {
     }
 }
 
-pub fn action_consent(home: &Path, binding: Binding) -> ActionConsent {
+pub fn action_consent(context: &Context, home: &Path, binding: Binding) -> ActionConsent {
     ActionConsent {
+        context: context.clone(),
         home: home.to_owned(),
         binding,
     }
 }
 
-pub fn within_workspace(path: &Path) -> bool {
-    context::within_workspace(path)
+pub fn within_workspace(context: Option<&Context>, path: &Path) -> bool {
+    context::within_workspace(context, path)
 }
 
 pub struct BindingDecision {
     pub route: Route,
     pub binding: Binding,
+    context: Context,
     input: Input<WorkspaceKey, BindingAction>,
     review_payload: Option<serde_json::Value>,
+}
+
+impl BindingDecision {
+    /// The approval context of the request the decision was routed for.
+    pub fn context(&self) -> &Context {
+        &self.context
+    }
 }
 
 async fn authorize_binding(
@@ -369,6 +393,8 @@ pub async fn consent_binding(
         .signed_duration_since(chrono::Utc::now())
         .to_std()
         .unwrap_or_default();
+    let approval = crate::runtime_context::host(call).approval;
+    let approval = approval.as_ref();
     let mut request = Request::for_binding(decision.binding.clone(), session_id);
     request.expires_at_ms = request
         .expires_at_ms
@@ -386,19 +412,19 @@ pub async fn consent_binding(
             Ok(())
         };
         ensure_open()?;
-        validate_binding(home, &decision.binding).map_err(BindingError::into_anyhow)?;
-        let route = context::resolve_review(home, &decision, &request.id).await?;
+        validate_binding(approval, home, &decision.binding).map_err(BindingError::into_anyhow)?;
+        let route = context::resolve_review(approval, home, &decision, &request.id).await?;
         ensure_open()?;
         let allowed = match route {
             Route::Allow => true,
             Route::Deny => false,
             Route::Ask | Route::Review => match super::consent(interactive) {
                 Consent::Deny => false,
-                Consent::Ask => super::ask(home, &request, remaining).await?,
+                Consent::Ask => super::ask(approval, home, &request, remaining).await?,
             },
         };
         ensure_open()?;
-        validate_binding(home, &decision.binding).map_err(BindingError::into_anyhow)?;
+        validate_binding(approval, home, &decision.binding).map_err(BindingError::into_anyhow)?;
         Ok(allowed)
     };
     tokio::select! {
@@ -436,8 +462,15 @@ impl BindingError {
     }
 }
 
-pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Settings, BindingError> {
-    let settings = context::governing_settings(home, &binding.scope.workspace)?;
+/// `context` is the approval context of the request the check belongs to;
+/// `None` only for the operator answering or listing questions outside any
+/// request.
+pub(crate) fn validate_binding(
+    context: Option<&Context>,
+    home: &Path,
+    binding: &Binding,
+) -> Result<Settings, BindingError> {
+    let settings = context::governing_settings(context, home, &binding.scope.workspace)?;
     let available: Vec<_> = settings.iter().map(Settings::scope).collect();
     if !policy::approval_scope_matches(&available, &binding.scope) {
         return Err(SelectionChanged.into());
@@ -448,24 +481,26 @@ pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Setting
 }
 
 pub(crate) fn consume_decision(
+    context: Option<&Context>,
     home: &Path,
     expected: &Binding,
     received: &Binding,
     allowed: bool,
 ) -> Result<bool> {
-    let settings = validate_binding(home, expected).map_err(BindingError::into_anyhow)?;
+    let settings = validate_binding(context, home, expected).map_err(BindingError::into_anyhow)?;
     let available = [settings.scope()];
     policy::consume_approval(&available, expected, received, allowed)
         .ok_or_else(|| SelectionChanged.into())
 }
 
 pub fn allowed_scope(
+    context: Option<&Context>,
     home: &Path,
     workdir: Option<&Path>,
     user_home: Option<&Path>,
 ) -> Result<gents_pack::plugin::allowed::Scope> {
     let mut entries = gents_pack::plugin::allowed::list(home)?;
-    if let Some(settings) = context::settings(home)? {
+    if let Some(settings) = context::settings(context, home)? {
         entries.extend(settings.dirs);
     }
     gents_pack::plugin::allowed::Scope::from_entries(home, entries, workdir, user_home)
@@ -474,12 +509,16 @@ pub fn allowed_scope(
 /// Installed plugin admission still enforces its manifold. This decision
 /// controls only consent for the exact bound input under that ceiling.
 pub fn binding_route(
+    context: Option<&Context>,
     home: &Path,
     action: impl FnOnce() -> Result<BindingAction>,
     covered: bool,
     payload: impl FnOnce() -> Result<serde_json::Value>,
 ) -> Result<Option<BindingDecision>> {
-    let Some(settings) = context::settings(home)? else {
+    let Some(context) = context else {
+        return Ok(None);
+    };
+    let Some(settings) = context::settings(Some(context), home)? else {
         return Ok(None);
     };
     let action = action()?;
@@ -507,6 +546,7 @@ pub fn binding_route(
     Ok(Some(BindingDecision {
         route,
         binding,
+        context: context.clone(),
         input,
         review_payload,
     }))
@@ -999,13 +1039,9 @@ mod tests {
             Some(&project),
             Some("chat"),
         )?;
-        let check = || {
-            let home = home.clone();
-            let binding = binding.clone();
-            let context = context.clone();
-            async move { scope(context, async move { validate_binding(&home, &binding) }).await }
-        };
-        check().await?;
+        let check = || validate_binding(context.as_ref(), &home, &binding);
+        check()?;
+        let consent = action_consent(context.as_ref().unwrap(), &home, binding.clone());
         save_mode(
             &home,
             &base.with_session(Some("chat"))?,
@@ -1013,12 +1049,18 @@ mod tests {
             Mode::FullAccess,
             None,
         )?;
-        let error = check().await.unwrap_err();
+        let error = check().unwrap_err();
         assert!(
             matches!(error, BindingError::SelectionChanged(_)),
             "{error}"
         );
-        validate_binding(&home, &binding)?;
+        // The recheck a bound plugin directory makes on a blocking thread holds
+        // the same request context, so it reads the same settings.
+        let rechecked = tokio::task::spawn_blocking(move || consent.validate())
+            .await?
+            .unwrap_err();
+        assert!(rechecked.is::<SelectionChanged>(), "{rechecked:#}");
+        validate_binding(None, &home, &binding)?;
         Ok(())
     }
 
