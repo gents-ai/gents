@@ -3,6 +3,13 @@ use serde_json::{json, Value};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigClientError, NodePermission};
 use crate::identity::{GrantSet, Recipient};
 
+#[path = "enrollment_grant/settlement.rs"]
+mod settlement;
+
+pub use settlement::{
+    after_removal, settle_owed_withdrawals, settlement_step, AfterRemoval, SettlementStep,
+};
+
 const RECEIPT_COLLECTION: &str = gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT_NAME;
 const NODE_ADMINISTRATOR_RELATION: &str = "administrator";
 
@@ -53,6 +60,9 @@ pub struct EnrollmentGrantReceipt {
     pub member_did: String,
     pub tuples: Vec<EnrollmentGrantTuple>,
     pub withdrawn: bool,
+    /// The withdrawal of the member's Node `administrator` relation is owed
+    /// (Lean `Receipt.owed`).
+    pub owed: bool,
 }
 
 impl EnrollmentGrantReceipt {
@@ -62,14 +72,22 @@ impl EnrollmentGrantReceipt {
     }
 }
 
+/// Lean `owedFor`.
+pub fn administration_owed(member: &str, receipts: &[EnrollmentGrantReceipt]) -> bool {
+    receipts
+        .iter()
+        .any(|receipt| receipt.owed && receipt.member_did == member)
+}
+
 /// The derived tuples a new grant for `member` records (Lean `record`): every
-/// one except those held independently, that is, natively present and
-/// accounted for by no live receipt.
+/// one except those held independently, that is, natively present, accounted
+/// for by no live receipt and not an owed withdrawal.
 pub fn plan_grant(
     member: &str,
     held: &[EnrollmentGrantTuple],
     receipts: &[EnrollmentGrantReceipt],
 ) -> Vec<EnrollmentGrantTuple> {
+    let owed = administration_owed(member, receipts);
     EnrollmentGrantTuple::derived()
         .into_iter()
         .filter(|tuple| {
@@ -77,6 +95,7 @@ pub fn plan_grant(
                 || receipts
                     .iter()
                     .any(|receipt| receipt.accounts(member, *tuple))
+                || (owed && *tuple == EnrollmentGrantTuple::NodeAdministrator)
         })
         .collect()
 }
@@ -116,6 +135,25 @@ pub fn plan_membership_withdrawal(
         .collect()
 }
 
+/// The receipts a withdrawal the runtime runs leaves owing the Node
+/// `administrator` relation's withdrawal (Lean `oweRevoke`,
+/// `oweRevokeMember`): those of `retired` that accounted for it, when the
+/// withdrawal removes it.
+pub fn plan_owing(
+    member: &str,
+    retired: &[&EnrollmentGrantReceipt],
+    removed: &[EnrollmentGrantTuple],
+) -> Vec<String> {
+    if !removed.contains(&EnrollmentGrantTuple::NodeAdministrator) {
+        return Vec::new();
+    }
+    retired
+        .iter()
+        .filter(|receipt| receipt.accounts(member, EnrollmentGrantTuple::NodeAdministrator))
+        .map(|receipt| receipt.doc_id.clone())
+        .collect()
+}
+
 fn decode_receipts(response: &Value) -> Result<Vec<EnrollmentGrantReceipt>, EnrollmentGrantError> {
     let malformed = |reason: String| EnrollmentGrantError::MalformedReceipt(reason);
     gents_protocol::graphql::graphql_rows_from_response(response, RECEIPT_COLLECTION)
@@ -146,6 +184,7 @@ fn decode_receipts(response: &Value) -> Result<Vec<EnrollmentGrantReceipt>, Enro
                 member_did: field("member_did")?,
                 tuples,
                 withdrawn: !row["withdrawn_at"].is_null(),
+                owed: !row["withdrawal_owed_at"].is_null(),
             })
         })
         .collect()
@@ -164,7 +203,8 @@ pub async fn load_enrollment_grant_receipts(
             .field(fields::REQUEST_ID)
             .field(fields::MEMBER_DID)
             .field(fields::TUPLES)
-            .field(fields::WITHDRAWN_AT),
+            .field(fields::WITHDRAWN_AT)
+            .field(fields::WITHDRAWAL_OWED_AT),
     )
     .filter(Filter::eq(fields::MEMBER_DID, member))
     .render();
@@ -392,10 +432,16 @@ where
         "node_doc_id": node_doc_id,
         "parent_linked": true,
     });
+    let taken_over: Vec<&str> = receipts
+        .iter()
+        .filter(|receipt| receipt.owed)
+        .map(|receipt| receipt.doc_id.as_str())
+        .collect();
     let doc_id = runtime
         .transact_signed_conflict_rebuild("enrollment_grant.record", |txn| {
-            let input = &input;
+            let (input, taken_over) = (&input, &taken_over);
             Box::pin(async move {
+                close_owed_in_txn(txn, taken_over).await?;
                 let result = txn
                     .execute_client_signed_create(
                         "mutation($input: NetworkEnrollmentGrantMutationInputArg!) { create_NetworkEnrollmentGrant(input: $input) { _docID } }",
@@ -418,6 +464,7 @@ where
         member_did: member.as_str().to_owned(),
         tuples: recorded.clone(),
         withdrawn: false,
+        owed: false,
     };
     let mut receipts = receipts;
     receipts.push(receipt.clone());
@@ -469,10 +516,13 @@ where
 }
 
 /// The withdrawal one revocation owes (Lean `revoke`): the live receipt it
-/// retires and the tuples only that receipt accounted for.
+/// retires and the tuples only that receipt accounted for. When the runtime
+/// runs it, the retired receipts in `owing_doc_ids` owe the Node
+/// `administrator` relation's withdrawal instead (Lean `oweRevoke`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnrollmentGrantWithdrawal {
     pub receipt_doc_ids: Vec<String>,
+    pub owing_doc_ids: Vec<String>,
     pub member: identity::Did,
     pub tuples: Vec<EnrollmentGrantTuple>,
 }
@@ -489,11 +539,13 @@ impl EnrollmentGrantWithdrawal {
         else {
             return Ok(None);
         };
+        let tuples = plan_withdrawal(revoked, receipts);
         Ok(Some(Self {
             receipt_doc_ids: vec![revoked.doc_id.clone()],
+            owing_doc_ids: plan_owing(&revoked.member_did, &[revoked], &tuples),
             member: identity::Did::new(&revoked.member_did)
                 .map_err(EnrollmentGrantError::MemberIdentity)?,
-            tuples: plan_withdrawal(revoked, receipts),
+            tuples,
         }))
     }
 
@@ -511,10 +563,12 @@ impl EnrollmentGrantWithdrawal {
         if live.is_empty() {
             return Ok(None);
         }
+        let tuples = plan_membership_withdrawal(member, receipts);
         Ok(Some(Self {
             receipt_doc_ids: live.iter().map(|receipt| receipt.doc_id.clone()).collect(),
+            owing_doc_ids: plan_owing(member, &live, &tuples),
             member: identity::Did::new(member).map_err(EnrollmentGrantError::MemberIdentity)?,
-            tuples: plan_membership_withdrawal(member, receipts),
+            tuples,
         }))
     }
 
@@ -540,17 +594,17 @@ impl EnrollmentGrantWithdrawal {
         Ok(())
     }
 
-    /// Retire the receipt and the Node `administrator` relation in the
-    /// transaction that publishes the revocation. The runtime is the native
-    /// NAC owner, so it may remove a relation on the user-owned Node.
-    pub async fn stage_in_txn(
+    /// Retire the receipts in the runtime's transaction that publishes the
+    /// denial or revocation, those that accounted for the Node
+    /// `administrator` relation owing its withdrawal (Lean `oweRevoke`): the
+    /// Node may not remove a relation on the User-owned Node document
+    /// (`node_alone_neither_grants_nor_withdraws_administration`), so the
+    /// owner's client issues it (`ClientAccessOwner::settle_withdrawals`).
+    pub async fn retire_owing_in_txn(
         &self,
         txn: &ConfigApplyTxn<'_>,
-        node_doc_id: &str,
     ) -> Result<(), EnrollmentGrantError> {
-        self.retire_receipts_in_txn(txn).await?;
-        self.remove_node_administration_in_txn(txn, node_doc_id)
-            .await
+        self.retire_receipts_in_txn(txn, &self.owing_doc_ids).await
     }
 
     pub async fn withdraw_as(
@@ -577,7 +631,7 @@ impl EnrollmentGrantWithdrawal {
         }
         runtime
             .transact_write("client_access.retire_grant", |txn| {
-                Box::pin(async move { self.retire_receipts_in_txn(txn).await })
+                Box::pin(async move { self.retire_receipts_in_txn(txn, &[]).await })
             })
             .await
     }
@@ -585,57 +639,67 @@ impl EnrollmentGrantWithdrawal {
     async fn retire_receipts_in_txn(
         &self,
         txn: &ConfigApplyTxn<'_>,
+        owing: &[String],
     ) -> Result<(), EnrollmentGrantError> {
-        let withdrawn_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        use gents_protocol::document_query::{fields::network_enrollment_grant as fields, Input};
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         for receipt_doc_id in &self.receipt_doc_ids {
-            let rendered = {
-                use gents_protocol::document_query::{
-                    fields::network_enrollment_grant as fields, Input, Update,
-                };
-                Update::doc(
-                    receipt_doc_id.as_str(),
-                    Input::new().set(fields::WITHDRAWN_AT, withdrawn_at.as_str()),
-                )
-                .render()
+            let input = Input::new().set(fields::WITHDRAWN_AT, now.as_str());
+            let input = match owing.contains(receipt_doc_id) {
+                true => input.set(fields::WITHDRAWAL_OWED_AT, now.as_str()),
+                false => input,
             };
-            let response = txn
-                .run(&rendered)
-                .await
-                .map_err(EnrollmentGrantError::Retire)?;
-            let updated = response
-                .pointer(&format!("/data/update_{RECEIPT_COLLECTION}"))
-                .or_else(|| response.pointer(&format!("/update_{RECEIPT_COLLECTION}")))
-                .and_then(Value::as_array)
-                .map_or(0, Vec::len);
-            if updated != 1 {
-                return Err(EnrollmentGrantError::RetireUnconfirmed);
-            }
-        }
-        Ok(())
-    }
-
-    async fn remove_node_administration_in_txn(
-        &self,
-        txn: &ConfigApplyTxn<'_>,
-        node_doc_id: &str,
-    ) -> Result<(), EnrollmentGrantError> {
-        if self
-            .tuples
-            .contains(&EnrollmentGrantTuple::NodeAdministrator)
-        {
-            txn.delete_actor_relationship(
-                "Node",
-                node_doc_id,
-                NODE_ADMINISTRATOR_RELATION,
-                &self.member,
-            )
-            .await
-            .map_err(EnrollmentGrantError::Retire)?;
+            update_receipt_in_txn(txn, receipt_doc_id, input).await?;
         }
         Ok(())
     }
 }
 
+async fn update_receipt_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    receipt_doc_id: &str,
+    input: gents_protocol::document_query::Input<
+        gents_protocol::document_query::fields::network_enrollment_grant::Doc,
+    >,
+) -> Result<(), EnrollmentGrantError> {
+    let rendered = gents_protocol::document_query::Update::doc(receipt_doc_id, input).render();
+    let response = txn
+        .run(&rendered)
+        .await
+        .map_err(EnrollmentGrantError::Retire)?;
+    let updated = response
+        .pointer(&format!("/data/update_{RECEIPT_COLLECTION}"))
+        .or_else(|| response.pointer(&format!("/update_{RECEIPT_COLLECTION}")))
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    if updated != 1 {
+        return Err(EnrollmentGrantError::RetireUnconfirmed);
+    }
+    Ok(())
+}
+
+/// Close the owed withdrawals of `receipt_doc_ids`: issued, or taken over by
+/// a new receipt (Lean `clearOwed`).
+pub(crate) async fn close_owed_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    receipt_doc_ids: &[&str],
+) -> Result<(), EnrollmentGrantError> {
+    use gents_protocol::document_query::{fields::network_enrollment_grant as fields, Input};
+    for receipt_doc_id in receipt_doc_ids {
+        update_receipt_in_txn(
+            txn,
+            receipt_doc_id,
+            Input::new().set_null(fields::WITHDRAWAL_OWED_AT),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "enrollment_grant_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "enrollment_grant/withdrawal_tests.rs"]
+mod withdrawal_tests;
