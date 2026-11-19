@@ -30,13 +30,17 @@ pub(super) struct CredentialProtection {
     paths: BTreeSet<PathBuf>,
 }
 
-pub(super) async fn capture() -> Result<CredentialProtection> {
-    let context = crate::runtime_context::current_tool_runtime_context();
+pub(super) async fn capture(
+    call: &gents_loop::tool::ToolCallEnvelope,
+) -> Result<CredentialProtection> {
+    let context = crate::runtime_context::tool_runtime_context(call);
     let runtime_home = context
         .as_ref()
         .and_then(|context| context.runtime_home.clone());
     let node_did = context.and_then(|context| context.node_did);
-    let approval_home = crate::plugin::approval::workspace::command_context_home();
+    let approval_home = crate::plugin::approval::workspace::command_context_home(
+        crate::runtime_context::host(call).approval.as_ref(),
+    );
     let result = tokio::task::spawn_blocking(move || capture_native(runtime_home, approval_home))
         .await
         .context("credential inspection worker failed")
@@ -154,8 +158,8 @@ impl CredentialProtection {
         Ok(protection)
     }
 
-    pub(super) async fn revalidate(&self) -> Result<()> {
-        let current = capture().await?;
+    pub(super) async fn revalidate(&self, call: &gents_loop::tool::ToolCallEnvelope) -> Result<()> {
+        let current = capture(call).await?;
         ensure!(
             current.paths == self.paths,
             "Credential exclusions changed while the command awaited approval. Retry the command."

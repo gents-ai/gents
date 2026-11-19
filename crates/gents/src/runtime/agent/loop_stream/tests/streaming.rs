@@ -126,11 +126,11 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             Arc::new(|_| Box::pin(async { Ok(()) })),
         );
         loop_config.on_rendered_request = Some(
-            gents_inference::rendered_request::scope::ambient_arming_sink(
+            gents_inference::rendered_request::scope::arming_sink(
                 gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
             ),
         );
-        let authored = gents_inference::rendered_request::scope::scope_request(scope, async {
+        let authored = { loop_config.provider_call.capture = Some(scope); async {
             let stream = run_loop_stream(
                 model,
                 Some(gents_loop::session_hook::NoopSessionHook),
@@ -157,7 +157,7 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
                 }
             }
             authored
-        })
+        } }
         .await;
         case.check(
             gents_lean_vocab::families::contracts_retry_entry_publish::RetryEntryPublication {

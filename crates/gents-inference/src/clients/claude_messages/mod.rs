@@ -37,9 +37,9 @@ use gents_loop::claude_messages_body::ClaudeAccountContext;
 pub(crate) use google::{GoogleCredentials, GoogleTokenSource};
 pub(crate) use route::ClaudeRoute;
 pub(crate) use send::open_messages_at;
-pub use send::stream_messages;
 #[cfg(test)]
 pub(crate) use send::stream_messages_at;
+pub use send::{stream_messages, MessagesAccount};
 #[cfg(test)]
 pub(crate) use sse::stream_sse_body;
 #[cfg(test)]

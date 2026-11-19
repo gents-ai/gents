@@ -27,32 +27,6 @@ const LISTENER_GRACE: Duration = if cfg!(test) {
     Duration::from_secs(5)
 };
 
-tokio::task_local! {
-    static INTERACTIVE: ();
-}
-
-pub async fn scope_interactive<F>(interactive: bool, future: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    if interactive {
-        INTERACTIVE.scope((), future).await
-    } else {
-        future.await
-    }
-}
-
-pub fn carry_interactive<F>(future: F) -> impl std::future::Future<Output = F::Output>
-where
-    F: std::future::Future,
-{
-    workspace::carry(scope_interactive(interactive(), future))
-}
-
-pub fn interactive() -> bool {
-    INTERACTIVE.try_with(|_| ()).is_ok()
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Consent {
@@ -207,7 +181,13 @@ impl Drop for Cleanup<'_> {
     }
 }
 
-pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool> {
+/// `context` is the approval context of the request that asks.
+pub async fn ask(
+    context: Option<&workspace::Context>,
+    home: &Path,
+    request: &Request,
+    wait: Duration,
+) -> Result<bool> {
     anyhow::ensure!(valid_id(&request.id), "invalid plugin approval question id");
     let queue = Queue::for_request(request);
     let started = tokio::time::Instant::now();
@@ -234,7 +214,7 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
             );
         }
         if let Some(binding) = request.binding() {
-            workspace::validate_binding(home, binding)
+            workspace::validate_binding(context, home, binding)
                 .map_err(workspace::BindingError::into_anyhow)?;
         }
         write_atomic(
@@ -250,10 +230,10 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
     let mut pause = Duration::from_millis(20);
     loop {
         if let Some(binding) = request.binding() {
-            workspace::validate_binding(home, binding)
+            workspace::validate_binding(context, home, binding)
                 .map_err(workspace::BindingError::into_anyhow)?;
         }
-        if let Some(allowed) = read_decision(home, request)? {
+        if let Some(allowed) = read_decision(context, home, request)? {
             return Ok(allowed);
         }
         anyhow::ensure!(
@@ -312,7 +292,7 @@ pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
                 "the approval queue contains duplicate question identities"
             );
             if let Some(binding) = request.binding() {
-                match workspace::validate_binding(home, binding) {
+                match workspace::validate_binding(None, home, binding) {
                     Err(
                         workspace::BindingError::SelectionChanged(_)
                         | workspace::BindingError::PathChanged(_),
@@ -357,7 +337,11 @@ fn read_question(home: &Path, id: &str) -> Result<(Queue, Request)> {
     found.with_context(|| format!("question {id} is not waiting for an answer"))
 }
 
-fn read_decision(home: &Path, request: &Request) -> Result<Option<bool>> {
+fn read_decision(
+    context: Option<&workspace::Context>,
+    home: &Path,
+    request: &Request,
+) -> Result<Option<bool>> {
     let queue = Queue::for_request(request);
     let bytes = match std::fs::read(queue.decision_file(home, &request.id)) {
         Ok(bytes) => bytes,
@@ -368,7 +352,7 @@ fn read_decision(home: &Path, request: &Request) -> Result<Option<bool>> {
         serde_json::from_slice(&bytes).context("the operator's answer is unreadable")?;
     let allowed = match (request.binding(), decision.binding.as_ref()) {
         (Some(expected), Some(received)) => {
-            workspace::consume_decision(home, expected, received, decision.allow)?
+            workspace::consume_decision(context, home, expected, received, decision.allow)?
         }
         (None, None) => decision.allow,
         _ => anyhow::bail!("the operator's answer does not match the approval scope"),
@@ -403,7 +387,8 @@ fn decide_with_clock(
         "the plugin approval question was already answered"
     );
     if let Some(binding) = request.binding() {
-        workspace::validate_binding(home, binding).map_err(workspace::BindingError::into_anyhow)?;
+        workspace::validate_binding(None, home, binding)
+            .map_err(workspace::BindingError::into_anyhow)?;
     }
     anyhow::ensure!(
         request.allows_answer(answer),

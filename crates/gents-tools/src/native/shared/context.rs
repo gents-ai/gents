@@ -7,10 +7,13 @@ use crate::native::CommandPolicyDenial;
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_pack::pack::rooted_paths::{ensure_within, normalize_for_creation};
 
+/// The configured tool root and base, and the call whose workspace root and
+/// working directory override them while it is served.
 #[derive(Clone)]
 pub struct ToolContext {
     root: Arc<PathBuf>,
     base: Arc<PathBuf>,
+    call: gents_loop::tool::ToolCallEnvelope,
 }
 
 #[derive(Debug)]
@@ -110,7 +113,21 @@ impl ToolContext {
         Ok(Self {
             root: Arc::new(canonical),
             base: Arc::new(base),
+            call: gents_loop::tool::ToolCallEnvelope::default(),
         })
+    }
+
+    /// This context while it serves `call`.
+    pub(crate) fn for_call(&self, call: &gents_loop::tool::ToolCallEnvelope) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
+
+    /// The call this context serves.
+    pub(crate) fn call(&self) -> &gents_loop::tool::ToolCallEnvelope {
+        &self.call
     }
 
     pub(crate) fn root(&self) -> PathBuf {
@@ -170,14 +187,14 @@ impl ToolContext {
     }
 
     fn effective_root(&self) -> PathBuf {
-        crate::runtime_context::current_tool_runtime_context()
+        crate::runtime_context::tool_runtime_context(&self.call)
             .and_then(|runtime| runtime.workspace_root)
             .unwrap_or_else(|| (*self.root).clone())
     }
 
     fn effective_base(&self) -> PathBuf {
         let root = self.effective_root();
-        let runtime_base = crate::runtime_context::current_tool_runtime_context()
+        let runtime_base = crate::runtime_context::tool_runtime_context(&self.call)
             .and_then(|runtime| runtime.workspace_cwd)
             .and_then(|base| resolve_base_dir(&root, Some(base)).ok());
         runtime_base

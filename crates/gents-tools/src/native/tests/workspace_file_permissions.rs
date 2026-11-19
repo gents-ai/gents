@@ -35,10 +35,7 @@ impl Fixture {
             .join("other/nested/file.txt")
     }
 
-    async fn run<F>(&self, future: F) -> F::Output
-    where
-        F: Future,
-    {
+    fn call(&self) -> gents_loop::tool::ToolCallEnvelope {
         let context = workspace::for_request(
             Some(self.home.path()),
             "node",
@@ -48,15 +45,32 @@ impl Fixture {
             None,
         )
         .unwrap();
-        tokio::time::timeout(
-            Duration::from_secs(30),
-            workspace::scope(context, approval::scope_interactive(true, future)),
-        )
-        .await
-        .expect("file operation did not finish")
+        crate::runtime_context::ToolHostContext {
+            interactive: true,
+            approval: context,
+            ..Default::default()
+        }
+        .call()
+    }
+
+    async fn run<F>(&self, future: F) -> F::Output
+    where
+        F: Future,
+    {
+        tokio::time::timeout(Duration::from_secs(30), future)
+            .await
+            .expect("file operation did not finish")
     }
 
     async fn write(&self, path: &Path) -> Result<String, ToolError> {
+        self.write_in(&self.call(), path).await
+    }
+
+    async fn write_in(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        path: &Path,
+    ) -> Result<String, ToolError> {
         let tool =
             WriteFileTool::new(ToolContext::new(self.root.path().to_owned(), false).unwrap());
         self.run(Tool::call(
@@ -68,7 +82,7 @@ impl Fixture {
                 expected_content_hash: None,
                 overwrite: false,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            call,
         ))
         .await
     }
@@ -80,6 +94,7 @@ impl Fixture {
         hash: Option<String>,
     ) -> Result<String, ToolError> {
         let tool = EditFileTool::new(ToolContext::new(self.root.path().to_owned(), false).unwrap());
+        let call = self.call();
         self.run(Tool::call(
             &tool,
             EditFileArgs {
@@ -93,7 +108,7 @@ impl Fixture {
                 operation: None,
                 expected_content_hash: hash,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &call,
         ))
         .await
     }
@@ -374,30 +389,33 @@ async fn full_access_file_changes_still_obey_the_configured_tool_root() {
 
 #[tokio::test]
 async fn full_access_cannot_widen_read_only_workspace_authority() {
-    use crate::runtime_context::{
-        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
-    };
+    use crate::runtime_context::ToolWorkspaceScope;
     let fixture = Fixture::new(Some(workspace::Mode::FullAccess));
     let path = fixture.outside();
-    let result = scope_request_tool_execution_with_workspace_overlay(
-        None,
-        None,
-        tokio_util::sync::CancellationToken::new(),
-        ToolWorkspaceScope {
-            runtime_home: None,
-            workspace_cwd: Some(fixture.key.path.clone()),
-            workspace_root: Some(fixture.root.path().canonicalize().unwrap()),
-            workspace_authority: Some(WorkspaceAuthority::ReadOnly),
-            workspace_artifact: None,
+    let workspace = ToolWorkspaceScope {
+        runtime_home: None,
+        workspace_cwd: Some(fixture.key.path.clone()),
+        workspace_root: Some(fixture.root.path().canonicalize().unwrap()),
+        workspace_authority: Some(WorkspaceAuthority::ReadOnly),
+        workspace_artifact: None,
+    };
+    let token = tokio_util::sync::CancellationToken::new();
+    let call = crate::runtime_context::entered_with_workspace_overlay(
+        &fixture.call(),
+        workspace.clone(),
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            identity: None,
+            deadline_at: None,
+            cancellation_token: token.clone(),
+            workspace_cwd: None,
+            live_output: None,
+            session_id: None,
+            correlation: None,
+            source_fields: Default::default(),
+            background: false,
         },
-        None,
-        None,
-        None,
-        Default::default(),
-        false,
-        fixture.write(&path),
-    )
-    .await;
+    );
+    let result = fixture.write_in(&call, &path).await;
     assert!(matches!(
         result,
         Err(ToolError::ReportedFailure {
@@ -438,6 +456,7 @@ async fn operator_file_aliases_cannot_be_read_or_changed_with_full_access() {
     let alias = fixture.key.path.join("project-settings.json");
     std::fs::hard_link(&settings, &alias).unwrap();
     let context = ToolContext::new(fixture.root.path().to_owned(), false).unwrap();
+    let call = fixture.call();
     let read = fixture
         .run(Tool::call(
             &ReadFileTool::new(context.clone(), 1024),
@@ -448,10 +467,11 @@ async fn operator_file_aliases_cannot_be_read_or_changed_with_full_access() {
                 max_chars: None,
                 raw_json: true,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &call,
         ))
         .await;
     assert!(read.unwrap_err().to_string().contains("operator"));
+    let call = fixture.call();
     let write = fixture
         .run(Tool::call(
             &WriteFileTool::new(context.clone()),
@@ -462,10 +482,11 @@ async fn operator_file_aliases_cannot_be_read_or_changed_with_full_access() {
                 overwrite: true,
                 raw_json: true,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &call,
         ))
         .await;
     assert!(write.unwrap_err().to_string().contains("operator"));
+    let call = fixture.call();
     let edit = fixture
         .run(Tool::call(
             &EditFileTool::new(context),
@@ -480,7 +501,7 @@ async fn operator_file_aliases_cannot_be_read_or_changed_with_full_access() {
                 operation: None,
                 expected_content_hash: None,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &call,
         ))
         .await;
     assert!(edit.unwrap_err().to_string().contains("operator"));
@@ -499,6 +520,7 @@ async fn ordinary_project_hard_links_remain_readable_and_editable() {
     std::fs::write(&path, "hello world").unwrap();
     std::fs::hard_link(&path, &alias).unwrap();
     let context = ToolContext::new(fixture.root.path().to_owned(), false).unwrap();
+    let call = fixture.call();
     let read = fixture
         .run(Tool::call(
             &ReadFileTool::new(context.clone(), 1024),
@@ -509,13 +531,14 @@ async fn ordinary_project_hard_links_remain_readable_and_editable() {
                 max_chars: None,
                 raw_json: true,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &call,
         ))
         .await
         .unwrap();
     assert!(read.contains("hello world"));
     fixture.edit(&alias, false, None).await.unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello reader");
+    let call = fixture.call();
     fixture
         .run(Tool::call(
             &WriteFileTool::new(context),
@@ -526,7 +549,7 @@ async fn ordinary_project_hard_links_remain_readable_and_editable() {
                 overwrite: true,
                 raw_json: true,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &call,
         ))
         .await
         .unwrap();
@@ -546,6 +569,7 @@ async fn write_only_project_files_remain_overwritable() {
     let original = std::fs::metadata(&path).unwrap().permissions();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).unwrap();
     let context = ToolContext::new(fixture.root.path().to_owned(), false).unwrap();
+    let call = fixture.call();
     let result = fixture
         .run(Tool::call(
             &WriteFileTool::new(context),
@@ -556,7 +580,7 @@ async fn write_only_project_files_remain_overwritable() {
                 overwrite: true,
                 raw_json: true,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &call,
         ))
         .await;
     assert_eq!(

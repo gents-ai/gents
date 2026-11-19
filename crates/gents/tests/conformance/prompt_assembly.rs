@@ -100,6 +100,7 @@ fn provider_invocations_are_confined_to_the_owned_loop_seam() {
     let expected = BTreeSet::from([
         "crates/gents-loop/src/loop_stream.rs".to_string(),
         "crates/gents-loop/src/rig_compat/model.rs".to_string(),
+        "crates/gents-loop/src/rig_compat/call.rs".to_string(),
         "crates/gents-inference/src/llm/rig_compat.rs".to_string(),
     ]);
     let found = files_containing(&[".completion_request(", ".completion(", ".stream("]);

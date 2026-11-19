@@ -14,6 +14,7 @@ pub mod output_obligation;
 pub mod prompt;
 pub mod provider_activity;
 pub mod provider_audit;
+pub mod provider_call;
 pub mod provider_input;
 pub mod provider_limit;
 pub mod provider_patches;

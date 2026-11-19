@@ -222,6 +222,34 @@ pub fn configuration_grant_route(
     }
 }
 
+/// The runtime's periodic writes of its own peer records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Periodic {
+    RegistryHeartbeat,
+    EndpointHeartbeat,
+    Directory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeriodicLoop {
+    Beats,
+    Idle,
+}
+
+/// What a periodic peer publication's loop does on a home whose document
+/// access control runs on `provider` (`Identity.NodePublication.periodic`).
+pub fn periodic(provider: DocumentAcp, _: Periodic) -> PeriodicLoop {
+    match publication(provider) {
+        Publication::Proceeds => PeriodicLoop::Beats,
+        Publication::AwaitsTransportGrants => PeriodicLoop::Idle,
+    }
+}
+
+/// [`periodic`] for `node`, whose provider is fixed while it runs.
+pub fn node_periodic(node: &defra_node::Node, publication: Periodic) -> PeriodicLoop {
+    periodic(provider_of(node), publication)
+}
+
 /// Where `node` decides document access.
 pub fn provider_of(node: &defra_node::Node) -> DocumentAcp {
     #[cfg(feature = "vera")]

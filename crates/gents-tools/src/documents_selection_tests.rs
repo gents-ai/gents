@@ -235,7 +235,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
                 crate::native::skills::LoadSkillArgs {
                     name: "skill".into(),
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
         let tool_loaded = loaded.is_ok();
@@ -247,7 +247,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
                 crate::native::skills::LoadSkillArgs {
                     name: "missing".into(),
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
         assert_eq!(catalog.is_ok(), tool_loaded, "{}", case.input.name);

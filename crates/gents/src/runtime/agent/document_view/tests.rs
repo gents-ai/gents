@@ -345,7 +345,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
             gents_tools::native::skills::LoadSkillArgs {
                 name: "Research".to_string(),
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .expect("load_skill");

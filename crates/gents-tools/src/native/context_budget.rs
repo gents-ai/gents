@@ -69,8 +69,11 @@ pub struct ContextBudgetScope {
 impl ContextBudgetScope {
     /// Resolve the scope from the in-flight tool call. Fails closed when the
     /// runtime did not install an agent or session identity.
-    fn from_tool_runtime(node_did: &str) -> Result<Self> {
-        let runtime = crate::runtime_context::current_tool_runtime_context();
+    fn from_tool_runtime(
+        call: &gents_loop::tool::ToolCallEnvelope,
+        node_did: &str,
+    ) -> Result<Self> {
+        let runtime = crate::runtime_context::tool_runtime_context(call);
         let agent_did = runtime
             .as_ref()
             .and_then(|runtime| runtime.agent_did.clone())
@@ -246,9 +249,9 @@ impl Tool for ContextBudgetTool {
     async fn call(
         &self,
         _args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        let scope = ContextBudgetScope::from_tool_runtime(&self.node_did)?;
+        let scope = ContextBudgetScope::from_tool_runtime(context, &self.node_did)?;
         let snapshot = load_context_budget_snapshot(&self.node, &scope).await?;
         gents_session::session::output_render::render(
             &snapshot,
@@ -766,28 +769,25 @@ mod tests {
     }
 
     async fn call_as(tool: &ContextBudgetTool, agent_did: &str, session_id: &str) -> String {
-        crate::runtime_context::scope_request_tool_execution_with_session(
-            Some(crate::runtime_context::ToolRequestIdentity::new(
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            identity: Some(crate::runtime_context::ToolRequestIdentity::new(
                 None,
                 Some("did:key:z-context".into()),
                 Some(agent_did.into()),
                 Some("caller-request".into()),
             )),
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            Some(session_id.into()),
-            async {
-                Tool::call(
-                    tool,
-                    ContextBudgetParams {},
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
-                )
+            session_id: Some(session_id.into()),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            )
+        }
+        .call();
+        async {
+            Tool::call(tool, ContextBudgetParams {}, &scope_call)
                 .await
                 .unwrap()
-            },
-        )
+        }
         .await
     }
 
@@ -976,7 +976,7 @@ mod tests {
         let error = Tool::call(
             &tool,
             ContextBudgetParams {},
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .expect_err("unscoped call must not fall back to a node-wide scan");

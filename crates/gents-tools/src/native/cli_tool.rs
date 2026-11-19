@@ -49,24 +49,28 @@ impl ToolDyn for CliTool {
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         let Ok(args) = serde_json::from_str::<CliToolArgs>(args) else {
             return Ok(());
         };
         admit_argv_policy(&self.config, &args.argv).map_err(LocalToolError::into_dispatch_error)
     }
 
-    fn call(
-        &self,
+    fn call<'a>(
+        &'a self,
         args: String,
-        _context: &gents_loop::tool::ToolCallEnvelope,
-    ) -> BoxFuture<'_, Result<String, ToolError>> {
+        call: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         let config = self.config.clone();
         Box::pin(async move {
-            deny_artifact_scope().map_err(LocalToolError::into_dispatch_error)?;
+            deny_artifact_scope(call).map_err(LocalToolError::into_dispatch_error)?;
             let args: CliToolArgs = serde_json::from_str(&args).map_err(ToolError::JsonError)?;
             admit_argv_policy(&config, &args.argv).map_err(LocalToolError::into_dispatch_error)?;
-            let output = run_cli_command(&config, &args.argv)
+            let output = run_cli_command(call, &config, &args.argv)
                 .await
                 .map_err(LocalToolError::into_dispatch_error)?;
             serde_json::to_string(&output).map_err(ToolError::JsonError)
@@ -120,8 +124,8 @@ fn cli_tool_environment(config: &CliToolConfig) -> RapidHashMap<String, String> 
     env
 }
 
-fn deny_artifact_scope() -> Result<(), LocalToolError> {
-    if crate::runtime_context::current_tool_runtime_context()
+fn deny_artifact_scope(call: &gents_loop::tool::ToolCallEnvelope) -> Result<(), LocalToolError> {
+    if crate::runtime_context::tool_runtime_context(call)
         .is_some_and(|scope| scope.workspace_artifact.is_some())
     {
         return Err(LocalToolError::reported_failure(
@@ -133,10 +137,11 @@ fn deny_artifact_scope() -> Result<(), LocalToolError> {
 }
 
 async fn run_cli_command(
+    call: &gents_loop::tool::ToolCallEnvelope,
     config: &CliToolConfig,
     argv: &[String],
 ) -> Result<String, LocalToolError> {
-    deny_artifact_scope()?;
+    deny_artifact_scope(call)?;
     let cwd = match config.working_dir.as_ref() {
         Some(path) => {
             if !path.is_dir() {
@@ -159,10 +164,11 @@ async fn run_cli_command(
         .to_str()
         .context("CLI executable path is not valid UTF-8")?;
     let launch_argv =
-        prepare_declared_cli_command(&cwd, command, argv, &config.allowed_argv_prefixes).await?;
+        prepare_declared_cli_command(call, &cwd, command, argv, &config.allowed_argv_prefixes)
+            .await?;
 
     let timeout_secs = config.timeout_secs.max(1);
-    let bounds = tool_execution_bounds(std::time::Duration::from_secs(timeout_secs));
+    let bounds = tool_execution_bounds(call, std::time::Duration::from_secs(timeout_secs));
 
     let outcome = run_managed_exec(ManagedExecRequest {
         argv: launch_argv,
@@ -174,7 +180,7 @@ async fn run_cli_command(
         environment: Some(cli_tool_environment(config)),
         tool_name: Some(config.name.clone()),
         live_output: bounds.live_output.clone(),
-        process_recorder: None,
+        process_recorder: gents_session::exec::ownership::process_recorder(call),
     })
     .await;
 
@@ -303,10 +309,8 @@ mod tests {
         let mut config = config(5);
         config.working_dir = Some(source.clone());
         let tool = CliTool::new(config.clone());
-        crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-            None,
-            None,
-            tokio_util::sync::CancellationToken::new(),
+        let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             crate::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(source.clone()),
@@ -314,30 +318,30 @@ mod tests {
                 workspace_authority: Some(crate::native::WorkspaceAuthority::ReadOnly),
                 workspace_artifact: Some(fixture.grant.clone()),
             },
-            None,
-            None,
-            None,
-            Default::default(),
-            false,
-            async {
-                let argv = vec!["-c".to_owned(), "touch cli-must-not-launch".to_owned()];
-                let error = run_cli_command(&config, &argv).await.unwrap_err();
-                assert!(error.to_string().contains("artifact-scoped"));
-                let args = serde_json::json!({"argv": argv}).to_string();
-                let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
-                    "sh",
-                    tool.call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
-                        .await,
-                );
-                assert!(matches!(
-                    outcome,
-                    gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
-                        class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
-                        ..
-                    }
-                ));
-            },
-        )
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        async {
+            let argv = vec!["-c".to_owned(), "touch cli-must-not-launch".to_owned()];
+            let error = run_cli_command(&scope_call, &config, &argv)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("artifact-scoped"));
+            let args = serde_json::json!({"argv": argv}).to_string();
+            let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
+                "sh",
+                tool.call(args, &scope_call).await,
+            );
+            assert!(matches!(
+                outcome,
+                gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+                    class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
+                    ..
+                }
+            ));
+        }
         .await;
         assert!(!sentinel.exists());
     }
@@ -345,6 +349,7 @@ mod tests {
     #[tokio::test]
     async fn reports_exit_code_and_output_and_env() {
         let out = run_cli_command(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &config(5),
             &["-c".into(), "echo $GENTS_T; echo err 1>&2; exit 3".into()],
         )
@@ -360,6 +365,7 @@ mod tests {
         let mut config = config(5);
         config.max_output_chars = 7;
         let out = run_cli_command(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &config,
             &[
                 "-c".into(),
@@ -376,6 +382,7 @@ mod tests {
     #[tokio::test]
     async fn tool_timeout_kills_the_process_group() {
         let err = run_cli_command(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &config(1),
             &[
                 "-c".into(),
@@ -414,8 +421,6 @@ mod tests {
 
     #[tokio::test]
     async fn request_cancellation_stops_the_command() {
-        use crate::runtime_context::scope_request_tool_execution;
-
         let token = tokio_util::sync::CancellationToken::new();
         let cancel = token.clone();
         let temp = tempfile::tempdir().unwrap();
@@ -434,12 +439,10 @@ mod tests {
             .expect("command must write output before cancellation");
             cancel.cancel();
         });
-        let err = scope_request_tool_execution(
-            None,
-            token,
-            run_cli_command(&config, &["-c".into(),
-                "printf 'partial stdout'; printf 'partial stderr' >&2; : > \"$GENTS_READY\"; sleep 30".into()]),
-        )
+        let scope_call =
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, token).call();
+        let err = run_cli_command(&scope_call, &config, &["-c".into(),
+                "printf 'partial stdout'; printf 'partial stderr' >&2; : > \"$GENTS_READY\"; sleep 30".into()])
         .await
         .unwrap_err();
         cancellation.await.unwrap();

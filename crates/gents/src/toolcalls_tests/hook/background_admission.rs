@@ -66,17 +66,21 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         }));
         let args = json!({"tool_name":"bash_unrestricted", "args":{"command":"/bin/sh", "args":["-c", "exit 0"]}}).to_string();
         accept_hook_tool_call(&harness.hook, "approval-stop", "spawn_process", &args, None).await;
-        let action = workspace::scope(
-            Some(context),
-            harness.hook.on_tool_call(
+        let approval_call = gents_tools::runtime_context::ToolHostContext {
+            approval: Some(context.clone()),
+            ..Default::default()
+        }
+        .call();
+        let action = harness
+            .hook
+            .on_tool_call(
                 "spawn_process",
                 None,
                 "approval-stop",
                 &args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            ),
-        )
-        .await;
+                &approval_call,
+            )
+            .await;
         let ToolCallHookAction::Skip { reason } = action else {
             panic!("{action:?}")
         };
@@ -262,17 +266,21 @@ async fn background_command_consent(
     }})
     .to_string();
     accept_hook_tool_call(&harness.hook, "spawn-command", "spawn_process", &args, None).await;
-    let action = workspace::scope(
-        Some(context),
-        harness.hook.on_tool_call(
+    let approval_call = gents_tools::runtime_context::ToolHostContext {
+        approval: Some(context.clone()),
+        ..Default::default()
+    }
+    .call();
+    let action = harness
+        .hook
+        .on_tool_call(
             "spawn_process",
             None,
             "spawn-command",
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
-        ),
-    )
-    .await;
+            &approval_call,
+        )
+        .await;
     let ToolCallHookAction::Skip { reason } = action else {
         panic!("{action:?}")
     };
@@ -527,7 +535,7 @@ async fn spawned_target_rejection_case(
             None,
             "spawn-denied",
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(

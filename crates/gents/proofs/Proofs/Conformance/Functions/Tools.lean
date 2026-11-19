@@ -5,6 +5,7 @@ import Proofs.Tools.MCPHealth.Coupling
 import Proofs.Tools.ToolPolicy.OperatorPaths
 import Proofs.Tools.ToolPolicy.PluginCalls
 import Proofs.Tools.ToolPolicy.CallEnvelope
+import Proofs.Tools.ToolPolicy.WorkspacePermissions
 import Proofs.Tools.SelfConfig.ToolsSave
 import Proofs.Tools.WorkspaceRootOperations
 import Proofs.Conformance.Family
@@ -26,6 +27,10 @@ namespace ToolPolicy.CallEnvelope
 deriving instance Lean.ToJson for Path, Source, Cancel, Seen
 end ToolPolicy.CallEnvelope
 
+namespace ToolPolicy.WorkspacePermissions
+deriving instance Lean.ToJson for CheckSite, GoverningSettings
+end ToolPolicy.WorkspacePermissions
+
 attribute [conformance_function]
   Identity.Configuration.ordinaryMutationAllowed
   Identity.Configuration.clientSignedWriteMayRetry
@@ -34,6 +39,7 @@ attribute [conformance_function]
   ToolPolicy.OperatorPaths.commandGuardAllows
   ToolPolicy.PluginCalls.available
   ToolPolicy.CallEnvelope.derive
+  ToolPolicy.WorkspacePermissions.governingSettings
   Proofs.MCPHealth.healthProjection
 
 namespace DocumentOperations

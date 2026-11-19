@@ -42,7 +42,12 @@ async fn run(
     } else {
         CommandExecutionPolicy::write_capable().with_mode(mode)
     };
-    let launch = workspace::scope(scope, prepare_command_launch(root, command, args, &policy))
+    let approval_call = crate::runtime_context::ToolHostContext {
+        approval: scope.clone(),
+        ..Default::default()
+    }
+    .call();
+    let launch = prepare_command_launch(&approval_call, root, command, args, &policy)
         .await
         .unwrap();
     let mut environment = launch.environment;
@@ -236,11 +241,12 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
         )
         .unwrap();
         let args = serde_json::json!({"argv": ["-c", "printf '%s' \"$FIXTURE_WORD\" > \"$1\"", "fixture", target]}).to_string();
-        let result = workspace::scope(
-            scope,
-            tool.call(args, &gents_loop::tool::ToolCallEnvelope::ambient()),
-        )
-        .await;
+        let approval_call = crate::runtime_context::ToolHostContext {
+            approval: scope.clone(),
+            ..Default::default()
+        }
+        .call();
+        let result = tool.call(args, &approval_call).await;
         if allowed {
             result.unwrap();
         }
@@ -257,9 +263,7 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
 
 #[tokio::test]
 async fn bounded_commands_protect_runtime_keys_without_workspace_consent() {
-    use crate::runtime_context::{
-        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
-    };
+    use crate::runtime_context::ToolWorkspaceScope;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("custom-runtime");
@@ -270,39 +274,34 @@ async fn bounded_commands_protect_runtime_keys_without_workspace_consent() {
         runtime_home: Some(home),
         ..Default::default()
     };
-    scope_request_tool_execution_with_workspace_overlay(
-        None,
-        None,
-        Default::default(),
+    let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+        &gents_loop::tool::ToolCallEnvelope::default(),
         scope,
-        None,
-        None,
-        None,
-        Default::default(),
-        false,
-        async {
-            let context = ToolContext::new(root, false).unwrap();
-            let policy = CommandExecutionPolicy::write_capable()
-                .with_mode(CommandExecutionMode::WorkspaceWrite);
-            let output = run_command(
-                &context,
-                "bash",
-                "/bin/cat",
-                &[key.to_str().unwrap().into()],
-                None,
-                Duration::from_secs(5),
-                &policy,
-                true,
-                4096,
-            )
-            .await
-            .unwrap_err();
-            let output = output.to_string();
-            let output: serde_json::Value = serde_json::from_str(&output).unwrap();
-            assert_eq!(output["ok"], false, "{output}");
-            assert_eq!(output["network_mode"], "disabled", "{output}");
-            assert_eq!(output["stdout"], "");
-        },
-    )
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, Default::default()),
+    );
+    async {
+        let context = ToolContext::new(root, false).unwrap();
+        let policy =
+            CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::WorkspaceWrite);
+        let output = run_command(
+            &scope_call,
+            &context,
+            "bash",
+            "/bin/cat",
+            &[key.to_str().unwrap().into()],
+            None,
+            Duration::from_secs(5),
+            &policy,
+            true,
+            4096,
+        )
+        .await
+        .unwrap_err();
+        let output = output.to_string();
+        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["ok"], false, "{output}");
+        assert_eq!(output["network_mode"], "disabled", "{output}");
+        assert_eq!(output["stdout"], "");
+    }
     .await;
 }

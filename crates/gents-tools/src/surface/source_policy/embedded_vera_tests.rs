@@ -759,6 +759,7 @@ async fn a_client_signed_create_in_the_runtime_process_on_the_node_store_is_unch
 }
 
 mod configuration_readers;
+mod heartbeats;
 mod learned_audience;
 mod owed;
 mod publication;

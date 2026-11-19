@@ -17,7 +17,7 @@ impl Transcript {
         let (outcome, raw) = match tool
             .call(
                 args.to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
         {

@@ -229,7 +229,7 @@ async fn call_tool(
         .unwrap_or_else(|| panic!("missing config tool for {name}"))
         .call(
             json!({"argv": argv}).to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .map_err(|error| format!("{error:#}"))
@@ -600,7 +600,7 @@ async fn task_run_fires_a_task_now_and_reuses_target_id() {
                 .unwrap()
                 .call(
                     argv.to_string(),
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 )
                 .await
         }

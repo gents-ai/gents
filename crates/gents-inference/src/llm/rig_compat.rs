@@ -1,14 +1,16 @@
 pub use gents_loop::rig_compat::*;
 
 /// Rig's provider clients by the wire protocol each speaks, generic over the
-/// native transport that carries it.
+/// native transport that carries it, each rebuilt for every call.
 pub mod providers {
     use anyhow::{Context, Result};
+    use gents_loop::rig_compat::call::CallClient;
     use gents_loop::rig_compat::http::{HeaderMap, Lifted, Transport};
 
-    pub type ResponsesClient<T> = rig::providers::openai::Client<Lifted<T>>;
-    pub type ChatCompletionsClient<T> = rig::providers::openai::CompletionsClient<Lifted<T>>;
-    pub type OpenRouterClient<T> = rig::providers::openrouter::Client<Lifted<T>>;
+    pub type ResponsesClient<T> = CallClient<rig::providers::openai::Client<Lifted<T>>>;
+    pub type ChatCompletionsClient<T> =
+        CallClient<rig::providers::openai::CompletionsClient<Lifted<T>>>;
+    pub type OpenRouterClient<T> = CallClient<rig::providers::openrouter::Client<Lifted<T>>>;
 
     pub fn build_openai_responses_client<H>(
         api_key: &str,
@@ -17,15 +19,18 @@ pub mod providers {
         http_headers: HeaderMap,
     ) -> Result<ResponsesClient<H>>
     where
-        H: Default + Transport,
+        H: Clone + Default + Transport + 'static,
     {
-        rig::providers::openai::Client::builder()
-            .api_key(api_key)
-            .base_url(base_url)
-            .http_headers(http_headers)
-            .http_client(Lifted(http_client))
-            .build()
-            .context("building OpenAI Responses client")
+        let (api_key, base_url) = (api_key.to_owned(), base_url.to_owned());
+        CallClient::new(move |call| {
+            rig::providers::openai::Client::builder()
+                .api_key(&api_key)
+                .base_url(&base_url)
+                .http_headers(http_headers.clone())
+                .http_client(Lifted::new(http_client.clone(), call.clone()))
+                .build()
+        })
+        .context("building OpenAI Responses client")
     }
 
     pub fn build_openai_chat_completions_client<H>(
@@ -34,14 +39,17 @@ pub mod providers {
         http_client: H,
     ) -> Result<ChatCompletionsClient<H>>
     where
-        H: Default + Transport,
+        H: Clone + Default + Transport + 'static,
     {
-        rig::providers::openai::CompletionsClient::builder()
-            .api_key(api_key)
-            .base_url(base_url)
-            .http_client(Lifted(http_client))
-            .build()
-            .context("building OpenAI Chat Completions client")
+        let (api_key, base_url) = (api_key.to_owned(), base_url.to_owned());
+        CallClient::new(move |call| {
+            rig::providers::openai::CompletionsClient::builder()
+                .api_key(&api_key)
+                .base_url(&base_url)
+                .http_client(Lifted::new(http_client.clone(), call.clone()))
+                .build()
+        })
+        .context("building OpenAI Chat Completions client")
     }
 
     pub fn build_openrouter_client<H>(
@@ -50,13 +58,16 @@ pub mod providers {
         http_client: H,
     ) -> Result<OpenRouterClient<H>>
     where
-        H: Default + Transport,
+        H: Clone + Default + Transport + 'static,
     {
-        Ok(rig::providers::openrouter::Client::builder()
-            .api_key(api_key)
-            .base_url(base_url)
-            .http_client(Lifted(http_client))
-            .build()?)
+        let (api_key, base_url) = (api_key.to_owned(), base_url.to_owned());
+        Ok(CallClient::new(move |call| {
+            rig::providers::openrouter::Client::builder()
+                .api_key(&api_key)
+                .base_url(&base_url)
+                .http_client(Lifted::new(http_client.clone(), call.clone()))
+                .build()
+        })?)
     }
 }
 
@@ -429,5 +440,7 @@ mod usage_tests {
     }
 }
 
+#[cfg(test)]
+mod call_tests;
 #[cfg(test)]
 mod pushdown_tests;

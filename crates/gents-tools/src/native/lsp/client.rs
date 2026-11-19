@@ -142,7 +142,10 @@ impl LspClient {
         })
     }
 
-    pub async fn initialize(&self) -> Result<Value, String> {
+    pub async fn initialize(
+        &self,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<Value, String> {
         let root_uri = super::uri::path_to_file_uri(&self.workspace);
         let params = json!({
             "processId": null,
@@ -194,7 +197,7 @@ impl LspClient {
             "clientInfo": { "name": "gents", "version": "0" }
         });
         let result = self
-            .request_with_timeout("initialize", params, self.initialize_timeout)
+            .request_with_timeout("initialize", params, self.initialize_timeout, cancel)
             .await?;
         let encodings = result
             .pointer("/capabilities/positionEncoding")
@@ -226,19 +229,27 @@ impl LspClient {
         Ok(result)
     }
 
-    pub async fn wait_until_ready(&self, timings: Option<&Value>) {
+    pub async fn wait_until_ready(
+        &self,
+        timings: Option<&Value>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) {
         let budget = ready_wait(timings);
         if budget.is_zero() {
             return;
         }
         if self.server_name == "rust-analyzer" {
-            self.wait_for_rust_analyzer(budget).await;
+            self.wait_for_rust_analyzer(budget, cancel).await;
             return;
         }
         self.wait_for_server_status(budget).await;
     }
 
-    async fn wait_for_rust_analyzer(&self, budget: Duration) {
+    async fn wait_for_rust_analyzer(
+        &self,
+        budget: Duration,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) {
         const MINIMUM_SETTLE: Duration = Duration::from_secs(2);
         let deadline = Instant::now() + budget;
         let started = Instant::now();
@@ -247,7 +258,12 @@ impl LspClient {
         let mut seen_workspace = false;
         while Instant::now() < deadline {
             match self
-                .request_with_timeout("rust-analyzer/analyzerStatus", json!({}), status_timeout)
+                .request_with_timeout(
+                    "rust-analyzer/analyzerStatus",
+                    json!({}),
+                    status_timeout,
+                    cancel,
+                )
                 .await
             {
                 Ok(Value::String(status))
@@ -435,8 +451,14 @@ impl LspClient {
         self.alive.load(Ordering::SeqCst)
     }
 
-    pub async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
-        self.request_with_timeout(method, params, REQUEST_TIMEOUT)
+    /// `cancel` is the cancellation of the call the request serves, if any.
+    pub async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<Value, String> {
+        self.request_with_timeout(method, params, REQUEST_TIMEOUT, cancel)
             .await
     }
 
@@ -445,6 +467,7 @@ impl LspClient {
         method: &str,
         params: Value,
         timeout: Duration,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<Value, String> {
         if !self.is_alive() {
             return Err("language server has exited".into());
@@ -475,12 +498,10 @@ impl LspClient {
             completed: Arc::new(AtomicBool::new(false)),
             runtime: DropCleanup::current(),
         };
-        let runtime = crate::runtime_context::current_tool_runtime_context();
-        let cancel = runtime.map(|scope| scope.cancellation_token);
         let outcome = tokio::select! {
             biased;
             _ = async {
-                if let Some(token) = &cancel {
+                if let Some(token) = cancel {
                     token.cancelled().await;
                 } else {
                     std::future::pending::<()>().await;
@@ -519,12 +540,12 @@ impl LspClient {
         let _ = self.notify("$/cancelRequest", json!({ "id": id })).await;
     }
 
-    pub async fn shutdown_exit(&self) {
+    pub async fn shutdown_exit(&self, cancel: Option<&tokio_util::sync::CancellationToken>) {
         let open: Vec<String> = self.versions.lock().await.keys().cloned().collect();
         for uri in open {
             self.close_document(&uri).await;
         }
-        let _ = self.request("shutdown", Value::Null).await;
+        let _ = self.request("shutdown", Value::Null, cancel).await;
         let _ = self.notify("exit", Value::Null).await;
         self.alive.store(false, Ordering::SeqCst);
         let mut process = self.process.lock().await;

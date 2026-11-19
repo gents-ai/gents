@@ -295,6 +295,7 @@ impl PluginExecutor {
     /// Lean `pluginScope`: what a call of `record` may bind.
     pub(crate) fn bind_scope(
         &self,
+        approval: Option<&approval::workspace::Context>,
         home: &Path,
         record: &InstalledPlugin,
         context: &BindContext<'_>,
@@ -302,12 +303,8 @@ impl PluginExecutor {
     ) -> Result<allowed::Scope> {
         let release = self.release.is_release(record);
         Ok(
-            approval::workspace::allowed_scope(home, context.workdir, user_home)?.with_own_folder(
-                home,
-                user_home,
-                release,
-                context.own_folder,
-            ),
+            approval::workspace::allowed_scope(approval, home, context.workdir, user_home)?
+                .with_own_folder(home, user_home, release, context.own_folder),
         )
     }
 
@@ -359,7 +356,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: &serde_json::Value,
         context: &BindContext<'_>,
-        _call: &ToolCallEnvelope,
+        call: &ToolCallEnvelope,
     ) -> Result<Option<BoundDir>, String> {
         let Some(binding) = &record.declaration.bind_dir else {
             return Ok(None);
@@ -388,13 +385,22 @@ impl PluginExecutor {
                 "Runtime permission files cannot be shared with a plugin.".into(),
             ));
         }
+        let approval_context = gents_tools::runtime_context::host(call).approval;
+        let approval_context = approval_context.as_ref();
         let scope = self
-            .bind_scope(home, record, context, user_home.as_deref())
+            .bind_scope(
+                approval_context,
+                home,
+                record,
+                context,
+                user_home.as_deref(),
+            )
             .map_err(|error| refuse(format!("{error:#}")))?;
         let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
         let route = approval::workspace::binding_route(
+            approval_context,
             home,
             || {
                 Ok(approval::workspace::BindingAction::Plugin {
@@ -406,7 +412,7 @@ impl PluginExecutor {
                     access,
                 })
             },
-            covered || approval::workspace::within_workspace(&resolved.target),
+            covered || approval::workspace::within_workspace(approval_context, &resolved.target),
             || Ok(input.clone()),
         )
         .map_err(|error| refuse(format!("{error:#}")))?;
@@ -415,7 +421,9 @@ impl PluginExecutor {
             let allowed = match route {
                 Some(decision) => {
                     let binding = decision.binding.clone();
+                    let consent_context = decision.context().clone();
                     let allowed = approval::workspace::consent_binding(
+                        call,
                         home,
                         decision,
                         context.interactive,
@@ -423,7 +431,11 @@ impl PluginExecutor {
                     )
                     .await
                     .map_err(|error| refuse(format!("{error:#}")))?;
-                    consent = Some(approval::workspace::action_consent(home, binding));
+                    consent = Some(approval::workspace::action_consent(
+                        &consent_context,
+                        home,
+                        binding,
+                    ));
                     allowed
                 }
                 None => match approval::consent(context.interactive) {
@@ -432,7 +444,7 @@ impl PluginExecutor {
                         let session_id = context.session_id.map(str::to_owned);
                         let request =
                             approval::Request::new(&plugin, &resolved, access, session_id);
-                        approval::ask(home, &request, approval::WAIT)
+                        approval::ask(approval_context, home, &request, approval::WAIT)
                             .await
                             .map_err(|error| refuse(format!("{error:#}")))?
                     }
@@ -449,7 +461,13 @@ impl PluginExecutor {
             }
         }
         let folder_allowed = self
-            .bind_scope(home, record, context, user_home.as_deref())
+            .bind_scope(
+                approval_context,
+                home,
+                record,
+                context,
+                user_home.as_deref(),
+            )
             .map_err(|error| refuse(format!("{error:#}")))?
             .granted(resolved.folder())
             .is_some();
@@ -516,7 +534,7 @@ impl PluginExecutor {
             tool_calls,
             context: call,
         } = invocation;
-        let session = gents_tools::runtime_context::current_tool_runtime_context();
+        let session = gents_tools::runtime_context::tool_runtime_context(call);
         let workdir = session
             .as_ref()
             .and_then(|context| context.workspace_cwd.clone())
@@ -542,7 +560,7 @@ impl PluginExecutor {
             workdir: workdir.as_deref(),
             own_folder,
             session_id: session_id.as_deref(),
-            interactive: approval::interactive(),
+            interactive: gents_tools::runtime_context::host(call).interactive,
         };
         let bound = self
             .bind_input(record, &input, &context, call)
@@ -768,7 +786,7 @@ impl PluginExecutor {
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
         actor: Option<identity::Did>,
-        _context: &ToolCallEnvelope,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginCall, RunError> {
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
@@ -784,7 +802,7 @@ impl PluginExecutor {
             }
             let admitted = self.admit(record)?;
             let budget = if record.declaration.imports_host_call() {
-                super::host_calls::budget_for_invocation(admitted.budget)
+                super::host_calls::budget_for_invocation(context, admitted.budget)
             } else { admitted.budget };
             let mut input = input.clone();
             if record.declaration.service.is_some() {
@@ -962,26 +980,24 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginOutcome> {
-        Ok(
-            PluginExecutor::call(self, record, input, &ToolCallEnvelope::ambient())
-                .await?
-                .outcome,
-        )
+        Ok(PluginExecutor::call(self, record, input, context)
+            .await?
+            .outcome)
     }
 
     async fn run_plugin_once(
         self: Arc<Self>,
         coordinate: &str,
         selected: &[gents_documents::PluginToolRef],
-        node: Arc<defra_node::Node>,
-        node_did: &str,
-        agent_did: Option<&str>,
+        agent: gents_tools::plugin_host::PluginRunAgent<'_>,
         input: serde_json::Value,
+        context: &ToolCallEnvelope,
     ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
         super::tool::PluginTool::for_run(self, coordinate, selected)?
-            .with_agent_data(node, node_did, agent_did)?
-            .run_once(input, &ToolCallEnvelope::ambient())
+            .with_agent_data(agent.node, agent.node_did, agent.agent_did)?
+            .run_once(input, context)
             .await
     }
 

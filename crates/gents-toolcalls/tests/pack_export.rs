@@ -237,7 +237,7 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
         .call(
             &installed,
             json!({"n": 2}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();

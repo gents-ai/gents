@@ -359,6 +359,12 @@ async fn a_seeded_lookup_serves_only_rows_for_the_requested_tags() {
 #[derive(Clone, Default)]
 struct AssemblyOnlyModel;
 
+impl crate::provider_call::ForCall for AssemblyOnlyModel {
+    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl rig::completion::CompletionModel for AssemblyOnlyModel {
     type Response = ();
@@ -390,6 +396,7 @@ impl rig::completion::CompletionModel for AssemblyOnlyModel {
 
 fn replay_assembly_config() -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: LoopReplayInput::default(),
         provider_input_counter: Arc::new(crate::provider_input::ProviderInputCounter::new(
             crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
@@ -421,7 +428,7 @@ fn replay_assembly_config() -> LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: crate::tool::ToolCallEnvelope::ambient(),
+        tool_context: crate::tool::ToolCallEnvelope::default(),
     }
 }
 

@@ -22,7 +22,7 @@ async fn call(tool: &SessionHistoryTool, params: Value) -> Value {
         &Tool::call(
             tool,
             serde_json::from_value(params).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap(),
@@ -34,7 +34,7 @@ async fn call_error(tool: &SessionHistoryTool, params: Value) -> String {
     Tool::call(
         tool,
         serde_json::from_value(params).unwrap(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err()
@@ -108,7 +108,7 @@ async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
         let text = Tool::call(
             &tool,
             serde_json::from_value(params.clone()).unwrap(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -156,7 +156,7 @@ async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
             let text = Tool::call(
                 &tool,
                 serde_json::from_value(params.clone()).unwrap(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
