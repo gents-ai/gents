@@ -44,12 +44,15 @@ pub async fn runtime_key(name: &str) -> RuntimeKey {
     }
 }
 
+#[cfg(test)]
+type SignNow = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
+
 /// A node DID and its key, signing synchronously.
 #[cfg(test)]
 #[derive(Clone)]
 pub struct RuntimeKey {
     pub did: String,
-    pub sign: std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>,
+    pub sign: SignNow,
 }
 
 #[cfg(test)]

@@ -178,7 +178,6 @@ fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
         home.path().join("principal.key"),
         None,
     )?);
-    let principal = identity.did().to_string();
     let data_dir = home.path().join("data");
 
     serve_phase(&data_dir, &identity, |node, address| {
