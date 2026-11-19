@@ -425,8 +425,13 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
                 .context("selected Callback is unavailable")?;
         txn.add_actor_relationship("CallbackBinding", &binding_doc, "reader", &agent)
             .await?;
-        txn.add_actor_relationship("Callback", &callback_doc, "reader", &agent)
-            .await?;
+        txn.change_configuration_reader(
+            gents_protocol::owner_staged::SelectedConfiguration::Callback,
+            &callback_doc,
+            &agent,
+            true,
+        )
+        .await?;
     }
     let mut queued_agents = BTreeSet::new();
     for (node_did, agent_did, agent_doc) in created_agents {
