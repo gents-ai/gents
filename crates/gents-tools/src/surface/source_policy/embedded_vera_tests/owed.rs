@@ -161,18 +161,16 @@ where
 async fn a_lapsed_delegation_leaves_an_owed_registration_its_client_settles_unasked(
 ) -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
-    let home = home(directory.path(), "owed").await?;
-    FreshBackendStore::observe(&home.data, &home.lock)
-        .await?
-        .initialize(&home.key, &home.node, DocumentAcp::Vera)
-        .await?;
-    let node = start(&home, DocumentAcp::Vera).await?;
+    let mut home = home(directory.path(), "owed").await?;
     let user = client_key(directory.path(), "user.key").await?;
     let stranger = client_key(directory.path(), "stranger.key").await?;
     let user_did = identity::Did::new(user.did())?;
-    ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?)
-        .grant_node_admin(&user_did)
+    home.owner = user_did.clone();
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, &home.owner, DocumentAcp::Vera)
         .await?;
+    let node = start(&home, DocumentAcp::Vera).await?;
     let audience = gents_store::local::document_acp::node_delegation_audience(&node)
         .expect("a Vera node names its delegation audience");
     let lifetime = Duration::from_secs(2);
@@ -199,7 +197,7 @@ async fn a_lapsed_delegation_leaves_an_owed_registration_its_client_settles_unas
         ),
         "{refused:?}"
     );
-    assert_eq!(tasks(&node).await?, Vec::<String>::new());
+    assert_eq!(tasks(&node, &home.owner).await?, Vec::<String>::new());
 
     let minted = SystemTime::now();
     let opened =
@@ -222,7 +220,7 @@ async fn a_lapsed_delegation_leaves_an_owed_registration_its_client_settles_unas
                 .expect("the session adopts its client's fresh delegation");
         })
         .await?;
-    assert_eq!(tasks(&node).await?, ["first", "second"]);
+    assert_eq!(tasks(&node, &home.owner).await?, ["first", "second"]);
     assert_eq!(
         owner_on_vera(&node, &created[1]).await?,
         Some(user_did.clone()),
