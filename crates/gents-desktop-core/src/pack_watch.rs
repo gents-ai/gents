@@ -392,15 +392,15 @@ where
         error.event()
     })?;
     let url = watch_url(&endpoint)?;
-    let builder = endpoint
-        .authorize(client.post(url).json(request))
-        .map_err(|_| WatchEvent::PermanentError)?;
+    let send = endpoint
+        .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(request)));
     let response = tokio::select! {
         biased;
         _ = cancel.cancelled() => return Err(WatchEvent::Cancel),
-        result = tokio::time::timeout(timing.send, builder.send()) => match result {
-            Ok(Ok(response)) => response,
-            Ok(Err(_)) | Err(_) => return Err(WatchEvent::TransientError),
+        result = tokio::time::timeout(timing.send, send) => match result {
+            Ok(Ok(Ok(response))) => response,
+            Ok(Err(_)) => return Err(WatchEvent::PermanentError),
+            Ok(Ok(Err(_))) | Err(_) => return Err(WatchEvent::TransientError),
         },
     };
     let status = response.status();

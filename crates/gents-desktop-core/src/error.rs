@@ -36,6 +36,8 @@ pub enum BridgeErrorCode {
     /// Retryable only when the store confirmed the failed attempt did not
     /// commit (Lean `TransactionReplay.clientMayRepeat`).
     TransactionConflict,
+    /// The home asks for a credential this version of Gents cannot present.
+    UpdateRequired,
     Unknown,
 }
 
@@ -63,6 +65,7 @@ impl BridgeErrorCode {
             Self::RuntimeStillBooting => "runtimeStillBooting",
             Self::SessionNotOwned => "sessionNotOwned",
             Self::TransactionConflict => "transactionConflict",
+            Self::UpdateRequired => "updateRequired",
             Self::Unknown => "unknown",
         }
     }
@@ -152,6 +155,26 @@ impl PartialEq for BridgeError {
 impl Eq for BridgeError {}
 
 impl BridgeError {
+    /// What the person is told of a home's refusal (`Identity.HeldAudience.told`):
+    /// an update of Gents when the edge of a Vera home answered that it
+    /// requires a delegation. External premise: only that edge answers 401
+    /// with `DELEGATION_REQUIRED_CODE`.
+    pub fn home_refusal(status: reqwest::StatusCode, body: &[u8]) -> Option<Self> {
+        let edge_requires_delegation = status == reqwest::StatusCode::UNAUTHORIZED
+            && serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|body| {
+                body.get("code").and_then(serde_json::Value::as_str)
+                    == Some(gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE)
+            });
+        edge_requires_delegation.then(Self::update_required)
+    }
+
+    fn update_required() -> Self {
+        Self::new(
+            BridgeErrorCode::UpdateRequired,
+            gents_store::local::document_acp::DocumentAcpError::DelegationRequired.to_string(),
+        )
+    }
+
     pub fn new(code: BridgeErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -223,6 +246,11 @@ impl BridgeError {
             .or_else(|| error.chain().find_map(|cause| cause.downcast_ref::<Self>()))
         {
             return classified.clone();
+        }
+        if gents_store::config_client::TransactionFailure::config_client_error(&error)
+            .is_some_and(gents_store::config_client::ConfigClientError::edge_requires_delegation)
+        {
+            return Self::update_required();
         }
         if gents_store::config_client::TransactionFailure::permission_denied(&error) {
             return Self::new(
@@ -803,5 +831,40 @@ mod storage_failure_tests {
         assert!(!error.retryable);
         assert!(error.message.contains("Free disk space"));
         assert!(error.message.contains("pending message"));
+    }
+}
+
+#[cfg(test)]
+mod told_conformance {
+    use super::{BridgeError, BridgeErrorCode};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Told {
+        Update,
+        Refusal,
+    }
+
+    #[test]
+    fn a_refusal_is_told_as_the_lean_model_tells_it() {
+        gents_lean_vocab::families::identity_held_audience_told::replay::<Told>(|input| {
+            let body = if input.edge_requires_delegation {
+                serde_json::json!({
+                    "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+                    "error": "refused",
+                })
+            } else {
+                serde_json::json!({ "error": "refused" })
+            };
+            let body = serde_json::to_vec(&body).unwrap();
+            match BridgeError::home_refusal(reqwest::StatusCode::UNAUTHORIZED, &body) {
+                Some(update) => {
+                    assert_eq!(update.code, BridgeErrorCode::UpdateRequired);
+                    assert!(update.message.contains("update Gents"));
+                    Told::Update
+                }
+                None => Told::Refusal,
+            }
+        });
     }
 }

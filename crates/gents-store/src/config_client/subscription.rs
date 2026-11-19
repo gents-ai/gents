@@ -127,13 +127,15 @@ impl ConfigAccess {
         }
         let client = subscription_client().await?;
         let started_at = Instant::now();
-        let request = endpoint
-            .authorize(client.post(endpoint.url()))?
-            .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(&serde_json::json!({"query": query}));
-        let response = tokio::time::timeout(HANDSHAKE_TIMEOUT, request.send())
+        let handshake = endpoint.send_resolving(|endpoint| {
+            Ok(endpoint
+                .authorize(client.post(endpoint.url()))?
+                .header(reqwest::header::ACCEPT, "text/event-stream")
+                .json(&serde_json::json!({"query": query})))
+        });
+        let response = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake)
             .await
-            .map_err(ConfigClientError::SubscriptionHandshake)??
+            .map_err(ConfigClientError::SubscriptionHandshake)???
             .error_for_status()?;
         let content_type = response
             .headers()

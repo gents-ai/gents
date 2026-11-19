@@ -1445,7 +1445,7 @@ fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
 }
 
 const RIG_OWNER_MODULES: &[&str] = &[
-    "crates/gents-loop/src/rig_compat.rs",
+    "crates/gents-loop/src/rig_compat",
     "crates/gents-loop/src/provider_input",
     "crates/gents-loop/src/loop_stream",
     "crates/gents-inference/src/llm/rig_compat.rs",
@@ -1453,24 +1453,11 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents/src/runtime/agent/loop_stream",
 ];
 
-/// Files that implement a Rig trait or build a Rig provider client, which no
-/// re-export through `rig_compat` can stand in for. The capture layer, the
-/// credential and limit-header clients, the Responses and session-tagging
-/// layers, the Codex policy and the Claude transport implement
-/// `HttpClientExt` or are generic over it; `claude_subscription` implements
-/// `CompletionModel` and `CompletionClient`. A row leaves when its owner
-/// exposes a native transport or model trait that one adapter in `rig_compat`
-/// lifts into Rig's.
-#[rustfmt::skip]
-const RIG_PATH_ALLOWLIST: &[&str] = &[
-    "crates/gents-loop/src/rendered_request/transport.rs",
-    "crates/gents-inference/src/clients/chatgpt_codex.rs",
-    "crates/gents-inference/src/clients/claude_messages/transport.rs",
-    "crates/gents-inference/src/clients/claude_subscription.rs",
-    "crates/gents-inference/src/clients/inference_http.rs",
-    "crates/gents-inference/src/auth/http.rs",
-    "crates/gents-inference/src/clients/provider_http.rs",
-];
+/// Files outside the owner modules that still name `rig`. A layer over the
+/// provider exchange implements `rig_compat::http::Transport`, and a model
+/// this workspace implements itself `rig_compat::model::Model`; `rig_compat`
+/// lifts both into Rig's traits. This list stays empty.
+const RIG_PATH_ALLOWLIST: &[&str] = &[];
 
 #[derive(Default)]
 struct RigPathVisitor {
@@ -2044,6 +2031,170 @@ fn ambient_request_context_only_shrinks() {
     );
 }
 
+/// A request a client endpoint authorizes is sent through
+/// `GraphqlEndpoint::send_resolving`, so a refusal of its credential reads the
+/// home's status again and is sent once more (`Identity.HeldAudience.resend`),
+/// or inside a transaction through `authorize_in_transaction`, whose
+/// transaction recovers as a unit (`Identity.HeldAudience.resendUnit`).
+/// Entries name why each remaining direct `authorize` stays; the list only
+/// shrinks.
+#[rustfmt::skip]
+const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("crates/gents-host/src/readiness.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
+    ("crates/gents-service/src/runtime_control.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
+    ("crates/gents-service/src/service_update/execute.rs", 2, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
+    ("crates/gents-store/src/config_client/graphql.rs", 2, "a transaction's commit and discard: its transaction recovers as a unit (resendUnit) and a refused commit is told"),
+    ("crates/gents-store/src/config_client/mod.rs", 1, "authorize_in_transaction, the one authorizer of requests inside a transaction"),
+];
+
+/// What sends the request a closure builds through `send_resolving`.
+const RESOLVING_SENDERS: &[&str] = &[
+    "send_resolving",
+    "send_counting_resends",
+    "endpoint_get_json",
+    "endpoint_send",
+];
+
+#[derive(Default)]
+struct UnrecoveredAuthorizeVisitor {
+    resolving: usize,
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for UnrecoveredAuthorizeVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if !self.visit_resolving_call(call) {
+            visit::visit_expr_call(self, call);
+        }
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "authorize" && call.args.len() == 1 && self.resolving == 0 {
+            self.sites += 1;
+        }
+        if RESOLVING_SENDERS.contains(&call.method.to_string().as_str()) {
+            self.visit_expr(&call.receiver);
+            self.resolving += 1;
+            for argument in &call.args {
+                self.visit_expr(argument);
+            }
+            self.resolving -= 1;
+        } else {
+            visit::visit_expr_method_call(self, call);
+        }
+    }
+}
+
+impl UnrecoveredAuthorizeVisitor {
+    fn visit_resolving_call(&mut self, call: &ExprCall) -> bool {
+        if !path_name(call).is_some_and(|name| {
+            RESOLVING_SENDERS
+                .iter()
+                .any(|sender| name.ends_with(sender))
+        }) {
+            return false;
+        }
+        self.resolving += 1;
+        for argument in &call.args {
+            self.visit_expr(argument);
+        }
+        self.resolving -= 1;
+        true
+    }
+}
+
+fn unrecovered_authorize_sites(syntax: &syn::File) -> usize {
+    let mut visitor = UnrecoveredAuthorizeVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn client_requests_recover_a_refused_credential() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .map(|(relative, syntax)| (relative, unrecovered_authorize_sites(&syntax)))
+        .filter(|(_, sites)| *sites > 0)
+        .collect::<BTreeMap<_, _>>();
+    let allowed = UNRECOVERED_AUTHORIZE_ALLOWLIST
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new request(s) authorized outside `send_resolving`; send through it so a refused credential recovers"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} requests authorized outside `send_resolving` exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} requests authorized outside `send_resolving`; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|(path, count)| format!("    (\"{path}\", {count}, \"<reason>\"),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "refused credential recovery ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
+    for (source, sites) in [
+        ("fn f() { e.authorize(c.get(u))?.send(); }", 1),
+        ("fn f() { e.send_resolving(|e| e.authorize(c.get(u))); }", 0),
+        (
+            "fn f() { e.send_resolving(|e| Ok(e.authorize(c.get(u))?.json(&b))); }",
+            0,
+        ),
+        ("fn f() { e.authorize_in_transaction(c.get(u), id); }", 0),
+        (
+            "fn f() { http_client::endpoint_get_json(&e, |e| e.authorize(c.get(u))); }",
+            0,
+        ),
+        (
+            "fn f() { endpoint_send(&e, |e| e.authorize(c.post(u))); }",
+            0,
+        ),
+        ("fn f() { other(&e, |e| e.authorize(c.post(u))); }", 1),
+        (
+            "fn f() { e.authorize(c.get(u)).and(e.send_resolving(|e| e.authorize(r))); }",
+            1,
+        ),
+        ("#[cfg(test)] mod tests { fn f() { e.authorize(r); } }", 0),
+        (
+            "impl E { #[cfg(test)] fn f(&self) { self.authorize(r); } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(unrecovered_authorize_sites(&syntax), sites, "{source}");
+    }
+}
+
 #[test]
 fn ambient_context_counts_statics_outside_test_items() {
     let syntax = syn::parse_file(
@@ -2578,6 +2729,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-session/src/session/output.rs", &["CanonicalOutputReadError::in_error"]),
     ("crates/gents-store/src/config_client/retry.rs", &["access_owner", "rerun_request_in"]),
     ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
+    ("crates/gents-store/src/config_client/user_write.rs", &["UserWriteRefusal::in_chain"]),
     ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
     ("crates/gents-store/src/local/backend_protection.rs", &["BackendProtectionError::in_chain"]),
     ("crates/gents-store/src/local/home.rs", &["store_lock_held"]),
@@ -5661,6 +5813,47 @@ fn lean_read_fence_counts_reads_after_a_lease_without_the_await() {
     }
 }
 
+const CLIENT_ENDPOINT_OWNER: &str = "crates/gents-desktop-core/src/client/home_endpoint.rs";
+
+const CLIENT_ENDPOINT_CRATES: &[&str] = &[
+    "crates/gents-desktop-",
+    "crates/gents-client-host/",
+    "apps/",
+];
+
+#[derive(Default)]
+struct EndpointConstructionVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for EndpointConstructionVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if path_name(call).is_some_and(|name| {
+            [
+                "GraphqlEndpoint::as_principal",
+                "GraphqlEndpoint::anonymous",
+            ]
+            .iter()
+            .any(|constructor| name.ends_with(constructor))
+        }) {
+            self.sites += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+}
+
 const HOME_CHOICE_CHECKS: &[&str] = &[
     "document_acp::ensure_home_opens",
     "document_acp::ensure_admissible",
@@ -5756,6 +5949,61 @@ impl<'ast> Visit<'ast> for HomeChoiceVisitor<'_> {
             }
         }
         visit::visit_expr_call(self, call);
+    }
+}
+
+fn endpoint_construction_sites(syntax: &syn::File) -> usize {
+    let mut visitor = EndpointConstructionVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+/// A client builds every endpoint to a home through `home_endpoint`, so the
+/// audience the home reports reaches the one minting point
+/// (`Identity.HeldAudience.recordCredential`).
+#[test]
+fn client_endpoints_are_built_by_their_owner() {
+    let root = repo_root();
+    let violations = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .filter(|(relative, _)| {
+            CLIENT_ENDPOINT_CRATES
+                .iter()
+                .any(|prefix| relative.starts_with(prefix))
+                && relative != CLIENT_ENDPOINT_OWNER
+        })
+        .filter(|(_, syntax)| endpoint_construction_sites(syntax) > 0)
+        .map(|(relative, _)| {
+            format!("{relative}: builds a GraphqlEndpoint; use gents_desktop_core::client::home_endpoint")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        violations.is_empty(),
+        "client endpoint ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn client_endpoint_fence_counts_constructors_outside_tests() {
+    for (source, sites) in [
+        ("fn f() { GraphqlEndpoint::as_principal(u, d); }", 1),
+        (
+            "fn f() { gents_store::config_client::GraphqlEndpoint::anonymous(u); }",
+            1,
+        ),
+        ("fn f() { home_endpoint::user_at(u, c, None); }", 0),
+        (
+            "#[cfg(test)] mod tests { fn f() { GraphqlEndpoint::anonymous(u); } }",
+            0,
+        ),
+        (
+            "impl S { #[cfg(test)] fn f() { GraphqlEndpoint::anonymous(u); } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(endpoint_construction_sites(&syntax), sites, "{source}");
     }
 }
 

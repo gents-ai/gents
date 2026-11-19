@@ -191,6 +191,18 @@ pub(super) async fn execute_graphql_async_with_tx(
             }
         };
 
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            if let Err(source) = response.error_for_status_ref() {
+                return Err(GraphqlError::Refused {
+                    graphql: graphql.to_owned(),
+                    source,
+                    code: refusal_code(response).await,
+                });
+            }
+        }
         let response = match response.error_for_status() {
             Ok(response) => response,
             Err(error)
@@ -255,6 +267,27 @@ pub(super) async fn execute_graphql_async_with_tx(
             graphql: graphql.to_owned(),
         }),
     )
+}
+
+/// The bound on the body of a refusal read for its `code`; a longer body is
+/// no edge's answer.
+#[cfg(feature = "native")]
+const REFUSAL_BODY_LIMIT: usize = 4096;
+
+#[cfg(feature = "native")]
+async fn refusal_code(mut response: reqwest::Response) -> Option<String> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        body.extend_from_slice(&chunk);
+        if body.len() > REFUSAL_BODY_LIMIT {
+            return None;
+        }
+    }
+    serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()?
+        .get("code")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 #[cfg(feature = "native")]

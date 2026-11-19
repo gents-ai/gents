@@ -53,9 +53,8 @@ pub(super) async fn request(
     url.set_fragment(None);
     let client = super::graphql::http_client().await?;
     let response = endpoint
-        .authorize(client.post(url).json(&command))?
-        .send()
-        .await?;
+        .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(&command)))
+        .await??;
     let status = response.status();
     if status.is_success() {
         return Ok(());

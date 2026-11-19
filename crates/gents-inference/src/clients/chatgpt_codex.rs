@@ -1,17 +1,17 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use crate::llm::rig_compat::http::{
+    self as http_client, HeaderMap, HeaderValue, LazyBody, Request, ReqwestClient, Response,
+    Transport,
+};
+#[cfg(test)]
+use crate::llm::rig_compat::http::{MultipartForm, StreamingResponse};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::Node as EmbeddedNode;
 use gents_loop::provider_patches::patch_instructions_body;
-use rig::http_client::{
-    self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, Request, ReqwestClient, Response,
-};
-#[cfg(test)]
-use rig::http_client::{MultipartForm, StreamingResponse};
-use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
 
 #[cfg(test)]
@@ -182,26 +182,25 @@ impl crate::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
     /// Other endpoints use buffered sends, which check the URI before capture.
     fn patch_streaming(
         &self,
-        response: rig::http_client::StreamingResponse,
-    ) -> rig::http_client::StreamingResponse {
+        response: http_client::StreamingResponse,
+    ) -> http_client::StreamingResponse {
         retain_turn_state(response.headers());
         response
     }
 
-    fn send_via<T, U>(
+    fn send_via<T>(
         &self,
         inner: &T,
         req: Request<Bytes>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
     where
-        T: Clone + HttpClientExt + 'static,
-        U: From<Bytes> + WasmCompatSend + 'static,
+        T: Clone + Transport + 'static,
     {
         let inner = inner.clone();
         async move {
             let is_responses_request = req.uri().path().ends_with("/responses");
             let request_body = req.body().clone();
-            let response = HttpClientExt::send::<Bytes, Bytes>(&inner, req).await?;
+            let response = Transport::send(&inner, req).await?;
 
             if is_responses_request {
                 retain_turn_state(response.headers());
@@ -220,7 +219,7 @@ impl crate::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
             if let Some(response_headers) = response_builder.headers_mut() {
                 *response_headers = headers;
             }
-            let body: LazyBody<U> = Box::pin(async move { Ok(U::from(body)) });
+            let body: LazyBody<Bytes> = Box::pin(async move { Ok(body) });
             response_builder
                 .body(body)
                 .map_err(http_client::Error::Protocol)
@@ -406,7 +405,7 @@ pub async fn build_responses_client(
         ),
     )
     .with_policy(ChatGptCodexPolicy { service_tier });
-    crate::clients::inference_http::build_openai_responses_client(
+    crate::llm::rig_compat::providers::build_openai_responses_client(
         "chatgpt-oauth-managed",
         &endpoint,
         http,

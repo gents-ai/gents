@@ -55,6 +55,7 @@ pub struct RuntimeHttpState {
     pub activation_observation: watch::Receiver<RuntimeActivationObservation>,
     pub replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
     pub serve_lifecycle: ServeLifecycleHandle,
+    pub document_acp: gents_store::local::document_acp::DocumentAcp,
 }
 
 impl RuntimeHttpState {
@@ -144,6 +145,7 @@ pub fn runtime_contract_router(
     activation_observation: watch::Receiver<RuntimeActivationObservation>,
     replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
     serve_lifecycle: ServeLifecycleHandle,
+    document_acp: gents_store::local::document_acp::DocumentAcp,
 ) -> RuntimeRouters {
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
@@ -169,6 +171,7 @@ pub fn runtime_contract_router(
         activation_observation,
         replicated_schema,
         serve_lifecycle,
+        document_acp,
     };
 
     let operator_routes = Router::new()
@@ -215,6 +218,10 @@ pub fn runtime_contract_router(
             post(crate::http::agent_identity::admission),
         )
         .route("/status", get(status_route))
+        .route(
+            gents_protocol::owed_settlement::OWED_SETTLEMENT_PATH,
+            post(crate::http::owed_settlement::settle),
+        )
         .route("/fleet/slots", get(fleet_slots_handler))
         .route(
             gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
@@ -358,4 +365,4 @@ async fn version_handler() -> impl IntoResponse {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

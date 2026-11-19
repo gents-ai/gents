@@ -33,6 +33,24 @@ pub type LoadHeldUser = fn(
     Result<Arc<dyn gents_store::identity::NodeIdentity>>,
 >;
 
+/// Wires a new pin through the runtime serving `endpoint`'s node, the client
+/// signing each of its writes with the User key it holds
+/// (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`).
+pub type WireAsClient = fn(
+    gents_store::config_client::GraphqlEndpoint,
+    String,
+    std::path::PathBuf,
+    WireRequest,
+) -> futures::future::BoxFuture<'static, Result<Value>>;
+
+/// Who signs a wire: the held User of a home a local transaction opens, or
+/// the client itself through the runtime serving the node.
+#[derive(Clone, Copy)]
+pub struct WireSigners {
+    pub held_user: LoadHeldUser,
+    pub client: WireAsClient,
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WireRequest {
@@ -70,21 +88,27 @@ pub fn explain_tools_command(agent: &str) -> String {
 
 /// Wires (or with `remove`, unwires) `request.plugin` over a held `access`.
 /// A preview computes the same report and writes nothing. A new pin over
-/// GraphQL is sent to the runtime serving that node ([`wire_remote`]), which
-/// writes it through its own embedded store.
+/// GraphQL is written in the runtime's transaction, signed by the client
+/// (`signers.client`).
 pub async fn wire_in(
     access: &ConfigAccess,
     owner: &str,
     home: &Path,
     request: &WireRequest,
-    held_user: LoadHeldUser,
+    signers: WireSigners,
 ) -> Result<Value> {
     if let ConfigAccess::Graphql(endpoint) = access {
         if !request.preview && !request.remove {
-            return wire_remote(endpoint, owner, request).await;
+            return (signers.client)(
+                endpoint.clone(),
+                owner.to_owned(),
+                home.to_owned(),
+                request.clone(),
+            )
+            .await;
         }
     }
-    wire_in_spawned(access, owner, home, request, held_user).await
+    wire_in_spawned(access, owner, home, request, signers.held_user).await
 }
 
 /// [`wire_in`] over `access` itself, never sent to a runtime: what a runtime
@@ -118,47 +142,11 @@ async fn wire_in_owned(
     anyhow::ensure!(wire_target_allowed(matches!(access, ConfigAccess::Local(_)), request.preview, request.remove),
             "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents config pack wire {} --agent {} --home <node-home>` without --graphql",
             request.plugin, request.agent);
-    let home_for_read = home.to_owned();
-    let plugin_name = request.plugin.clone();
-    let (_store_guard, plugin) = tokio::task::spawn_blocking(move || {
-        let guard = crate::plugin::store::try_lock_store(&home_for_read)?;
-        let (namespace, name) = split_pack_coordinate(&plugin_name);
-        let plugin = read_record(&home_for_read, namespace, name).with_context(|| {
-            format!("{plugin_name} is not installed. Next: gents config pack install <pack>")
-        })?;
-        Ok::<_, anyhow::Error>((guard, plugin))
-    })
-    .await??;
-    #[cfg(any(test, feature = "test-fixtures"))]
-    {
-        let pause = WIRE_TEST_PAUSE
-            .lock()
-            .unwrap()
-            .as_ref()
-            .filter(|pause| pause.home == home)
-            .cloned();
-        if let Some(pause) = pause {
-            pause.reached.notify_one();
-            pause.release.notified().await;
-        }
-    }
-
-    let mut plan = crate::pack::wiring::PluginWiring::read(
-        access,
-        owner,
-        home,
-        &request.agent,
-        plugin.clone(),
-        &request.targets_from,
-    )
-    .await?;
-    plan.remove = request.remove;
-    plan.preview = request.preview;
-    plan.dynamic_consent = request
-        .dynamic_consent
-        .then_some(crate::pack::consent_dynamic_run as _);
-    plan.tool_calls_consent = request.tool_calls_consent;
-    plan.next_step = explain_tools_command(&request.agent);
+    let WirePlan {
+        _store_guard,
+        plugin,
+        plan,
+    } = WirePlan::read(access, owner, home, request).await?;
     let report = if request.preview {
         access
             .transact_readonly("cli.pack.wire.preview", |txn| {
@@ -217,13 +205,108 @@ async fn wire_in_owned(
             .await?
     };
 
+    wire_outcome(request, &plugin, &report)
+}
+
+/// What a wire reports to its caller.
+pub fn wire_outcome(
+    request: &WireRequest,
+    plugin: &crate::plugin::store::InstalledPlugin,
+    report: &crate::pack::WireReport,
+) -> Result<Value> {
     Ok(json!({
         "plugin": request.plugin,
         "agent": request.agent,
         "preview": request.preview,
         "authority": describe_plugin_authority(&plugin.declaration, &plugin.ceiling()),
-        "report": report,
+        "report": serde_json::to_value(report)?,
     }))
+}
+
+/// A wire's plan, read as `access`'s actor, with the plugin store of `home`
+/// held until it is applied.
+pub struct WirePlan {
+    _store_guard: Option<crate::plugin::store::StoreGuard>,
+    pub plugin: crate::plugin::store::InstalledPlugin,
+    pub plan: crate::pack::wiring::PluginWiring,
+}
+
+impl WirePlan {
+    pub async fn read(
+        access: &ConfigAccess,
+        owner: &str,
+        home: &Path,
+        request: &WireRequest,
+    ) -> Result<Self> {
+        Self::read_holding(access, owner, home, request, true).await
+    }
+
+    /// [`Self::read`] without holding the plugin store: what a client
+    /// reads beside the runtime that holds it while it writes.
+    pub async fn read_unheld(
+        access: &ConfigAccess,
+        owner: &str,
+        home: &Path,
+        request: &WireRequest,
+    ) -> Result<Self> {
+        Self::read_holding(access, owner, home, request, false).await
+    }
+
+    async fn read_holding(
+        access: &ConfigAccess,
+        owner: &str,
+        home: &Path,
+        request: &WireRequest,
+        hold: bool,
+    ) -> Result<Self> {
+        let home_for_read = home.to_owned();
+        let plugin_name = request.plugin.clone();
+        let (store_guard, plugin) = tokio::task::spawn_blocking(move || {
+            let guard = hold
+                .then(|| crate::plugin::store::try_lock_store(&home_for_read))
+                .transpose()?;
+            let (namespace, name) = split_pack_coordinate(&plugin_name);
+            let plugin = read_record(&home_for_read, namespace, name).with_context(|| {
+                format!("{plugin_name} is not installed. Next: gents config pack install <pack>")
+            })?;
+            Ok::<_, anyhow::Error>((guard, plugin))
+        })
+        .await??;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        {
+            let pause = WIRE_TEST_PAUSE
+                .lock()
+                .unwrap()
+                .as_ref()
+                .filter(|pause| pause.home == home)
+                .cloned();
+            if let Some(pause) = pause {
+                pause.reached.notify_one();
+                pause.release.notified().await;
+            }
+        }
+        let mut plan = crate::pack::wiring::PluginWiring::read(
+            access,
+            owner,
+            home,
+            &request.agent,
+            plugin.clone(),
+            &request.targets_from,
+        )
+        .await?;
+        plan.remove = request.remove;
+        plan.preview = request.preview;
+        plan.dynamic_consent = request
+            .dynamic_consent
+            .then_some(crate::pack::consent_dynamic_run as _);
+        plan.tool_calls_consent = request.tool_calls_consent;
+        plan.next_step = explain_tools_command(&request.agent);
+        Ok(Self {
+            _store_guard: store_guard,
+            plugin,
+            plan,
+        })
+    }
 }
 
 /// Wires each plugin `pack` shipped into each of `agents`, agent by agent,
@@ -234,9 +317,9 @@ pub async fn wire_pack_plugins(
     home: &Path,
     pack: &ResolvedPack,
     agents: &[String],
-    held_user: LoadHeldUser,
+    signers: WireSigners,
 ) -> Result<Vec<Value>> {
-    wire_pack_plugins_consenting(access, owner, home, pack, agents, false, false, held_user).await
+    wire_pack_plugins_consenting(access, owner, home, pack, agents, false, false, signers).await
 }
 
 /// [`wire_pack_plugins`], with the node owner's consent to dynamic scripts
@@ -254,7 +337,7 @@ pub async fn wire_pack_plugins_consenting(
     agents: &[String],
     dynamic_consent: bool,
     tool_calls_consent: bool,
-    held_user: LoadHeldUser,
+    signers: WireSigners,
 ) -> Result<Vec<Value>> {
     let namespace = &pack.manifest().metadata.namespace;
     let mut wired = Vec::new();
@@ -269,7 +352,7 @@ pub async fn wire_pack_plugins_consenting(
                 dynamic_consent,
                 tool_calls_consent,
             };
-            wired.push(wire_in(access, owner, home, &request, held_user).await?);
+            wired.push(wire_in(access, owner, home, &request, signers).await?);
         }
     }
     Ok(wired)
@@ -456,67 +539,9 @@ pub struct WireCommand {
     pub request: WireRequest,
 }
 
-/// Sends `request` to the runtime serving `endpoint`'s node, once: its
-/// outcome is unconfirmed when no answer arrives, so it is never retried.
-pub async fn wire_remote(
-    endpoint: &gents_store::config_client::GraphqlEndpoint,
-    owner: &str,
-    request: &WireRequest,
-) -> Result<Value> {
-    let mut url = reqwest::Url::parse(endpoint.url())?;
-    anyhow::ensure!(
-        matches!(url.scheme(), "http" | "https")
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none(),
-        "pack wiring requires an HTTP URL without credentials"
-    );
-    let prefix = url
-        .path()
-        .strip_suffix("/api/v0/graphql")
-        .ok_or_else(|| anyhow::anyhow!("pack wiring requires a Gents runtime GraphQL endpoint"))?;
-    url.set_path(&format!("{prefix}{WIRE_PATH}"));
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-    let response = endpoint
-        .authorize(client.post(url))?
-        .json(&WireCommand {
-            node_did: owner.to_owned(),
-            request: request.clone(),
-        })
-        .send()
-        .await
-        .map_err(|error| {
-            anyhow::anyhow!(
-            "pack wiring outcome is unconfirmed; inspect the agent's Tools before retrying: {error}"
-        )
-        })?;
-    let status = response.status();
-    let bytes = response.bytes().await.map_err(|error| {
-        anyhow::anyhow!(
-        "pack wiring response was unreadable; inspect the agent's Tools before retrying: {error}"
-    )
-    })?;
-    anyhow::ensure!(
-        status.is_success(),
-        "pack wiring returned HTTP {status}: {}",
-        String::from_utf8_lossy(&bytes)
-    );
-    serde_json::from_slice(&bytes).map_err(|error| {
-        anyhow::anyhow!(
-        "pack wiring response was unreadable; inspect the agent's Tools before retrying: {error}"
-    )
-    })
-}
-
 #[cfg(test)]
 mod remote_tests {
     use super::*;
-    use axum::{routing::post, Json, Router};
-    use std::sync::Mutex;
 
     #[test]
     fn wire_targets_follow_the_lean_model() {
@@ -525,69 +550,5 @@ mod remote_tests {
                 wire_target_allowed(input.local, input.preview, input.remove)
             },
         );
-    }
-
-    fn request() -> WireRequest {
-        WireRequest {
-            plugin: "acme/tool".into(),
-            agent: "assistant".into(),
-            targets_from: vec!["acme/pack".into()],
-            remove: false,
-            preview: false,
-            dynamic_consent: false,
-            tool_calls_consent: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn remote_wire_sends_one_bounded_request_to_runtime() {
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let app = Router::new().route(
-            WIRE_PATH,
-            post({
-                let received = received.clone();
-                move |Json(command): Json<WireCommand>| {
-                    let received = received.clone();
-                    async move {
-                        received.lock().unwrap().push(command);
-                        Json(serde_json::json!({"wired": true}))
-                    }
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let endpoint = gents_store::config_client::GraphqlEndpoint::anonymous(format!(
-            "http://{address}/api/v0/graphql"
-        ));
-        let result = wire_remote(&endpoint, "did:key:owner", &request())
-            .await
-            .unwrap();
-        assert_eq!(result["wired"], true);
-        let received = received.lock().unwrap();
-        assert_eq!(received.len(), 1);
-        assert_eq!(received[0].node_did, "did:key:owner");
-        assert_eq!(received[0].request.plugin, "acme/tool");
-        assert_eq!(received[0].request.targets_from, ["acme/pack"]);
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn lost_response_is_unconfirmed_and_is_not_retried() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            drop(stream);
-        });
-        let endpoint = gents_store::config_client::GraphqlEndpoint::anonymous(format!(
-            "http://{address}/api/v0/graphql"
-        ));
-        let error = wire_remote(&endpoint, "did:key:owner", &request())
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("outcome is unconfirmed"));
-        server.await.unwrap();
     }
 }

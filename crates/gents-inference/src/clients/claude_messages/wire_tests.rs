@@ -12,7 +12,9 @@ use gents_claude::request::RequestHead;
 use gents_claude::retry::{DEFAULT_MAX_RETRIES, OAUTH_REFRESH_ATTEMPTS};
 use rapidhash::{HashSetExt, RapidHashSet};
 use rig::completion::CompletionError;
-use rig::http_client::{HttpClientExt, MultipartForm, Request};
+use rig::http_client::{MultipartForm, Request};
+
+use crate::llm::rig_compat::http::Transport;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -595,7 +597,7 @@ async fn multipart_is_a_typed_error() {
         .body(MultipartForm::new())
         .expect("request");
     let error = client
-        .send_multipart::<Bytes>(request)
+        .send_multipart(request)
         .await
         .err()
         .expect("multipart");
