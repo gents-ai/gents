@@ -2736,6 +2736,7 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
     // Every CLI caller holds its own User key: the served node admits only its own.
     let foreign = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
     assert!(foreign.contains("401 Unauthorized"), "{foreign}");
+    assert!(!foreign.contains("gents init"), "{foreign}");
 
     let served_home = home_dir.join(".gents");
     let served_home = served_home.to_str().context("home path is not UTF-8")?;
@@ -2745,6 +2746,7 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
         &[&trace[..], &["--home", served_home], &request[..]].concat(),
     )?;
     assert!(named.contains("401 Unauthorized"), "{named}");
+    assert!(!named.contains("gents init"), "{named}");
     let timeline = run_cli_json(
         &home_dir,
         &[&trace[..], &["--home", served_home], &request[..]].concat(),
