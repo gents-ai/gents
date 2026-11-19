@@ -371,8 +371,9 @@ async fn inference_setup_state_rejects_an_unconfigured_runtime() {
 async fn inference_settings_read_survives_a_concurrent_projection_replacement() {
     let (core, _directory) = crate::tests::support::boot_core().await;
     let server = wiremock::MockServer::start().await;
-    let did = "did:test:settings-runtime";
-    crate::client_test_support::runtime_metadata(&server, did).await;
+    let runtime = crate::client_test_support::runtime_key("settings-runtime").await;
+    let did = runtime.did.as_str();
+    crate::client_test_support::runtime_metadata(&server, &runtime).await;
     let store = core.stores().ensure(did);
     let fresh = gents_observe::client_projection::store::ClientStore::from_rows(
         gents_observe::client_projection::store::ClientStoreRows {
@@ -460,7 +461,11 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         .to_string(),
     )
     .unwrap();
-    crate::client_test_support::runtime_metadata(&server, &did).await;
+    crate::client_test_support::runtime_metadata(
+        &server,
+        &crate::client_test_support::RuntimeKey::of_file(&key_path),
+    )
+    .await;
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
         node_did: did.to_string(),
         label: ("Local").to_string(),

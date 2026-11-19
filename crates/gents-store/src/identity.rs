@@ -13,6 +13,7 @@ mod enrollment_grant;
 mod error;
 mod file_key;
 pub mod grant_sets;
+pub mod home_status;
 pub(crate) mod macos;
 pub(crate) mod provision_client;
 mod registered;
@@ -357,6 +358,18 @@ pub(crate) fn defradb_bearer_authorization_with_config(
 
 pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
+}
+
+impl KeyIdentity {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn sign_now(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        self.identity
+            .sign(payload)
+            .map_err(|source| IdentityError::SignPayload {
+                did: self.did.clone(),
+                source,
+            })
+    }
 }
 
 #[async_trait]

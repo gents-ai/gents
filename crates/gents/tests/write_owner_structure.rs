@@ -2171,6 +2171,128 @@ fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
     }
 }
 
+/// A client keeps a delegation audience or clock only from a status its
+/// home's node key signed for the read (`Identity.HeldAudience.reportedOfHome`):
+/// what a status's unsigned fields report is read into a report only where
+/// the home signs it, and a client takes a report only from the signed
+/// statement (`home_status::authenticate`). Entries name each reader; the
+/// list only shrinks.
+#[rustfmt::skip]
+const STATUS_REPORT_READERS: &[(&str, usize, &str)] = &[
+    ("crates/gents-protocol/src/delegation_audience.rs", 1, "the status field's reader, called only by the signer"),
+    ("crates/gents-protocol/src/home_attestation.rs", 2, "what the home signs, and the report of a signed statement"),
+];
+
+/// What reads a report from a status, and the report itself.
+const STATUS_REPORT_CALLS: &[&str] = &[
+    "ReportedHome::observe",
+    "ReportedDelegationAudience::observe",
+];
+
+#[derive(Default)]
+struct StatusReportVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for StatusReportVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if path_name(call).is_some_and(|name| {
+            STATUS_REPORT_CALLS
+                .iter()
+                .any(|reader| name.ends_with(reader))
+        }) {
+            self.sites += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_struct(&mut self, report: &'ast syn::ExprStruct) {
+        if report
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "ReportedHome")
+        {
+            self.sites += 1;
+        }
+        visit::visit_expr_struct(self, report);
+    }
+}
+
+fn status_report_sites(syntax: &syn::File) -> usize {
+    let mut visitor = StatusReportVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn a_client_keeps_only_what_its_home_signed() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .map(|(relative, syntax)| (relative, status_report_sites(&syntax)))
+        .filter(|(_, sites)| *sites > 0)
+        .collect::<BTreeMap<_, _>>();
+    let allowed = STATUS_REPORT_READERS
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new read(s) of a status's unsigned report; keep only what `home_status::authenticate` returns"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} reads of a status's unsigned report exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} reads of a status's unsigned report; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "signed status ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn signed_status_fence_counts_unsigned_report_readers() {
+    for (source, sites) in [
+        ("fn f() { ReportedHome::observe(&status); }", 1),
+        (
+            "fn f() { gents_protocol::delegation_audience::ReportedDelegationAudience::observe(&s); }",
+            1,
+        ),
+        ("fn f() { ReportedHome { audience, provider_time }; }", 1),
+        ("fn f() { home_status::authenticate(&status, node, &nonce); }", 0),
+        ("#[cfg(test)] mod tests { fn f() { ReportedHome::observe(&s); } }", 0),
+        (
+            "impl E { #[cfg(test)] fn f(&self) { ReportedHome { audience, provider_time }; } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(status_report_sites(&syntax), sites, "{source}");
+    }
+}
+
 #[test]
 fn ambient_context_counts_statics_outside_test_items() {
     let syntax = syn::parse_file(

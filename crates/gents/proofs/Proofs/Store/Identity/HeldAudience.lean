@@ -12,7 +12,9 @@ another audience and refuses every delegation minted for the old one
 (`UserDelegation.a_restart_under_another_audience_refuses_the_old_credential`);
 the client reads the status again and sends the request once more, with no one
 asked. A home on the node's own store reports none, and its client presents the
-identity token it presented before this model. -/
+identity token it presented before this model. The client keeps a report only
+when the home's node key signed it over a nonce the client sent with that read
+(gents#3964). -/
 
 namespace Identity.HeldAudience
 
@@ -56,20 +58,80 @@ def change (held : Held) (reported : Reported) (sameAudience clockMoved : Bool) 
   | .known, .absent => .forgotten
   | _, _ => .unchanged
 
-/-- Decision (gents#3831): a client reads a saved home's status, which names
-the node answering it. A status naming another node than the home's, or none,
-is not the home's: what it reports counts as unavailable, so the record keeps
-what it holds and the client never mints a delegation for another node's
-audience to send to this home's endpoint. External premise: the status is
-unsigned, so this binds an honest node's answer to its home; an endpoint that
-impersonates the home can still name any node. -/
-def reportedOfHome (sameNode : Bool) (reported : Reported) : Reported :=
-  if sameNode then reported else .unavailable
+/-- What a home's status says of its audience. -/
+inductive Reading where
+  | absent
+  | named (audience : Audience)
+  | unavailable
+  deriving DecidableEq, Repr
 
-theorem a_status_from_another_node_changes_no_record (held : Held) (reported : Reported)
-    (sameAudience clockMoved : Bool) :
-    change held (reportedOfHome false reported) sameAudience clockMoved = .unchanged := by
-  cases held <;> rfl
+/-- What a home's status reports for its client to mint at: its audience and
+the provider's time it mints at (`UserDelegation.issueAt`). -/
+structure Report where
+  reading : Reading
+  providerTime : Option Nat
+  deriving DecidableEq, Repr
+
+def Report.unavailable : Report := ⟨.unavailable, none⟩
+
+def Report.reported (report : Report) : Reported :=
+  match report.reading with
+  | .absent => .absent
+  | .named _ => .named
+  | .unavailable => .unavailable
+
+/-- Which statement of a node key a signature is. A node key signs other
+statements too, such as enrollment offers; each names its kind first, so no
+signature of one is taken for another. -/
+inductive Domain where
+  | homeStatus
+  | other
+  deriving DecidableEq, Repr
+
+/-- What a home signs of a status read: the kind of statement, the nonce its
+client sent with the read, the node the status names, and its report. -/
+structure Statement where
+  domain : Domain
+  nonce : Nat
+  node : String
+  report : Report
+  deriving DecidableEq, Repr
+
+/-- A signature as verifying it shows it: the key it verifies under and the
+statement it covers. External premise: a node key's signature scheme is
+unforgeable, so only the holder of the key a status names can make a signature
+that verifies under it, and only over the statement it signed. -/
+structure Signature where
+  key : String
+  statement : Statement
+  deriving DecidableEq, Repr
+
+/-- A status as a client reads it: the node it names, its report, and the
+signature it carries, if any. -/
+structure SignedStatus where
+  node : String
+  report : Report
+  signature : Option Signature
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3964): a status is the saved home's when it names the node
+the saved record names and carries that node key's signature of a home status
+statement over the nonce the client sent with this read, that node, and the
+report. Anyone answering at the home's address can name the home's node and
+the audience of any Vera node, which is public; only the home's key can sign
+it, and a fresh nonce keeps a status the home signed before, for a deployment
+it has since left, from being answered again. -/
+def authentic (home : String) (nonce : Nat) (status : SignedStatus) : Bool :=
+  status.node == home
+    && status.signature == some ⟨home, ⟨.homeStatus, nonce, home, status.report⟩⟩
+
+/-- Decision (gents#3831, gents#3964): what a saved home's status reports
+counts only when it is the home's (`authentic`); any other status, from another
+node, unsigned, or signed over anything else, reports nothing: the record keeps
+what it holds and the client never mints a delegation for an audience the home
+did not sign to send to this home's endpoint. -/
+def reportedOfHome (home : String) (nonce : Nat) (status : SignedStatus) : Report :=
+  if authentic home nonce status then status.report else .unavailable
 
 /-- Decision (gents#3831): a client holding an audience that names no genesis
 identity reads the status again before it mints a request-bound delegation,
@@ -206,6 +268,129 @@ before this model. -/
 theorem a_home_on_the_node_store_keeps_the_identity_token (held : Option Record) :
     recordCredential (observe held .absent) = .identityToken := rfl
 
+/-- What a client keeps of a report it read on its own clock `clock`. -/
+def Report.status (report : Report) (clock : Nat) : Status :=
+  match report.reading with
+  | .absent => .absent
+  | .named audience => .named audience (report.providerTime.map (⟨·, clock⟩))
+  | .unavailable => .unavailable
+
+theorem a_report_keeps_what_it_reports (report : Report) (clock : Nat) :
+    (report.status clock).reported = report.reported := by
+  cases report with
+  | mk reading providerTime => cases reading <;> rfl
+
+/-- A status that names the saved node with an audience that node did not
+sign, or that carries no signature at all, changes no record: the client mints
+only for the audience it held before, and one that held none mints no
+delegation. -/
+theorem an_unsigned_audience_changes_no_record (home : String) (nonce clock : Nat)
+    (status : SignedStatus) (held : Option Record) (unsigned : authentic home nonce status = false) :
+    observe held ((reportedOfHome home nonce status).status clock) = held
+      ∧ recordCredential (observe held ((reportedOfHome home nonce status).status clock))
+          = recordCredential held := by
+  simp [reportedOfHome, unsigned, Report.unavailable, Report.status, observe]
+
+theorem a_status_signed_for_another_nonce_is_refused (home : String) (sent signed : Nat)
+    (status : SignedStatus) (other : sent ≠ signed)
+    (byHome : status.signature = some ⟨home, ⟨.homeStatus, signed, home, status.report⟩⟩) :
+    authentic home sent status = false := by
+  simp [authentic, byHome, Ne.symm other]
+
+theorem a_signature_of_another_statement_is_refused (home : String) (nonce : Nat)
+    (status : SignedStatus) (domain : Domain) (other : domain ≠ .homeStatus)
+    (byHome : status.signature = some ⟨home, ⟨domain, nonce, home, status.report⟩⟩) :
+    authentic home nonce status = false := by
+  simp [authentic, byHome, other]
+
+theorem a_status_signed_by_another_key_is_refused (home key : String) (nonce : Nat)
+    (status : SignedStatus) (statement : Statement) (other : key ≠ home)
+    (signed : status.signature = some ⟨key, statement⟩) :
+    authentic home nonce status = false := by
+  simp [authentic, signed, other]
+
+theorem an_altered_report_is_refused (home : String) (nonce : Nat) (status : SignedStatus)
+    (covered : Report) (altered : status.report ≠ covered)
+    (byHome : status.signature = some ⟨home, ⟨.homeStatus, nonce, home, covered⟩⟩) :
+    authentic home nonce status = false := by
+  simp [authentic, byHome, Ne.symm altered]
+
+theorem a_status_from_another_node_is_refused (home : String) (nonce : Nat)
+    (status : SignedStatus) (other : status.node ≠ home) :
+    authentic home nonce status = false := by
+  simp [authentic, other]
+
+/-- The home's own signed status is taken as an accepted status was before
+statuses were signed: its report is kept exactly as it reads. -/
+theorem a_signed_status_is_kept_as_it_reports (home : String) (nonce clock : Nat)
+    (report : Report) (held : Option Record) :
+    reportedOfHome home nonce
+        ⟨home, report, some ⟨home, ⟨.homeStatus, nonce, home, report⟩⟩⟩ = report
+      ∧ observe held ((reportedOfHome home nonce
+          ⟨home, report, some ⟨home, ⟨.homeStatus, nonce, home, report⟩⟩⟩).status clock)
+        = observe held (report.status clock) := by
+  simp [reportedOfHome, authentic]
+
+/-- Decision (gents#3964): a status that is not the home's lets no credential
+be sent to the home's endpoint, at the client's first read of it as at every
+later one: it reports nothing, and a status that reports nothing resolves to a
+refusal (`UserDelegation.resolve`), never to the identity token an unsigned
+status could ask for. -/
+theorem an_unauthenticated_status_lets_no_credential_be_sent (home : String) (nonce : Nat)
+    (status : SignedStatus) (unsigned : authentic home nonce status = false) :
+    resolve (reportedOfHome home nonce status).reported = .refused := by
+  simp [reportedOfHome, unsigned, Report.unavailable, Report.reported, resolve]
+
+/-- What a home's status says of how its clients authenticate: with the
+identity token of a home on the node's own store, with delegations for its
+Vera deployment, or not at all yet. -/
+inductive Advertised where
+  | local
+  | vera
+  | unavailable
+  deriving DecidableEq, Repr
+
+/-- What a client makes of a status the home signed. -/
+inductive Reconciled where
+  /-- Its report is kept. -/
+  | kept
+  /-- It reports no audience a client can mint for yet. -/
+  | unavailable
+  /-- It contradicts itself. -/
+  | contradictory
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3964): a signed status states how its clients authenticate
+and which audience it mints for, and the two must agree: a home on the node's
+own store names no audience, and a Vera home names its own deployment or
+none, which its client authentication then names. A signed status whose two
+statements disagree is the home's contradiction, refused as such: it is never
+read as a status that reported nothing, which would leave a client minting
+for the audience it held before at its own clock. `sameDeployment` is whether
+the audience names the deployment the client authentication names. -/
+def reconcile (advertised : Advertised) (stated : Reported) (sameDeployment : Bool) :
+    Reconciled :=
+  match advertised, stated with
+  | .unavailable, _ => .unavailable
+  | _, .unavailable => .unavailable
+  | .local, .absent => .kept
+  | .local, .named => .contradictory
+  | .vera, .absent => .kept
+  | .vera, .named => if sameDeployment then .kept else .contradictory
+
+/-- A status counts as the home's when the home signed it and it does not
+contradict itself; a contradictory one is refused as an unauthenticated one is
+(`recovery`). -/
+def homeStatus (signed : Bool) (reconciled : Reconciled) : Bool :=
+  signed && reconciled != .contradictory
+
+theorem a_home_on_the_node_store_names_no_audience (sameDeployment : Bool) :
+    reconcile .local .named sameDeployment = .contradictory
+      ∧ reconcile .local .absent sameDeployment = .kept := ⟨rfl, rfl⟩
+
+theorem a_vera_home_naming_another_deployment_contradicts_itself :
+    reconcile .vera .named false = .contradictory := rfl
+
 /-- Why a node refused a client's request, as far as its credential goes. -/
 inductive Refusal where
   /-- The edge of a Vera home refused an identity token (`UserDelegation.edge`). -/
@@ -260,6 +445,50 @@ def resend (resent : Bool) (refusal : Refusal) (record : Change) : Bool :=
   !resent && decide (refusal ≠ .other)
     && (record == .learned || record == .changed || record == .reclocked
       || refusal == .outsideWindow)
+
+/-- What becomes of a request refused for its credential once the client read
+its home's status again. -/
+inductive Recovery where
+  | resend
+  /-- The refusal is what the person is told (`told`). -/
+  | tell
+  /-- The request fails saying the home's status could not be authenticated. -/
+  | unauthenticated
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3964): a request refused for its credential whose home's
+status, read again, is not the home's (`authentic`) fails saying the home's
+status could not be authenticated: nothing it reported is kept, and the person
+learns why the request could not recover rather than only that it was refused.
+A home that signs no status, being older than this client or holding no node
+key, is told so. A refusal of no credential reads no status. Otherwise the
+request goes as `resend` says. -/
+def recovery (resent : Bool) (refusal : Refusal) (authenticated : Bool) (record : Change) :
+    Recovery :=
+  if refusal = .other then .tell
+  else if !authenticated then .unauthenticated
+  else if resend resent refusal record then .resend
+  else .tell
+
+theorem an_unauthenticated_status_never_sends_again (resent : Bool) (refusal : Refusal)
+    (record : Change) : recovery resent refusal false record ≠ .resend := by
+  unfold recovery
+  split <;> simp
+
+theorem a_contradictory_status_never_sends_again (resent : Bool) (refusal : Refusal)
+    (record : Change) (signed : Bool) :
+    recovery resent refusal (homeStatus signed .contradictory) record ≠ .resend := by
+  simpa [homeStatus] using an_unauthenticated_status_never_sends_again resent refusal record
+
+theorem an_authenticated_status_recovers_as_before (resent : Bool) (refusal : Refusal)
+    (record : Change) :
+    (recovery resent refusal true record = .resend) = (resend resent refusal record = true) := by
+  unfold recovery
+  split
+  · rename_i other
+    subst other
+    cases resent <;> simp [resend]
+  · split <;> simp_all
 
 theorem a_request_presenting_no_credential_is_never_sent_again (answer : Answer)
     (presented : Credential) (resent : Bool) (record : Change)
