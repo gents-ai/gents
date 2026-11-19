@@ -137,25 +137,27 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             .as_str()
             .unwrap();
         let task_doc_id = response["data"]["Task"][0]["_docID"].as_str().unwrap();
-        let spec = gents_automation::test_support::pending_agent_request_spec(
-            owner,
-            agent.did(),
-            "work",
-            ExecutionOrigin::Scheduled,
-            TriggerLineage {
-                trigger_id: Some("trigger".into()),
-                trigger_kind: Some("event".into()),
-                source_doc_id: Some(source_doc.into()),
-                correlation: None,
-                trigger_context: None,
+        let spec = gents_session::request::lifecycle::materialize::pending_agent_request_spec(
+            gents_session::request::lifecycle::materialize::PendingAgentRequest {
+                node_did: owner,
+                agent_did: agent.did(),
+                content: "work",
+                execution_origin: ExecutionOrigin::Scheduled,
+                trigger_lineage: TriggerLineage {
+                    trigger_id: Some("trigger".into()),
+                    trigger_kind: Some("event".into()),
+                    source_doc_id: Some(source_doc.into()),
+                    correlation: None,
+                    trigger_context: None,
+                },
+                conversation_title: None,
+                workspace_lineage: None,
+                requester_did: None,
+                trigger_doc_id: Some(trigger_doc),
             },
-            None,
-            None,
             &fire.request_id,
             &fire.session_id,
             Some(&key),
-            None,
-            Some(trigger_doc),
         )
         .unwrap();
         let create = build_signed_request(spec, RequestSigner::Identity(agent))

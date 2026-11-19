@@ -371,23 +371,24 @@ async fn stage_request(
     let signer = txn
         .managed_agent_signer()
         .context("plugin job message requires a managed Agent signer")?;
-    let create =
-        gents_session::request::lifecycle::materialize::build_session_message_request_with_input(
-            cause,
-            &SessionMessageTarget {
-                node_did: node_did.to_owned(),
-                agent_did: agent_did.to_owned(),
-                session_id: session_id.clone(),
-            },
+    let create = gents_session::request::lifecycle::materialize::build_session_message_request(
+        cause,
+        &SessionMessageTarget {
+            node_did: node_did.to_owned(),
+            agent_did: agent_did.to_owned(),
+            session_id: session_id.clone(),
+        },
+        gents_session::request::lifecycle::materialize::SessionMessageRequest {
             content,
             title,
-            &request_id,
-            Some(retry_key.clone()),
+            request_id: &request_id,
+            retry_key: Some(retry_key.clone()),
             hop,
             input,
-            &signer,
-        )
-        .await?;
+        },
+        &signer,
+    )
+    .await?;
     if let Some(existing) = existing {
         if same_fingerprint(&existing, &create) {
             return Ok(create);

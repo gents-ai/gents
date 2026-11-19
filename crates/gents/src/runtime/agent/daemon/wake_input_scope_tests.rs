@@ -775,21 +775,23 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
         &agent_access,
         &node,
         &original,
-        "background result",
-        "background-completion-notification:agent-observation:tool",
-        "Review background completion results",
-        RequestQueue {
-            delivery: Default::default(),
-            position: None,
-            source: QueueSource::BackgroundCompletion,
-            policy: QueuePolicy::Coalesce,
-            key: Some("background_completion:agent-observation".into()),
-            queued_after_request_id: Some(original.request_id.clone()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "background result",
+            message_key: "background-completion-notification:agent-observation:tool",
+            wake_content: "Review background completion results",
+            queue: RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source: QueueSource::BackgroundCompletion,
+                policy: QueuePolicy::Coalesce,
+                key: Some("background_completion:agent-observation".into()),
+                queued_after_request_id: Some(original.request_id.clone()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            },
+            existing_notification_doc_id: None,
+            wake: RequestHopCause::Continuation,
         },
-        None,
-        RequestHopCause::Continuation,
     )
     .await
     .unwrap()

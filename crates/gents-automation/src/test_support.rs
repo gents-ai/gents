@@ -12,10 +12,7 @@ use serde_json::Value;
 use crate::triggers::engine::durable;
 use crate::triggers::TaskDeliveryAdmission;
 use gents_documents::{automation, event_consumer, event_trigger, EventSource, Task, Trigger};
-use gents_session::request::lifecycle::{
-    materialize, ExecutionOrigin, ExecutionOwnershipLost, RequestSpec, TriggerLineage,
-    WorkspaceLineage,
-};
+use gents_session::request::lifecycle::ExecutionOwnershipLost;
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::identity::NodeIdentity;
 
@@ -104,37 +101,6 @@ pub async fn checkpoint_prefix(
 
 pub fn execution_ownership_lost_reason() -> String {
     ExecutionOwnershipLost.to_string()
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn pending_agent_request_spec(
-    node_did: &str,
-    agent_did: &str,
-    content: &str,
-    execution_origin: ExecutionOrigin,
-    trigger_lineage: TriggerLineage,
-    conversation_title: Option<&str>,
-    workspace_lineage: Option<&WorkspaceLineage>,
-    request_id: &str,
-    session_id: &str,
-    retry_key: Option<&str>,
-    requester_did: Option<&str>,
-    trigger_doc_id: Option<&str>,
-) -> Result<RequestSpec> {
-    materialize::pending_agent_request_spec(
-        node_did,
-        agent_did,
-        content,
-        execution_origin,
-        trigger_lineage,
-        conversation_title,
-        workspace_lineage,
-        request_id,
-        session_id,
-        retry_key,
-        requester_did,
-        trigger_doc_id,
-    )
 }
 
 #[derive(Clone)]

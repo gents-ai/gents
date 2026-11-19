@@ -369,13 +369,15 @@ impl CanonicalBackgroundFixture {
             &self.access,
             &self.node,
             &self.parent,
-            notification_content,
-            message_key,
-            wake_content,
-            queue,
-            existing_notification_doc_id,
+            gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+                content: notification_content,
+                message_key,
+                wake_content,
+                queue,
+                existing_notification_doc_id,
+                wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            },
             publication,
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         )
         .await
     }

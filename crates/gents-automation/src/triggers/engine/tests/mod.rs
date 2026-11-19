@@ -233,18 +233,7 @@ impl SpyMaterializer {
 impl MaterializerHandle for SpyMaterializer {
     fn materialize(
         &self,
-        task: &ResolvedTask,
-        trigger_id: Option<&str>,
-        trigger_kind: TriggerKind,
-        _trigger_doc_id: Option<&str>,
-        source_doc_id: Option<&str>,
-        _correlation: Option<&str>,
-        _trigger_context: Option<&str>,
-        rendered_prompt: &str,
-        rendered_goal_objective: Option<&str>,
-        durable_fire_key: &str,
-        delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
-        _prepared_ids: Option<(&str, &str)>,
+        fire: FireMaterialization<'_>,
     ) -> Pin<
         Box<
             dyn Future<Output = Result<String, crate::triggers::engine::MaterializeError>>
@@ -252,6 +241,17 @@ impl MaterializerHandle for SpyMaterializer {
                 + '_,
         >,
     > {
+        let FireMaterialization {
+            task,
+            trigger_id,
+            trigger_kind,
+            source_doc_id,
+            rendered_prompt,
+            rendered_goal_objective,
+            durable_fire_key,
+            delivery,
+            ..
+        } = fire;
         let entry = (
             trigger_id.map(str::to_owned),
             trigger_kind,

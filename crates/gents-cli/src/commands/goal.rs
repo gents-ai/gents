@@ -194,8 +194,10 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
         &node_did,
         &args.scope.session,
         &args.from,
-        &backend_id,
-        args.with_compaction,
+        gents_automation::goal::AccountMove {
+            target_backend_id: &backend_id,
+            move_companions: args.with_compaction,
+        },
         &|profile| crate::commands::config::profile::bound_slots(home, graphql, &node_did, profile),
     )
     .await?;

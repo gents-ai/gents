@@ -143,21 +143,23 @@ async fn deliver(
         created_at: "2026-10-21T00:00:00Z".into(),
     };
     let mut spec = gents_session::request::lifecycle::materialize::pending_agent_request_spec(
-        f.identity.did(),
-        f.agent.did(),
-        "Delivery work",
-        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
-        gents_session::request::lifecycle::TriggerLineage {
-            trigger_kind: Some("manual".into()),
-            ..Default::default()
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did: f.identity.did(),
+            agent_did: f.agent.did(),
+            content: "Delivery work",
+            execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                trigger_kind: Some("manual".into()),
+                ..Default::default()
+            },
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: Some(f.agent.did()),
+            trigger_doc_id: None,
         },
-        None,
-        None,
         &fire.request_id,
         session,
         Some(&fire.fire_key),
-        Some(f.agent.did()),
-        None,
     )?;
     spec.input.goal_assignment = captured;
     let create = gents_session::request::lifecycle::build_signed_request(
@@ -240,13 +242,15 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                     Box::pin(async {
                         gents_session::session::ensure_session_in_txn(
                             txn,
-                            &session,
-                            f.identity.did(),
-                            f.agent.did(),
-                            Some(requester),
-                            None,
-                            None,
-                            "2026-01-01T00:00:00Z",
+                            gents_session::session::NewAgentSession {
+                                session_id: &session,
+                                node_did: f.identity.did(),
+                                agent_did: f.agent.did(),
+                                requester_did: Some(requester),
+                                title: None,
+                                provenance: None,
+                                created_at: "2026-01-01T00:00:00Z",
+                            },
                         )
                         .await?;
                         Ok::<_, anyhow::Error>(())
