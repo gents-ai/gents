@@ -396,12 +396,15 @@ def snapshotPromptTailJson : String :=
   ""
 
 set_option maxHeartbeats 2000000 in
-/-- Every family's schema elaborates in one list term, whose definitional
-checks grow with the family count past the default heartbeat budget. It is a
-definition of its own: checked in one term with the vocabularies, it exceeds
-the kernel's recursion limit. -/
+private def functionEntries : List (String × Lean.Json) :=
+  conformance_function_entries%
+
+set_option maxHeartbeats 2000000 in
+private def familyEntries : List (String × Lean.Json) :=
+  conformance_family_entries%
+
 def snapshotFamiliesJson : String :=
-  (conformance_families%).compress
+  (Lean.Json.mkObj (functionEntries ++ familyEntries)).compress
 
 def snapshotVocabulariesJson : String :=
   (conformance_vocabularies%).compress
