@@ -963,6 +963,28 @@ theorem owed_withdrawal_is_never_dropped (s : State) (member : String) (step : S
         rw [Step.apply, this, owed] at gone
         exact absurd gone (by decide)
 
+/-- No step the Node takes as itself removes a member's Node `administrator`
+relation: its denials and revocations owe the withdrawal, and its settlement
+is refused. With `node_alone_neither_grants_nor_withdraws_administration`, no
+path lets the Node grant or remove Node administration by itself. -/
+theorem node_withdrawal_keeps_administration (s : State) (member : String) (step : Step)
+    (byNode : (∃ request, step = .revoke nodeStanding request) ∨
+      (∃ m, step = .revokeMember nodeStanding m) ∨ (∃ m, step = .settle nodeStanding m))
+    (holding : holds s member .nodeAdministrator = true) :
+    holds (step.apply s) member .nodeAdministrator = true := by
+  have refused : withdrawAdmitted nodeStanding = false := by native_decide
+  simp only [holds, List.contains_iff_mem] at holding ⊢
+  rcases byNode with ⟨request, rfl⟩ | ⟨m, rfl⟩ | ⟨m, rfl⟩
+  · simp only [Step.apply, revokeBy, refused, Bool.false_eq_true, if_false]
+    unfold oweRevoke
+    split
+    · exact holding
+    · exact List.mem_filter.mpr ⟨holding, by simp⟩
+  · simp only [Step.apply, revokeMemberBy, refused, Bool.false_eq_true, if_false]
+    exact List.mem_filter.mpr ⟨holding, by simp [oweRevokeMember]⟩
+  · simp only [Step.apply, settle, refused, Bool.false_and, Bool.false_eq_true, if_false]
+    exact holding
+
 /-- When the Node finds a member's administration withdrawal due, the same
 step retires the receipt and owes the withdrawal: no state has one without
 the other. -/
