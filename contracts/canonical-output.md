@@ -460,7 +460,7 @@ or drop those collections from the client-to-runtime direction.
 | Surface | This layer | Implementation handoff |
 | --- | --- | --- |
 | `gents-schemas/src/lib.rs`, `gents-protocol/src/schemas.rs`, runtime schema exports | Register segment only; remove separate seal, response and spill collections | Verify fresh schema registration and strict JSON/SDL decoding |
-| `gents-migration/src/registry.rs` | Remove obsolete response/spill baselines; update client-authored catalog | Add the fresh segment root pin and regenerate changed request/message/tool pins with DefraDB; catalog coverage/parity remains required. No fabricated pins or relaxed checks |
+| `gents-store/src/schema/catalog.rs` | Remove obsolete response/spill baselines; update client-authored catalog | Add the fresh segment root pin and regenerate changed request/message/tool pins with DefraDB; catalog coverage/parity remains required. No fabricated pins or relaxed checks |
 | `agent/p2p_reconcile/{templates,profiles,policy}.rs` | Replace response/spill routes with segment, preserving requester/agent filters and route directions | Conformance for conversation, client (both directions), machine and operator routes; collection presence is not ACP authorization |
 | `file_inventory/{closure,selection}.rs` | Closed collection enum; authorized reference closure of one session | Resolve closure references, enumerate twins and include origin dependencies; P2P does not replicate or hydrate sessions |
 | Desktop `client/core/writes.rs`, `query/{session_transcript,document_patches}.rs`, `store/*`, observers | Inventory only; deleted row types break old readers | Follow origin references without subscribing to an entire parent session; project reordered header/segment arrival |

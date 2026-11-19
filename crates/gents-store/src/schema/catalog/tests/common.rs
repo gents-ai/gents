@@ -8,6 +8,8 @@ use defra_core::{
 use defra_node::Node as EmbeddedNode;
 use identity::{Identity as _, RawIdentity};
 
+use crate::schema::catalog::NODE_POLICIES;
+
 pub fn node_identity() -> String {
     let key = crypto::generate_ed25519().expect("node key");
     let identity = RawIdentity::from_ed25519(key.clone()).expect("node identity");
@@ -37,67 +39,23 @@ pub async fn fresh_node() -> Arc<EmbeddedNode> {
         .build()
         .await
         .expect("build node");
-    for (policy, expected) in [
-        (
-            gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
-            gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
-        ),
-        (
-            gents_protocol::schemas::CLIENT_JOURNAL_POLICY,
-            gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID,
-        ),
-        (
-            gents_protocol::schemas::MAILBOX_POLICY,
-            gents_protocol::schemas::MAILBOX_POLICY_ID,
-        ),
-        (
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
-        ),
-    ] {
+    for policy in &NODE_POLICIES {
         let actual = node
-            .add_dac_policy_with_counter_as(&node_context(&node), policy, 0)
+            .add_dac_policy_with_counter_as(&node_context(&node), policy.definition, 0)
             .await
             .expect("fixture policy");
-        assert_eq!(actual, expected);
+        assert_eq!(actual, policy.id);
     }
     std::mem::forget(dir);
     Arc::new(node)
 }
 
-#[allow(dead_code)]
 pub fn node_context(node: &EmbeddedNode) -> RequestContext {
     RequestContext::default().with_identity(node.node_identity_did().map(str::to_owned))
 }
 
-#[allow(dead_code)]
-pub async fn patch_collection(
-    node: &EmbeddedNode,
-    collection: &str,
-    patch: &str,
-) -> schema::CollectionVersion {
-    let before = node
-        .get_all_collection_versions()
-        .await
-        .expect("versions before patch");
+pub async fn patch_collection(node: &EmbeddedNode, patch: &str) {
     node.patch_collection_as(&node_context(node), patch, None)
         .await
         .expect("patch collection");
-    let after = node
-        .get_all_collection_versions()
-        .await
-        .expect("versions after patch");
-    after
-        .into_iter()
-        .find(|version| {
-            version.name == collection
-                && !before
-                    .iter()
-                    .any(|old| old.version_id == version.version_id)
-        })
-        .unwrap_or_else(|| {
-            node.get_collection(collection)
-                .expect("collection lookup")
-                .expect("collection exists")
-        })
 }

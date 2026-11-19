@@ -310,9 +310,7 @@ pub fn admit_write(
                 }
                 .into(),
                 granted,
-                application: !gents_store::schema::migration::DEFAULT_REGISTRY
-                    .managed_names()
-                    .any(|name| name == collection),
+                application: !gents_store::schema::catalog::RUNTIME_CATALOG.manages(collection),
                 protected: gents_documents::PROTECTED_DATASTORE_COLLECTIONS.contains(&collection),
                 credential: gents_protocol::schemas::is_credential_collection(collection),
                 bounded: targeted,

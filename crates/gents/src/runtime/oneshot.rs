@@ -46,7 +46,7 @@ pub async fn run_openai_oneshot_with_tools_admitted(
     let tool_config = agent.tools.as_ref();
     let agent = agent.agent.as_ref();
     admission.validate(&node).await?;
-    gents_store::schema::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    gents_store::schema::catalog::ensure_runtime_owned(node.clone()).await?;
 
     let api_key = if matches!(
         &agent.backend_auth,

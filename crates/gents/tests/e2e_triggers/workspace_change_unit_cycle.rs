@@ -175,7 +175,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_env_filter(tracing_subscriber::EnvFilter::new(
-            "gents=info,gents_migration=warn",
+            "gents=info,gents_store::schema::catalog=warn",
         ))
         .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;
@@ -405,7 +405,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_env_filter(tracing_subscriber::EnvFilter::new(
-            "gents=info,gents_migration=warn",
+            "gents=info,gents_store::schema::catalog=warn",
         ))
         .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;
@@ -523,7 +523,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_env_filter(tracing_subscriber::EnvFilter::new(
-            "gents=info,gents_migration=warn",
+            "gents=info,gents_store::schema::catalog=warn",
         ))
         .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;

@@ -1,13 +1,9 @@
+use crate::schema::catalog::{ensure, Catalog, OrdinaryIndex, BASELINE, ORDINARY_INDEXES};
 use defra_node::Node as EmbeddedNode;
-use gents_migration::{
-    ensure_migrations_with_registry, OrdinaryIndex, Registry, DEFAULT_BASELINE,
-    DEFAULT_ORDINARY_INDEXES,
-};
 use gents_protocol::schemas::{AGENT_REQUEST, AGENT_REQUEST_NAME, MAILBOX_ITEM, MAILBOX_ITEM_NAME};
 use serde_json::Value;
 
-use crate::common;
-use common::fresh_node;
+use super::common::fresh_node;
 
 fn created_request_doc_id(data: &Value) -> String {
     let value = data
@@ -61,30 +57,28 @@ async fn assert_indexed_query(node: &EmbeddedNode, query: &str, index: &str, max
     }
 }
 
-fn registry_with_request_index<'a>(indexes: &'a [OrdinaryIndex<'static>]) -> Registry<'a> {
-    let request = DEFAULT_BASELINE
+fn catalog_with_request_index<'a>(indexes: &'a [OrdinaryIndex<'static>]) -> Catalog<'a> {
+    let request = BASELINE
         .iter()
         .find(|entry| entry.name == AGENT_REQUEST_NAME)
         .expect("AgentRequest baseline");
-    Registry {
+    Catalog {
         baseline: std::slice::from_ref(request),
-        steps: &[],
         ordinary_indexes: indexes,
     }
 }
 
-fn registry_with_mailbox_cursor_index() -> Registry<'static> {
-    let mailbox = DEFAULT_BASELINE
+fn catalog_with_mailbox_cursor_index() -> Catalog<'static> {
+    let mailbox = BASELINE
         .iter()
         .find(|entry| entry.name == MAILBOX_ITEM_NAME)
         .expect("MailboxItem baseline");
-    let index = DEFAULT_ORDINARY_INDEXES
+    let index = ORDINARY_INDEXES
         .iter()
         .find(|index| index.name == "MailboxItem_node_status_item_key")
         .expect("MailboxItem cursor index");
-    Registry {
+    Catalog {
         baseline: std::slice::from_ref(mailbox),
-        steps: &[],
         ordinary_indexes: std::slice::from_ref(index),
     }
 }
@@ -218,12 +212,12 @@ fn index_inventory(collection: &defra_node::CollectionVersion) -> Vec<Value> {
 
 #[tokio::test]
 async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_documents() {
-    let indexes = DEFAULT_ORDINARY_INDEXES
+    let indexes = ORDINARY_INDEXES
         .iter()
         .copied()
         .filter(|index| index.collection == AGENT_REQUEST_NAME)
         .collect::<Vec<_>>();
-    let registry = registry_with_request_index(&indexes);
+    let catalog = catalog_with_request_index(&indexes);
     let existing = fresh_node().await;
     existing
         .add_collection(AGENT_REQUEST)
@@ -241,7 +235,7 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
         .any(|index| index.name == "AgentRequest_node_did_session_id"));
     let before_rows = request_rows(existing.as_ref()).await;
 
-    ensure_migrations_with_registry(existing.as_ref(), &registry)
+    ensure(existing.as_ref(), &catalog)
         .await
         .expect("reconcile existing index");
     let after_first_reconciliation = existing
@@ -259,7 +253,7 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
         );
     }
 
-    ensure_migrations_with_registry(existing.as_ref(), &registry)
+    ensure(existing.as_ref(), &catalog)
         .await
         .expect("repeat reconciliation");
     let after_repeat = existing
@@ -437,7 +431,7 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
     .await;
 
     let fresh = fresh_node().await;
-    ensure_migrations_with_registry(fresh.as_ref(), &registry)
+    ensure(fresh.as_ref(), &catalog)
         .await
         .expect("fresh baseline and index");
     let fresh_collection = fresh
@@ -476,8 +470,8 @@ async fn mailbox_cursor_index_reconciles_on_an_existing_collection() {
         .iter()
         .any(|index| index.name == "MailboxItem_node_status_item_key"));
 
-    let registry = registry_with_mailbox_cursor_index();
-    ensure_migrations_with_registry(node.as_ref(), &registry)
+    let catalog = catalog_with_mailbox_cursor_index();
+    ensure(node.as_ref(), &catalog)
         .await
         .expect("reconcile cursor index on existing MailboxItem");
     let after = node
@@ -500,7 +494,7 @@ async fn mailbox_cursor_index_reconciles_on_an_existing_collection() {
         vec![("node_did", false), ("status", false), ("item_key", false)]
     );
 
-    ensure_migrations_with_registry(node.as_ref(), &registry)
+    ensure(node.as_ref(), &catalog)
         .await
         .expect("reconcile MailboxItem cursor index idempotently");
     node.shutdown().await.expect("shut down test node");
@@ -542,23 +536,20 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
 
-    let baseline = DEFAULT_BASELINE
+    let baseline = BASELINE
         .iter()
         .find(|entry| entry.name == AGENT_OUTPUT_SEGMENT_NAME)
         .unwrap();
-    let index = DEFAULT_ORDINARY_INDEXES
+    let index = ORDINARY_INDEXES
         .iter()
         .find(|index| index.collection == AGENT_OUTPUT_SEGMENT_NAME)
         .unwrap();
-    let registry = Registry {
+    let catalog = Catalog {
         baseline: std::slice::from_ref(baseline),
-        steps: &[],
         ordinary_indexes: std::slice::from_ref(index),
     };
     for _ in 0..2 {
-        ensure_migrations_with_registry(node.as_ref(), &registry)
-            .await
-            .unwrap();
+        ensure(node.as_ref(), &catalog).await.unwrap();
         let after = node
             .get_collection(AGENT_OUTPUT_SEGMENT_NAME)
             .unwrap()
@@ -604,22 +595,19 @@ async fn background_completion_recovery_seeks_pending_status_range() {
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let baseline = DEFAULT_BASELINE
+    let baseline = BASELINE
         .iter()
         .find(|c| c.name == AGENT_TOOL_CALL_NAME)
         .unwrap();
-    let index = DEFAULT_ORDINARY_INDEXES
+    let index = ORDINARY_INDEXES
         .iter()
         .find(|i| i.name == "AgentToolCall_node_await_status")
         .unwrap();
-    let registry = Registry {
+    let catalog = Catalog {
         baseline: std::slice::from_ref(baseline),
-        steps: &[],
         ordinary_indexes: std::slice::from_ref(index),
     };
-    ensure_migrations_with_registry(node.as_ref(), &registry)
-        .await
-        .unwrap();
+    ensure(node.as_ref(), &catalog).await.unwrap();
     let query = r#"query { AgentToolCall(filter:{node_did:{_eq:"n"},await_mode:{_eq:"background"},lifecycle_state:{_in:["completed","failed","timedOut","cancelled"]},status:{_like:"completionPending%",_ge:"completionPending",_lt:"completionPendinh"}}){tool_call_key} }"#;
     assert_indexed_query(node.as_ref(), query, index.name, 0).await;
     let cases = serde_json::json!([
@@ -682,22 +670,19 @@ async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
     let query = r#"query {AgentMessage(filter:{session_id:{_eq:"s"}},order:[{sequence:DESC},{_docID:ASC}],limit:30){_docID sequence}}"#;
     let original = node.execute(query).await;
     assert!(!original.has_errors(), "{:?}", original.errors);
-    let baseline = DEFAULT_BASELINE
+    let baseline = BASELINE
         .iter()
         .find(|c| c.name == AGENT_MESSAGE_NAME)
         .unwrap();
-    let index = DEFAULT_ORDINARY_INDEXES
+    let index = ORDINARY_INDEXES
         .iter()
         .find(|i| i.name == "AgentMessage_session_sequence")
         .unwrap();
-    let registry = Registry {
+    let catalog = Catalog {
         baseline: std::slice::from_ref(baseline),
-        steps: &[],
         ordinary_indexes: std::slice::from_ref(index),
     };
-    ensure_migrations_with_registry(node.as_ref(), &registry)
-        .await
-        .unwrap();
+    ensure(node.as_ref(), &catalog).await.unwrap();
     let result = node.execute(query).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     assert_eq!(original.data, result.data);
@@ -738,23 +723,20 @@ async fn transcript_tool_page_streams_sequence_and_key_order() {
     let query = r#"query { AgentToolCall(filter:{session_id:{_eq:"s"},node_did:{_eq:"n"},requester_did:{_eq:"r"}},order:[{message_sequence:DESC},{tool_call_key:DESC}],limit:10){_docID message_sequence tool_call_key} }"#;
     let original = node.execute(query).await;
     assert!(!original.has_errors(), "{:?}", original.errors);
-    let baseline = DEFAULT_BASELINE
+    let baseline = BASELINE
         .iter()
         .find(|c| c.name == AGENT_TOOL_CALL_NAME)
         .unwrap();
-    let index = DEFAULT_ORDINARY_INDEXES
+    let index = ORDINARY_INDEXES
         .iter()
         .find(|i| i.name == "AgentToolCall_session_sequence_key")
         .unwrap();
-    let registry = Registry {
+    let catalog = Catalog {
         baseline: std::slice::from_ref(baseline),
-        steps: &[],
         ordinary_indexes: std::slice::from_ref(index),
     };
     for _ in 0..2 {
-        ensure_migrations_with_registry(node.as_ref(), &registry)
-            .await
-            .unwrap();
+        ensure(node.as_ref(), &catalog).await.unwrap();
         let result = node.execute(query).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
         assert_eq!(original.data, result.data);
@@ -822,22 +804,19 @@ async fn inference_metrics_window_seeks_recent_terminal_calls() {
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let baseline = DEFAULT_BASELINE
+    let baseline = BASELINE
         .iter()
         .find(|c| c.name == INFERENCE_CALL_NAME)
         .unwrap();
-    let index = DEFAULT_ORDINARY_INDEXES
+    let index = ORDINARY_INDEXES
         .iter()
         .find(|i| i.name == "InferenceCall_kind_ended_at")
         .unwrap();
-    let registry = Registry {
+    let catalog = Catalog {
         baseline: std::slice::from_ref(baseline),
-        steps: &[],
         ordinary_indexes: std::slice::from_ref(index),
     };
-    ensure_migrations_with_registry(node.as_ref(), &registry)
-        .await
-        .unwrap();
+    ensure(node.as_ref(), &catalog).await.unwrap();
     let query = r#"query { InferenceCall(
         filter: { call_kind: { _eq: "inference" }, call_state: { _in: ["completed", "failed", "cancelled"] }, ended_at: { _ge: "2026-10-22T21:15:00" } },
         order: [{ ended_at: DESC }, { call_id: DESC }], limit: 500
@@ -878,24 +857,21 @@ async fn rendered_request_context_details_lookup_is_bounded_to_one_call() {
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
-    let baseline = DEFAULT_BASELINE
+    let baseline = BASELINE
         .iter()
         .find(|c| c.name == RENDERED_REQUEST_NAME)
         .unwrap();
-    let index = DEFAULT_ORDINARY_INDEXES
+    let index = ORDINARY_INDEXES
         .iter()
         .find(|i| i.name == "RenderedRequest_request_node_session_turn_attempt")
         .unwrap();
-    let registry = Registry {
+    let catalog = Catalog {
         baseline: std::slice::from_ref(baseline),
-        steps: &[],
         ordinary_indexes: std::slice::from_ref(index),
     };
     let query = r#"query { RenderedRequest(filter:{request_doc_id:{_eq:"physical-request"},node_did:{_eq:"node"},session_id:{_eq:"session"},turn_index:{_eq:73},attempt:{_eq:0},capture_scope:{_like:"inference.%"}},limit:2){capture_version source request_json provenance_json} }"#;
     for _ in 0..2 {
-        ensure_migrations_with_registry(node.as_ref(), &registry)
-            .await
-            .unwrap();
+        ensure(node.as_ref(), &catalog).await.unwrap();
         assert_indexed_query(node.as_ref(), query, index.name, 2).await;
         assert_eq!(
             before.version_id,

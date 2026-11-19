@@ -1,14 +1,14 @@
-use gents_migration::ensure_migrations;
 use gents_protocol::schemas;
 
-use crate::common;
+use super::common;
+use crate::schema::catalog::{ensure_runtime, SchemaError};
 
 #[tokio::test]
 async fn fresh_inference_usage_keeps_its_canonical_root_and_single_indexes() {
     let node = common::fresh_node().await;
     node.add_collection(schemas::INFERENCE_CALL).await.unwrap();
     let before = node.get_collection("InferenceCall").unwrap().unwrap();
-    ensure_migrations(node.as_ref()).await.unwrap();
+    ensure_runtime(node.as_ref()).await.unwrap();
     let after = node.get_collection("InferenceCall").unwrap().unwrap();
     assert_eq!(after.version_id, before.version_id);
     for name in ["session_id", "model_name", "profile_id"] {
@@ -36,11 +36,8 @@ async fn incompatible_inference_usage_stays_refused_without_schema_changes() {
         schemas::INFERENCE_CALL.replace("prompt_tokens: Int", "prompt_tokens: String");
     node.add_collection(&incompatible).await.unwrap();
     let before = node.get_collection("InferenceCall").unwrap().unwrap();
-    let error = ensure_migrations(node.as_ref()).await.unwrap_err();
-    assert!(matches!(
-        error,
-        gents_migration::Error::UnknownLineage { .. }
-    ));
+    let error = ensure_runtime(node.as_ref()).await.unwrap_err();
+    assert!(matches!(error, SchemaError::UnknownLineage { .. }));
     let versions = node.get_all_collection_versions().await.unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].version_id, before.version_id);

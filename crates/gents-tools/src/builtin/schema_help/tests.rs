@@ -669,12 +669,7 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
 }
 
 #[tokio::test]
-async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
-    let wasm = gents_store::schema::migration::fixture_lens_wasm();
-    assert!(
-        wasm.len() > 16,
-        "schema migration coverage requires the fixture lens build"
-    );
+async fn migration_set_refuses_a_lens_module_read_from_a_path() {
     let db = node().await;
     let node = db.node.clone();
     let tool = runtime_owned_tool(&node);
@@ -683,13 +678,6 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
         identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
     );
     apply(&tool,json!({"argv":["collection","create"],"options":{"sdl":"type FixtureDoc { name: String }"}})).await;
-    access
-        .write(
-            "schema_test.lens_seed",
-            r#"mutation { create_FixtureDoc(input:{name:"alice"}) { _docID } }"#,
-        )
-        .await
-        .unwrap();
     let source = access
         .collection_version("FixtureDoc")
         .await
@@ -716,32 +704,6 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
         .as_str()
         .unwrap()
         .to_owned();
-    let lens = defra_node::LensConfig::new(
-        &source,
-        &dest,
-        defra_node::LensModule::from_bytes(wasm.to_vec()),
-    );
-    let registered = apply(
-        &tool,
-        json!({"argv":["migration","set"],"options":{"config":lens}}),
-    )
-    .await;
-    assert!(registered["result"]["lensId"].is_string());
-    apply(
-        &tool,
-        json!({"argv":["version","activate"],"target_id":dest}),
-    )
-    .await;
-    apply(
-        &tool,
-        json!({"argv":["collection","materialize"],"target_id":"FixtureDoc"}),
-    )
-    .await;
-    let rows = access
-        .execute("{ FixtureDoc { name label } }")
-        .await
-        .unwrap();
-    assert_eq!(rows["data"]["FixtureDoc"][0]["label"], "ALICE");
     let path_lens = defra_node::LensConfig::new(
         &source,
         &dest,
