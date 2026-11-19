@@ -47,11 +47,6 @@ on:
         required: false
         type: string
         default: ""
-      test_cache:
-        description: Test-result cache for the in-build portable slice on this run only (off, on, or full to run every test and record); empty uses GENTS_CI_TEST_CACHE.
-        required: false
-        type: string
-        default: ""
 
 # A new push to a pull request cancels its run in progress. A run of main, a
 # merge queue entry or a dispatch finishes: main's post-merge run is the only
@@ -74,14 +69,6 @@ env:
   # test-rust-build-space.py evaluates this condition per event.
   GENTS_CI_KEEP_TARGET_TREE: >-
     ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-    (github.event_name == 'pull_request' &&
-    github.event.pull_request.head.repo.full_name == github.repository) }}
-  # Only runs of this repository's own code record test results: pushes to
-  # main, the scheduled run, merge queue entries, dispatches and pull requests
-  # from this repository's branches. Fork pull requests never record.
-  GATE_TEST_CACHE_TRUSTED: >-
-    ${{ github.event_name == 'push' || github.event_name == 'schedule' ||
-    github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
     (github.event_name == 'pull_request' &&
     github.event.pull_request.head.repo.full_name == github.repository) }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -170,12 +157,7 @@ jobs:
             && 'true' || env.GATE_EVERYTHING }}
           # gate.py selects the scheduled run's jobs itself (resolve_plan).
           GATE_ONLY: ${{ inputs.only }}
-          # scripts/ci/gate.py test_cache_mode reads these.
           GATE_EVENT: ${{ github.event_name }}
-          GATE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          GATE_TEST_CACHE_INPUT: ${{ inputs.test_cache }}
-          GATE_TEST_CACHE: ${{ vars.GENTS_CI_TEST_CACHE }}
-          GATE_TEST_CACHE_MAIN: ${{ vars.GENTS_CI_TEST_CACHE_MAIN }}
           GATE_RUNNER_OVERRIDES: ${{ inputs.runner_overrides }}
           GATE_FALLBACK: ${{ vars.GENTS_CI_FALLBACK }}
           GATE_FORK: >-
@@ -498,13 +480,6 @@ jobs:
       - name: Check proofs, generated files and structure
         run: make gate-run JOB=contract
 
-      # Here rather than in repository-guard: this job already has the
-      # proofs' Lean toolchain and dependencies, which a cold guard runner
-      # spent its whole 10 minutes fetching.
-      - name: Check the test-result cache against its Lean model
-        if: fromJSON(needs.plan.outputs.plan).contract.test_cache_model
-        run: .github/scripts/check-test-cache-model.sh
-
       - name: Show Rust build cache stats
         if: always()
         run: .github/scripts/show-sccache-stats.sh
@@ -637,18 +612,7 @@ jobs:
         run: .github/scripts/setup-nextest.sh
 
       - name: Build the ${{ matrix.archive }} test archive
-        env:
-          GATE_TEST_CACHE_REPORT: ${{ runner.temp }}/test-cache-report.json
         run: make gate-run JOB="build:${{ matrix.archive }}${{ matrix.partition && format(':{0}', matrix.partition) || '' }}"
-
-      - name: Upload the test cache report
-        if: always() && matrix.test_cache != 'off'
-        uses: actions/upload-artifact@v7
-        with:
-          name: gents-test-cache-${{ matrix.archive }}${{ matrix.partition && format('-{0}', matrix.partition) || '' }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/test-cache-report.json
-          if-no-files-found: ignore
-          retention-days: 14
 
       - name: Upload the ${{ matrix.archive }} test archive
         if: ${{ !matrix.run }}
