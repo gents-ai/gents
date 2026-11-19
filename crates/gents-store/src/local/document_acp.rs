@@ -204,6 +204,24 @@ pub fn ensure_node_publication(node: &defra_node::Node) -> Result<()> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigurationGrantRoute {
+    Direct,
+    OwnerStaged,
+}
+
+/// How a configuration actor changes a relation only the document's owner
+/// manages (`Identity.OwnerStaged.configurationGrantRoute`).
+pub fn configuration_grant_route(
+    provider: DocumentAcp,
+    actor_owns: bool,
+) -> ConfigurationGrantRoute {
+    match (provider, actor_owns) {
+        (DocumentAcp::Local, _) | (DocumentAcp::Vera, true) => ConfigurationGrantRoute::Direct,
+        (DocumentAcp::Vera, false) => ConfigurationGrantRoute::OwnerStaged,
+    }
+}
+
 /// Where `node` decides document access.
 pub fn provider_of(node: &defra_node::Node) -> DocumentAcp {
     #[cfg(feature = "vera")]
