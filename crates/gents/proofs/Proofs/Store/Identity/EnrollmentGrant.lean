@@ -688,9 +688,11 @@ refuses every document read, write and relationship change of an actor
 without those permissions, whatever its document relations; the revision that
 retires the receipt also withdraws the member's routes and replication. What
 remains exposed until the withdrawal is issued: the `administrator` relation
-itself, which grants document access again the moment the member holds those
-permissions from another source (an independent grant, another grant set, a
-peer whose node ACP grants them against the same Vera deployment). -/
+itself. The runtime grants the member no node permission meanwhile
+(`permissionGrantAdmitted`), so it turns into access again only through a
+node permission granted outside the runtime: natively over HTTP by the NAC
+owner, or by a peer whose node ACP grants it against the same Vera
+deployment. -/
 
 /-- The Node's standing on its own Node document. -/
 def nodeStanding : Standing := .runtimeReader
