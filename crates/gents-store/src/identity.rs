@@ -29,9 +29,10 @@ pub use enrollment_approval::{
     EnrollmentApproval, EnrollmentApprovalError,
 };
 pub use enrollment_grant::{
-    grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant,
-    plan_membership_withdrawal, plan_withdrawal, EnrollmentGrantError, EnrollmentGrantOutcome,
-    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal,
+    administration_owed, after_removal, grant_enrollment_authority, load_enrollment_grant_receipts,
+    plan_grant, plan_membership_withdrawal, plan_owing, plan_withdrawal, settle_owed_withdrawals,
+    settlement_step, AfterRemoval, EnrollmentGrantError, EnrollmentGrantOutcome,
+    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal, SettlementStep,
 };
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};

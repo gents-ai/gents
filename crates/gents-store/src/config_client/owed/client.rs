@@ -73,10 +73,12 @@ where
     }
 }
 
-/// Start settling in the background what the endpoint's own User owes,
-/// when the endpoint mints Vera delegations; `tell` hands a failure, in
-/// product words, to whoever tells the person. Nothing is started for any
-/// other endpoint.
+/// Start settling in the background what the endpoint's own User owes and
+/// the administration withdrawals its home owes it (Lean
+/// `Identity.EnrollmentGrant.settlementStep`), when the endpoint signs as its
+/// own User with the key it holds, on a local home as on a Vera home; `tell`
+/// hands a failure, in product words, to whoever tells the person. Nothing is
+/// started for any other endpoint.
 pub fn spawn_settlement<T>(
     endpoint: GraphqlEndpoint,
     node_did: String,
@@ -85,7 +87,7 @@ pub fn spawn_settlement<T>(
 where
     T: FnOnce(OwedSettlementFailed) + Send + 'static,
 {
-    endpoint.mints_delegations().then(|| {
+    endpoint.held_client_signing_capability().is_ok().then(|| {
         tokio::spawn(async move {
             let pass = EndpointPass {
                 endpoint: &endpoint,

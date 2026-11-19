@@ -29,6 +29,7 @@ structure ReceiptObservation where
   member : String
   tuples : List String
   withdrawn : Bool
+  owed : Bool
   deriving ToJson
 
 structure StepObservation where
@@ -51,13 +52,17 @@ def applyStep (s : State) (step : StepInput) : State :=
   else if step.action == "grant_interrupted" then
     grantInterrupted s step.request step.member step.issued
   else if step.action == "abandon" then abandon s step.request
+  else if step.action == "owe_revoke" then revokeBy nodeStanding s step.request
+  else if step.action == "owe_revoke_member" then revokeMemberBy nodeStanding s step.member
+  else if step.action == "settle" then settle .owner s step.member
+  else if step.action == "settle_by_node" then settle nodeStanding s step.member
   else revoke s step.request
 
 def observe (subjects : List String) (s : State) : StepObservation :=
   { holdings := subjects.map fun subject => { subject, tuples := heldOf s subject }
     receipts := s.receipts.reverse.map fun r =>
       { request := r.request, member := r.member, tuples := r.tuples.map Tuple.name
-        withdrawn := r.withdrawn } }
+        withdrawn := r.withdrawn, owed := r.owed } }
 
 def trace (subjects : List String) (s : State) : List StepInput → List StepObservation
   | [] => []
@@ -82,6 +87,18 @@ def interruptedStep (request member : String) (issued : Nat) : StepInput :=
 
 def abandonStep (request : String) : StepInput :=
   { action := "abandon", request, member := "", tuple := "", issued := 0 }
+
+def oweRevokeStep (request : String) : StepInput :=
+  { action := "owe_revoke", request, member := "", tuple := "", issued := 0 }
+
+def oweRevokeMemberStep (member : String) : StepInput :=
+  { action := "owe_revoke_member", request := "", member, tuple := "", issued := 0 }
+
+def settleStep (member : String) : StepInput :=
+  { action := "settle", request := "", member, tuple := "", issued := 0 }
+
+def settleByNodeStep (member : String) : StepInput :=
+  { action := "settle_by_node", request := "", member, tuple := "", issued := 0 }
 
 /-- An approval failing at each point its issuing can fail at, abandoned, then
 retried. -/
@@ -119,7 +136,27 @@ def traceCases : List (String × List StepInput) :=
       [independentStep "member" "update-document", abandonStep "a"]),
    ("revoked-request-is-not-reissued",
       [grantStep "a" "member", revokeStep "a", interruptedStep "a" "member" 2,
-       grantStep "a" "member"])] ++ abandonedAtEveryPoint
+       grantStep "a" "member"]),
+   ("a-denial-the-node-finds-owes-administration-until-the-owner-settles",
+      [grantStep "a" "member", oweRevokeStep "a", settleByNodeStep "member",
+       settleStep "member", settleStep "member"]),
+   ("a-revocation-the-node-finds-owes-every-generations-administration",
+      [independentStep "member" "read-document", grantStep "first" "member",
+       grantStep "renewal" "member", oweRevokeMemberStep "member", settleByNodeStep "member",
+       settleStep "member"]),
+   ("a-denial-sharing-administration-with-a-live-enrollment-owes-nothing",
+      [grantStep "a" "member", grantStep "b" "member", oweRevokeStep "a", settleStep "member",
+       oweRevokeStep "b", settleStep "member"]),
+   ("an-independent-administrator-owes-nothing",
+      [independentStep "member" "node-administrator", grantStep "a" "member",
+       oweRevokeStep "a", settleStep "member"]),
+   ("a-reapproval-takes-the-owed-withdrawal-over",
+      [grantStep "a" "member", oweRevokeStep "a", grantStep "b" "member", settleStep "member",
+       oweRevokeStep "b", settleStep "member"]),
+   ("an-owed-withdrawal-survives-other-steps",
+      [grantStep "a" "member", grantStep "c" "other", oweRevokeStep "a", revokeStep "c",
+       oweRevokeMemberStep "member", abandonStep "a", settleStep "other", settleStep "member"])]
+    ++ abandonedAtEveryPoint
 
 @[conformance_family]
 def cases : Family CaseInput TraceOutput where
