@@ -28,7 +28,7 @@ mod sse_state;
 mod transport;
 
 #[cfg(test)]
-use crate::clients::claude_subscription::ClaudeStreamResponse;
+use crate::llm::rig_compat::model::StreamEnd;
 pub(crate) use error::non_success_message;
 #[cfg(test)]
 pub(crate) use error::{body_prefix, non_success_error, NON_SUCCESS_BODY_PREFIX_BYTES};

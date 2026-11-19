@@ -11,6 +11,10 @@ pub enum ConfigClientError {
     ReadVariablesUnsupported,
     #[error(transparent)]
     PackApproval(#[from] super::PackApprovalError),
+    #[error(transparent)]
+    Delegation(#[from] super::DelegationError),
+    #[error("a write for a User was refused")]
+    UserWrite(#[from] super::user_write::UserWriteRefusal),
     #[error("verified pack effect failed")]
     PackEvidence(#[source] Box<super::PackEvidenceError>),
     #[error("client Agent publication journal could not be recorded")]
@@ -183,6 +187,8 @@ pub enum ConfigClientError {
         "this backend does not support transaction-bound relationship or permission operations"
     )]
     TransactionAuthorizationUnsupported,
+    #[error("a read whose rows the runtime uses must select each row's _docID")]
+    RuntimeUseRowWithoutDocId,
     #[error("invalid resource relationship target")]
     InvalidResourceRelationshipTarget,
     #[error("{collection} {doc_id} is not owned by this runtime or one of its Agents")]
@@ -232,7 +238,7 @@ pub enum ConfigClientError {
     PermissionObservationMissing,
     #[error("runtime identity cannot act for agent document work")]
     RuntimeDocumentActor,
-    #[error("{source}\n{}", super::graphql_diagnostic_hint(endpoint, source.refused_by_runtime()))]
+    #[error("{}", super::graphql_query_failure(endpoint, source))]
     HttpQuery {
         endpoint: String,
         #[source]
@@ -535,6 +541,86 @@ impl ConfigClientError {
                     reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
                 )
             })
+    }
+
+    /// Whether the edge of a Vera home refused this request's identity token
+    /// and asked for a delegation, which is told as an update of Gents
+    /// (`Identity.HeldAudience.told`). External premise: only that edge
+    /// answers 401 with `DELEGATION_REQUIRED_CODE`.
+    pub fn edge_requires_delegation(&self) -> bool {
+        use gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE;
+        let named = |status: &reqwest::StatusCode, body: &str| {
+            *status == reqwest::StatusCode::UNAUTHORIZED
+                && serde_json::from_str::<serde_json::Value>(body).is_ok_and(|body| {
+                    body.get("code").and_then(serde_json::Value::as_str)
+                        == Some(DELEGATION_REQUIRED_CODE)
+                })
+        };
+        match self.access() {
+            Self::Protocol(error) => error.refusal_code().is_some_and(|(status, code)| {
+                status == reqwest::StatusCode::UNAUTHORIZED && code == DELEGATION_REQUIRED_CODE
+            }),
+            Self::StorageFailure(error) | Self::HttpQuery { source: error, .. } => {
+                error.edge_requires_delegation()
+            }
+            Self::NodePermissionStatus { status, body }
+            | Self::RelationshipStatus { status, body }
+            | Self::OwnerStagedRouteStatus { status, body }
+            | Self::DocumentRelationshipStatus { status, body }
+            | Self::SchemaStatus { status, body, .. }
+            | Self::SchemaOperationStatus { status, body }
+            | Self::TxBeginStatus { status, body, .. }
+            | Self::TxCommitStatus { status, body, .. } => named(status, body),
+            _ => false,
+        }
+    }
+
+    /// What a node answered this request with that may refuse the
+    /// credential it presented (`Identity.HeldAudience.refusalOf`): a 401 or
+    /// 403, or DefraDB refusing its delegation for its window.
+    pub(crate) fn credential_answer(
+        &self,
+    ) -> Option<gents_protocol::delegation_audience::CredentialAnswer> {
+        use gents_protocol::delegation_audience::CredentialAnswer;
+        if self.delegation_outside_window() {
+            return Some(CredentialAnswer::OutsideWindow);
+        }
+        self.credential_refusal_status()
+            .map(|status| CredentialAnswer::of_status(status.as_u16()))
+    }
+
+    fn delegation_outside_window(&self) -> bool {
+        match self {
+            Self::Response(crate::graphql::GraphqlResponseError::Access(error))
+            | Self::StorageFailure(error)
+            | Self::HttpQuery { source: error, .. } => error.delegation_outside_window(),
+            _ => self.database_failure().is_some_and(
+                gents_protocol::database_error::GraphqlFailure::is_delegation_outside_window,
+            ),
+        }
+    }
+
+    /// The 401 or 403 a node answered this request with, which may refuse
+    /// the credential it presented (`Identity.HeldAudience.refusalOf`).
+    pub(crate) fn credential_refusal_status(&self) -> Option<reqwest::StatusCode> {
+        let status = match self.access() {
+            Self::NodePermissionStatus { status, .. }
+            | Self::HttpOperationStatus { status, .. }
+            | Self::RelationshipStatus { status, .. }
+            | Self::DocumentRelationshipStatus { status, .. }
+            | Self::OwnerStagedRouteStatus { status, .. }
+            | Self::SchemaStatus { status, .. }
+            | Self::SchemaOperationStatus { status, .. }
+            | Self::TxBeginStatus { status, .. }
+            | Self::TxCommitStatus { status, .. }
+            | Self::TxDiscardStatus { status, .. } => Some(*status),
+            access => access.transport_error().and_then(reqwest::Error::status),
+        }?;
+        matches!(
+            status,
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        )
+        .then_some(status)
     }
 
     /// The HTTP transport source held by this typed access error, if any.

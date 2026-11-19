@@ -12,18 +12,35 @@ const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
-        .get_or_try_init(|| async {
-            tokio::task::spawn_blocking(|| {
-                reqwest::Client::builder()
-                    .timeout(HTTP_TIMEOUT)
-                    .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT)
-                    .build()
-                    .map_err(ConfigClientError::HttpClientBuild)
-            })
-            .await
-            .map_err(ConfigClientError::HttpClientJoin)?
-        })
+        .get_or_try_init(|| build_client(Some(HTTP_TIMEOUT)))
         .await
+}
+
+/// The client of an HTTP write (an auto-commit mutation or a transaction):
+/// its requests wait for the server's answer or a connection failure, never a
+/// client clock. A commit abandoned by a total request timeout while a loaded
+/// server is still committing has an unknown outcome that only the server's
+/// death justifies (`tla/CommitResponseWait.tla`, `ClientWindow`); bounding a
+/// wedged commit is the server's (`Wedged`).
+async fn write_http_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+    CLIENT.get_or_try_init(|| build_client(None)).await
+}
+
+async fn build_client(total: Option<std::time::Duration>) -> Result<reqwest::Client> {
+    tokio::task::spawn_blocking(move || {
+        let builder = reqwest::Client::builder()
+            .connect_timeout(HTTP_TIMEOUT)
+            .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT);
+        match total {
+            Some(total) => builder.timeout(total),
+            None => builder,
+        }
+        .build()
+        .map_err(ConfigClientError::HttpClientBuild)
+    })
+    .await
+    .map_err(ConfigClientError::HttpClientJoin)?
 }
 
 pub(super) async fn auto_commit(
@@ -41,11 +58,46 @@ pub(super) async fn auto_commit(
         Some(variables) => serde_json::json!({"query": mutation, "variables": variables}),
         None => serde_json::json!({"query": mutation}),
     };
-    let response = endpoint
-        .authorize(http_client().await?.post(endpoint.url()))?
-        .json(&body)
-        .send()
-        .await
+    match auto_commit_once(endpoint, &body).await? {
+        (Err(refused), false) if recovers_window(endpoint, &refused).await => {
+            auto_commit_once(endpoint, &body).await?.0
+        }
+        (answered, _) => answered,
+    }
+}
+
+/// Whether `error` is a delegation DefraDB refused for its window, which the
+/// endpoint recovers by minting it again at its home's clock and sending the
+/// request once more (`Identity.HeldAudience.resend`). External premise
+/// (defradb.rs#3006): such a write was refused before anything was written.
+async fn recovers_window(endpoint: &GraphqlEndpoint, error: &ConfigClientError) -> bool {
+    match error.credential_answer() {
+        Some(answer @ gents_protocol::delegation_audience::CredentialAnswer::OutsideWindow) => {
+            endpoint.recovers(answer).await
+        }
+        _ => false,
+    }
+}
+
+/// One mutation, sent once more for a refused credential, and whether it was.
+async fn auto_commit_once(
+    endpoint: &GraphqlEndpoint,
+    body: &Value,
+) -> Result<(Result<Value>, bool)> {
+    let client = write_http_client().await?;
+    let (response, resent) = endpoint
+        .send_counting_resends(|endpoint| {
+            Ok(endpoint.authorize(client.post(endpoint.url()))?.json(body))
+        })
+        .await?;
+    Ok((answer_mutation(endpoint, response).await, resent))
+}
+
+async fn answer_mutation(
+    endpoint: &GraphqlEndpoint,
+    response: std::result::Result<reqwest::Response, reqwest::Error>,
+) -> Result<Value> {
+    let response = response
         .map_err(|source| ConfigClientError::PostMutation {
             endpoint: endpoint.to_string(),
             source,
@@ -80,6 +132,30 @@ pub(super) async fn query_with_options(
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
     ensure_query_document(query)?;
+    let answered = query_once(endpoint, query, variables, options).await;
+    let refused = match &answered {
+        Err(ConfigClientError::Protocol(error)) => {
+            error.transport_error().and_then(reqwest::Error::status)
+        }
+        _ => None,
+    };
+    match (refused, &answered) {
+        (Some(status), _) if endpoint.recovers_refusal(status).await => {
+            query_once(endpoint, query, variables, options).await
+        }
+        (None, Err(error)) if recovers_window(endpoint, error).await => {
+            query_once(endpoint, query, variables, options).await
+        }
+        _ => answered,
+    }
+}
+
+async fn query_once(
+    endpoint: &GraphqlEndpoint,
+    query: &str,
+    variables: Option<&Value>,
+    options: GraphqlRequestOptions,
+) -> Result<Value> {
     let authorization = endpoint.authorization()?;
     Ok(match variables {
         Some(variables) => {
@@ -102,7 +178,7 @@ pub(super) async fn txn_begin(
     endpoint: &GraphqlEndpoint,
     read_only: bool,
 ) -> Result<(reqwest::Client, String)> {
-    let client = http_client().await?.clone();
+    let client = write_http_client().await?.clone();
     let path = format!("{}/tx", graphql_api_base(endpoint.url())?);
     let url = if read_only {
         format!("{path}?read_only=true")
@@ -110,9 +186,8 @@ pub(super) async fn txn_begin(
         path
     };
     let response = endpoint
-        .authorize(client.post(url))?
-        .send()
-        .await
+        .send_resolving(|endpoint| endpoint.authorize(client.post(&url)))
+        .await?
         .map_err(|source| ConfigClientError::PostTxBegin {
             endpoint: endpoint.to_string(),
             source,
@@ -157,8 +232,7 @@ pub(super) async fn txn_execute(
     variables: &Value,
 ) -> Result<Value> {
     let response = endpoint
-        .authorize(client.post(endpoint.url()))?
-        .header("x-defradb-tx", id)
+        .authorize_in_transaction(client.post(endpoint.url()), id)?
         .json(&serde_json::json!({"query": query, "variables": variables}))
         .send()
         .await

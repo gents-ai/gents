@@ -1,11 +1,63 @@
 pub use gents_loop::rig_compat::*;
 
 /// Rig's provider clients by the wire protocol each speaks, generic over the
-/// transport that carries it.
+/// native transport that carries it.
 pub mod providers {
-    pub use rig::providers::openai::Client as ResponsesClient;
-    pub use rig::providers::openai::CompletionsClient as ChatCompletionsClient;
-    pub use rig::providers::openrouter::Client as OpenRouterClient;
+    use anyhow::{Context, Result};
+    use gents_loop::rig_compat::http::{HeaderMap, Lifted, Transport};
+
+    pub type ResponsesClient<T> = rig::providers::openai::Client<Lifted<T>>;
+    pub type ChatCompletionsClient<T> = rig::providers::openai::CompletionsClient<Lifted<T>>;
+    pub type OpenRouterClient<T> = rig::providers::openrouter::Client<Lifted<T>>;
+
+    pub fn build_openai_responses_client<H>(
+        api_key: &str,
+        base_url: &str,
+        http_client: H,
+        http_headers: HeaderMap,
+    ) -> Result<ResponsesClient<H>>
+    where
+        H: Default + Transport,
+    {
+        rig::providers::openai::Client::builder()
+            .api_key(api_key)
+            .base_url(base_url)
+            .http_headers(http_headers)
+            .http_client(Lifted(http_client))
+            .build()
+            .context("building OpenAI Responses client")
+    }
+
+    pub fn build_openai_chat_completions_client<H>(
+        api_key: &str,
+        base_url: &str,
+        http_client: H,
+    ) -> Result<ChatCompletionsClient<H>>
+    where
+        H: Default + Transport,
+    {
+        rig::providers::openai::CompletionsClient::builder()
+            .api_key(api_key)
+            .base_url(base_url)
+            .http_client(Lifted(http_client))
+            .build()
+            .context("building OpenAI Chat Completions client")
+    }
+
+    pub fn build_openrouter_client<H>(
+        api_key: &str,
+        base_url: &str,
+        http_client: H,
+    ) -> Result<OpenRouterClient<H>>
+    where
+        H: Default + Transport,
+    {
+        Ok(rig::providers::openrouter::Client::builder()
+            .api_key(api_key)
+            .base_url(base_url)
+            .http_client(Lifted(http_client))
+            .build()?)
+    }
 }
 
 use async_stream::try_stream;

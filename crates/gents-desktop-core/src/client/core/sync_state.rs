@@ -24,7 +24,7 @@ pub(in crate::client) struct ClientSyncStateOwner {
 
 impl ClientSyncStateOwner {
     #[cfg(test)]
-    pub(super) async fn for_test(
+    pub(in crate::client) async fn for_test(
         records: Vec<PeerRecord>,
         peers: Vec<ClientPeerStatus>,
     ) -> (tempfile::TempDir, Self) {
@@ -66,6 +66,7 @@ impl ClientSyncStateOwner {
             enrollment_activation_errors: BTreeMap::new(),
             directory: records,
             peers,
+            unkept_changes: Vec::new(),
         });
         Self {
             tx,
@@ -309,6 +310,43 @@ impl ClientSyncStateOwner {
             self.publish_persisted_directory(directory.records().to_vec());
         }
         Ok(replaced)
+    }
+
+    /// Apply what a status read reports to the audience `expected` holds
+    /// (`Identity.HeldAudience.change`), returning the change and the record
+    /// as it now stands; a record another writer moved first is left to it.
+    pub(in crate::client) async fn observe_delegation_audience(
+        &self,
+        expected: &PeerRecord,
+        reported: &gents_protocol::delegation_audience::ReportedDelegationAudience,
+    ) -> anyhow::Result<(
+        gents_protocol::delegation_audience::HeldAudienceChange,
+        PeerRecord,
+    )> {
+        use gents_protocol::delegation_audience::HeldAudienceChange;
+        let change = reported.change_for(expected.delegation_audience.as_ref());
+        if change == HeldAudienceChange::Unchanged {
+            return Ok((change, expected.clone()));
+        }
+        let mut replacement = expected.clone();
+        replacement.delegation_audience = change
+            .clone()
+            .held_after(expected.delegation_audience.clone());
+        Ok(match self.replace_record(expected, replacement).await? {
+            Some(updated) => (change, updated),
+            None => (HeldAudienceChange::Unchanged, expected.clone()),
+        })
+    }
+
+    /// Tell, once, that the home `node_did` did not keep a change; a later
+    /// one replaces it.
+    pub(super) fn report_unkept_change(&self, unkept: super::owed_settlement::UnkeptChange) {
+        self.tx.send_modify(|state| {
+            state
+                .unkept_changes
+                .retain(|told| told.node_did != unkept.node_did);
+            state.unkept_changes.push(unkept);
+        });
     }
 
     pub(super) async fn set_pairing_ready(
@@ -567,11 +605,15 @@ mod tests {
         use super::super::EnrollmentActivationStage;
         use super::*;
         use serde_json::Value;
-        let output = gents_lean_contract::run_prepared_generator(
-            &gents_lean_contract::proofs_dir().unwrap(),
-            "Proofs.Conformance.EnrollmentActivation:olean",
-            "Proofs/Conformance/EnrollmentActivation.lean",
-        )
+        let output = tokio::task::spawn_blocking(|| {
+            gents_lean_contract::run_prepared_generator(
+                &gents_lean_contract::proofs_dir().unwrap(),
+                "Proofs.Conformance.EnrollmentActivation:olean",
+                "Proofs/Conformance/EnrollmentActivation.lean",
+            )
+        })
+        .await
+        .unwrap()
         .unwrap();
         let cases: Vec<Value> = serde_json::from_str(&output).unwrap();
         assert!(!cases.is_empty());

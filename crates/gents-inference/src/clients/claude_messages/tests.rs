@@ -497,7 +497,7 @@ fn sse_tool_use_block(id: &str, name: &str, start_input: &str, deltas: &[&str]) 
     sse
 }
 
-fn tool_call_arguments(events: &[RawStreamingChoice<ClaudeStreamResponse>]) -> Value {
+fn tool_call_arguments(events: &[RawStreamingChoice<StreamEnd>]) -> Value {
     match &events[0] {
         RawStreamingChoice::ToolCall(call) => call.arguments.clone(),
         other => panic!("expected ToolCall first, got {other:?}"),
@@ -568,7 +568,7 @@ fn sse_error_event_becomes_provider_error() {
     );
 }
 
-fn event_key(event: &RawStreamingChoice<ClaudeStreamResponse>) -> String {
+fn event_key(event: &RawStreamingChoice<StreamEnd>) -> String {
     match event {
         RawStreamingChoice::Message(text) => format!("text:{text}"),
         RawStreamingChoice::ToolCall(call) => {
@@ -795,7 +795,7 @@ fn claude_sse_dispatch_cases_drive_the_stream_state() {
         }
     }
 
-    fn emitted(event: &RawStreamingChoice<ClaudeStreamResponse>) -> sse::SseEmitted {
+    fn emitted(event: &RawStreamingChoice<StreamEnd>) -> sse::SseEmitted {
         let base = |kind: &str| sse::SseEmitted {
             kind: kind.into(),
             text: None,

@@ -226,7 +226,9 @@ pub async fn load_node_snapshot_on(
             NodeRuntimeList::new(node_did),
             NodeReadinessList::new(node_did),
             RequestRows::new(Scope::Node(node_did.to_owned())).nonterminal(),
-            gents_automation::views::MailboxRows::new(node_did).open(),
+            gents_automation::views::MailboxRows::new(node_did)
+                .open()
+                .for_reader(),
             gents_automation::views::GoalRows::new(node_did),
             gents_session::views::SessionList {
                 input: gents_protocol::operations::session::SessionListInput {

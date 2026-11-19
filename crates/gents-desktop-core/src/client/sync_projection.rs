@@ -248,6 +248,7 @@ mod tests {
             peers: (0..case.configured_peers)
                 .map(|index| peer(index as usize, index < case.dialed_peers))
                 .collect(),
+            unkept_changes: Vec::new(),
         }
     }
 }

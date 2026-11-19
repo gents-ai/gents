@@ -32,14 +32,7 @@ impl crate::client::ClientCore {
             let Some(graphql) = record.graphql.as_deref() else {
                 return Ok(None);
             };
-            let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-                self.node_identity().private_key_bytes(),
-            )?;
-            gents_store::config_client::GraphqlEndpoint::as_principal(
-                graphql,
-                self.node_identity().did(),
-            )
-            .with_client_signing_capability(capability)?
+            self.saved_user_endpoint(graphql, record)?
         } else {
             return Ok(None);
         };
@@ -66,9 +59,8 @@ impl crate::client::ClientCore {
             .timeout(std::time::Duration::from_secs(2))
             .build()?;
         let mut response = endpoint
-            .authorize(client.post(url).json(key))?
-            .send()
-            .await
+            .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(key)))
+            .await?
             .map_err(|error| {
                 let message = error.to_string();
                 crate::error::BridgeError::runtime_http_error(error, message)
@@ -80,6 +72,11 @@ impl crate::client::ClientCore {
             response.status(),
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
         ) {
+            let status = response.status();
+            let body = response.bytes().await.unwrap_or_default();
+            if let Some(update) = crate::error::BridgeError::home_refusal(status, &body) {
+                return Err(update.into());
+            }
             return Err(crate::error::BridgeError::new(
                 crate::error::BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",

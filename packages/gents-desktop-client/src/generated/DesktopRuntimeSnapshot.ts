@@ -4,5 +4,6 @@ import type { EndedAccessView } from "./EndedAccessView.js";
 import type { EnrollmentRequestView } from "./EnrollmentRequestView.js";
 import type { P2PHealthView } from "./P2PHealthView.js";
 import type { SyncHealthView } from "./SyncHealthView.js";
+import type { UnkeptChangeView } from "./UnkeptChangeView.js";
 
-export type DesktopRuntimeSnapshot = { clientDid: string, p2pHealth: P2PHealthView, syncHealth: SyncHealthView, enrollmentRequests: Array<EnrollmentRequestView> | null, rowCount: number, approxSerializedBytes: number, operatorConfigAuthoritativeNodeDids?: Array<string>, deployments: Array<DeploymentView>, endedAccess: Array<EndedAccessView>, };
+export type DesktopRuntimeSnapshot = { clientDid: string, p2pHealth: P2PHealthView, syncHealth: SyncHealthView, enrollmentRequests: Array<EnrollmentRequestView> | null, rowCount: number, approxSerializedBytes: number, operatorConfigAuthoritativeNodeDids?: Array<string>, deployments: Array<DeploymentView>, endedAccess: Array<EndedAccessView>, unkeptChanges: Array<UnkeptChangeView>, };

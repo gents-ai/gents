@@ -678,6 +678,9 @@ impl ToolSurface {
                 self.host_tools
                     .read_root()
                     .map(std::path::Path::to_path_buf),
+                self.host_tools
+                    .write_root()
+                    .map(std::path::Path::to_path_buf),
                 runtime.node.clone(),
                 &runtime.node_did,
                 runtime

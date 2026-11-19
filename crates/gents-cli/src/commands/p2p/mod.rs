@@ -80,9 +80,13 @@ pub(super) async fn p2p_probe_get(
     graphql: &gents_store::config_client::GraphqlEndpoint,
     url: &str,
 ) -> Value {
-    let request = p2p_http_client().and_then(|client| Ok(graphql.authorize(client.get(url))?));
-    let response = match request {
-        Ok(request) => gents_host::http_client::http_get_json::<Value>(request).await,
+    let response = match p2p_http_client() {
+        Ok(client) => {
+            gents_host::http_client::endpoint_get_json::<Value, _>(graphql, |graphql| {
+                graphql.authorize(client.get(url))
+            })
+            .await
+        }
         Err(error) => Err(error),
     };
     match response {

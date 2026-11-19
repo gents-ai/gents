@@ -452,6 +452,28 @@ pub struct DesktopRuntimeSnapshot {
     pub operator_config_authoritative_node_dids: Option<Vec<String>>,
     pub deployments: Vec<DeploymentView>,
     pub ended_access: Vec<EndedAccessView>,
+    pub unkept_changes: Vec<UnkeptChangeView>,
+}
+
+/// A change a home did not keep; `message` is what the person reads.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnkeptChangeView {
+    pub node_did: String,
+    pub label: String,
+    pub at: String,
+    pub message: String,
+}
+
+impl From<gents_desktop_core::client::UnkeptChange> for UnkeptChangeView {
+    fn from(unkept: gents_desktop_core::client::UnkeptChange) -> Self {
+        Self {
+            node_did: unkept.node_did,
+            label: unkept.label,
+            at: unkept.at,
+            message: unkept.message,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

@@ -4,6 +4,9 @@ mod enrollment;
 mod file_inventory;
 mod file_review;
 mod goal;
+mod held_audience;
+pub(super) mod owed_settlement;
+pub use owed_settlement::UnkeptChange;
 mod inference_observation;
 mod p2p_ops;
 mod route_manager;
@@ -293,6 +296,8 @@ pub struct ClientSyncStateSnapshot {
     // directory read after receiving a sync update.
     pub directory: Vec<PeerRecord>,
     pub peers: Vec<ClientPeerStatus>,
+    /// The latest change each home did not keep, told quietly.
+    pub unkept_changes: Vec<owed_settlement::UnkeptChange>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,6 +326,7 @@ pub struct ClientCore {
     observer: Mutex<Option<ObserverHandle>>,
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
+    owed_settlements: owed_settlement::OwedSettlements,
     inference_observation_epoch: std::sync::atomic::AtomicU64,
     inference_observations: std::sync::Mutex<
         RapidHashMap<(String, String), inference_observation::InferenceObservationOwner>,
@@ -355,6 +361,24 @@ impl ClientCore {
 
     pub fn node_identity(&self) -> &PrincipalIdentity {
         &self.node_identity
+    }
+
+    /// The User's endpoint at `url` of the saved home `record`, keeping what
+    /// its status reports with the saved record (`home_endpoint::user_saved`).
+    pub(crate) fn saved_user_endpoint(
+        &self,
+        url: &str,
+        record: &PeerRecord,
+    ) -> anyhow::Result<gents_store::config_client::GraphqlEndpoint> {
+        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+            self.node_identity.private_key_bytes(),
+        )?;
+        Ok(crate::client::home_endpoint::user_saved(
+            url,
+            &capability,
+            record,
+            &self.sync_state,
+        )?)
     }
 
     pub fn node(&self) -> &EmbeddedNode {
@@ -669,6 +693,7 @@ impl ClientCore {
             task.abort();
             let _ = task.await;
         }
+        self.owed_settlements.stop().await;
         if let Some(observer) = self.observer.lock().await.take() {
             tracing::info!("client core shutdown: stopping observer");
             observer.shutdown().await;

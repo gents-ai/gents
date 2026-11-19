@@ -356,6 +356,10 @@ pub enum LoopStreamItem {
         will_retry: bool,
         backoff: std::time::Duration,
     },
+    /// A retry's backoff ended. The consumer authorizes the retry's dispatch
+    /// against the execution lease before it polls the stream again (Lean
+    /// `RequestExecutionLease.retryWakeDispatches`).
+    RetryWake,
     OutputObligationPending {
         reminder: Message,
     },

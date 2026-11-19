@@ -2285,7 +2285,7 @@ async fn boot_capture_agent_with(
     .backend_id(CAPTURE_BACKEND_ID)
     .model_name(CAPTURE_MODEL)
     .stream_batch_ms(0)
-    .deadline_duration_secs(30);
+    .deadline_duration_secs(gents_store::test_support::UNREACHED_DEADLINE.as_secs());
     let runtime = customize(behavior)
         .done()
         .build()

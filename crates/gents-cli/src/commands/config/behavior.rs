@@ -137,7 +137,7 @@ impl std::fmt::Display for AgentFailure {
         if matches!(self.error, AgentOperationError::CatalogNotHeld) {
             write!(
                 formatter,
-                "\nA Node owner or administrator grants the catalog: gents config agent grant-catalog --graphql <GRAPHQL_URL> --node-did <NODE_DID> <AGENT_DID>"
+                "\nA Node owner or administrator makes the agent a Node administrator, the one grant of the catalog: gents config agent grant-node-admin --graphql <GRAPHQL_URL> --node-did <NODE_DID> <AGENT_DID>"
             )?;
         }
         Ok(())
@@ -250,22 +250,22 @@ pub(super) async fn agent_self_config_permission(
     }))
 }
 
-pub(super) async fn agent_catalog_permission(
-    args: AgentCatalogPermissionArgs,
+pub(super) async fn agent_node_administration(
+    args: AgentNodeAdministrationArgs,
     grant: bool,
 ) -> Result<()> {
     let receipt = change_permission(
         &args.graphql,
         args.node_did,
         args.agent_did,
-        AgentPermission::Catalog,
+        AgentPermission::NodeAdministration,
         grant,
     )
     .await?;
     print_json(&json!({
         "node_did": receipt.node_did,
         "agent_did": receipt.agent_did,
-        "catalog_granted": receipt.granted,
+        "node_administration_granted": receipt.granted,
     }))
 }
 

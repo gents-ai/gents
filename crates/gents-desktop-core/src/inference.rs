@@ -510,7 +510,8 @@ impl crate::client::ClientCore {
             .graphql
             .as_deref()
             .context("runtime has no HTTP endpoint")?;
-        read_inference_setup_state_from(graphql, node_did, self.node_identity()).await
+        let saved = self.saved_user_endpoint(graphql, record)?;
+        read_inference_setup_state_from(graphql, Some(saved), node_did, self.node_identity()).await
     }
 }
 
@@ -518,11 +519,11 @@ impl crate::client::ClientCore {
 /// opened; bound the HTTP wait as well as the response body.
 async fn read_inference_setup_state_from(
     graphql: &str,
+    saved: Option<gents_store::config_client::GraphqlEndpoint>,
     node_did: &str,
     client_identity: &crate::client::PrincipalIdentity,
 ) -> anyhow::Result<InferenceSetupState> {
     use anyhow::Context;
-    use gents_store::config_client::GraphqlEndpoint;
     let mut url = reqwest::Url::parse(graphql).context("runtime endpoint is invalid")?;
     anyhow::ensure!(
         matches!(url.scheme(), "http" | "https")
@@ -542,21 +543,36 @@ async fn read_inference_setup_state_from(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-        client_identity.private_key_bytes(),
-    )?;
-    let endpoint = GraphqlEndpoint::as_principal(graphql, client_identity.did())
-        .with_client_signing_capability(capability)?;
+    let endpoint = match saved {
+        Some(saved) => saved,
+        None => crate::client::home_endpoint::user_at(
+            graphql,
+            &gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+                client_identity.private_key_bytes(),
+            )?,
+            None,
+        )?,
+    };
     let mut response = endpoint
-        .authorize(client.get(url))?
-        .send()
-        .await
+        .send_resolving(|endpoint| endpoint.authorize(client.get(url.clone())))
+        .await?
         .map_err(|error| {
             crate::error::BridgeError::runtime_http_error(
                 error,
                 "reading runtime model settings".to_owned(),
             )
         })?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_default();
+        if let Some(update) = crate::error::BridgeError::home_refusal(status, &body) {
+            return Err(update.into());
+        }
+        anyhow::bail!(
+            "runtime model settings are unavailable (HTTP {}); reconnect the runtime and try again",
+            status.as_u16()
+        );
+    }
     anyhow::ensure!(
         response.status().is_success(),
         "runtime model settings are unavailable (HTTP {}); reconnect the runtime and try again",
@@ -632,6 +648,7 @@ mod tests {
             .await;
         let state = read_inference_setup_state_from(
             &format!("{}/api/v0/graphql", server.uri()),
+            None,
             node,
             &identity,
         )
@@ -674,6 +691,7 @@ mod tests {
                 .await;
             assert!(read_inference_setup_state_from(
                 &format!("{}/api/v0/graphql", server.uri()),
+                None,
                 "did:runtime",
                 &identity
             )
@@ -698,6 +716,7 @@ mod tests {
                 .await;
             let error = read_inference_setup_state_from(
                 &format!("{}/api/v0/graphql", server.uri()),
+                None,
                 "did:runtime",
                 &identity,
             )
@@ -722,6 +741,7 @@ mod tests {
             .await;
         let error = read_inference_setup_state_from(
             &format!("{}/api/v0/graphql", server.uri()),
+            None,
             "did:runtime",
             &identity,
         )

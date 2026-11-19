@@ -3,9 +3,9 @@ use super::{home, store_key::StoreKey};
 use crate::identity::NodeIdentity;
 use anyhow::Context;
 
-/// A store created before the Agent baseline gained `get-collection` carries
-/// the previous lineage marker. It is refused as an older home before any
-/// node opens it.
+/// A store created before `agent_manager` took only the Node administrators'
+/// userset carries the previous lineage marker. It is refused as an older home
+/// before any node opens it.
 #[tokio::test]
 async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyhow::Result<()> {
     use super::backend_protection::{BackendProtectionError, FreshBackendStore, PROVENANCE_MARKER};
@@ -33,10 +33,10 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
         .await?
         .initialize(&key, &node, super::document_acp::DocumentAcp::Local)
         .await?;
-    assert!(PROVENANCE_MARKER.ends_with("-v2"));
+    assert!(PROVENANCE_MARKER.ends_with("-v3"));
     std::fs::rename(
         data.join(PROVENANCE_MARKER),
-        data.join(".gents-private-backend-v1"),
+        data.join(".gents-private-backend-v2"),
     )?;
     drop(lock);
     // Every file under the home, the store lock's own file included.
@@ -78,7 +78,7 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
     // A store with this version's marker, and one with no marker, pass to
     // the lock.
     std::fs::rename(
-        data.join(".gents-private-backend-v1"),
+        data.join(".gents-private-backend-v2"),
         data.join(PROVENANCE_MARKER),
     )?;
     super::backend_protection::refuse_earlier_lineage(&data)?;
