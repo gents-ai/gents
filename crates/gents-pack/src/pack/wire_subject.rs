@@ -104,14 +104,15 @@ pub enum WireRecord {
 /// The record a client plans a wire from (`Configuration.wirePlanSubject`):
 /// the pack it sent or its own home's record, or a served record only when
 /// it is exactly what a pack in `approved` yields; `None` plans and signs
-/// nothing.
+/// nothing. A served record contributes only the approved subject, so no
+/// other field the runtime sent reaches the plan.
 pub fn wire_plan_record(approved: &[WireSubject], record: WireRecord) -> Option<InstalledPlugin> {
     match record {
         WireRecord::SentPack(subject) => Some(subject.installed()),
         WireRecord::OwnHome(kept) => Some(kept),
         WireRecord::Served(served) => WireSubject::of_record(&served)
             .filter(|subject| approved.contains(subject))
-            .map(|_| served),
+            .map(|subject| subject.installed()),
     }
 }
 
