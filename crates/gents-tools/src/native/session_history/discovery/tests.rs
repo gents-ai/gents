@@ -338,6 +338,7 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
         .unwrap_err()
         .to_string();
         assert!(error.contains("next call: sessions"), "{missing}: {error}");
+        assert_eq!(error.matches("next call:").count(), 1, "{missing}: {error}");
     }
     let validator = jsonschema::validator_for(&definition.parameters).unwrap();
     for valid in [
