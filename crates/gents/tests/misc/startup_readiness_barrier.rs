@@ -192,7 +192,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
     tokio::time::timeout(
-        crate::support::live_inference::STALL_CEILING,
+        gents_store::test_support::STALL_CEILING,
         observer.wait_for(ProcessLifecycleState::Ready),
     )
     .await

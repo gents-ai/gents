@@ -8,11 +8,13 @@ pub mod wire_database;
 #[cfg(unix)]
 pub use executable_script::{copy_executable, hold_sibling, write_executable_script, HeldSibling};
 
-/// Hang detector for a test wait that has no deadline of its own: the longest
-/// the awaited owner may go without a change before the wait fails. It is one
-/// suite-wide ceiling far above any host's scheduling delay, never a per-test
-/// latency budget (TLA+ `WallClockBound`; the same value as the `gents`
-/// suites' `STALL_CEILING`).
+/// Hang detector for every wait without a deadline of its own: the longest a
+/// wait may observe no progress (no change to the documents it watches, no
+/// output from the process it waits on) before it fails with the state it
+/// last saw. It is the one suite-wide ceiling, far above any host's scheduling
+/// delay, never a per-test latency budget (TLA+ `WallClockBound`): the runtime
+/// has no quiescence notification to fail on instead, and a fixture that holds
+/// a provider response or a process is quiet by design.
 pub const STALL_CEILING: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// A fixture deadline the scenario does not exercise: beyond any run the hang

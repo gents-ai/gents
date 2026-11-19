@@ -12,8 +12,8 @@ use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::live_inference::STALL_CEILING;
 use super::snapshots::{fetch_request_snapshot, SnapshotReader};
+use gents_store::test_support::STALL_CEILING;
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
