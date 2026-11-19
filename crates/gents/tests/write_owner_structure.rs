@@ -1884,19 +1884,6 @@ fn where_clause_fence_counts_inline_bounds_only() {
     }
 }
 
-/// Request context (identity, signing, ACP bypass, transaction handles, the
-/// requester or session, trace or request IDs) travels as explicit arguments
-/// or fields. `tokio::task_local!` loses it across `tokio::spawn`, and Clippy's
-/// `disallowed_macros` cannot be allowed at an item-position macro site, so
-/// this ratchet owns the ban. Entries name why each production site remains;
-/// the list only shrinks.
-#[rustfmt::skip]
-const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-loop/src/provider_input/routing_affinity.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
-    ("crates/gents-loop/src/rendered_request/scope.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
-    ("crates/gents-inference/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
-];
-
 /// Task-local statics that hold no request context, by file and name. The
 /// rule is about what a request carries, so these are not counted, provided
 /// the static's own docstring says what it holds instead.
@@ -1982,45 +1969,28 @@ fn ambient_context_sites(relative: &str, syntax: &syn::File) -> usize {
         .count()
 }
 
+/// Request context (identity, signing, ACP bypass, transaction handles, the
+/// requester or session, trace or request IDs) travels as explicit arguments
+/// or fields. `tokio::task_local!` loses it across `tokio::spawn`, and Clippy's
+/// `disallowed_macros` cannot be allowed at an item-position macro site, so
+/// this test owns the ban: no production site remains and none is admitted.
 #[test]
 fn ambient_request_context_only_shrinks() {
     let root = repo_root();
-    let actual = parse_production(&root, production_sources(&root))
+    let violations = parse_production(&root, production_sources(&root))
         .into_iter()
-        .map(|(relative, syntax)| {
+        .filter_map(|(relative, syntax)| {
             let sites = ambient_context_sites(&relative, &syntax);
-            (relative, sites)
+            (sites > 0).then(|| {
+                format!(
+                    "{relative}: {sites} thread_local!/task_local! static(s); pass request context as an argument or field"
+                )
+            })
         })
-        .filter(|(_, sites)| *sites > 0)
-        .collect::<BTreeMap<_, _>>();
-    let allowed = AMBIENT_CONTEXT_ALLOWLIST
-        .iter()
-        .map(|(path, count, _)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let found = actual.get(path).copied().unwrap_or_default();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} new thread_local!/task_local! static(s); pass request context as an argument or field"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} thread_local!/task_local! statics exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} thread_local!/task_local! statics; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
-    let current = actual
-        .iter()
-        .map(|(path, count)| format!("    (\"{path}\", {count}, \"<reason>\"),"))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect::<Vec<_>>();
     assert!(
         violations.is_empty(),
-        "ambient request context ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        "ambient request context is banned:\n{}",
         violations.join("\n")
     );
 }

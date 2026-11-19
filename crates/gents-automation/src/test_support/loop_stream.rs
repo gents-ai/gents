@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use futures::{stream, Stream, StreamExt};
 use gents_inference::llm::message::{AssistantContent, ToolResultContent, UserContent};
+use gents_loop::provider_call::{ForCall, ProviderCall};
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 
@@ -43,8 +44,12 @@ pub struct ScriptedModel {
     stall_after_chunks: bool,
     capture_requests: bool,
     stream_entry_gate: Option<Arc<StreamEntryGate>>,
-    provider_observer: Option<Arc<dyn Fn(bool) + Send + Sync>>,
+    provider_observer: Option<ProviderObserver>,
+    call: ProviderCall,
 }
+
+/// Sees each dispatch (`true`) and stream poll (`false`) with the call it belongs to.
+pub type ProviderObserver = Arc<dyn Fn(bool, &ProviderCall) + Send + Sync>;
 
 impl ScriptedModel {
     pub fn new(chunks: Vec<RawStreamingChoice<()>>) -> Self {
@@ -66,10 +71,11 @@ impl ScriptedModel {
             capture_requests: true,
             stream_entry_gate: None,
             provider_observer: None,
+            call: ProviderCall::default(),
         }
     }
 
-    pub fn with_provider_observer(mut self, observer: Arc<dyn Fn(bool) + Send + Sync>) -> Self {
+    pub fn with_provider_observer(mut self, observer: ProviderObserver) -> Self {
         self.provider_observer = Some(observer);
         self
     }
@@ -107,6 +113,15 @@ impl ScriptedModel {
     }
 }
 
+impl ForCall for ScriptedModel {
+    fn for_call(&self, call: &ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for ScriptedModel {
     type Response = ();
@@ -131,7 +146,7 @@ impl CompletionModel for ScriptedModel {
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         if let Some(observer) = &self.provider_observer {
-            observer(true);
+            observer(true, &self.call);
         }
         if let Some(gate) = &self.stream_entry_gate {
             gate.entered.notify_one();
@@ -139,6 +154,7 @@ impl CompletionModel for ScriptedModel {
         }
         if self.capture_requests {
             gents_inference::test_support::capture_scripted_provider_request(
+                &self.call,
                 &request,
                 "test-model",
             )
@@ -179,9 +195,10 @@ impl CompletionModel for ScriptedModel {
             Box::pin(stream::iter(items))
         };
         let observer = self.provider_observer.clone();
+        let call = self.call.clone();
         let inner = inner.map(move |item| {
             if let Some(observer) = &observer {
-                observer(false);
+                observer(false, &call);
             }
             item
         });
@@ -309,6 +326,7 @@ pub fn tool_result_text(content: &ToolResultContent) -> &str {
 
 pub fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(
@@ -380,13 +398,26 @@ pub fn owned_config_for(
     config
 }
 
+/// A config whose calls are captured, into a sink that keeps nothing.
 pub fn owned_config(max_turns: usize) -> LoopConfig {
     let mut config = config(max_turns);
-    config.on_rendered_request = Some(
-        gents_inference::rendered_request::scope::ambient_arming_sink(
-            gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
-        ),
-    );
+    config.on_rendered_request = Some(gents_inference::rendered_request::scope::arming_sink(
+        gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
+    ));
+    config.provider_call.capture = Some(gents_inference::rendered_request::scope::test_scope(
+        gents_inference::rendered_request::RenderedRequestContext {
+            request_doc_id: "owned-test-doc".into(),
+            request_commit_cid: String::new(),
+            request_id: "owned-test-request".into(),
+            node_did: "did:test:node".into(),
+            requester_did: String::new(),
+            agent_did: "general".into(),
+            session_id: "owned-test-session".into(),
+            model_name: "test-model".into(),
+            provider_family: None,
+        },
+        Arc::new(|_| Box::pin(async { Ok(()) })),
+    ));
     config
 }
 
@@ -468,34 +499,7 @@ pub async fn collect_owned_scripted_stream<S>(
 where
     S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
 {
-    collect_owned_scripted_stream_with_capture_scope(stream, hook, writer, lifecycle, profile, None)
-        .await
-}
-
-pub async fn collect_owned_scripted_stream_with_capture_scope<S>(
-    stream: S,
-    hook: &DefraSessionHook,
-    writer: &gents_session::request::streaming::DefraStreamWriter,
-    lifecycle: &mut gents_session::request::lifecycle::RequestLifecycle,
-    profile: gents_loop::provider_input::ProviderInputProfile,
-    capture_scope: Option<Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
-) -> CollectedScriptedStream
-where
-    S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
-{
-    let scope = capture_scope.unwrap_or_else(|| {
-        let context = gents_inference::rendered_request::context_for_claimed_request(
-            lifecycle.request(),
-            "",
-            "test-model".into(),
-            None,
-        );
-        gents_inference::rendered_request::scope::test_scope(
-            context,
-            Arc::new(|_| Box::pin(async { Ok(()) })),
-        )
-    });
-    let collection = gents_inference::rendered_request::scope::scope_request(scope, async move {
+    let collection = async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
         let mut processor = gents_loop::stream_processor::StreamProcessor::new(
@@ -535,7 +539,7 @@ where
             }
         }
         collected
-    });
+    };
     collection.await
 }
 

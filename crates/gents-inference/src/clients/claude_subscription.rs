@@ -13,6 +13,7 @@ use chrono::DateTime;
 use gents_claude::metadata::device_id;
 use gents_claude::rotation::{tier, Family, Tier};
 use gents_loop::claude_messages_body::{ClaudeAccountContext, SESSION_KEY_PARAM};
+use gents_loop::provider_call::ProviderCall;
 use gents_loop::provider_limit::{mark_account_rotated, ProviderLimitHeaders};
 
 use crate::auth::claude::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
@@ -20,7 +21,7 @@ use crate::auth::credential::{
     BearerSource, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
 };
 use crate::clients::claude_messages::{
-    non_success_message, open_messages_at, ClaudeRoute, MESSAGES_URI,
+    non_success_message, open_messages_at, ClaudeRoute, MessagesAccount, MESSAGES_URI,
 };
 use crate::usage_observation::now_unix_secs;
 use crate::usage_observation::{RotationFeed, UsageAccount, UsageCache, UsageReporter};
@@ -311,6 +312,7 @@ where
     accounts: Arc<[ClaudeAccount<S>]>,
     rotation: Option<Rotation>,
     route: ClaudeRoute,
+    call: ProviderCall,
 }
 
 impl<S> Clone for ClaudeSubscriptionModel<S>
@@ -323,6 +325,7 @@ where
             accounts: self.accounts.clone(),
             rotation: self.rotation.clone(),
             route: self.route.clone(),
+            call: self.call.clone(),
         }
     }
 }
@@ -351,6 +354,7 @@ where
         let surface = surface_of(request);
         match &self.rotation {
             Some(rotation) => open_rotated(
+                &self.call,
                 &self.route,
                 &self.model,
                 request,
@@ -364,14 +368,17 @@ where
                 let account = self.accounts.first().ok_or_else(|| {
                     CompletionError::ProviderError("Claude client has no account".to_string())
                 })?;
-                crate::clients::claude_messages::open_messages_at(
+                open_messages_at(
+                    &self.call,
                     &self.route,
                     &self.model,
                     request,
-                    &account.identity.context(false),
+                    MessagesAccount {
+                        context: &account.identity.context(false),
+                        bearer: account.bearer.as_ref(),
+                        usage: account.usage.clone(),
+                    },
                     surface,
-                    account.bearer.as_ref(),
-                    account.usage.clone(),
                 )
                 .await
                 .map(StreamExt::boxed)
@@ -421,6 +428,14 @@ where
             accounts,
             rotation: client.rotation.clone(),
             route: client.route.clone(),
+            call: ProviderCall::default(),
+        }
+    }
+
+    fn for_call(&self, call: &ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
         }
     }
 
@@ -486,6 +501,7 @@ fn pool_exhausted(reset_at: Option<u64>) -> CompletionError {
 }
 
 async fn open_rotated<S>(
+    call: &ProviderCall,
     route: &ClaudeRoute,
     model: &str,
     request: &CompletionRequest,
@@ -516,13 +532,16 @@ where
         .account_state(&choice.key)
         .is_some_and(|state| tier(policy, now, family, &state) == Some(Tier::Overage));
     match open_messages_at(
+        call,
         route,
         model,
         request,
-        &account.identity.context(using_overage),
+        MessagesAccount {
+            context: &account.identity.context(using_overage),
+            bearer: account.bearer.as_ref(),
+            usage: account.usage.clone(),
+        },
         surface,
-        account.bearer.as_ref(),
-        account.usage.clone(),
     )
     .await
     {

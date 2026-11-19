@@ -10,7 +10,51 @@ use gents_documents::test_support::{
 };
 use gents_store::test_support::held_runtime_identity;
 
+/// A request with fixed identity and no execution state, for code that reads
+/// only what a request names.
+pub fn agent_request(request_id: &str) -> gents_protocol::row::AgentRequest {
+    gents_protocol::row::AgentRequest {
+        retry_parent_request_doc_id: None,
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
+        doc_id: format!("doc-{request_id}"),
+        request_id: request_id.to_string(),
+        node_did: "did:test:test".to_string(),
+        requester_did: None,
+        agent_did: "default".to_string(),
+        session_id: format!("session-{request_id}"),
+        content: "hello".to_string(),
+        max_total_tokens: None,
+        input: Default::default(),
+        execution_origin: None,
+        created_at: "2026-04-15T00:00:00Z".to_string(),
+        deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_lease_secs: None,
+        request_hop: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
+        workspace_id: None,
+        workspace_authority: None,
+        workspace_owner_node_did: None,
+        workspace_seal_hash: None,
+        executed_model_name: None,
+        executed_reasoning_effort: None,
+        executed_service_tier: None,
+        executed_inference_profile_id: None,
+        executed_runtime_generation: None,
+    }
+}
+
 pub async fn capture_scripted_provider_request(
+    call: &gents_loop::provider_call::ProviderCall,
     request: &rig::completion::CompletionRequest,
     model: &str,
 ) -> Result<(), rig::completion::CompletionError> {
@@ -34,7 +78,7 @@ pub async fn capture_scripted_provider_request(
             |error| rig::completion::CompletionError::ProviderError(error.to_string()),
         )?))
         .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    gents_loop::rig_compat::http::Transport::send_streaming(&transport, outbound)
+    gents_loop::rig_compat::http::Transport::send_streaming(&transport, call, outbound)
         .await
         .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
     assert_eq!(

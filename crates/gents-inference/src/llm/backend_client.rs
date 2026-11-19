@@ -73,12 +73,12 @@ pub enum BackendClient {
 impl BackendClient {
     pub fn replay_issuer(&self) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
         let request = match self {
-            Self::OpenAiChatCompletions(client) => client.post("/chat/completions")?,
-            Self::OpenAiResponses(client) => client.post("/responses")?,
-            Self::OpenRouter(client) => client.post("/chat/completions")?,
-            Self::ChatGptCodex(client) => client.post("/responses")?,
-            Self::XaiGrokChatCompletions(client) => client.post("/chat/completions")?,
-            Self::XaiGrokResponses(client) => client.post("/responses")?,
+            Self::OpenAiChatCompletions(client) => client.client().post("/chat/completions")?,
+            Self::OpenAiResponses(client) => client.client().post("/responses")?,
+            Self::OpenRouter(client) => client.client().post("/chat/completions")?,
+            Self::ChatGptCodex(client) => client.client().post("/responses")?,
+            Self::XaiGrokChatCompletions(client) => client.client().post("/chat/completions")?,
+            Self::XaiGrokResponses(client) => client.client().post("/responses")?,
             Self::ClaudeSubscription(_) => return claude_subscription_replay_issuer(),
             Self::AnthropicApiKey(client) => {
                 return messages_replay_issuer(

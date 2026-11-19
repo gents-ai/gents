@@ -101,7 +101,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
 
     assert!(processor.has_observable_activity());
     use gents_inference::rendered_request::scope::{
-        arm, claim_pending, current_audit_sender, scope_request, RequestCaptureScope,
+        arm, claim_pending, current_audit_sender, RequestCaptureScope,
     };
     use gents_inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
@@ -121,8 +121,12 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
         },
         capture_sink,
     ));
-    scope_request(scope, async {
+    async {
+        let capture_scope = scope;
+        let capture = Some(&capture_scope);
+        processor = processor.with_capture(Some(capture_scope.clone()));
         let label = arm(
+            capture,
             gents_inference::rendered_request::CaptureScopeKind::Inference,
             0,
             0,
@@ -130,8 +134,8 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
         )
         .expect("arm exact inference capture");
         assert_eq!(label, "inference.1");
-        claim_pending().expect("claim exact inference capture");
-        let sender = current_audit_sender().expect("claimed audit sender");
+        claim_pending(capture).expect("claim exact inference capture");
+        let sender = current_audit_sender(capture).expect("claimed audit sender");
         let mut reservation = sender.reserve().await.expect("audit capacity");
         reservation
             .emit(ClaudeAuditEvent::Signature {
@@ -147,7 +151,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
             .persist_received_partial_turn("persist deadline-expired assistant turn")
             .await
             .unwrap());
-    })
+    }
     .await;
 
     let history = gents_session::session::load_history_with_access(
