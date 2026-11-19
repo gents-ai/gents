@@ -2014,12 +2014,7 @@ mod tests {
         let owner = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
         let home = temp.path().join("home");
         let data = default_data_dir(&home);
-        let (lock_home, lock_data) = (home.clone(), data.clone());
-        let lock =
-            tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
-                .await
-                .unwrap()
-                .unwrap();
+        let lock = lock_init_store(&home, &data, false).await.unwrap();
         let obstruction = temp.path().join("not-a-directory");
         fs::write(&obstruction, b"file").unwrap();
         let bad_key = obstruction.join("identity.key");
