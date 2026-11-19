@@ -16,7 +16,7 @@ use rig::streaming::RawStreamingChoice;
 use super::lock_fixtures_for_test;
 use super::platform_wire_tests::{expected_body, expected_names, names, settings, sse_body, MODEL};
 use super::route::ClaudeRoute;
-use super::send::stream_messages_routed;
+use super::send::{stream_messages_routed, MessagesAccount};
 use super::tests::echo_request;
 use super::wire_tests::{reply, Reply, Server, Wire};
 use super::{GoogleCredentials, GoogleTokenSource};
@@ -73,13 +73,16 @@ async fn send(
         &format!("http://127.0.0.1:{}/token", server.port),
     ));
     let stream = stream_messages_routed(
+        &Default::default(),
         route,
         MODEL,
         &echo_request(),
-        &account,
+        MessagesAccount {
+            context: &account,
+            bearer: &bearer,
+            usage: None,
+        },
         RapidHashSet::new(),
-        &bearer,
-        None,
     )
     .await
     .map_err(|error| error.to_string())?;

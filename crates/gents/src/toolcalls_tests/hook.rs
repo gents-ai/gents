@@ -101,7 +101,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
                 None,
                 "premature-goal-complete",
                 r#"{"status":"complete","reason":"text alone is not output"}"#,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await,
         ToolCallHookAction::Skip { .. }
@@ -138,7 +138,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
                 None,
                 "required-output",
                 "{}",
-                &gents_loop::tool::ToolCallEnvelope::ambient()
+                &gents_loop::tool::ToolCallEnvelope::default()
             )
             .await,
         ToolCallHookAction::Continue
@@ -170,7 +170,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
                 None,
                 "acknowledged-goal-complete",
                 r#"{"status":"complete","reason":"required scan output is durable"}"#,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await,
         ToolCallHookAction::Skip { .. }
@@ -283,7 +283,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                         .await
                         .unwrap();
                 }
-                let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+                let envelope = gents_loop::tool::ToolCallEnvelope::default();
                 let call = hook.on_tool_call("read", None, "receipt-call", "{}", &envelope);
                 let action = if attempt.acknowledged {
                     call.await
@@ -395,7 +395,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                     None,
                     "receipt-call",
                     "{}",
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 )
                 .await;
             let after_replay = fetch_tool_call_row(&hook, &session_id, "receipt-call").await;

@@ -139,31 +139,29 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
             output_obligation: None,
         },
     );
-    gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-        None,
-        None,
-        CancellationToken::new(),
-        None,
-        None,
-        Some(child.session_id.clone()),
-        child.caused_by_correlation.clone(),
-        Default::default(),
-        false,
-        async {
-            Tool::call(
-                &tool,
-                BoundedWriteParams(
-                    serde_json::json!({"summary": "remaining work complete"})
-                        .as_object()
-                        .unwrap()
-                        .clone(),
-                ),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            )
-            .await
-            .unwrap();
-        },
-    )
+    let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        session_id: Some(child.session_id.clone()),
+        correlation: child.caused_by_correlation.clone(),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            CancellationToken::new(),
+        )
+    }
+    .call();
+    async {
+        Tool::call(
+            &tool,
+            BoundedWriteParams(
+                serde_json::json!({"summary": "remaining work complete"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+            &scope_call,
+        )
+        .await
+        .unwrap();
+    }
     .await;
     let response = node
         .execute("{ ResumedGoalOutput { _docID run_id summary } }")

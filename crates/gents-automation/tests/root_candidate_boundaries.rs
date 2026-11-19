@@ -18,8 +18,8 @@ async fn other_provider_loop_has_no_codex_affinity() {
         RawStreamingChoice::Message("done".into()),
         RawStreamingChoice::FinalResponse(()),
     ])
-    .with_provider_observer(Arc::new(|_| {
-        assert!(gents_loop::provider_input::routing_affinity::current().is_none());
+    .with_provider_observer(Arc::new(|_, call| {
+        assert!(call.routing_affinity.is_none());
     }));
     let stream = run_loop_stream(
         model,
@@ -27,7 +27,7 @@ async fn other_provider_loop_has_no_codex_affinity() {
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
-        owned_config(0),
+        owned_config_for(0, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -66,7 +66,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
             TaggedMessage::unassociated(Message::user("bound invalid batch")),
             Vec::new(),
             Arc::new(vec![Box::new(InvalidProgressProbe) as Box<dyn ToolDyn>]),
-            owned_config(500),
+            owned_config_for(500, &lifecycle),
         );
         let collected = collect_owned_scripted_stream(
             stream,
@@ -170,7 +170,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         TaggedMessage::unassociated(Message::user("inspect crates")),
         Vec::new(),
         Arc::new(tools),
-        owned_config(10),
+        owned_config_for(10, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -280,7 +280,7 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
             TaggedMessage::unassociated(Message::user("inspect source")),
             Vec::new(),
             Arc::new(tools),
-            owned_config(500),
+            owned_config_for(500, &lifecycle),
         );
         let collected = collect_owned_scripted_stream(
             stream,
@@ -358,7 +358,7 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
         TaggedMessage::unassociated(Message::user("list the missing directory")),
         Vec::new(),
         Arc::new(tools),
-        owned_config(64),
+        owned_config_for(64, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -415,7 +415,7 @@ async fn repeated_failures_are_identified_as_the_lean_model_derives_them() {
                 command_envelope: case.input.command_envelope,
                 varying_hint: case.input.varying_hint,
             }) as Box<dyn ToolDyn>]),
-            owned_config(64),
+            owned_config_for(64, &lifecycle),
         );
         let collected = collect_owned_scripted_stream(
             stream,
@@ -523,7 +523,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
         TaggedMessage::unassociated(Message::user("describe list_hosts")),
         Vec::new(),
         Arc::new(tools),
-        owned_config(4),
+        owned_config_for(4, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -605,7 +605,7 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         TaggedMessage::unassociated(Message::user("describe")),
         Vec::new(),
         Arc::new(tools),
-        owned_config(4),
+        owned_config_for(4, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -679,7 +679,7 @@ async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
             name: gents_protocol::goal_names::GET_GOAL_TOOL_NAME.into(),
             output: "must be intercepted".into(),
         }) as Box<dyn ToolDyn>]),
-        owned_config(4),
+        owned_config_for(4, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -932,7 +932,7 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
                 None,
                 "spawn-malformed",
                 args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
         let ToolCallHookAction::Skip { reason } = &action else {

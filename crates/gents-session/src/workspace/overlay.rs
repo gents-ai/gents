@@ -407,7 +407,7 @@ async fn load_request_workspace_overlay(
         bail!("artifact_write requires a sealed ReadOnly workspace binding");
     }
     let live_tree_hash = if sealed {
-        Some(super::adapter::working_tree_hash(Path::new(&placement.host_path)).await?)
+        Some(super::adapter::working_tree_hash(Path::new(&placement.host_path), None).await?)
     } else {
         None
     };

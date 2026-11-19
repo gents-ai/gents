@@ -80,11 +80,20 @@ impl ReductionEngine for BackendScopedReductionEngine {
         options: &'a ReductionOptions,
         admission: ReductionAdmission,
     ) -> BoxFuture<'a, Result<ReductionResult, CompactionError>> {
-        let work = self
-            .inner
-            .reduce(messages, context_window, options, admission);
-        let backend_id = self.backend_id.clone();
-        Box::pin(async move { crate::admission::scope_backend(&backend_id, work).await })
+        Box::pin(async move {
+            let mut options = options.clone();
+            options.provider_call.admission = Some(
+                options
+                    .provider_call
+                    .admission
+                    .as_ref()
+                    .expect("backend selection requires request admission context")
+                    .with_backend(&self.backend_id),
+            );
+            self.inner
+                .reduce(messages, context_window, &options, admission)
+                .await
+        })
     }
 }
 

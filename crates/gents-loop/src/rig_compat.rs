@@ -21,13 +21,15 @@ where
 }
 
 pub trait ProviderModel:
-    rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static> + 'static
+    rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static>
+    + crate::provider_call::ForCall
+    + 'static
 {
 }
 
 impl<M> ProviderModel for M
 where
-    M: rig::completion::CompletionModel + 'static,
+    M: rig::completion::CompletionModel + crate::provider_call::ForCall + 'static,
     M::Response: 'static,
     M::StreamingResponse: 'static,
 {
@@ -51,6 +53,7 @@ pub mod completion {
     pub use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 }
 
+pub mod call;
 pub mod http;
 pub mod model;
 

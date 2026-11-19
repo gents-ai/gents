@@ -272,6 +272,40 @@ fn node_publication_matches_the_lean_model() {
     );
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Periodic {
+    RegistryHeartbeat,
+    EndpointHeartbeat,
+    Directory,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Loop {
+    Beats,
+    Idle,
+}
+
+#[test]
+fn periodic_publication_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_node_publication_periodic::replay::<
+        Loop,
+        Periodic,
+        Provider,
+    >(|input| {
+        let periodic = match input.periodic {
+            Periodic::RegistryHeartbeat => super::Periodic::RegistryHeartbeat,
+            Periodic::EndpointHeartbeat => super::Periodic::EndpointHeartbeat,
+            Periodic::Directory => super::Periodic::Directory,
+        };
+        match super::periodic(document_acp(input.provider), periodic) {
+            super::PeriodicLoop::Beats => Loop::Beats,
+            super::PeriodicLoop::Idle => Loop::Idle,
+        }
+    });
+}
+
 #[test]
 fn what_a_person_reads_names_no_internals() {
     let path = std::path::PathBuf::from("/home/data/vera/node");

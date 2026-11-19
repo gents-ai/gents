@@ -538,7 +538,7 @@ async fn xai_wire_body_without_effort_requests_encrypted_reasoning() {
         terminal,
     );
     let body = terminal_body(
-        crate::llm::rig_compat::http::Lifted(transport),
+        crate::llm::rig_compat::http::Lifted::new(transport, Default::default()),
         bodies,
         request,
     )
@@ -563,7 +563,7 @@ async fn openai_responses_wire_body_never_adds_encrypted_reasoning_even_when_sta
     let bodies = terminal.bodies.clone();
     let transport = crate::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
     let body = terminal_body(
-        crate::llm::rig_compat::http::Lifted(transport),
+        crate::llm::rig_compat::http::Lifted::new(transport, Default::default()),
         bodies,
         request,
     )
@@ -582,7 +582,7 @@ async fn openai_responses_wire_body_leaves_include_to_the_server_default_store()
     let bodies = terminal.bodies.clone();
     let transport = crate::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
     let body = terminal_body(
-        crate::llm::rig_compat::http::Lifted(transport),
+        crate::llm::rig_compat::http::Lifted::new(transport, Default::default()),
         bodies,
         request,
     )

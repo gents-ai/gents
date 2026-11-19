@@ -58,7 +58,7 @@ async fn dispatch_with_lost_receipt(
             None,
             call_id,
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         ),
     )
     .await;
@@ -351,7 +351,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
             None,
             "incompatible-steer",
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     let ToolCallHookAction::Skip { reason } = action else {

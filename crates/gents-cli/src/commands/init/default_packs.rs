@@ -1405,7 +1405,7 @@ mod tests {
                 let answer = config
                     .call(
                         call.to_string(),
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     )
                     .await;
                 let answer = answer.unwrap_or_else(|error| panic!("{call}: {error}"));
@@ -1441,7 +1441,7 @@ mod tests {
                 config
                     .call(
                         call.to_string(),
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     )
                     .await
                     .unwrap_err()

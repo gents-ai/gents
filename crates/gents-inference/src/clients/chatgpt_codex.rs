@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::Node as EmbeddedNode;
+use gents_loop::provider_call::ProviderCall;
 use gents_loop::provider_patches::patch_instructions_body;
 use serde_json::{json, Value};
 
@@ -137,14 +138,14 @@ pub struct ChatGptCodexPolicy {
 impl crate::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401, 403];
 
-    fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
+    fn patch_request_body(&self, call: &ProviderCall, req: Request<Bytes>) -> Request<Bytes> {
         let (mut parts, body) = req.into_parts();
         let mut body = body;
         if parts.uri.path().ends_with("/responses") {
             for name in ["session_id", "x-client-request-id", "x-codex-turn-state"] {
                 parts.headers.remove(name);
             }
-            if let Some(affinity) = gents_loop::provider_input::routing_affinity::current() {
+            if let Some(affinity) = &call.routing_affinity {
                 if let Ok(session) = HeaderValue::from_str(affinity.session()) {
                     parts.headers.insert("session_id", session.clone());
                     parts.headers.insert("x-client-request-id", session);
@@ -163,12 +164,14 @@ impl crate::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
             if let Some(patched) = self.service_tier.and_then(|tier| tier.patch(&body).ok()) {
                 body = patched.into();
             }
-            let call = crate::admission::current_call_join();
-            let affinity = gents_loop::provider_input::routing_affinity::current();
+            let join = call
+                .admission
+                .as_ref()
+                .and_then(|admission| admission.current_join());
             tracing::info!(
-                call_id = call.as_ref().map(|call| call.call_id.as_str()),
-                call_seq = call.as_ref().map(|call| call.call_seq),
-                affinity_scope_present = affinity.is_some(),
+                call_id = join.as_ref().map(|join| join.call_id.as_str()),
+                call_seq = join.as_ref().map(|join| join.call_seq),
+                affinity_scope_present = call.routing_affinity.is_some(),
                 session_header_present = parts.headers.contains_key("session_id"),
                 client_request_header_present = parts.headers.contains_key("x-client-request-id"),
                 turn_state_header_present = parts.headers.contains_key("x-codex-turn-state"),
@@ -182,14 +185,16 @@ impl crate::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
     /// Other endpoints use buffered sends, which check the URI before capture.
     fn patch_streaming(
         &self,
+        call: &ProviderCall,
         response: http_client::StreamingResponse,
     ) -> http_client::StreamingResponse {
-        retain_turn_state(response.headers());
+        retain_turn_state(call, response.headers());
         response
     }
 
     fn send_via<T>(
         &self,
+        call: &ProviderCall,
         inner: &T,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
@@ -197,13 +202,14 @@ impl crate::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
         T: Clone + Transport + 'static,
     {
         let inner = inner.clone();
+        let call = call.clone();
         async move {
             let is_responses_request = req.uri().path().ends_with("/responses");
             let request_body = req.body().clone();
-            let response = Transport::send(&inner, req).await?;
+            let response = Transport::send(&inner, &call, req).await?;
 
             if is_responses_request {
-                retain_turn_state(response.headers());
+                retain_turn_state(&call, response.headers());
             }
             let status = response.status();
             let headers = response.headers().clone();
@@ -227,18 +233,21 @@ impl crate::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
     }
 }
 
-fn retain_turn_state(headers: &HeaderMap) {
-    let affinity = gents_loop::provider_input::routing_affinity::current();
+fn retain_turn_state(call: &ProviderCall, headers: &HeaderMap) {
+    let affinity = call.routing_affinity.as_ref();
     let returned = headers
         .get("x-codex-turn-state")
         .and_then(|header| header.to_str().ok());
-    let retained = affinity.as_ref().and_then(|affinity| affinity.token());
-    let call = crate::admission::current_call_join();
+    let retained = affinity.and_then(|affinity| affinity.token());
+    let join = call
+        .admission
+        .as_ref()
+        .and_then(|admission| admission.current_join());
     // Opaque routing tokens may carry provider state. Record presence and
     // equality only; body comparisons use the existing rendered captures.
     tracing::info!(
-        call_id = call.as_ref().map(|call| call.call_id.as_str()),
-        call_seq = call.as_ref().map(|call| call.call_seq),
+        call_id = join.as_ref().map(|join| join.call_id.as_str()),
+        call_seq = join.as_ref().map(|join| join.call_seq),
         provider_request_id = headers
             .get("x-request-id")
             .and_then(|value| value.to_str().ok()),

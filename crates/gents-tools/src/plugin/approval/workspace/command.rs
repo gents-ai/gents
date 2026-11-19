@@ -40,6 +40,7 @@ pub fn writable_root(root: &Path, policy: &CommandExecutionPolicy) -> Result<Pat
 /// by the shared launch owner. A supplied but unavailable approval home is an
 /// error at request setup, never evidence of an unconfigured workspace.
 pub async fn authorize_command(
+    call: &gents_loop::tool::ToolCallEnvelope,
     argv: &[String],
     cwd: &Path,
     root: &Path,
@@ -67,6 +68,7 @@ pub async fn authorize_command(
         return Ok(());
     };
     super::authorize_binding(
+        call,
         &home,
         decision,
         "The command was not approved for this workspace.",
@@ -103,14 +105,16 @@ mod tests {
                     session,
                 )
                 .unwrap();
-                workspace::scope(
-                    context,
-                    crate::plugin::approval::scope_interactive(false, async move {
-                        let policy = CommandExecutionPolicy::write_capable();
-                        let argv = vec!["printf".to_owned(), "gated".to_owned()];
-                        authorize_command(&argv, &project, &project, None, &policy).await
-                    }),
-                )
+                let call = crate::runtime_context::ToolHostContext {
+                    approval: context.clone(),
+                    ..Default::default()
+                }
+                .call();
+                workspace::scope(context, async move {
+                    let policy = CommandExecutionPolicy::write_capable();
+                    let argv = vec!["printf".to_owned(), "gated".to_owned()];
+                    authorize_command(&call, &argv, &project, &project, None, &policy).await
+                })
                 .await
             }
         };

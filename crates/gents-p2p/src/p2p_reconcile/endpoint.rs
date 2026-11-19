@@ -160,6 +160,15 @@ async fn endpoint_heartbeat(
     graphql_url: Option<String>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    if crate::peer_publication::idles(
+        &node,
+        gents_store::local::document_acp::Periodic::EndpointHeartbeat,
+        &cancel,
+    )
+    .await
+    {
+        return Ok(());
+    }
     let Some(p2p) = crate::node_access::operations(&node) else {
         tracing::debug!(
             "PeerRegistry endpoint heartbeat idle because embedded node has no P2P transport"

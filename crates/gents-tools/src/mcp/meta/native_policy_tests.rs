@@ -24,7 +24,7 @@ async fn invoke(tool: &super::CallToolTool, service: &str, name: &str) -> Result
             tool_name: name.into(),
             arguments: json!({}),
         },
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .map_err(anyhow::Error::new)

@@ -563,7 +563,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
 #[tokio::test]
 async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     use gents_inference::rendered_request::scope::{
-        claim_pending, scope_request, test_scope, CaptureClaim, CaptureScopeKind,
+        claim_pending, test_scope, CaptureClaim, CaptureScopeKind,
     };
     use gents_inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
@@ -584,7 +584,11 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
     let scope = test_scope(context, sink);
 
-    scope_request(scope, async {
+    async {
+        let call = gents_loop::provider_call::ProviderCall {
+            capture: Some(scope),
+            ..Default::default()
+        };
         for (kind, expected) in [
             (CaptureScopeKind::Inference, "inference.1"),
             (CaptureScopeKind::Compaction, "compaction.1"),
@@ -601,6 +605,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
                 .clone()
                 .expect("every production loop config installs an arming sink");
             on_rendered_request(
+                &call,
                 0,
                 0,
                 rig::completion::CompletionRequest {
@@ -622,7 +627,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
             .await
             .expect("arming never fails");
 
-            let (_, claim) = claim_pending().expect("a scope is installed");
+            let (_, claim) = claim_pending(call.capture.as_ref()).expect("a scope is installed");
             let CaptureClaim::Armed(pending) = claim else {
                 panic!("{kind} did not arm a pending capture");
             };
@@ -631,7 +636,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
                 "{kind} armed the wrong scope"
             );
         }
-    })
+    }
     .await;
 }
 

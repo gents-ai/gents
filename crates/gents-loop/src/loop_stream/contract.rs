@@ -155,6 +155,7 @@ impl Drop for EstimateSeedGuard {
 
 pub type RenderedRequestSink = Arc<
     dyn Fn(
+            &crate::provider_call::ProviderCall,
             usize,
             u32,
             CompletionRequest,
@@ -186,6 +187,9 @@ pub struct TurnCompactionRequest {
     pub admission: crate::compaction::ReductionAdmission,
     pub turn_index: usize,
     pub prior_reduction_keys: Vec<String>,
+    /// What the compacting loop's provider calls carry, from which the
+    /// reduction's own calls derive.
+    pub provider_call: crate::provider_call::ProviderCall,
 }
 
 #[derive(Debug)]
@@ -412,6 +416,9 @@ pub struct LoopConfig {
     /// The envelope of the request this loop runs for: the context its
     /// foreground tool calls are derived from.
     pub tool_context: crate::tool::ToolCallEnvelope,
+    /// What this loop's provider calls carry; each dispatch adds its routing
+    /// affinity.
+    pub provider_call: crate::provider_call::ProviderCall,
 }
 
 #[derive(Clone, Debug)]

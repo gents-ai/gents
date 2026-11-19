@@ -6,12 +6,12 @@ use crate::runtime::agent::loop_stream::{AggregateTokenBudget, FoldedPrompt};
 use crate::turn::prompt::{BuiltPrompt, PromptBuilder};
 use crate::turn::provider_input::budget::ContextCalibration;
 use crate::turn::provider_input::ProviderInputProfile;
-use gents_inference::admission::{self, CallKind};
 use gents_inference::compaction;
 use gents_inference::llm::message::Message;
 use gents_loop::loop_stream::{
     provider_messages, provider_view_tagged, LoopReplayInput, TaggedMessage,
 };
+use gents_loop::provider_call::admission::{AdmissionCallContext, CallKind};
 use gents_observe::observe::runtime_trace::RequestTraceAttrs;
 use gents_protocol::row::AgentRequest;
 use gents_session::session;
@@ -29,6 +29,11 @@ pub(super) struct RequestInputs<'a> {
     pub(super) effective_seed: Option<i64>,
     pub(super) resume_from_history: bool,
     pub(super) resume_same_request: bool,
+    /// The request's admission, from which its calls are admitted.
+    pub(super) admission: &'a AdmissionCallContext,
+    /// The request's capture scope, which its provider calls are captured in.
+    pub(super) capture:
+        Option<&'a std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
 }
 
 pub(super) struct PreparedRequestInput {
@@ -504,6 +509,8 @@ where
             aggregate_token_budget,
             context_calibration,
             effective_seed,
+            admission: admission_context,
+            capture,
             ..
         } = inputs;
         let SessionReduction {
@@ -537,17 +544,17 @@ where
             &options,
             self.agent_config.context_window,
         )?;
-        let result = admission::scope_call(
-            CallKind::Compaction,
-            1,
-            self.compactor.reduce(
+        options.provider_call.admission = Some(admission_context.for_call(CallKind::Compaction, 1));
+        options.provider_call.capture = capture.cloned();
+        let result = self
+            .compactor
+            .reduce(
                 projected_native.clone(),
                 self.agent_config.context_window,
                 &options,
                 admission,
-            ),
-        )
-        .await?;
+            )
+            .await?;
 
         // The seeded anchor described the unreduced history.
         context_calibration.invalidate_anchor();

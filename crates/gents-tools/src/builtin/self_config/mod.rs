@@ -319,6 +319,7 @@ pub fn build_self_config_tools_with_runtime(
         tasks,
         selected_plugins: config.selected_plugins.clone(),
         ceiling_plugins: config.ceiling_plugins.clone(),
+        envelope: gents_loop::tool::ToolCallEnvelope::default(),
     }));
     tools
 }

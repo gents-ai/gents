@@ -10,10 +10,10 @@ use tracing::Instrument;
 use super::ShutdownDrainFailure;
 use super::{AgentDaemon, HandleRequestOutcome};
 use crate::runtime::agent::loop_stream::{LoopReplayInput, TaggedMessage};
-use gents_inference::admission::{self, CallKind};
 use gents_inference::llm::message::Message;
 use gents_inference::resolved::MaxTurnsProvenance;
 use gents_loop::error::LoopFailureCause;
+use gents_loop::provider_call::admission::{self, AdmissionCallContext, CallKind};
 use gents_protocol::row::AgentRequest;
 
 mod drive;
@@ -203,6 +203,8 @@ where
         consumed_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
         folded_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
         context_calibration: crate::turn::provider_input::budget::ContextCalibration,
+        admission: &AdmissionCallContext,
+        capture: Option<&Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
     ) -> Result<HandleRequestOutcome> {
         workspace.runtime_home = self.approval_home.clone();
         let request_deadline = lifecycle.claimed_deadline_at();
@@ -332,12 +334,13 @@ where
                 let terminal_failure_reason = admission::terminal_failure_reason_observer();
                 let hook_for_start_interrupt = persistence_hook.clone();
                 let provider_profile = loop_config.provider_input_counter.profile();
-                let stream = admission::scope_call_with_token_and_failure_reason(
-                    CallKind::Inference,
-                    attempt_index,
-                    inference_token.clone(),
-                    terminal_failure_reason.clone(),
-                    async {
+                loop_config.provider_call.capture = capture.cloned();
+                loop_config.provider_call.admission = Some(
+                    admission
+                        .for_call(CallKind::Inference, attempt_index)
+                        .with_cancellation(inference_token.clone(), terminal_failure_reason.clone()),
+                );
+                let stream = async {
                         tokio::select! {
                             biased;
                             _ = shutdown.changed() => {
@@ -365,16 +368,10 @@ where
                                 loop_config,
                             ))) => Ok(stream)
                         }
-                    },
-                )
+                    }
                 .await?;
 
-                admission::scope_call_with_token_and_failure_reason(
-                    CallKind::Inference,
-                    attempt_index,
-                    inference_token.clone(),
-                    terminal_failure_reason.clone(),
-                    Box::pin(drive::drive_inference_stream(
+                Box::pin(drive::drive_inference_stream(
                         drive::StreamDrive {
                             persistence_hook: &persistence_hook,
                             stream_writer,
@@ -384,18 +381,16 @@ where
                             inference_token: &inference_token,
                             request_id: &request_id,
                             session_id: &session_id,
-                            trigger_correlation: &trigger_correlation,
-                            trigger_context: &trigger_context,
                             request_deadline,
                             terminal_failure_reason: &terminal_failure_reason,
                             max_turns_provenance,
+                            capture,
                         },
                         stream,
                         lifecycle,
                         shutdown,
                         interrupt_rx,
-                    )),
-                )
+                    ))
                 .await
             }
             .instrument(tracing::info_span!(
@@ -415,29 +410,7 @@ where
             )));
 
         let outcome =
-            gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-                Some(
-                    gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
-                        request.requester_did.clone(),
-                        Some(request.node_did.clone()),
-                        Some(agent_did.to_string()),
-                        Some(request.request_id.clone()),
-                    ),
-                ),
-                request_deadline,
-                request_token.clone(),
-                workspace,
-                None,
-                Some(session_id.clone()),
-                trigger_correlation.clone(),
-                trigger_context.source_fields.clone(),
-                false,
-                gents_tools::plugin::approval::scope_interactive(
-                    request.execution_origin.as_deref() == Some("interactive"),
-                    gents_tools::plugin::approval::workspace::scope(approval_context, inference),
-                ),
-            )
-            .await;
+            gents_tools::plugin::approval::workspace::scope(approval_context, inference).await;
 
         if let Some(error) = reviewer.take_failure() {
             return Err(error);
@@ -510,7 +483,15 @@ pub(super) mod tests {
     }
 
     #[derive(Clone)]
-    struct RoutedReplyModel;
+    struct RoutedReplyModel {
+        call: gents_loop::provider_call::ProviderCall,
+    }
+
+    impl gents_loop::provider_call::ForCall for RoutedReplyModel {
+        fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+            Self { call: call.clone() }
+        }
+    }
 
     #[allow(refining_impl_trait)]
     impl CompletionModel for RoutedReplyModel {
@@ -519,7 +500,9 @@ pub(super) mod tests {
         type Client = ();
 
         fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            Self
+            Self {
+                call: Default::default(),
+            }
         }
 
         async fn completion(
@@ -535,8 +518,10 @@ pub(super) mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-                .await?;
+            gents_inference::test_support::capture_scripted_provider_request(
+                &self.call, &request, "scripted",
+            )
+            .await?;
             let items = vec![
                 Ok(RawStreamingChoice::Message("routed reply".to_string())),
                 Ok(RawStreamingChoice::FinalResponse(())),
@@ -548,6 +533,7 @@ pub(super) mod tests {
 
     #[derive(Clone)]
     struct WakeInputModel {
+        call: gents_loop::provider_call::ProviderCall,
         provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
         title_calls: Arc<AtomicUsize>,
         title_shape_mismatches: Arc<AtomicUsize>,
@@ -561,6 +547,15 @@ pub(super) mod tests {
         did: String,
         signer: gents_store::identity::ManagedAgentSigner,
         runtime: Arc<dyn NodeIdentity>,
+    }
+
+    impl gents_loop::provider_call::ForCall for WakeInputModel {
+        fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+            Self {
+                call: call.clone(),
+                ..self.clone()
+            }
+        }
     }
 
     #[allow(refining_impl_trait)]
@@ -586,8 +581,10 @@ pub(super) mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-                .await?;
+            gents_inference::test_support::capture_scripted_provider_request(
+                &self.call, &request, "scripted",
+            )
+            .await?;
             let history =
                 serde_json::to_value(&request.chat_history).expect("serialize provider input");
             let title_preamble = super::super::title::title_generation_preamble();
@@ -695,7 +692,13 @@ pub(super) mod tests {
     }
 
     #[derive(Clone)]
-    struct CountingReplyModel(Arc<AtomicUsize>);
+    struct CountingReplyModel(Arc<AtomicUsize>, gents_loop::provider_call::ProviderCall);
+
+    impl gents_loop::provider_call::ForCall for CountingReplyModel {
+        fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+            Self(self.0.clone(), call.clone())
+        }
+    }
 
     #[allow(refining_impl_trait)]
     impl CompletionModel for CountingReplyModel {
@@ -703,7 +706,7 @@ pub(super) mod tests {
         type StreamingResponse = ();
         type Client = ();
         fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            Self(Arc::new(AtomicUsize::new(0)))
+            Self(Arc::new(AtomicUsize::new(0)), Default::default())
         }
         async fn completion(
             &self,
@@ -715,8 +718,10 @@ pub(super) mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-            gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-                .await?;
+            gents_inference::test_support::capture_scripted_provider_request(
+                &self.1, &request, "scripted",
+            )
+            .await?;
             self.0.fetch_add(1, Ordering::SeqCst);
             let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
                 Ok(RawStreamingChoice::Message("admitted reply".to_string())),
@@ -1151,7 +1156,9 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config,
             provider_family: None,
-            model: Arc::new(RoutedReplyModel),
+            model: Arc::new(RoutedReplyModel {
+                call: Default::default(),
+            }),
             preamble,
             loop_tools,
             prompt_builder,
@@ -1328,7 +1335,7 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(WakeInputModel {
+            model: Arc::new(WakeInputModel { call: Default::default(),
                 provider_inputs: provider_inputs.clone(),
                 title_calls: title_calls.clone(),
                 title_shape_mismatches: title_shape_mismatches.clone(),
@@ -1596,7 +1603,7 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(CountingReplyModel(calls.clone())),
+            model: Arc::new(CountingReplyModel(calls.clone(), Default::default())),
             preamble: prompt_builder.preamble().to_string(),
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -1744,7 +1751,7 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(CountingReplyModel(calls.clone())),
+            model: Arc::new(CountingReplyModel(calls.clone(), Default::default())),
             preamble: prompt_builder.preamble().to_string(),
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,

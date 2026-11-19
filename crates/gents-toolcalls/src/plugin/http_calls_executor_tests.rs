@@ -45,7 +45,7 @@ async fn an_allow_listed_request_reaches_the_server_only_when_granted() {
         .call(
             &record,
             json!({"n": 1}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -68,7 +68,7 @@ async fn an_allow_listed_request_reaches_the_server_only_when_granted() {
         .call(
             &record,
             json!({"n": 1}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -119,7 +119,7 @@ async fn a_round_asking_both_services_is_bad_output() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
