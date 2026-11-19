@@ -234,7 +234,14 @@ async fn generated_usage_reads_reach_the_modelled_outcomes() {
                 grok_billing: format!("{}/v1/billing?format=credits", upstream.origin),
                 claude_usage: format!("{}/api/oauth/usage", upstream.origin),
             };
-            let started = Utc::now();
+            // The model's windows never reset inside a scenario, but the keyed
+            // read's daily window resets at the next UTC midnight after the read
+            // (`next_openrouter_reset`). Starting at a UTC midnight keeps every
+            // pass, at most minutes in, inside one day whatever the wall clock.
+            let started = Utc::now()
+                .date_naive()
+                .and_time(chrono::NaiveTime::MIN)
+                .and_utc();
             let mut seen = Vec::new();
             for pass in &case.input.passes {
                 *upstream.response.lock().unwrap() = pass.response;
