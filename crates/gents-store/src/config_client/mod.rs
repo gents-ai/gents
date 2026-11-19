@@ -57,6 +57,7 @@ mod error;
 mod event_policy_conformance;
 mod graphql;
 mod held_audience;
+pub mod home_status;
 pub mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;

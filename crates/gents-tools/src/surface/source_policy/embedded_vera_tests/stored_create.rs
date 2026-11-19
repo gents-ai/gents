@@ -392,21 +392,27 @@ async fn a_stored_create_whose_credentials_lapse_before_it_is_sent_is_settled_by
     Ok(())
 }
 
-/// What the runtime's public status reports of its node now.
-struct NodeStatus(Arc<defra_node::Node>);
+/// What the runtime's public status reports of its node now, signed by its
+/// node key.
+struct NodeStatus(Arc<defra_node::Node>, Arc<dyn NodeIdentity>);
 
 impl gents_store::config_client::ResolveAudience for NodeStatus {
-    fn resolve(
-        &self,
-    ) -> futures::future::BoxFuture<'_, Option<gents_protocol::delegation_audience::ReportedHome>>
-    {
-        Box::pin(async {
-            Some(gents_protocol::delegation_audience::ReportedHome {
-                audience: gents_protocol::delegation_audience::ReportedDelegationAudience::Named(
-                    gents_store::local::document_acp::node_delegation_audience(&self.0)?,
-                ),
-                provider_time: gents_store::local::document_acp::node_provider_time(&self.0),
-            })
+    fn resolve<'a>(
+        &'a self,
+        nonce: &'a gents_protocol::home_attestation::HomeNonce,
+    ) -> futures::future::BoxFuture<'a, Option<serde_json::Value>> {
+        Box::pin(async move {
+            Some(
+                gents_store::test_support::signed_home_status(
+                    self.1.as_ref(),
+                    &gents_protocol::delegation_audience::ReportedDelegationAudience::Named(
+                        gents_store::local::document_acp::node_delegation_audience(&self.0)?,
+                    ),
+                    gents_store::local::document_acp::node_provider_time(&self.0),
+                    nonce,
+                )
+                .await,
+            )
         })
     }
 }
@@ -459,7 +465,10 @@ async fn a_stored_create_from_a_device_whose_clock_is_minutes_off_is_admitted() 
 
         let client = ConfigAccess::Graphql(
             endpoint_for(&node, &user.0)?
-                .with_audience_resolver(Arc::new(NodeStatus(node.clone())))
+                .with_audience_resolver(
+                    home.node.did(),
+                    Arc::new(NodeStatus(node.clone(), home.node.clone())),
+                )
                 .with_device_clock_for_test(skewed(skew)),
         );
         let signed = prepare(&user, request(&home, &user, agent.did(), name).await?).await?;

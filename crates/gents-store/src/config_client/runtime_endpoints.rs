@@ -1,9 +1,10 @@
-use gents_protocol::delegation_audience::ReportedHome;
 use std::sync::{Arc, RwLock};
 
 use gents_protocol::client_authentication::ClientAuthentication;
+use gents_protocol::home_attestation::{HomeNonce, HomeStatusRefusal, HOME_NONCE_QUERY};
 use rapidhash::RapidHashMap;
 
+use super::home_status::{self, AuthenticatedHome};
 use super::{ClientSigningCapability, ConfigClientError, GraphqlEndpoint, Result};
 
 #[derive(Debug)]
@@ -86,35 +87,27 @@ impl GraphqlEndpoint {
     }
 
     async fn discover_runtime_authentication(&self, node: &str) -> Result<ClientAuthentication> {
-        let (authentication, reported) = self.fetch_runtime_status(node).await?;
-        self.delegation_audience.observe(reported);
+        let (authentication, home) = self.fetch_runtime_status(node).await?;
+        if let Ok(home) = home {
+            self.delegation_audience.observe(&home);
+        }
         Ok(authentication)
     }
 
-    pub(super) async fn reread_runtime_home(&self) -> Option<ReportedHome> {
+    pub(super) async fn reread_runtime_home(&self) -> Option<Home> {
         let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication else {
             return None;
         };
         let mut current = current.lock().await;
-        let (authentication, reported) = self.fetch_runtime_status(node).await.ok()?;
+        let (authentication, home) = self.fetch_runtime_status(node).await.ok()?;
         *current = Some(authentication);
-        Some(reported)
+        Some(home)
     }
 
-    pub async fn observe_runtime_status(&self, status: &serde_json::Value) -> Result<()> {
-        if let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication {
-            let mut current = current.lock().await;
-            let (authentication, reported) = Self::decode_runtime_status(node, status)?;
-            self.delegation_audience.observe(reported);
-            *current = Some(authentication);
-        }
-        Ok(())
-    }
-
-    async fn fetch_runtime_status(
-        &self,
-        node: &str,
-    ) -> Result<(ClientAuthentication, ReportedHome)> {
+    /// Read the runtime's public status with a fresh nonce, so what it
+    /// reports is kept only when the saved node signed it for this read
+    /// (`Identity.HeldAudience.authentic`).
+    async fn fetch_runtime_status(&self, node: &str) -> Result<(ClientAuthentication, Home)> {
         let base = self
             .url()
             .trim()
@@ -122,9 +115,11 @@ impl GraphqlEndpoint {
             .ok_or_else(|| ConfigClientError::GraphqlApiBase {
                 graphql: self.to_string(),
             })?;
+        let nonce = home_status::fresh_nonce();
         let response = discovery_client()
             .await?
             .get(format!("{base}/status"))
+            .query(&[(HOME_NONCE_QUERY, nonce.as_str())])
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
@@ -138,47 +133,40 @@ impl GraphqlEndpoint {
             .json()
             .await
             .map_err(ConfigClientError::RuntimeAuthenticationHttp)?;
-        Self::decode_runtime_status(node, &body)
+        Self::decode_runtime_status(node, &nonce, &body)
     }
 
     fn decode_runtime_status(
         node: &str,
+        nonce: &HomeNonce,
         body: &serde_json::Value,
-    ) -> Result<(ClientAuthentication, ReportedHome)> {
+    ) -> Result<(ClientAuthentication, Home)> {
         if body.get("node_did").and_then(serde_json::Value::as_str) != Some(node) {
             return Err(ConfigClientError::RuntimeAuthenticationIdentity);
         }
-        let authentication: ClientAuthentication = serde_json::from_value(
+        let advertised: ClientAuthentication = serde_json::from_value(
             body.get(gents_protocol::client_authentication::STATUS_FIELD)
                 .cloned()
                 .ok_or(ConfigClientError::RuntimeAuthenticationUnavailable)?,
         )?;
-        if authentication == ClientAuthentication::Unavailable {
+        if advertised == ClientAuthentication::Unavailable {
             return Err(ConfigClientError::RuntimeAuthenticationUnavailable);
         }
-        use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
-        let mut reported = ReportedHome::of_home(body, node);
-        match (&authentication, &reported.audience) {
-            (
-                ClientAuthentication::Vera { worker, deployment },
-                ReportedDelegationAudience::Absent,
-            ) => {
-                reported.audience = ReportedDelegationAudience::Named(DelegationAudience {
-                    worker: worker.clone(),
-                    deployment: *deployment,
-                    genesis_id: None,
-                });
+        match home_status::authenticate(body, node, nonce) {
+            Ok(home) => {
+                let home = home
+                    .resolved()
+                    .ok_or(ConfigClientError::RuntimeAuthenticationUnavailable)?;
+                Ok((home.authentication().clone(), Ok(home)))
             }
-            (ClientAuthentication::Local, ReportedDelegationAudience::Absent) => {}
-            (
-                ClientAuthentication::Vera { worker, deployment },
-                ReportedDelegationAudience::Named(audience),
-            ) if worker == &audience.worker && deployment == &audience.deployment => {}
-            _ => return Err(ConfigClientError::RuntimeAuthenticationUnavailable),
+            Err(refusal) => Ok((advertised, Err(refusal))),
         }
-        Ok((authentication, reported))
     }
 }
+
+/// What a status read reports for the saved home, or why it is not the
+/// home's.
+pub(super) type Home = std::result::Result<AuthenticatedHome, HomeStatusRefusal>;
 
 pub(super) async fn discovery_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
@@ -196,3 +184,6 @@ pub(super) async fn discovery_client() -> Result<&'static reqwest::Client> {
         })
         .await
 }
+
+#[cfg(test)]
+mod tests;

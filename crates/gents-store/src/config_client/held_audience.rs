@@ -2,18 +2,24 @@ use std::sync::{Arc, RwLock};
 
 use futures::future::BoxFuture;
 use gents_protocol::delegation_audience::{
-    resend, CredentialAnswer, CredentialRefusal, DelegationAudience, HeldAudienceChange, HomeClock,
-    PresentedCredential, ReportedHome,
+    recovery, CredentialAnswer, CredentialRefusal, DelegationAudience, HeldAudienceChange,
+    HomeClock, PresentedCredential, Recovery,
 };
+use gents_protocol::home_attestation::{HomeNonce, HomeStatusRefusal};
 
+use super::home_status::{self, AuthenticatedHome};
+use super::runtime_endpoints::Home;
 use super::{ConfigClientError, GraphqlEndpoint, RequestBoundAudience};
 
-/// Reads what an endpoint's home reports of its delegation audience and
-/// clock now, and keeps the audience wherever its client keeps it
-/// (`Identity.HeldAudience`).
+/// Reads an endpoint's home's status now, answered to a read carrying
+/// `nonce` (`home_attestation::HOME_NONCE_QUERY`); the endpoint keeps what it
+/// reports only when the home's node key signed it for that read
+/// (`Identity.HeldAudience.reportedOfHome`).
 pub trait ResolveAudience: Send + Sync {
-    fn resolve(&self) -> BoxFuture<'_, Option<ReportedHome>>;
+    fn resolve<'a>(&'a self, nonce: &'a HomeNonce) -> BoxFuture<'a, Option<serde_json::Value>>;
 }
+
+type StatusRead = std::pin::Pin<Box<dyn std::future::Future<Output = Option<Home>> + Send + Sync>>;
 
 /// The device clock a client mints on, in Unix seconds.
 #[derive(Clone, Default)]
@@ -39,7 +45,7 @@ pub(super) struct HeldAudienceCell(Arc<Held>);
 struct Held {
     audience: RwLock<Option<DelegationAudience>>,
     clock: RwLock<Option<HomeClock>>,
-    resolver: Option<Arc<dyn ResolveAudience>>,
+    resolver: Option<(String, Arc<dyn ResolveAudience>)>,
     device: DeviceClock,
 }
 
@@ -72,9 +78,10 @@ impl HeldAudienceCell {
             .unwrap_or_else(|poison| poison.into_inner()) = clock;
     }
 
-    /// Keep what `reported` says, read now, and say what it changed
-    /// (`Identity.HeldAudience.observe`).
-    pub(super) fn observe(&self, reported: ReportedHome) -> HeldAudienceChange {
+    /// Keep what the home's own status says, read now, and say what it
+    /// changed (`Identity.HeldAudience.observe`).
+    pub(super) fn observe(&self, home: &AuthenticatedHome) -> HeldAudienceChange {
+        let reported = home.reported();
         let held = self.get();
         let (held_clock, now) = self.minting_clock();
         let read = reported.provider_time.map(|provider_at_read| HomeClock {
@@ -114,12 +121,12 @@ impl HeldAudienceCell {
             .unwrap_or_else(|poison| poison.into_inner()) = audience;
     }
 
-    fn resolving(&self, resolver: Arc<dyn ResolveAudience>) -> Self {
+    fn resolving(&self, node: String, resolver: Arc<dyn ResolveAudience>) -> Self {
         let (clock, _) = self.minting_clock();
         Self(Arc::new(Held {
             audience: RwLock::new(self.get()),
             clock: RwLock::new(clock),
-            resolver: Some(resolver),
+            resolver: Some((node, resolver)),
             device: self.0.device.clone(),
         }))
     }
@@ -141,7 +148,9 @@ impl PartialEq for HeldAudienceCell {
         self.get() == other.get()
             && match (&self.0.resolver, &other.0.resolver) {
                 (None, None) => true,
-                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (Some((left_node, left)), Some((right_node, right))) => {
+                    left_node == right_node && Arc::ptr_eq(left, right)
+                }
                 _ => false,
             }
     }
@@ -159,10 +168,15 @@ impl std::fmt::Debug for HeldAudienceCell {
 }
 
 impl GraphqlEndpoint {
-    /// Read the home's status again when a request is refused for its
-    /// credential (`Identity.HeldAudience.resend`).
-    pub fn with_audience_resolver(mut self, resolver: Arc<dyn ResolveAudience>) -> Self {
-        self.delegation_audience = self.delegation_audience.resolving(resolver);
+    /// Read the status of the home whose node is `node` through `resolver`
+    /// when a request is refused for its credential
+    /// (`Identity.HeldAudience.resend`).
+    pub fn with_audience_resolver(
+        mut self,
+        node: impl Into<String>,
+        resolver: Arc<dyn ResolveAudience>,
+    ) -> Self {
+        self.delegation_audience = self.delegation_audience.resolving(node.into(), resolver);
         self
     }
 
@@ -177,17 +191,26 @@ impl GraphqlEndpoint {
         self
     }
 
-    async fn read_status(&self) -> Option<ReportedHome> {
+    /// The read is boxed so the futures awaiting it carry no nesting of
+    /// what it reports.
+    fn read_status(&self) -> StatusRead {
         // A task of its own keeps a caller's future `Sync`, as a tool's
         // definition future must be, whatever future the read returns.
         let read = match self.delegation_audience.0.resolver.clone() {
-            Some(resolver) => tokio::spawn(async move { resolver.resolve().await }),
+            Some((node, resolver)) => tokio::spawn(async move {
+                let nonce = home_status::fresh_nonce();
+                let status = resolver.resolve(&nonce).await?;
+                match home_status::authenticate(&status, &node, &nonce) {
+                    Ok(home) => home.resolved().map(Ok),
+                    Err(refusal) => Some(Err(refusal)),
+                }
+            }),
             None => {
                 let endpoint = self.clone();
                 tokio::spawn(async move { endpoint.reread_runtime_home().await })
             }
         };
-        read.await.ok().flatten()
+        Box::pin(async move { read.await.ok().flatten() })
     }
 
     fn presented_credential(&self) -> PresentedCredential {
@@ -205,19 +228,25 @@ impl GraphqlEndpoint {
 
     /// Read the home's status again after its node answered a request this
     /// endpoint sent with `answer`, and keep the audience and clock it
-    /// reports. `None` when the answer refuses no credential this endpoint
-    /// presented (`Identity.HeldAudience.refusalOf`) or no status could be
-    /// read.
+    /// reports when it is the home's; otherwise why it is not. `None` when
+    /// the answer refuses no credential this endpoint presented
+    /// (`Identity.HeldAudience.refusalOf`) or no status could be read.
     pub(super) async fn reread_after_refusal(
         &self,
         answer: CredentialAnswer,
-    ) -> Option<(CredentialRefusal, HeldAudienceChange)> {
+    ) -> Option<(
+        CredentialRefusal,
+        Result<HeldAudienceChange, HomeStatusRefusal>,
+    )> {
         let refusal = CredentialRefusal::of(answer, self.presented_credential());
         if refusal == CredentialRefusal::Other {
             return None;
         }
-        let reported = self.read_status().await?;
-        Some((refusal, self.delegation_audience.observe(reported)))
+        let home = self.read_status().await?;
+        Some((
+            refusal,
+            home.map(|home| self.delegation_audience.observe(&home)),
+        ))
     }
 
     /// The audience this endpoint mints request-bound delegations for, with
@@ -239,8 +268,14 @@ impl GraphqlEndpoint {
             held.as_ref(),
             clock.is_some(),
         ) {
-            if let Some(reported) = self.read_status().await {
-                self.delegation_audience.observe(reported);
+            match self.read_status().await {
+                Some(Ok(home)) => {
+                    self.delegation_audience.observe(&home);
+                }
+                Some(Err(refusal)) => {
+                    return Err(ConfigClientError::HomeStatusUnauthenticated(refusal));
+                }
+                None => {}
             }
         }
         let (clock, now) = self.delegation_audience.minting_clock();
@@ -259,8 +294,8 @@ impl GraphqlEndpoint {
     /// its home.
     pub(super) async fn home_time(&self) -> u64 {
         if self.mints_delegations() && self.delegation_audience.minting_clock().0.is_none() {
-            if let Some(reported) = self.read_status().await {
-                self.delegation_audience.observe(reported);
+            if let Some(Ok(home)) = self.read_status().await {
+                self.delegation_audience.observe(&home);
             }
         }
         let (clock, now) = self.delegation_audience.minting_clock();
@@ -269,15 +304,31 @@ impl GraphqlEndpoint {
 
     /// Whether a request this endpoint sent and its node answered with
     /// `answer` is to be sent once more, after the home's status was read
-    /// again and the audience and clock it reports kept.
-    pub async fn recovers(&self, answer: CredentialAnswer) -> bool {
-        self.reread_after_refusal(answer)
-            .await
-            .is_some_and(|(refusal, change)| resend(false, refusal, &change))
+    /// again and the audience and clock it reports kept
+    /// (`Identity.HeldAudience.recovery`); a status that is not the home's
+    /// fails the request.
+    pub async fn recovers(&self, answer: CredentialAnswer) -> Result<bool, ConfigClientError> {
+        let Some((refusal, read)) = self.reread_after_refusal(answer).await else {
+            return Ok(false);
+        };
+        let (authenticated, record) = match &read {
+            Ok(record) => (true, record.clone()),
+            Err(_) => (false, HeldAudienceChange::Unchanged),
+        };
+        match (recovery(false, refusal, authenticated, &record), read) {
+            (Recovery::Resend, _) => Ok(true),
+            (Recovery::Unauthenticated, Err(refusal)) => {
+                Err(ConfigClientError::HomeStatusUnauthenticated(refusal))
+            }
+            _ => Ok(false),
+        }
     }
 
     /// `recovers` for an answer's HTTP status.
-    pub async fn recovers_refusal(&self, status: reqwest::StatusCode) -> bool {
+    pub async fn recovers_refusal(
+        &self,
+        status: reqwest::StatusCode,
+    ) -> Result<bool, ConfigClientError> {
         self.recovers(CredentialAnswer::of_status(status.as_u16()))
             .await
     }
@@ -304,11 +355,14 @@ impl GraphqlEndpoint {
     {
         self.runtime_authentication().await?;
         let response = build(self)?.send().await;
-        match &response {
-            Ok(answered) if self.recovers_refusal(answered.status()).await => {
-                Ok((build(self)?.send().await, true))
-            }
-            _ => Ok((response, false)),
+        let recovered = match &response {
+            Ok(answered) => self.recovers_refusal(answered.status()).await?,
+            Err(_) => false,
+        };
+        if recovered {
+            Ok((build(self)?.send().await, true))
+        } else {
+            Ok((response, false))
         }
     }
 }
@@ -328,24 +382,38 @@ mod tests {
     use super::ResolveAudience;
     use crate::config_client::GraphqlEndpoint;
 
+    /// The home's status, signed by its node key for each read.
     struct Status {
+        node: crate::identity::KeyIdentity,
         reports: ReportedDelegationAudience,
         provider_time: Option<u64>,
         reads: AtomicUsize,
     }
 
     impl ResolveAudience for Status {
-        fn resolve(
-            &self,
-        ) -> BoxFuture<'_, Option<gents_protocol::delegation_audience::ReportedHome>> {
+        fn resolve<'a>(
+            &'a self,
+            nonce: &'a gents_protocol::home_attestation::HomeNonce,
+        ) -> BoxFuture<'a, Option<serde_json::Value>> {
             self.reads.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async {
-                Some(gents_protocol::delegation_audience::ReportedHome {
-                    audience: self.reports.clone(),
-                    provider_time: self.provider_time,
-                })
+            Box::pin(async move {
+                Some(
+                    crate::test_support::signed_home_status(
+                        &self.node,
+                        &self.reports,
+                        self.provider_time,
+                        nonce,
+                    )
+                    .await,
+                )
             })
         }
+    }
+
+    async fn home_key() -> crate::identity::KeyIdentity {
+        tokio::task::spawn_blocking(|| crate::test_support::test_identity("held-home"))
+            .await
+            .unwrap()
     }
 
     fn audience(deployment: u64) -> DelegationAudience {
@@ -423,15 +491,134 @@ mod tests {
             .unwrap()
             .with_reported_delegation_audience(held)
             .unwrap()
-            .with_audience_resolver(status.clone())
+            .with_audience_resolver(
+                crate::identity::NodeIdentity::did(&status.node),
+                status.clone(),
+            )
     }
 
-    fn status(reports: ReportedDelegationAudience) -> Arc<Status> {
+    async fn status(reports: ReportedDelegationAudience) -> Arc<Status> {
         Arc::new(Status {
+            node: home_key().await,
             reports,
             provider_time: None,
             reads: AtomicUsize::new(0),
         })
+    }
+
+    /// What answers at the home's address naming the home's node and the
+    /// audience the node there takes, without the home's signature for the
+    /// read: unsigned, signed by another key, or the home's own status
+    /// signed for an earlier read.
+    #[derive(Clone, Copy, Debug)]
+    enum Forgery {
+        Unsigned,
+        OtherKey,
+        Replayed,
+    }
+
+    struct Impostor {
+        home: crate::identity::KeyIdentity,
+        other: crate::identity::KeyIdentity,
+        forgery: Forgery,
+        reports: DelegationAudience,
+        reads: AtomicUsize,
+    }
+
+    impl ResolveAudience for Impostor {
+        fn resolve<'a>(
+            &'a self,
+            nonce: &'a gents_protocol::home_attestation::HomeNonce,
+        ) -> BoxFuture<'a, Option<serde_json::Value>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                let mut status = serde_json::json!({
+                    "node_did": crate::identity::NodeIdentity::did(&self.home),
+                    "client_authentication": {
+                        "kind": "vera",
+                        "worker": self.reports.worker,
+                        "deployment": self.reports.deployment,
+                    },
+                    "delegation_audience": self.reports,
+                });
+                match self.forgery {
+                    Forgery::Unsigned => {}
+                    Forgery::OtherKey => {
+                        crate::identity::home_status::attest(Some(&self.other), nonce, &mut status)
+                            .await;
+                    }
+                    Forgery::Replayed => {
+                        let earlier =
+                            gents_protocol::home_attestation::HomeNonce::from_bytes([9; 32]);
+                        crate::identity::home_status::attest(
+                            Some(&self.home),
+                            &earlier,
+                            &mut status,
+                        )
+                        .await;
+                    }
+                }
+                Some(status)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_status_the_home_did_not_sign_changes_no_record_and_mints_nothing() {
+        for forgery in [Forgery::Unsigned, Forgery::OtherKey, Forgery::Replayed] {
+            for held in [None, Some(audience(1))] {
+                let server = node_taking(2).await;
+                let impostor = Arc::new(Impostor {
+                    home: home_key().await,
+                    other: home_key().await,
+                    forgery,
+                    reports: audience(2),
+                    reads: AtomicUsize::new(0),
+                });
+                let user =
+                    tokio::task::spawn_blocking(|| crate::test_support::test_identity("held-user"))
+                        .await
+                        .unwrap();
+                let capability =
+                    crate::identity::NodeIdentity::client_signing_capability(&user).unwrap();
+                let endpoint = GraphqlEndpoint::as_principal(&server.url, capability.did())
+                    .with_client_signing_capability(capability)
+                    .unwrap()
+                    .with_reported_delegation_audience(match &held {
+                        Some(audience) => ReportedDelegationAudience::Named(audience.clone()),
+                        None => ReportedDelegationAudience::Absent,
+                    })
+                    .unwrap()
+                    .with_audience_resolver(
+                        crate::identity::NodeIdentity::did(&impostor.home),
+                        impostor.clone(),
+                    );
+                let answered = super::super::graphql::query_with_options(
+                    &endpoint,
+                    "query { Node { _docID } }",
+                    None,
+                    gents_protocol::graphql::GraphqlRequestOptions {
+                        max_attempts: 1,
+                        ..Default::default()
+                    },
+                )
+                .await;
+                assert!(
+                    matches!(
+                        answered,
+                        Err(crate::config_client::ConfigClientError::HomeStatusUnauthenticated(_))
+                    ),
+                    "{forgery:?} {held:?}: {answered:?}"
+                );
+                assert_eq!(impostor.reads.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    server.presented(),
+                    vec![held.as_ref().map(|audience| audience.deployment)],
+                    "{forgery:?}: nothing is minted for the audience the home did not sign"
+                );
+                assert_eq!(endpoint.delegation_audience.get(), held, "{forgery:?}");
+            }
+        }
     }
 
     async fn query(endpoint: &GraphqlEndpoint) -> bool {
@@ -451,7 +638,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_that_knew_no_audience_learns_it_from_the_refusal() {
         let server = node_taking(1).await;
-        let status = status(ReportedDelegationAudience::Named(audience(1)));
+        let status = status(ReportedDelegationAudience::Named(audience(1))).await;
         let endpoint = endpoint(&server, ReportedDelegationAudience::Absent, &status).await;
         assert!(query(&endpoint).await);
         assert_eq!(server.presented().len(), 2);
@@ -461,7 +648,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_recovers_from_a_restart_under_another_audience() {
         let server = node_taking(2).await;
-        let status = status(ReportedDelegationAudience::Named(audience(2)));
+        let status = status(ReportedDelegationAudience::Named(audience(2))).await;
         let endpoint = endpoint(
             &server,
             ReportedDelegationAudience::Named(audience(1)),
@@ -492,7 +679,7 @@ mod tests {
             ),
         ] {
             let server = node_taking(node).await;
-            let status = status(reports);
+            let status = status(reports).await;
             let endpoint = endpoint(&server, held, &status).await;
             assert!(!query(&endpoint).await);
             assert_eq!(server.presented().len(), 1);
@@ -555,7 +742,7 @@ mod tests {
     #[tokio::test]
     async fn a_transaction_refused_after_a_restart_runs_again_whole_once() {
         let server = transacting_node(2).await;
-        let status = status(ReportedDelegationAudience::Named(audience(2)));
+        let status = status(ReportedDelegationAudience::Named(audience(2))).await;
         let endpoint = endpoint(
             &server,
             ReportedDelegationAudience::Named(audience(1)),
@@ -574,7 +761,7 @@ mod tests {
             ReportedDelegationAudience::Unavailable,
         ] {
             let server = transacting_node(2).await;
-            let status = status(reports);
+            let status = status(reports).await;
             let endpoint = endpoint(
                 &server,
                 ReportedDelegationAudience::Named(audience(1)),
@@ -587,9 +774,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_transaction_whose_home_status_is_not_signed_fails_saying_so_and_runs_once() {
+        for forgery in [Forgery::Unsigned, Forgery::OtherKey, Forgery::Replayed] {
+            let server = transacting_node(2).await;
+            let impostor = Arc::new(Impostor {
+                home: home_key().await,
+                other: home_key().await,
+                forgery,
+                reports: audience(2),
+                reads: AtomicUsize::new(0),
+            });
+            let user =
+                tokio::task::spawn_blocking(|| crate::test_support::test_identity("held-user"))
+                    .await
+                    .unwrap();
+            let capability =
+                crate::identity::NodeIdentity::client_signing_capability(&user).unwrap();
+            let endpoint = GraphqlEndpoint::as_principal(&server.url, capability.did())
+                .with_client_signing_capability(capability)
+                .unwrap()
+                .with_reported_delegation_audience(ReportedDelegationAudience::Named(audience(1)))
+                .unwrap()
+                .with_audience_resolver(
+                    crate::identity::NodeIdentity::did(&impostor.home),
+                    impostor.clone(),
+                );
+            let runs = AtomicUsize::new(0);
+            let committed = crate::config_client::ConfigAccess::Graphql(endpoint.clone())
+                .transact_readonly("held_audience.unsigned", |txn| {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move {
+                        txn.execute("query { Node { _docID } }").await?;
+                        Ok::<_, crate::config_client::ConfigClientError>(())
+                    })
+                })
+                .await;
+            assert!(
+                matches!(
+                    committed,
+                    Err(crate::config_client::ConfigClientError::HomeStatusUnauthenticated(_))
+                ),
+                "{forgery:?}: {committed:?}"
+            );
+            assert_eq!(runs.load(Ordering::SeqCst), 1, "{forgery:?}");
+            assert_eq!(server.presented(), vec![Some(1)], "{forgery:?}");
+            assert_eq!(endpoint.delegation_audience.get(), Some(audience(1)));
+        }
+    }
+
+    #[tokio::test]
     async fn a_transaction_refused_again_is_run_only_twice() {
         let server = transacting_node(3).await;
-        let status = status(ReportedDelegationAudience::Named(audience(2)));
+        let status = status(ReportedDelegationAudience::Named(audience(2))).await;
         let endpoint = endpoint(
             &server,
             ReportedDelegationAudience::Named(audience(1)),
@@ -626,7 +862,7 @@ mod tests {
                 url: edge_answering(body).await,
                 presented: Arc::default(),
             };
-            let status = status(ReportedDelegationAudience::Absent);
+            let status = status(ReportedDelegationAudience::Absent).await;
             let endpoint = endpoint(&server, ReportedDelegationAudience::Absent, &status).await;
             let told = crate::config_client::post_graphql(&endpoint, "query { Node { _docID } }")
                 .await
@@ -645,7 +881,7 @@ mod tests {
     #[tokio::test]
     async fn a_second_refusal_is_told() {
         let server = node_taking(3).await;
-        let status = status(ReportedDelegationAudience::Named(audience(2)));
+        let status = status(ReportedDelegationAudience::Named(audience(2))).await;
         let endpoint = endpoint(
             &server,
             ReportedDelegationAudience::Named(audience(1)),
@@ -709,6 +945,7 @@ mod tests {
         let provider_time = now + 600;
         let (url, expiries) = node_at(provider_time).await;
         let status = Arc::new(Status {
+            node: home_key().await,
             reports: ReportedDelegationAudience::Named(audience(1)),
             provider_time: Some(provider_time),
             reads: AtomicUsize::new(0),

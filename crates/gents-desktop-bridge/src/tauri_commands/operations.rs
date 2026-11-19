@@ -54,12 +54,6 @@ where
         gents::client_runtime::fetch_runtime_status_for_node(&endpoint, &node_did),
     );
     let tool_call_rows = tool_call_rows?;
-    if let Ok(status) = &status {
-        endpoint
-            .observe_runtime_status(status)
-            .await
-            .map_err(|error| BridgeError::classify_transport_error(error.into()))?;
-    }
     let liveness = status.and_then(|status| {
         serde_json::from_value::<RuntimeLivenessView>(
             status

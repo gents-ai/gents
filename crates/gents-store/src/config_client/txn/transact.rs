@@ -257,31 +257,32 @@ fn resend_unit(
 
 /// Read the home's status again when `error` refused the credential of a
 /// request `txn` sent at `stage`, and say whether the whole transaction runs
-/// again (`resend_unit`).
+/// again (`resend_unit`); a status that is not the home's says why
+/// (`Identity.HeldAudience.recovery`).
 async fn refused_unit_runs_again(
     txn: &ConfigApplyTxn<'_>,
     error: Option<&ConfigClientError>,
     stage: UnitStage,
     mode: TransactionMode,
     resent: bool,
-) -> bool {
+) -> std::result::Result<bool, gents_protocol::home_attestation::HomeStatusRefusal> {
     let (Some(endpoint), Some(answer)) = (
         txn.http_endpoint(),
         error.and_then(ConfigClientError::credential_answer),
     ) else {
-        return false;
+        return Ok(false);
     };
     let Some((refusal, record)) = endpoint.reread_after_refusal(answer).await else {
-        return false;
+        return Ok(false);
     };
-    resend_unit(
+    Ok(resend_unit(
         resent,
         refusal,
-        &record,
+        &record?,
         stage,
         mode,
         txn.client_signed_write_dispatched.load(Ordering::Acquire),
-    )
+    ))
 }
 
 pub(super) fn transact_owned<'a, T, E, F, B>(
@@ -540,7 +541,7 @@ where
                                 });
                                 return Err(E::from(txn.unconfirmed_relationships(error)));
                             }
-                            refused_unit_runs_again(
+                            let _ = refused_unit_runs_again(
                                 &txn,
                                 Some(&error),
                                 UnitStage::Commit,
@@ -601,15 +602,22 @@ where
                             continue;
                         }
                     }
-                    if refused_unit_runs_again(
+                    let runs_again = refused_unit_runs_again(
                         &txn,
                         error.config_client_error(),
                         UnitStage::BeforeCommit,
                         mode,
                         resent_unit,
                     )
-                    .await
-                    {
+                    .await;
+                    let (runs_again, error) = match runs_again {
+                        Ok(runs_again) => (runs_again, error),
+                        Err(refusal) => (
+                            false,
+                            E::from(ConfigClientError::HomeStatusUnauthenticated(refusal)),
+                        ),
+                    };
+                    if runs_again {
                         telemetry.record(AttemptReport {
                             outcome: WriteOutcome::Retrying,
                             conflict_source: ConflictSource::None,

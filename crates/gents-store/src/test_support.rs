@@ -87,6 +87,38 @@ pub fn test_identity(name: &str) -> crate::identity::KeyIdentity {
     crate::identity::KeyIdentity::load_or_create(path, None).unwrap()
 }
 
+/// A home's public status reporting `reports` and `provider_time`, signed by
+/// its node key `node` for the read that sent `nonce`, as the host signs it.
+pub async fn signed_home_status(
+    node: &dyn crate::identity::NodeIdentity,
+    reports: &gents_protocol::delegation_audience::ReportedDelegationAudience,
+    provider_time: Option<u64>,
+    nonce: &gents_protocol::home_attestation::HomeNonce,
+) -> serde_json::Value {
+    use gents_protocol::client_authentication::ClientAuthentication;
+    use gents_protocol::delegation_audience::ReportedDelegationAudience;
+    let authentication = match reports {
+        ReportedDelegationAudience::Named(audience) => ClientAuthentication::Vera {
+            worker: audience.worker.clone(),
+            deployment: audience.deployment,
+        },
+        ReportedDelegationAudience::Absent => ClientAuthentication::Local,
+        ReportedDelegationAudience::Unavailable => ClientAuthentication::Unavailable,
+    };
+    let mut status = serde_json::json!({
+        gents_protocol::delegation_audience::STATUS_NODE_DID_FIELD: node.did(),
+        gents_protocol::client_authentication::STATUS_FIELD: authentication,
+    });
+    if let Some(reported) = reports.status_value() {
+        status[gents_protocol::delegation_audience::STATUS_DELEGATION_AUDIENCE_FIELD] = reported;
+    }
+    if let Some(time) = provider_time {
+        status[gents_protocol::delegation_audience::STATUS_PROVIDER_TIME_FIELD] = time.into();
+    }
+    crate::identity::home_status::attest(Some(node), nonce, &mut status).await;
+    status
+}
+
 pub async fn delete_configuration_document(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     collection: &str,

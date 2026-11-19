@@ -14,26 +14,37 @@ use super::{client_key, create_task, home, owner_on_vera, tasks, Home};
 /// The runtime's public status as the host projects it: its lifecycle, and
 /// the audience its running node reports (`document_acp::status_reports`).
 /// `names_audience` off stands for a runtime that names none.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct Status {
+    identity: Arc<dyn gents_store::identity::NodeIdentity>,
     node: Arc<OnceLock<Weak<defra_node::Node>>>,
     names_audience: Arc<AtomicBool>,
 }
 
 impl Status {
-    fn payload(&self) -> serde_json::Value {
-        let mut status = serde_json::json!({ "lifecycle": "ready" });
+    /// The status signed by the node key for the read that sent `nonce`.
+    async fn payload(&self, nonce: Option<&str>) -> serde_json::Value {
         let node = self.node.get().and_then(Weak::upgrade);
-        if let (true, Some(node)) = (self.names_audience.load(Ordering::SeqCst), node) {
-            let audience = gents_store::local::document_acp::node_delegation_audience(&node);
-            if let Some(reported) =
-                gents_store::local::document_acp::status_reports(DocumentAcp::Vera, audience)
-                    .status_value()
-            {
-                status[gents_protocol::delegation_audience::STATUS_DELEGATION_AUDIENCE_FIELD] =
-                    reported;
-            }
-        }
+        let reports = match (self.names_audience.load(Ordering::SeqCst), node) {
+            (true, Some(node)) => gents_store::local::document_acp::status_reports(
+                DocumentAcp::Vera,
+                gents_store::local::document_acp::node_delegation_audience(&node),
+            ),
+            _ => ReportedDelegationAudience::Absent,
+        };
+        let Some(nonce) =
+            nonce.and_then(|nonce| gents_protocol::home_attestation::HomeNonce::parse(nonce).ok())
+        else {
+            return serde_json::json!({ "lifecycle": "ready" });
+        };
+        let mut status = gents_store::test_support::signed_home_status(
+            self.identity.as_ref(),
+            &reports,
+            None,
+            &nonce,
+        )
+        .await;
+        status["lifecycle"] = "ready".into();
         status
     }
 }
@@ -46,8 +57,9 @@ async fn serve_at(
     let listener =
         tokio::task::spawn_blocking(move || std::net::TcpListener::bind(address)).await??;
     let status = Status {
+        identity: home.node.clone(),
+        node: Arc::default(),
         names_audience: Arc::new(AtomicBool::new(true)),
-        ..Status::default()
     };
     let served = status.clone();
     let (node, _admission) = ProtectedBackendStore::open(&home.data, &home.key, &home.lock)
@@ -64,10 +76,26 @@ async fn serve_at(
                         let served = served.clone();
                         edge.wrap(router.route(
                             "/status",
-                            axum::routing::get(move || {
-                                let served = served.clone();
-                                async move { axum::Json(served.payload()) }
-                            }),
+                            axum::routing::get(
+                                move |query: axum::extract::Query<
+                                    rapidhash::RapidHashMap<String, String>,
+                                >| {
+                                    let served = served.clone();
+                                    async move {
+                                        axum::Json(
+                                            served
+                                                .payload(
+                                                    query
+                                                        .get(
+                                                            gents_protocol::home_attestation::HOME_NONCE_QUERY,
+                                                        )
+                                                        .map(String::as_str),
+                                                )
+                                                .await,
+                                        )
+                                    }
+                                },
+                            ),
                         ))
                     }
                 })),
@@ -89,17 +117,23 @@ struct PublicStatus {
 }
 
 impl ResolveAudience for PublicStatus {
-    fn resolve(&self) -> BoxFuture<'_, Option<gents_protocol::delegation_audience::ReportedHome>> {
+    fn resolve<'a>(
+        &'a self,
+        nonce: &'a gents_protocol::home_attestation::HomeNonce,
+    ) -> BoxFuture<'a, Option<serde_json::Value>> {
         Box::pin(async move {
-            let status = reqwest::get(&self.url)
+            reqwest::Client::new()
+                .get(&self.url)
+                .query(&[(
+                    gents_protocol::home_attestation::HOME_NONCE_QUERY,
+                    nonce.as_str(),
+                )])
+                .send()
                 .await
                 .ok()?
                 .json::<serde_json::Value>()
                 .await
-                .ok()?;
-            Some(gents_protocol::delegation_audience::ReportedHome::observe(
-                &status,
-            ))
+                .ok()
         })
     }
 }
@@ -129,7 +163,21 @@ async fn a_client_recovers_when_its_runtime_comes_back_as_another_deployment() -
 {
     let directory = tempfile::tempdir()?;
     let first = vera_home(directory.path(), "first").await?;
+    let (first_key, second_key) = (
+        directory.path().join("first/node.key"),
+        directory.path().join("second/node.key"),
+    );
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        std::fs::create_dir_all(second_key.parent().expect("a home directory"))?;
+        std::fs::copy(first_key, second_key).map(drop)
+    })
+    .await??;
     let second = vera_home(directory.path(), "second").await?;
+    assert_eq!(
+        first.node.did(),
+        second.node.did(),
+        "the same home's node key"
+    );
     let address = tokio::task::spawn_blocking(|| {
         std::net::TcpListener::bind("127.0.0.1:0").and_then(|listener| listener.local_addr())
     })
@@ -140,9 +188,12 @@ async fn a_client_recovers_when_its_runtime_comes_back_as_another_deployment() -
     let client = GraphqlEndpoint::as_principal(&url, user.did())
         .with_client_signing_capability(user.clone())?
         .with_reported_delegation_audience(ReportedDelegationAudience::Absent)?
-        .with_audience_resolver(Arc::new(PublicStatus {
-            url: format!("http://{address}/status"),
-        }));
+        .with_audience_resolver(
+            first.node.did(),
+            Arc::new(PublicStatus {
+                url: format!("http://{address}/status"),
+            }),
+        );
     let access = ConfigAccess::Graphql(client.clone());
 
     let (node, _status) = serve_at(&first, address).await?;
@@ -168,9 +219,12 @@ async fn a_client_recovers_when_its_runtime_comes_back_as_another_deployment() -
     let unresolved = GraphqlEndpoint::as_principal(&url, user.did())
         .with_client_signing_capability(user.clone())?
         .with_reported_delegation_audience(ReportedDelegationAudience::Absent)?
-        .with_audience_resolver(Arc::new(PublicStatus {
-            url: format!("http://{address}/status"),
-        }));
+        .with_audience_resolver(
+            first.node.did(),
+            Arc::new(PublicStatus {
+                url: format!("http://{address}/status"),
+            }),
+        );
     assert!(
         create_task(&ConfigAccess::Graphql(unresolved), "unresolved")
             .await

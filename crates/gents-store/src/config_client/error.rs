@@ -19,6 +19,8 @@ pub enum ConfigClientError {
     RuntimeAuthenticationIdentity,
     #[error("the runtime has not advertised usable client authentication; reconnect the runtime")]
     RuntimeAuthenticationUnavailable,
+    #[error("the home's status could not be authenticated: {0}")]
+    HomeStatusUnauthenticated(gents_protocol::home_attestation::HomeStatusRefusal),
     #[error("preparing the held client key for a runtime delegation")]
     ClientDelegationSigner(#[source] Box<vera::vera_rs::SignerError>),
     #[error("client delegation signing task failed")]
