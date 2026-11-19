@@ -79,7 +79,6 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use gents_store::identity::NodeIdentity;
     fn home(server: &MockServer, node: &str, vera: bool) -> (RuntimeConnection, GraphqlEndpoint) {
         let graphql = format!("{}/api/v0/graphql", server.uri());
         let capability = gents_store::test_support::test_identity("owed-settlement-user")
