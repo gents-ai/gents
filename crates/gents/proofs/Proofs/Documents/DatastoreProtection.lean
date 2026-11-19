@@ -8,7 +8,7 @@ namespace Documents.DatastoreProtection
 
 def protectedCollections : List String :=
   [ "EvalDefinition", "EvalRun", "EvalTrial", "EvalVerdict", "OptimizationJob"
-  , "PendingChatSubmission" ]
+  , "PendingChatSubmission", "ClientAuthoredSubmission", "ClientOutboxSequence" ]
 
 /-- The protection gate runs before the collection scope check, so no scope
 grant widens it. -/

@@ -93,11 +93,18 @@ fn scope(home: &Path) -> ScopeArgs {
     }
 }
 
+/// Returns once the store this access held is released, its node handles
+/// let go first (`tla/StoreHandoff.tla` `AckedHandoff`).
 async fn release(access: gents_store::config_client::ConfigAccess) {
+    let store_release = access.begin_store_release();
     if let Some(node) = access.local_node() {
         if let Err(error) = node.shutdown().await {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
         }
+    }
+    drop(access);
+    if let Some(store_release) = store_release {
+        store_release.released().await;
     }
 }
 
@@ -1161,7 +1168,7 @@ mod tests {
             "{installed:?}"
         );
         let data = gents_service::home_state::default_data_dir(home.path());
-        let claim = crate::commands::init::lock_init_store(home.path(), &data, false)
+        let claim = gents_store::local::home::lock_store(home.path(), &data)
             .expect("provisioning and all pack readers released the service's home");
         drop(claim);
     }

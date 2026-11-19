@@ -580,12 +580,6 @@ pub(crate) async fn resolve_config_access_under_plugin_store(
     Ok((access, home))
 }
 
-/// How long an offline command waits for a previous holder of the home's
-/// store that declared its release, such as the node an earlier command in
-/// this process shut down (Lean `StoreHandoff.decide`); a serving runtime is
-/// refused at once.
-const OFFLINE_STORE_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
-
 pub(crate) async fn resolve_pack_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
@@ -654,7 +648,7 @@ async fn resolve_config_access_inner(
     let claim = gents_store::local::home::acquire_store(
         &home_dir,
         &data_dir,
-        OFFLINE_STORE_RELEASE_WAIT,
+        gents_store::local::home::STORE_RELEASE_WAIT,
     )
     .await
     .map_err(|error| {
@@ -989,7 +983,7 @@ mod tests {
     /// its config, store key and a fresh protected store whose provenance
     /// names the runtime.
     async fn initialized_home_with_store(temp: &Path) -> PathBuf {
-        gents_service::home_state::client_identity_for_new_node()
+        let client = gents_service::home_state::client_identity_for_new_node()
             .await
             .unwrap();
         let home = initialized_home(temp);
@@ -1007,6 +1001,7 @@ mod tests {
             .initialize(
                 &key,
                 &identity,
+                &identity::Did::new(client.did()).unwrap(),
                 gents_store::local::document_acp::DocumentAcp::Local,
             )
             .await

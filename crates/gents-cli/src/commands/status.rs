@@ -28,7 +28,17 @@ pub(crate) async fn status(args: StatusArgs) -> Result<()> {
         None if std::io::stdout().is_terminal() => OutputFormat::Text,
         None => OutputFormat::Json,
     };
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())
+        .await
+        .map_err(|error| {
+            if gents_store::client_error::BridgeError::carried_by(&error).is_some_and(|cause| {
+                cause.code == gents_store::client_error::BridgeErrorCode::EndpointUnreachable
+            }) {
+                error.context("check the runtime address or run `gents` to set up this home and start its runtime, then retry `gents status`")
+            } else {
+                error
+            }
+        })?;
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let output = load_runtime_status_output(args.home.as_deref(), &graphql, &node_did).await?;
     if format == OutputFormat::Json {

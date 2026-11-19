@@ -9,7 +9,7 @@ use gents::support::fixtures::configure_agent_tools_as;
 use gents::support::live_inference::STALL_CEILING;
 use gents::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse};
 use gents::support::{managed_agent_fixture, test_db};
-use gents_desktop_core::client::TranscriptWindow;
+use gents_observe::client_projection::query::TranscriptWindow;
 use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 use gents_store::graphql::escape_graphql_string;
 
@@ -254,7 +254,7 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
         }
     };
 
-    let page = gents_desktop_core::client::load_session_transcript_window_on(
+    let page = gents_observe::client_projection::query::load_session_transcript_window_on(
         &fixture.access,
         SESSION_ID,
         Some(&observed.node_did),
@@ -414,7 +414,7 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
         "the originating tool calls still render as tool activity: {background_tools:#?}"
     );
 
-    let before = gents_desktop_core::client::load_session_transcript_window_on(
+    let before = gents_observe::client_projection::query::load_session_transcript_window_on(
         &fixture.access,
         SESSION_ID,
         Some(&observed.node_did),

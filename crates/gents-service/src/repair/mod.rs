@@ -971,10 +971,9 @@ async fn last_error(config: &NativeServiceConfig) -> Option<String> {
 /// client identity, so an anonymous query cannot establish service readiness.
 /// Observing readiness grants no document access.
 pub async fn serving_status(graphql: &str) -> Option<serde_json::Value> {
-    let status_url = gents_desktop_core::local_runtime::runtime_status_url(graphql).ok()?;
     let payload = tokio::time::timeout(
         Duration::from_secs(2),
-        gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&status_url, None),
+        gents::client_runtime::fetch_runtime_connection_payload(graphql),
     )
     .await
     .ok()?

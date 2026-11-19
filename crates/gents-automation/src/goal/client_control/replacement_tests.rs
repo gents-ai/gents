@@ -373,7 +373,7 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
             .unwrap()
             .iter()
             .any(|row| row["request_id"] == "replacement-first"));
-        process_command(node, &identity, &doc_id, fixture.agent.as_ref())
+        process_command(node, &identity, &doc_id, fixture.agent.as_ref(), None)
             .await
             .unwrap();
         assert!(
@@ -407,7 +407,7 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
     }
     let doc_id = persist_command(&access, &command).await;
     let applied = if start.commit {
-        process_command(node, &identity, &doc_id, fixture.agent.as_ref())
+        process_command(node, &identity, &doc_id, fixture.agent.as_ref(), None)
             .await
             .unwrap();
         let result = receipt(&access, &doc_id).await;

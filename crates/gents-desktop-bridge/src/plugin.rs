@@ -122,11 +122,11 @@ where
             tauri_commands::join_requests::desktop_join_members_list,
             tauri_commands::join_requests::desktop_join_history_read,
             tauri_commands::db_explorer::desktop_open_db_explorer,
-            tauri_commands::peers::desktop_peer_remove,
-            tauri_commands::peers::desktop_peer_rename,
-            tauri_commands::peers::desktop_ended_access_dismiss,
-            tauri_commands::peers::desktop_peer_enroll_status,
-            tauri_commands::peers::desktop_peer_enroll_invite,
+            tauri_commands::peers::desktop_runtime_remove,
+            tauri_commands::peers::desktop_runtime_rename,
+            tauri_commands::peers::desktop_runtime_access_request,
+            tauri_commands::peers::desktop_runtime_access_list,
+            tauri_commands::peers::desktop_runtime_access_decide,
             tauri_commands::workspace::desktop_workspace_list,
             tauri_commands::lifecycle::desktop_client_snapshot,
             tauri_commands::lifecycle::desktop_set_selected_node,
@@ -233,7 +233,7 @@ where
 /// Holds the process lock across the reset reservation for the app lifetime.
 fn hold_desktop_process<R>(
     app: &tauri::AppHandle<R>,
-    paths: &gents_desktop_core::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> anyhow::Result<()>
 where
     R: Runtime,
@@ -251,10 +251,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_desktop_core::client::DesktopPaths;
     use gents_desktop_core::home_reset::{
         lock_browser_store, lock_desktop_process, BrowserStoreLock, DesktopProcessLock,
     };
+    use gents_store::client_journal::paths::DesktopPaths;
 
     #[test]
     fn browser_store_and_process_locks_are_both_held_after_setup() {

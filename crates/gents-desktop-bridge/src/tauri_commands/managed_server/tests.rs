@@ -3,14 +3,9 @@ use super::{
     authority::*, launch::*, pairing::*, port::*, preference::*, readiness::*, reset::*,
     start_wait::*, status::*,
 };
-use crate::local_pairing::{
-    await_managed_pairing_approval, enrollment_request_is_not_visible_yet,
-    grant_then_approve_managed, resolve_managed_request, select_managed_request, PairingApproval,
-};
-use crate::local_pairing::{retry_managed_pairing, PairingFailure};
+use crate::client_runtime::ClientRuntime;
 use crate::state::ManagedServerState as ManagedServerRuntimeState;
 use crate::types::{ManagedServerState, ManagedServerToolCeiling};
-use gents_desktop_core::client::{ClientCore, EnrollmentRequestResult};
 use gents_desktop_core::home_reset::*;
 use gents_desktop_core::preference::MANAGED_SERVER_CONFIG;
 use gents_service::repair::crash_loop::{CrashLoopWatch, JobSample};
@@ -48,7 +43,7 @@ fn lineage_refusal(
     }
 }
 
-fn dirty_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::DesktopPaths) {
+fn dirty_home(temp: &Path) -> (PathBuf, gents_store::client_journal::paths::DesktopPaths) {
     let home = temp.join(".gents");
     write(&home.join("data/MANIFEST"), "REGOMAN old lineage");
     write(
@@ -63,18 +58,17 @@ fn dirty_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::DesktopPaths
         r#"{"node_did":"did:key:other"}"#,
     );
     write(&home.join("grok-port-home/data/MANIFEST"), "REGOMAN other");
-    let desktop = gents_desktop_core::client::DesktopPaths::from_root(temp.join("desktop"));
+    let desktop = gents_store::client_journal::paths::DesktopPaths::from_root(temp.join("desktop"));
     write(
         &desktop.node_data_dir().join("MANIFEST"),
         "REGOMAN old client",
     );
-    write(desktop.peer_directory_path(), "{}");
+    write(desktop.runtime_directory_path(), "{}");
     write(
         desktop.principal_metadata_path(),
         r#"{"did":"did:key:z6MkClient","public_key_bytes":[1,2,3]}"#,
     );
     write(desktop.identity_key_path(), "principal");
-    write(desktop.iroh_secret_key_path(), "iroh");
     write(&desktop.root().join(MANAGED_SERVER_CONFIG), "{}");
     write(&desktop.root().join("runtime/gents"), "packaged runtime");
     (std::fs::canonicalize(&home).unwrap(), desktop)

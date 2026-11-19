@@ -46,6 +46,8 @@ pub struct LocalConfigAccess {
     /// The runtime key's derivation proof, held only by an access its host
     /// built with that key; staging as an Agent requires it.
     pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,
+    pub(super) client_authorization:
+        Option<crate::config_client::client_authentication::ClientAuthorization>,
     pub(super) presented_delegation: Option<crate::config_client::user_write::PresentedDelegation>,
 }
 
@@ -60,6 +62,7 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            client_authorization: None,
             presented_delegation: None,
         }
     }
@@ -100,6 +103,24 @@ impl LocalConfigAccess {
         self
     }
 
+    pub(crate) fn attach_client_authorization(
+        &mut self,
+        authorization: crate::config_client::client_authentication::ClientAuthorization,
+    ) -> Result<()> {
+        if self.identity.as_ref() != Some(authorization.actor()) && self.agent_signer.is_none() {
+            return Err(ConfigClientError::TransactionActorMismatch);
+        }
+        self.client_authorization = Some(authorization);
+        Ok(())
+    }
+
+    pub(crate) fn request_context(&self) -> defra_core::RequestContext {
+        crate::config_client::client_authentication::ClientAuthorization::request_context(
+            self.client_authorization.as_ref(),
+            self.identity.clone(),
+        )
+    }
+
     pub(crate) fn require_client_signed_writes(&mut self) {
         self.client_signed_writes = true;
     }
@@ -132,14 +153,18 @@ impl LocalConfigAccess {
         self.agent_signer.clone()
     }
 
-    /// The node's own identity acts unsigned; any other local actor acts
-    /// only under its validated managed signer.
+    /// Native actor operations preserve the verified User delegation or the
+    /// Node/Agent's own signer. This does not authorize a document write.
     pub(crate) fn require_actor_signer(&self) -> Result<()> {
-        require_mutation_signer(
-            &self.node,
-            self.identity.as_ref(),
-            self.agent_signer.as_ref(),
-        )
+        if self
+            .client_authorization
+            .as_ref()
+            .is_some_and(|caller| self.identity.as_ref() == Some(caller.actor()))
+        {
+            return Ok(());
+        }
+
+        self.require_mutation_signer()
     }
 
     pub(crate) fn require_mutation_signer(&self) -> Result<()> {
@@ -167,6 +192,7 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            client_authorization: None,
             presented_delegation: None,
         })
     }

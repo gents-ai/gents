@@ -1,20 +1,16 @@
 import type { DeploymentView } from "./generated/DeploymentView.js";
 import type { DesktopClientSnapshot } from "./generated/DesktopClientSnapshot.js";
 import type { InferenceBackendView } from "./generated/InferenceBackendView.js";
-import type { SavedPeerView } from "./generated/SavedPeerView.js";
+import type { SavedRuntimeView } from "./generated/SavedRuntimeView.js";
 
 type NodeView = Omit<DeploymentView, "sessions" | "mailboxItems">;
 
 export function isLocalNode(
-  deployment: Pick<NodeView, "nodeDid" | "source">,
+  deployment: Pick<NodeView, "nodeDid" | "local">,
   initNodeDid?: string | null,
 ): boolean {
-  const source = deployment.source ?? "";
   return (
-    deployment.nodeDid === initNodeDid ||
-    source === "local" ||
-    source === "local-standard" ||
-    source.startsWith("local")
+    deployment.nodeDid === initNodeDid || deployment.local
   );
 }
 
@@ -102,11 +98,10 @@ export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
 export type FirstRunPhase = "unknown" | "active" | "done";
 
 export function isSavedRemote(
-  peer: SavedPeerView,
+  peer: SavedRuntimeView,
   initNodeDid?: string | null,
 ): boolean {
   return (
-    peer.source === "enrollment" &&
     !peer.local &&
     !isLocalNode(peer, initNodeDid)
   );
@@ -115,7 +110,7 @@ export function isSavedRemote(
 export function hasSavedRemote(
   snapshot: Pick<DesktopClientSnapshot, "bootstrap">,
 ): boolean {
-  return snapshot.bootstrap.savedPeers.some((peer) =>
+  return snapshot.bootstrap.savedRuntimes.some((peer) =>
     isSavedRemote(peer, snapshot.bootstrap.initNodeDid),
   );
 }

@@ -116,7 +116,7 @@ def issueAt (home : Option HomeClock) (clock : Nat) : Nat :=
   | some home => home.providerAtRead + (clock - home.clockAtRead)
 
 /-- How long a general delegation is minted for. External premise
-(`vera::vera_rs::caller_delegation`): DefraDB issues a general delegation at the
+(`vera_delegation::caller_delegation`): DefraDB issues a general delegation at the
 signer's own clock and takes only its lifetime. Decision (gents#3831): a client
 whose clock is behind its home's lengthens it by how far behind, so the
 delegation ends `lifetimeSeconds` after the provider's time, as one issued

@@ -37,8 +37,15 @@ pub async fn start_node(
         .start_node_with_projection(
             key,
             runtime,
-            http,
-            p2p,
+            move |mut builder| {
+                if let Some(http) = http {
+                    builder = builder.with_http(http);
+                }
+                if let Some(p2p) = p2p {
+                    builder = builder.with_p2p(p2p);
+                }
+                builder
+            },
             Arc::new(ceiling),
             projected_plugins(&plugins),
             &gents_automation::lifecycle_hooks::composition(),
@@ -69,8 +76,15 @@ pub async fn start_node_under_plugin_store(
         .start_node_with_projection(
             key,
             runtime,
-            http,
-            p2p,
+            move |mut builder| {
+                if let Some(http) = http {
+                    builder = builder.with_http(http);
+                }
+                if let Some(p2p) = p2p {
+                    builder = builder.with_p2p(p2p);
+                }
+                builder
+            },
             Arc::new(ceiling),
             projected_plugins(&plugins),
             &gents_automation::lifecycle_hooks::composition(),

@@ -1,0 +1,3 @@
+---- MODULE MCAuthoredOutboxDeliveryGreen ----
+EXTENDS AuthoredOutboxDelivery
+====

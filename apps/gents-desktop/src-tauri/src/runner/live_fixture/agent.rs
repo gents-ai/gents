@@ -4,9 +4,9 @@ mod inference;
 use anyhow::{Context, Result};
 use gents::runtime::embedded::EmbeddedHome;
 use gents::{DocumentRuntimeOptions, Gents};
-use gents_desktop_core::client::PrincipalIdentity;
 use gents_documents::{default_inference_profile_id_for_agent, InferenceBackend};
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 use gents_tools::{surface::cli_tool, surface::ToolCeiling};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -135,13 +135,13 @@ async fn seed_live_agent_documents(
         config_actor.private_key_bytes(),
     )?;
     let access = ConfigAccess::Graphql(
-        gents_desktop_core::client::home_endpoint::user_at(
-            home.graphql_endpoint()
-                .context("runtime HTTP endpoint missing")?,
-            &capability,
-            None,
-        )?
-        .with_client_signed_agent_creates(),
+        gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(capability)
+            .endpoint(
+                node_did,
+                home.graphql_endpoint()
+                    .context("runtime HTTP endpoint missing")?,
+            )?
+            .with_client_signed_agent_creates(),
     );
     let node_input =
         json!({"node_did":node_did,"display_name":agent_name,"created_by":config_actor_did});

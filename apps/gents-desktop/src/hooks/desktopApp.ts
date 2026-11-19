@@ -9,7 +9,6 @@ import { clientStatus, createClientStore } from "./clientStore";
 import { createFleetStore } from "./fleetStore";
 import { createSelectionStore } from "./selectionStore";
 import { reconcileSelection } from "./selectionReconcile";
-import { noticeEndedAccess } from "./endedAccessNotices";
 import { noticeUnkeptChanges } from "./unkeptChangeNotices";
 import { createSessionReads } from "./sessionReads";
 import { createSessionStore, holdsRequest } from "./sessionStore";
@@ -123,7 +122,6 @@ export function createDesktopApp({
   observeLandedChatSends(stores);
   const drafts = createDraftStore();
   reconcileSelection(stores, actions.selectNode, drafts);
-  noticeEndedAccess(stores.fleet);
   noticeUnkeptChanges(stores.fleet);
   keepSeen(stores);
   watchNotifications(stores);

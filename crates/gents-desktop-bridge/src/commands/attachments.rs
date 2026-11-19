@@ -1,12 +1,12 @@
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use gents_protocol::request_input::RequestAttachment;
 
-use crate::error::BridgeError;
+use gents_store::client_error::BridgeError;
 
 /// Attachment names are display metadata. Reads use the authorized retained
 /// message or request, never a host filesystem path supplied by a client.
 pub async fn request_attachments(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
     session_id: &str,
     request_id: &str,
@@ -85,21 +85,21 @@ mod tests {
         use base64::{engine::general_purpose::STANDARD, Engine};
         let home = tempfile::tempdir().unwrap();
         let core = std::sync::Arc::new(
-            ClientCore::start_with_paths_and_options(
-                gents_desktop_core::client::DesktopPaths::from_root(home.path()),
-                gents_desktop_core::client::ClientCoreOptions::local_only(),
+            ClientRuntime::start_with_paths_and_options(
+                gents_store::client_journal::paths::DesktopPaths::from_root(home.path()),
+                crate::client_test_support::file_journal_options(),
             )
             .await
             .unwrap(),
         );
-        let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+        let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(
             std::sync::Arc::new(core.node_identity().clone()),
         )
         .await;
         runtime.publish_node(serde_json::json!({})).await;
         let agent = runtime.publish_chat_agent().await;
         core.stop_observer_for_test().await;
-        runtime.connect(&core).await;
+        crate::client_test_support::connect_runtime(&runtime, &core).await;
         let node_did = runtime.node_did().to_owned();
         let requester = core.node_identity().did().to_owned();
         let access = runtime.user_access();
