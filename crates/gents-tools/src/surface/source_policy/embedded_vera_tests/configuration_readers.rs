@@ -4,7 +4,6 @@ use gents_documents::{apply_desired_state_plan, DesiredStateApplyDocument, Desir
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
-use gents_store::identity::NodeIdentity;
 use gents_store::local::backend_protection::FreshBackendStore;
 use gents_store::local::document_acp::DocumentAcp;
 use serde_json::json;

@@ -47,7 +47,6 @@ impl ConfigApplyTxn<'_> {
     /// registered owner yet was created in this transaction by its only
     /// identity.
     async fn actor_owns(&self, doc_id: &str) -> Result<bool> {
-        use acp::DocumentACP as _;
         let TxnBackend::Embedded { node, identity, .. } = &self.backend else {
             return Ok(false);
         };
