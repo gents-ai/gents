@@ -77,18 +77,6 @@ impl ReportedHome {
                 .and_then(Value::as_u64),
         }
     }
-
-    /// What `status` reports for the home whose node is `node_did`
-    /// (`Identity.HeldAudience.reportedOfHome`): nothing, when another node
-    /// or none answers for it.
-    pub fn of_home(status: &Value, node_did: &str) -> Self {
-        let home = Self::observe(status);
-        let same_node = status.get(STATUS_NODE_DID_FIELD).and_then(Value::as_str) == Some(node_did);
-        Self {
-            audience: home.audience.of_home(same_node),
-            provider_time: home.provider_time.filter(|_| same_node),
-        }
-    }
 }
 
 /// The code the edge of a Vera home answers a User's identity token with
@@ -124,15 +112,6 @@ impl ReportedDelegationAudience {
             Some(reported) => {
                 serde_json::from_value(reported.clone()).map_or(Self::Unavailable, Self::Named)
             }
-        }
-    }
-
-    /// `Identity.HeldAudience.reportedOfHome`.
-    pub fn of_home(self, same_node: bool) -> Self {
-        if same_node {
-            self
-        } else {
-            Self::Unavailable
         }
     }
 
@@ -224,6 +203,34 @@ pub fn resend(resent: bool, refusal: CredentialRefusal, record: &HeldAudienceCha
                 | HeldAudienceChange::Changed(_)
                 | HeldAudienceChange::Reclocked
         ) || refusal == CredentialRefusal::OutsideWindow)
+}
+
+/// What becomes of a request refused for its credential once its home's
+/// status was read again (`Identity.HeldAudience.Recovery`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recovery {
+    Resend,
+    Tell,
+    Unauthenticated,
+}
+
+/// `Identity.HeldAudience.recovery`: `authenticated` is whether the status
+/// read again was the home's.
+pub fn recovery(
+    resent: bool,
+    refusal: CredentialRefusal,
+    authenticated: bool,
+    record: &HeldAudienceChange,
+) -> Recovery {
+    if refusal == CredentialRefusal::Other {
+        Recovery::Tell
+    } else if !authenticated {
+        Recovery::Unauthenticated
+    } else if resend(resent, refusal, record) {
+        Recovery::Resend
+    } else {
+        Recovery::Tell
+    }
 }
 
 /// What a node answered a request with, as far as its credential goes

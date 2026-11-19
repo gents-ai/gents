@@ -225,6 +225,7 @@ mod tests {
             replicated_schema: Default::default(),
             serve_lifecycle: Default::default(),
             document_acp: Default::default(),
+            node_identity: None,
         }
     }
 

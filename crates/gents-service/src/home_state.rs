@@ -714,6 +714,7 @@ mod tests {
     /// a delegation for any other deployment.
     struct Runtime {
         url: String,
+        node: std::sync::Arc<gents_store::identity::KeyIdentity>,
         status: std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
         presented: std::sync::Arc<std::sync::Mutex<Vec<Option<u64>>>>,
     }
@@ -759,14 +760,54 @@ mod tests {
             serde_json::json!({ "lifecycle": "starting" }),
         ));
         let presented = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let (reported, taking, seen) = (status.clone(), status.clone(), presented.clone());
+        let node = std::sync::Arc::new(
+            tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("runtime"))
+                .await
+                .unwrap(),
+        );
+        let (reported, taking, seen, signer) = (
+            status.clone(),
+            status.clone(),
+            presented.clone(),
+            node.clone(),
+        );
         let router = axum::Router::new()
             .route(
                 "/status",
-                axum::routing::get(move || {
-                    let reported = reported.clone();
-                    async move { axum::Json(reported.lock().unwrap().clone()) }
-                }),
+                axum::routing::get(
+                    move |query: axum::extract::RawQuery| {
+                        let (reported, signer) = (reported.clone(), signer.clone());
+                        async move {
+                            let mut status = reported.lock().unwrap().clone();
+                            if status.get("node_did").is_some() {
+                                status["node_did"] =
+                                    gents_store::identity::NodeIdentity::did(signer.as_ref()).into();
+                                if let Some(nonce) = query.0.as_deref().and_then(|query| {
+                                    query.split('&').find_map(|pair| {
+                                        let (name, nonce) = pair.split_once('=')?;
+                                        (name
+                                            == gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                                            .then(|| {
+                                                gents_protocol::home_attestation::HomeNonce::parse(
+                                                    nonce,
+                                                )
+                                                .ok()
+                                            })
+                                            .flatten()
+                                    })
+                                }) {
+                                    gents_store::identity::home_status::attest(
+                                        Some(signer.as_ref()),
+                                        &nonce,
+                                        &mut status,
+                                    )
+                                    .await;
+                                }
+                            }
+                            axum::Json(status)
+                        }
+                    },
+                ),
             )
             .fallback(move |headers: axum::http::HeaderMap| {
                 let (taking, seen) = (taking.clone(), seen.clone());
@@ -798,12 +839,13 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, router).await });
         Runtime {
             url: format!("http://{address}/api/v0/graphql"),
+            node,
             status,
             presented,
         }
     }
 
-    async fn cli_endpoint(url: &str) -> gents_store::config_client::GraphqlEndpoint {
+    async fn cli_endpoint(runtime: &Runtime) -> gents_store::config_client::GraphqlEndpoint {
         let home = tempfile::tempdir().unwrap();
         let paths = gents_store::client_journal::paths::DesktopPaths::from_root(home.path());
         paths.ensure_root_dirs().await.unwrap();
@@ -813,7 +855,12 @@ mod tests {
             )
             .await
             .unwrap();
-        super::client_signed_endpoint(url, &identity, "did:key:test-runtime").unwrap()
+        super::client_signed_endpoint(
+            runtime.url.as_str(),
+            &identity,
+            gents_store::identity::NodeIdentity::did(runtime.node.as_ref()),
+        )
+        .unwrap()
     }
 
     async fn reads(endpoint: &gents_store::config_client::GraphqlEndpoint) -> bool {
@@ -825,7 +872,7 @@ mod tests {
     #[tokio::test]
     async fn a_cli_endpoint_built_before_its_runtime_answered_recovers_on_first_use() {
         let runtime = runtime().await;
-        let endpoint = cli_endpoint(&runtime.url).await;
+        let endpoint = cli_endpoint(&runtime).await;
         runtime.reports(ready(Some(1)));
         assert!(reads(&endpoint).await);
         assert_eq!(runtime.presented(), vec![Some(1)]);
@@ -835,7 +882,7 @@ mod tests {
     async fn a_long_cli_command_survives_a_restart_under_another_audience() {
         let runtime = runtime().await;
         runtime.reports(ready(Some(1)));
-        let endpoint = cli_endpoint(&runtime.url).await;
+        let endpoint = cli_endpoint(&runtime).await;
         assert!(reads(&endpoint).await);
         assert_eq!(runtime.presented(), vec![Some(1)]);
         runtime.reports(ready(Some(2)));
@@ -847,7 +894,7 @@ mod tests {
     async fn a_cli_endpoint_on_a_local_home_presents_its_identity_token_once() {
         let runtime = runtime().await;
         runtime.reports(ready(None));
-        let endpoint = cli_endpoint(&runtime.url).await;
+        let endpoint = cli_endpoint(&runtime).await;
         assert!(reads(&endpoint).await);
         assert_eq!(runtime.presented(), vec![None]);
     }

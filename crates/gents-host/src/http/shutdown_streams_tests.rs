@@ -97,7 +97,7 @@ async fn node_shutdown_with_an_open_graphql_subscription_completes_within_the_bo
             gents::defra_node::HttpConfig::with_listener(listener)
                 .unwrap()
                 .with_extra_routes(gents_store::test_support::local_authentication_route(
-                    owner.did(),
+                    std::sync::Arc::new(owner.clone()),
                 ))
                 .with_router_transform(std::sync::Arc::new(move |router| streams.wrap(router))),
         )

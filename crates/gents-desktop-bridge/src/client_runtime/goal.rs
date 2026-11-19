@@ -462,7 +462,11 @@ mod tests {
             },
         )
         .await?;
-        crate::client_test_support::runtime_metadata(&server, &did).await;
+        crate::client_test_support::runtime_metadata(
+            &server,
+            &crate::client_test_support::RuntimeKey::of_file(&key),
+        )
+        .await;
         core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
             node_did: did.to_string(),
             label: ("Goal runtime").to_string(),
