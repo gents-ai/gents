@@ -14,21 +14,22 @@ pub use service::ClientHostService;
 
 use std::sync::Arc;
 
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{AppMeta, BootstrapPolicy, ManagedServerPolicy, ResolvedBridgePolicy};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::projection::SnapshotGrants;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use protocol::ClientCommand;
 
 /// Transport attachments share the existing core and never own its shutdown.
 /// The installation host must stop and join attachments before closing the core.
 pub struct ClientHost {
-    core: Arc<ClientCore>,
+    core: Arc<ClientRuntime>,
     installation_build: Option<String>,
     advertised_commands: Vec<String>,
     policy: ResolvedBridgePolicy,
@@ -39,14 +40,14 @@ pub struct ClientHost {
 impl ClientHost {
     /// The executable digest is compatibility metadata, never runtime identity
     /// or document authority. Embedded application hosts retain their own lifetime.
-    pub fn for_installation(core: Arc<ClientCore>, build: String) -> Self {
+    pub fn for_installation(core: Arc<ClientRuntime>, build: String) -> Self {
         let mut host = Self::new(core);
         host.installation_build = Some(build);
         host
     }
 
     pub fn for_installation_with_command_inventory(
-        core: Arc<ClientCore>,
+        core: Arc<ClientRuntime>,
         build: String,
         commands: Vec<String>,
     ) -> Self {
@@ -78,9 +79,7 @@ impl ClientHost {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         drop(self);
-        if let Some(released) = released {
-            released.released().await;
-        }
+        released.released().await;
         if let Some(pending) = pending {
             pending.acknowledge(&closed).await;
         }
@@ -94,7 +93,8 @@ impl ClientHost {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(pending);
     }
 
-    pub fn new(core: Arc<ClientCore>) -> Self {
+    pub fn new(core: Arc<ClientRuntime>) -> Self {
+        core.start_authored_delivery();
         Self {
             installation_build: None,
             advertised_commands: ClientCommand::NAMES
@@ -155,41 +155,21 @@ impl ClientHost {
             }
             ClientCommand::RuntimeIsLocal { node_did } => {
                 let record = self.require_connected_runtime(&node_did).await?;
-                encode(record.is_managed_runtime())
+                encode(record.local_node_home.is_some())
             }
             ClientCommand::InferenceCatalog {} => {
                 encode(gents_inference::backends::setup::inference_setup_catalog())
             }
             ClientCommand::InferenceSetupState { node_did } => {
-                let record = self.require_connected_runtime(&node_did).await?;
-                if record.operator_graphql().is_none()
-                    || matches!(
-                        self.core.options().operator_identity_interaction,
-                        gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent
-                    )
-                {
-                    return encode(
-                        self.core
-                            .read_inference_setup_state(&node_did)
-                            .await
-                            .map_err(backend_error)?,
-                    );
-                }
-                let access = self
-                    .core
-                    .operator_access(&node_did)
-                    .map_err(backend_error)?;
+                self.require_configured_runtime(&node_did).await?;
                 encode(
-                    gents_desktop_core::inference::load_inference_setup_state(&access, &node_did)
+                    self.core
+                        .read_inference_setup_state(&node_did)
                         .await
-                        .map_err(|error| {
-                            BridgeError::new(
-                                BridgeErrorCode::EndpointUnreachable,
-                                format!("Runtime configuration is not available: {error}"),
-                            )
-                        })?,
+                        .map_err(backend_error)?,
                 )
             }
+
             ClientCommand::InferenceModelsDiscover { request } => {
                 self.require_configured_runtime(&request.node_did).await?;
                 encode(
@@ -432,6 +412,7 @@ impl ClientHost {
                 .await
                 .map_err(backend_error)?;
                 encode(crate::types::ChatSendResult {
+                    publication: crate::types::ChatPublication::Delivered,
                     session_id: result.session_id,
                     request_id: result.request_id,
                     node_did: result.node_did,
@@ -453,6 +434,7 @@ impl ClientHost {
                 .await
                 .map_err(backend_error)?;
                 encode(crate::types::ChatSendResult {
+                    publication: crate::types::ChatPublication::Delivered,
                     session_id: result.session_id,
                     request_id: result.request_id,
                     node_did: result.node_did,
@@ -532,8 +514,7 @@ impl ClientHost {
             ClientCommand::ConnectLocal { node_home } => {
                 let home = match node_home {
                     Some(path) if !path.trim().is_empty() => std::path::PathBuf::from(path.trim()),
-                    _ => gents_desktop_core::local_runtime::default_node_home()
-                        .map_err(backend_error)?,
+                    _ => gents::client_runtime::default_node_home().map_err(backend_error)?,
                 };
                 if !home.is_absolute() {
                     return Err(BridgeError::new(
@@ -542,20 +523,16 @@ impl ClientHost {
                     ));
                 }
                 self.core
-                    .refresh_local_standard_peer(&home, "Local runtime")
+                    .refresh_local_runtime(&home, "Local runtime")
                     .await
                     .map_err(backend_error)?;
-                self.core
-                    .request_p2p_repair()
-                    .await
-                    .map_err(backend_error)?;
+                self.core.request_runtime_reconnect(None).await;
                 encode(())
             }
             ClientCommand::EnrollLocal { node_home } => {
                 let home = match node_home {
                     Some(path) if !path.trim().is_empty() => std::path::PathBuf::from(path.trim()),
-                    _ => gents_desktop_core::local_runtime::default_node_home()
-                        .map_err(backend_error)?,
+                    _ => gents::client_runtime::default_node_home().map_err(backend_error)?,
                 };
                 if !home.is_absolute() {
                     return Err(BridgeError::new(
@@ -565,30 +542,19 @@ impl ClientHost {
                 }
                 let peer = self
                     .core
-                    .refresh_local_standard_peer(&home, "Local runtime")
+                    .refresh_local_runtime(&home, "Local runtime")
                     .await
                     .map_err(backend_error)?;
                 let target = crate::local_pairing::ManagedPairingTarget {
                     node_name: peer.label,
                     node_did: peer.node_did,
-                    graphql: peer.graphql.ok_or_else(|| {
-                        BridgeError::untyped(
-                            "The local runtime did not provide a configuration endpoint.",
-                        )
-                    })?,
+                    graphql: peer.graphql,
                 };
-                crate::local_pairing::retry_managed_pairing(
+                crate::local_pairing::ensure_managed_runtime_pairing(
+                    Arc::clone(&self.core),
+                    &home,
+                    &target,
                     &cancel,
-                    crate::local_pairing::MANAGED_PAIRING_ATTEMPTS,
-                    crate::local_pairing::MANAGED_PAIRING_RETRY_DELAY,
-                    || {
-                        crate::local_pairing::ensure_managed_runtime_pairing(
-                            Arc::clone(&self.core),
-                            &home,
-                            &target,
-                            &cancel,
-                        )
-                    },
                 )
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
@@ -634,11 +600,29 @@ impl ClientHost {
                 .await
                 .map_err(BridgeError::untyped)?,
             ),
-            ClientCommand::Enroll { request } => {
-                encode(crate::commands::request_status_enrollment(&self.core, request).await?)
+            ClientCommand::ListRuntimeAccess { node_did } => encode(
+                self.core
+                    .list_runtime_access_requests(&node_did)
+                    .await
+                    .map_err(backend_error)?
+                    .into_iter()
+                    .map(crate::types::ClientAccessRequestView::from)
+                    .collect::<Vec<_>>(),
+            ),
+            ClientCommand::DecideRuntimeAccess { request } => {
+                encode(crate::types::ClientAccessRequestView::from(
+                    self.core
+                        .decide_runtime_access(
+                            &request.node_did,
+                            &request.request_id,
+                            request.decision,
+                        )
+                        .await
+                        .map_err(backend_error)?,
+                ))
             }
-            ClientCommand::EnrollInvite { request } => {
-                encode(crate::commands::request_invite_enrollment(&self.core, request).await?)
+            ClientCommand::RequestRuntimeAccess { request } => {
+                encode(crate::commands::request_runtime_access(&self.core, request).await?)
             }
             ClientCommand::SessionSnapshot(args) => encode(
                 crate::commands::session_snapshot(
@@ -759,8 +743,8 @@ impl ClientHost {
     async fn require_connected_runtime(
         &self,
         node_did: &str,
-    ) -> Result<gents_desktop_core::client::PeerRecord, BridgeError> {
-        let records = self.core.peer_records().await;
+    ) -> Result<gents_protocol::runtime_connection::RuntimeConnection, BridgeError> {
+        let records = self.core.runtime_connections();
         let mut matches = records.iter().filter(|record| record.node_did == node_did);
         matches
             .next()
@@ -775,12 +759,7 @@ impl ClientHost {
     }
 
     async fn require_configured_runtime(&self, node_did: &str) -> Result<(), BridgeError> {
-        if self
-            .require_connected_runtime(node_did)
-            .await?
-            .operator_graphql()
-            .is_none()
-        {
+        if !self.require_connected_runtime(node_did).await?.validate() {
             return Err(BridgeError::new(
                 BridgeErrorCode::InvalidArgument,
                 "Choose a configured runtime. Use Gents: Connect Local Runtime to connect a runtime on this machine.",

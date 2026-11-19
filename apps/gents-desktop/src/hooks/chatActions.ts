@@ -373,17 +373,19 @@ export function createChatActions({
         ? displayedGoal(node.nodeDid, selectedSessionId, accepts)
         : null;
       const current = selectedSessionId
-        ? observedGoal(
-            await api.fetchSessionGoal(node.nodeDid, selectedSessionId),
-            node.nodeDid,
-            selectedSessionId,
-            accepts,
-          )
+        ? node.runtimeConnection !== "connected"
+          ? null
+          : observedGoal(
+              await api.fetchSessionGoal(node.nodeDid, selectedSessionId),
+              node.nodeDid,
+              selectedSessionId,
+              accepts,
+            )
         : null;
       const expected =
         displayed && current && selectedSessionId
           ? fenceOnDisplayed(displayed, current, selectedSessionId)
-          : null;
+          : (displayed?.revision ?? null);
       const result = await goalDelivery.submit(
         {
           clientDid: goalClientDid,

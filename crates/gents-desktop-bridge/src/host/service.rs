@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::client_runtime::ClientRuntime;
 use anyhow::{Context, Result};
-use gents_desktop_core::client::ClientCore;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -15,7 +15,7 @@ pub struct ClientHostService {
 }
 
 impl ClientHostService {
-    pub fn start(core: Arc<ClientCore>, listener: LocalListener) -> Self {
+    pub fn start(core: Arc<ClientRuntime>, listener: LocalListener) -> Self {
         let stop = CancellationToken::new();
         let task = tokio::spawn(listener.serve(Arc::new(ClientHost::new(core)), stop.clone()));
         Self {

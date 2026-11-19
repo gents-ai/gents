@@ -10,6 +10,7 @@ use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry
 mod backed_request;
 pub mod blocked_turn;
 mod claimed_publication;
+pub mod client_application;
 mod client_control;
 mod client_submission;
 pub mod continuation;

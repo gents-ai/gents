@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-runtime-access-decide"
+description = "Enables the desktop_runtime_access_decide command without any pre-configured scope."
+commands.allow = ["desktop_runtime_access_decide"]
+
+[[permission]]
+identifier = "deny-desktop-runtime-access-decide"
+description = "Denies the desktop_runtime_access_decide command without any pre-configured scope."
+commands.deny = ["desktop_runtime_access_decide"]

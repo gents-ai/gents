@@ -1,6 +1,7 @@
 use gents_inference::backends::setup::{InferenceAuthMethod, InferenceSetupCatalog};
 
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 /// The desktop callback servers require a host browser and a loopback listener.
 /// iOS sign-in needs a native authentication session before these methods can

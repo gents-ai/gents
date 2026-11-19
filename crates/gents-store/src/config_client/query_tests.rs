@@ -10,7 +10,7 @@ use super::{
 
 fn one_attempt(timeout: Duration) -> GraphqlRequestOptions {
     GraphqlRequestOptions {
-        timeout,
+        timeout: Some(timeout),
         max_attempts: 1,
         retry_backoff: Duration::ZERO,
     }
@@ -116,8 +116,8 @@ async fn graphql_response_errors_remain_distinct_from_transport_failures() {
     }
 }
 
-#[test]
-fn authenticated_delegation_preserves_actor_without_minting_a_token() {
+#[tokio::test]
+async fn authenticated_delegation_preserves_actor_without_minting_a_token() {
     let actor =
         identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76".to_owned())
             .unwrap();
@@ -128,7 +128,7 @@ fn authenticated_delegation_preserves_actor_without_minting_a_token() {
     )
     .unwrap();
     assert_eq!(
-        endpoint.authorization().unwrap().as_deref(),
+        endpoint.runtime_authorization().await.unwrap().as_deref(),
         Some("Bearer original-caller-token")
     );
     let access = super::ConfigAccess::Graphql(endpoint);

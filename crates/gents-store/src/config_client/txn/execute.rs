@@ -452,7 +452,7 @@ impl ConfigApplyTxn<'_> {
         // The node owns the transaction; native NAC judges each changing
         // edge against the explicit actor and admits an unchanged one without
         // authority (Lean `Configuration.sourceChangeAllowed`).
-        let context = defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
+        let context = self.request_context(Some(actor.clone()));
         let roots = |records: &[crate::local::ProjectedPlugin]| {
             let mut roots = std::collections::BTreeSet::new();
             for record in records {
@@ -589,14 +589,12 @@ impl ConfigApplyTxn<'_> {
                     self.presented_delegation.as_ref(),
                 )?;
                 let context = match credential {
-                    defra_node::SignerCredential::Delegation(token) => {
-                        defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()))
-                            .with_bearer(Some(actor.to_string()), Some(token))
-                    }
+                    defra_node::SignerCredential::Delegation(token) => self
+                        .request_context(Some(actor.clone()))
+                        .with_bearer(Some(actor.to_string()), Some(token)),
                     defra_node::SignerCredential::None
                     | defra_node::SignerCredential::RequestBound(_) => {
-                        defra_core::RequestContext::default().with_identity(Some(actor.to_string()))
+                        self.request_context(Some(actor.clone()))
                     }
                 };
                 let node = Arc::clone(node);
@@ -696,8 +694,31 @@ impl ConfigApplyTxn<'_> {
         let doc_ids = doc_ids.to_vec();
         execute_owned_native(
             async move {
-                node.observe_document_access_in_txn(&handle, &collection, &doc_ids, subject, mode)
-                    .await
+                if doc_ids.is_empty() {
+                    return node
+                        .observe_document_access_in_txn(
+                            &handle,
+                            &collection,
+                            &doc_ids,
+                            subject,
+                            mode,
+                        )
+                        .await;
+                }
+                let mut decisions = Vec::with_capacity(doc_ids.len());
+                for batch in doc_ids.chunks(query::owners::MAX_OWNER_OBSERVATIONS) {
+                    decisions.extend(
+                        node.observe_document_access_in_txn(
+                            &handle,
+                            &collection,
+                            batch,
+                            subject.clone(),
+                            mode.clone(),
+                        )
+                        .await?,
+                    );
+                }
+                Ok(decisions)
             },
             Arc::clone(native_operations),
             self.operation,
@@ -894,7 +915,8 @@ impl ConfigApplyTxn<'_> {
                 let node = Arc::clone(node);
                 let request = QueryRequest::new(document)
                     .with_variables(variables.clone())
-                    .with_identity(identity.clone());
+                    .with_identity(identity.clone())
+                    .with_context(self.request_context(identity.clone()));
                 let handle = handle.clone();
                 let agent_signer = agent_signer.as_deref().cloned();
                 let result = execute_owned_native(
@@ -1202,57 +1224,6 @@ impl ConfigApplyTxn<'_> {
         .await
     }
 
-    /// Read only account-selection metadata as this transaction's bound
-    /// runtime. Native document ACP still filters and authorizes the read.
-    /// The credential owner supplies `query`; store holds no OAuthCredential
-    /// selection of its own.
-    pub async fn execute_runtime_account_metadata_query(
-        &self,
-        node_did: &str,
-        query: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        self.execute_runtime_metadata_query(node_did, query).await
-    }
-
-    /// Read only the runtime Node's hop cap as this transaction's bound
-    /// runtime. Native document ACP still filters the Node row.
-    pub(super) async fn execute_runtime_hop_cap_query(
-        &self,
-        node_did: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        self.execute_runtime_metadata_query(
-            node_did,
-            &super::runtime_hop_cap::runtime_hop_cap_query(node_did),
-        )
-        .await
-    }
-
-    async fn execute_runtime_metadata_query(
-        &self,
-        node_did: &str,
-        query: &str,
-    ) -> Result<defra_node::QueryResponse> {
-        let TxnBackend::Embedded {
-            node,
-            agent_signer: Some(agent_signer),
-            ..
-        } = &self.backend
-        else {
-            return Err(ConfigClientError::EmbeddedAccessRequired);
-        };
-        if node.node_identity_did() != Some(node_did)
-            || agent_signer.node_did() != node_did
-            || self.actor_did() != Some(agent_signer.did())
-        {
-            return Err(ConfigClientError::TransactionActorMismatch);
-        }
-        let runtime =
-            identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
-        graphql::ensure_query_document(query)?;
-        self.execute_local_response_with_actor(query, None, Some(runtime), None)
-            .await
-    }
-
     pub(super) async fn execute_local_response_with_actor(
         &self,
         document: &str,
@@ -1271,7 +1242,9 @@ impl ConfigApplyTxn<'_> {
         };
         let started = Instant::now();
         let node = Arc::clone(node);
-        let mut request = QueryRequest::new(document).with_identity(identity);
+        let mut request = QueryRequest::new(document)
+            .with_identity(identity.clone())
+            .with_context(self.request_context(identity));
         if let Some(variables) = variables {
             request = request.with_variables(variables);
         }

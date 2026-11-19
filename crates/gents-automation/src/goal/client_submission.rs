@@ -185,6 +185,7 @@ pub async fn recover_session_goal_control(
         Some(row) => match receipt_row(access, &{
             let document = document_id(&row)?;
             grant_command_relationships(access, command, &document).await?;
+
             document
         })
         .await?
@@ -217,6 +218,34 @@ pub async fn submit_prepared_session_goal_control(
         }
     };
     grant_command_relationships(access, command, &document).await?;
+    if let ConfigAccess::Graphql(endpoint) = access {
+        if endpoint.requires_client_delegation().await? {
+            let mut url = reqwest::Url::parse(endpoint.url())?;
+            let base = url
+                .path()
+                .strip_suffix("/api/v0/graphql")
+                .context("runtime endpoint has no GraphQL path")?;
+            url.set_path(&format!(
+                "{base}{}",
+                gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH
+            ));
+            let client = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(30))
+                .build()?;
+            let apply = gents_protocol::goal_control::ApplyGoalControl {
+                node_did: command.node_did.clone(),
+                command_doc_id: document.clone(),
+                agent_did: command.agent_did.clone(),
+            };
+            endpoint
+                .send_resolving(|endpoint| {
+                    Ok(endpoint.authorize(client.post(url.clone()))?.json(&apply))
+                })
+                .await??
+                .error_for_status()?;
+        }
+    }
     // The runtime leaves a creation without native request evidence unanswered;
     // every other control is answered after it rechecks the requester's access
     // in the effect transaction.

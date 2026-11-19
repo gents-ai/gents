@@ -217,9 +217,7 @@ export function App() {
                 }
           }
           approxSerializedBytes={runtime?.approxSerializedBytes ?? 0}
-          agentLabel={
-            selectedDeployment?.node.defaultAgentDid ?? null
-          }
+          agentLabel={selectedDeployment?.node.defaultAgentDid ?? null}
           canSend={Boolean(selectedDeployment) && Boolean(draft.trim())}
           draft={draft}
           interruptVisible={false}
@@ -244,27 +242,27 @@ export function App() {
           }
           bootstrap={snapshot?.bootstrap ?? null}
           deployments={deployments}
-          enrollmentRequests={runtime?.enrollmentRequests ?? null}
+          accessRequests={runtime?.accessRequests ?? null}
           loading={false}
           starting={!storeState.started && busy}
-          onRequestStatusEnrollment={(address) =>
-            run("peer_enroll", async () => {
-              const request = await bridge.api.requestStatusEnrollment(address);
+          onRequestRuntimeAccess={(address) =>
+            run("runtime_access_request", async () => {
+              const request = await bridge.api.requestRuntimeAccess(address);
               await store.refresh();
               return request;
             })
           }
           onOpenChat={(nodeDid) => push(`open_chat: ${nodeDid}`)}
           onOpenConfig={(nodeDid) => push(`open_config: ${nodeDid}`)}
-          onRemovePeer={(peerId) =>
-            run("peer_remove", () => bridge.api.removePeer(peerId)).then(() =>
-              store.refresh(),
-            )
-          }
-          onRenamePeer={(peerId, label) =>
-            run("peer_rename", () => bridge.api.renamePeer(peerId, label)).then(
+          onRemoveRuntime={(peerId) =>
+            run("runtime_remove", () => bridge.api.removeRuntime(peerId)).then(
               () => store.refresh(),
             )
+          }
+          onRenameRuntime={(peerId, label) =>
+            run("runtime_rename", () =>
+              bridge.api.renameRuntime(peerId, label),
+            ).then(() => store.refresh())
           }
         />
       </section>

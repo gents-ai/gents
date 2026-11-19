@@ -20,7 +20,7 @@ function fixture() {
       node(),
       node({
         nodeDid: remote,
-        source: "enrollment",
+        local: false,
         label: "studio-1",
         node: { ...deployment.node, nodeDid: remote, displayName: "Amy" },
       }),

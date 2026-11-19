@@ -463,6 +463,8 @@ pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::EVAL_VERDICT_NAME,
     gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
     gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME,
+    gents_protocol::schemas::CLIENT_AUTHORED_SUBMISSION_NAME,
+    gents_protocol::schemas::CLIENT_OUTBOX_SEQUENCE_NAME,
 ];
 
 /// These collections require the workspace publication owner to stage native

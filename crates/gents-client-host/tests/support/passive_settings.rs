@@ -1,6 +1,6 @@
 use super::Attachment;
 use anyhow::{ensure, Context, Result};
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use serde_json::json;
 use std::path::Path;
 

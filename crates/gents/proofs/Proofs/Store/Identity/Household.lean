@@ -440,6 +440,9 @@ def allowedIn : List ResourceDefinition → Nat → State → DID → String →
             allowedIn definitions fuel state actor target targetId targetRelation)
     | _, _ => false
 
+/-- Document-specific ACP grants, independent of a native NAC administrator's
+query DAC bypass. Native conformance observes named document permissions; ordinary
+client query isolation also depends on the native node permissions it holds. -/
 def allowed (fuel : Nat) (state : State) (actor resource id permission : String) : Bool :=
   allowedIn policy fuel state actor resource id permission
 
@@ -1132,8 +1135,8 @@ def runtimeMayUseFor (use : RuntimeUse) (nodeReader credentialWriter : Bool) : B
   runtimeMayUse 5 (runtimeUseRevoked nodeReader credentialWriter) "runtime"
     use.document.1 use.document.2
 
-def hostingRuntimeReads (use : RuntimeUse) (nodeReader credentialWriter : Bool) : Bool :=
-  nativeRead true 5 (runtimeUseRevoked nodeReader credentialWriter) "runtime"
+def hostingRuntimeReads (bypass : Bool) (use : RuntimeUse) (nodeReader credentialWriter : Bool) : Bool :=
+  nativeRead bypass 5 (runtimeUseRevoked nodeReader credentialWriter) "runtime"
     use.document.1 use.document.2
 
 /-- With its grants in place the runtime uses every document. -/
@@ -1145,7 +1148,8 @@ theorem granted_runtime_uses_every_document :
 stops every use, while the hosting runtime still reads every one of them. -/
 theorem revoked_grants_stop_every_use :
     RuntimeUse.all.map (runtimeMayUseFor · true true) = [false, false, false, false] ∧
-      RuntimeUse.all.map (hostingRuntimeReads · true true) = [true, true, true, true] := by
+      RuntimeUse.all.map (hostingRuntimeReads true · true true) = [true, true, true, true] ∧
+      RuntimeUse.all.map (hostingRuntimeReads false · true true) = [false, false, false, false] := by
   native_decide
 
 /-- Revoking `runtime_reader` stops the backend, hop-cap and agent-creation

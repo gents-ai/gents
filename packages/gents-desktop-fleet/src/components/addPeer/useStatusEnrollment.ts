@@ -1,16 +1,16 @@
 import { useState } from "react";
 
-import type { EnrollmentRequestView } from "@source-inc/gents-desktop-client";
+import type { ClientAccessRequestView } from "@source-inc/gents-desktop-client";
 import { formatPeerConnectionError } from "../../peerConnectionErrors.js";
 
 export type StatusEnrollmentOptions = {
-  onRequestStatusEnrollment: (
+  onRequestRuntimeAccess: (
     serverAddress: string,
-  ) => Promise<EnrollmentRequestView>;
+  ) => Promise<ClientAccessRequestView>;
 };
 
 export function useStatusEnrollment({
-  onRequestStatusEnrollment,
+  onRequestRuntimeAccess,
 }: StatusEnrollmentOptions) {
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [importError, setImportError] = useState(false);
@@ -31,9 +31,9 @@ export function useStatusEnrollment({
     setFetchingStatus(true);
     setImportStatus(null);
     try {
-      const enrollment = await onRequestStatusEnrollment(trimmed);
+      const enrollment = await onRequestRuntimeAccess(trimmed);
       setImportStatus(
-        `Enrollment request ${enrollment.requestId} sent · waiting for pairing request acceptance`,
+        `Access request ${enrollment.requestId} sent · waiting for administrator approval`,
       );
       setImportError(false);
       return enrollment;

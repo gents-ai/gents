@@ -65,7 +65,8 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
         }
         None => {
             let binding =
-                gents_desktop_core::agent_identity::provision(&endpoint, &args.node_did).await?;
+                gents_store::identity::provision_agent_identity_remote(&endpoint, &args.node_did)
+                    .await?;
             let agent = Agent {
                 agent_did: binding.agent_did.clone(),
                 creation_nonce: binding.creation_nonce.clone(),
@@ -175,7 +176,8 @@ async fn submit_create(
     input: AgentCreateInput,
 ) -> Result<()> {
     let endpoint = gents_service::home_state::resolve_graphql_endpoint(graphql, home).await?;
-    let identity_binding = gents_desktop_core::agent_identity::provision(&endpoint, owner).await?;
+    let identity_binding =
+        gents_store::identity::provision_agent_identity_remote(&endpoint, owner).await?;
     let access = ConfigAccess::Graphql(endpoint);
     let mut receipt = create_agent(&access, owner, identity_binding, &input).await?;
     if let Some(Value::String(command)) = receipt.pointer_mut("/host_root_access/user_command") {

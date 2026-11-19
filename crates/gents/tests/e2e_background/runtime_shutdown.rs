@@ -195,7 +195,7 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
     let turn = boot_background_turn("r6-background-shutdown-stop", Vec::new()).await;
     finish_dynamic_turn(&turn);
     assert_eq!(
-        wait_for_request_terminal(&turn.fixture.access, &turn.request_id, STALL_CEILING).await,
+        wait_for_request_terminal(&turn.fixture.access, &turn.request_id).await,
         "completed",
         "initial accepted request did not complete"
     );

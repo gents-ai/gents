@@ -2043,9 +2043,13 @@ const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-host/src/readiness.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
     ("crates/gents-service/src/runtime_control.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
     ("crates/gents-service/src/service_update/execute.rs", 2, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
+    ("crates/gents-store/src/config_client/client_authentication.rs", 1, "authorize_runtime, an authorizer that reads the runtime's authentication first; its callers are counted"),
     ("crates/gents-store/src/config_client/graphql.rs", 2, "a transaction's commit and discard: its transaction recovers as a unit (resendUnit) and a refused commit is told"),
     ("crates/gents-store/src/config_client/mod.rs", 1, "authorize_in_transaction, the one authorizer of requests inside a transaction"),
 ];
+
+/// What authorizes a request as the endpoint's principal.
+const AUTHORIZERS: &[&str] = &["authorize", "authorize_runtime"];
 
 /// What sends the request a closure builds through `send_resolving`.
 const RESOLVING_SENDERS: &[&str] = &[
@@ -2081,7 +2085,10 @@ impl<'ast> Visit<'ast> for UnrecoveredAuthorizeVisitor {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method == "authorize" && call.args.len() == 1 && self.resolving == 0 {
+        if AUTHORIZERS.contains(&call.method.to_string().as_str())
+            && call.args.len() == 1
+            && self.resolving == 0
+        {
             self.sites += 1;
         }
         if RESOLVING_SENDERS.contains(&call.method.to_string().as_str()) {
@@ -2171,6 +2178,11 @@ fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
             0,
         ),
         ("fn f() { e.authorize_in_transaction(c.get(u), id); }", 0),
+        ("fn f() { e.authorize_runtime(c.get(u)).await?.send(); }", 1),
+        (
+            "fn f() { e.send_resolving(|e| e.authorize_runtime(c.get(u))); }",
+            0,
+        ),
         (
             "fn f() { http_client::endpoint_get_json(&e, |e| e.authorize(c.get(u))); }",
             0,
@@ -2689,7 +2701,8 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 #[rustfmt::skip]
 const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-client-host/src/editor_store.rs", &["HistoryUnlockRequired::occurs_in"]),
-    ("crates/gents-desktop-core/src/error.rs", &["BridgeError::carried_by", "BridgeError::classify_transport_error"]),
+    ("crates/gents-desktop-bridge/src/client_runtime/authored_delivery.rs", &["SavedForDelivery::in_error"]),
+    ("crates/gents-store/src/client_error.rs", &["BridgeError::carried_by", "BridgeError::classify_transport_error"]),
     ("crates/gents-documents/src/desired_state/plan.rs", &["stale_expectation"]),
     ("crates/gents-documents/src/desired_state/validate.rs", &["OutcomeSourceSchemaError::in_error"]),
     ("crates/gents-documents/src/references.rs", &["MissingReference::in_error"]),
@@ -2740,6 +2753,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-tools/src/builtin/self_config/command/crud.rs", &["BatchFailure::in_error"]),
     ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", &["CatalogRefusal::in_error"]),
     ("crates/gents-tools/src/builtin/self_config/ops.rs", &["MissingAgent::in_error", "MissingConfigDocument::in_error"]),
+    ("crates/gents-tools/src/guided_failure.rs", &["GuidedFailure::or_help"]),
     ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["auth_refusal_of"]),
     ("crates/gents/src/eval/documents.rs", &["already_completed", "already_invalidated", "feedback_off_train"]),
     ("crates/gents/src/runtime/agent/daemon.rs", &["ShutdownDrainFailure::occurs_in"]),
@@ -2755,10 +2769,6 @@ const CHAIN_WALKER: &str = "crates/gents-protocol/src/error_chain.rs";
 /// docstring names the external premise. This list only shrinks.
 #[rustfmt::skip]
 const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    // in P2pTool::call
-    ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    // in SessionHistoryTool::call
-    ("crates/gents-tools/src/native/session_history.rs", 1),
 ];
 
 /// Adapter-boundary classifiers: functions that decide on error text, or ask
@@ -2773,7 +2783,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-cli/src/commands/eval/watch.rs", &["store_locked"]),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", &["pipe_name_reserved"]),
-    ("crates/gents-desktop-core/src/inference.rs", &["classify_discovery_failure"]),
+    ("crates/gents-observe/src/client_inference.rs", &["classify_discovery_failure"]),
     ("crates/gents-eval/src/report/store.rs", &["unresolvable"]),
     ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", &["provider_reason_from_failure"]),
     ("crates/gents-loop/src/error.rs", &["ProviderReport::classify_failure_text"]),
@@ -2783,7 +2793,7 @@ const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-observe/src/observe/trace_export.rs", &["looks_like_deadline_or_inference_failure"]),
     ("crates/gents-pack/src/plugin/store.rs", &["is_not_found"]),
     ("crates/gents-protocol/src/graphql/response.rs", &["is_collection_missing_error_message"]),
-    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_error_in_chain"]),
+    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_source"]),
     ("crates/gents-protocol/src/node_readiness.rs", &["is_behavior_unavailable_rejection"]),
     ("crates/gents-service/src/native_service.rs", &["ensure_launchd_result"]),
     ("crates/gents-session/src/workspace/action_plan.rs", &["parse_action_plan_json"]),
@@ -4614,6 +4624,14 @@ const OWNERS_ASKED_FOR_WHAT_THEY_HOLD: &[(&str, &str)] = &[
 /// Each crate's `AccessClassification` family enumerating its variants that
 /// hold an access error or the store's `ViewError`.
 const ACCESS_HOLDER_FAMILIES: &[(&str, &str)] = &[
+    (
+        "gents-automation",
+        "access_classification_automation_wrapped",
+    ),
+    (
+        "gents-desktop-bridge",
+        "access_classification_desktop_bridge_wrapped",
+    ),
     ("gents-store", "access_classification_store_wrapped"),
     ("gents-inference", "access_classification_inference_wrapped"),
     ("gents-session", "access_classification_session_wrapped"),
@@ -5812,8 +5830,6 @@ fn lean_read_fence_counts_reads_after_a_lease_without_the_await() {
     }
 }
 
-const CLIENT_ENDPOINT_OWNER: &str = "crates/gents-desktop-core/src/client/home_endpoint.rs";
-
 const CLIENT_ENDPOINT_CRATES: &[&str] = &[
     "crates/gents-desktop-",
     "crates/gents-client-host/",
@@ -5957,8 +5973,8 @@ fn endpoint_construction_sites(syntax: &syn::File) -> usize {
     visitor.sites
 }
 
-/// A client builds every endpoint to a home through `home_endpoint`, so the
-/// audience the home reports reaches the one minting point
+/// A client builds every endpoint to a runtime through `RuntimeEndpoints`, so
+/// the audience the runtime reports reaches the one minting point
 /// (`Identity.HeldAudience.recordCredential`).
 #[test]
 fn client_endpoints_are_built_by_their_owner() {
@@ -5969,11 +5985,10 @@ fn client_endpoints_are_built_by_their_owner() {
             CLIENT_ENDPOINT_CRATES
                 .iter()
                 .any(|prefix| relative.starts_with(prefix))
-                && relative != CLIENT_ENDPOINT_OWNER
         })
         .filter(|(_, syntax)| endpoint_construction_sites(syntax) > 0)
         .map(|(relative, _)| {
-            format!("{relative}: builds a GraphqlEndpoint; use gents_desktop_core::client::home_endpoint")
+            format!("{relative}: builds a GraphqlEndpoint; use gents_store::config_client::runtime_endpoints::RuntimeEndpoints")
         })
         .collect::<Vec<_>>();
     assert!(
@@ -5991,7 +6006,7 @@ fn client_endpoint_fence_counts_constructors_outside_tests() {
             "fn f() { gents_store::config_client::GraphqlEndpoint::anonymous(u); }",
             1,
         ),
-        ("fn f() { home_endpoint::user_at(u, c, None); }", 0),
+        ("fn f() { RuntimeEndpoints::new(c).endpoint(n, u); }", 0),
         (
             "#[cfg(test)] mod tests { fn f() { GraphqlEndpoint::anonymous(u); } }",
             0,

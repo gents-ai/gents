@@ -1,5 +1,5 @@
+use crate::client_runtime::ClientRuntime;
 use anyhow::{ensure, Context, Result};
-use gents_desktop_core::client::ClientCore;
 use gents_documents::config_projection;
 use gents_documents::{Schedule, Task};
 use gents_store::collection::Collection;
@@ -8,7 +8,7 @@ use gents_store::graphql::escape_graphql_string;
 use crate::types::{ConfiguredActionKind, ConfiguredActionView};
 
 pub(super) async fn catalog(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
 ) -> Result<Vec<ConfiguredActionView>> {
     let (task_fields, _) = config_projection(Collection::Task, None)?;

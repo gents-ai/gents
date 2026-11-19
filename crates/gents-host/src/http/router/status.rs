@@ -204,7 +204,19 @@ pub(super) async fn status_route(
 }
 
 async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
+    let authentication = match state.activation_runtime.get() {
+        Some(runtime) => gents_store::config_client::client_authentication::runtime_authentication(
+            &runtime.operator_config_access(),
+        )
+        .await
+        .unwrap_or(gents_protocol::client_authentication::ClientAuthentication::Unavailable),
+        None => gents_protocol::client_authentication::ClientAuthentication::Unavailable,
+    };
     if let Some(map) = body.as_object_mut() {
+        map.insert(
+            gents_protocol::client_authentication::STATUS_FIELD.to_owned(),
+            json!(authentication),
+        );
         let enrollment = match state.enrollment_offer_issuer.read().await.clone() {
             Some(issuer) => match issuer.mint().await {
                 Ok(offer) => crate::http::enrollment::EnrollmentStatus::Available {

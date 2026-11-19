@@ -29,9 +29,19 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
         },
     )
     .await??;
+    let owner_path = home.join("owner.key");
+    let owner = tokio::task::spawn_blocking(move || {
+        crate::identity::KeyIdentity::load_or_create(owner_path, None)
+    })
+    .await??;
     FreshBackendStore::observe(&data, &lock)
         .await?
-        .initialize(&key, &node, super::document_acp::DocumentAcp::Local)
+        .initialize(
+            &key,
+            &node,
+            &identity::Did::new(owner.did())?,
+            super::document_acp::DocumentAcp::Local,
+        )
         .await?;
     assert!(PROVENANCE_MARKER.ends_with("-v3"));
     std::fs::rename(
@@ -149,10 +159,21 @@ async fn an_uncheckable_copy_leaves_the_original_store_untouched() -> anyhow::Re
         },
     )
     .await??;
+    let owner_path = home.join("owner.key");
+    let owner = tokio::task::spawn_blocking(move || {
+        crate::identity::KeyIdentity::load_or_create(owner_path, None)
+            .map(|key| key.did().to_owned())
+    })
+    .await??;
     let key = StoreKey::from_host(&[19; 32])?;
     super::backend_protection::FreshBackendStore::observe(&data, &lock)
         .await?
-        .initialize(&key, &identity, super::document_acp::DocumentAcp::Local)
+        .initialize(
+            &key,
+            &identity,
+            &identity::Did::new(owner)?,
+            super::document_acp::DocumentAcp::Local,
+        )
         .await?;
     ProtectedBackendStore::open(&data, &key, &lock)
         .await?

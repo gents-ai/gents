@@ -5,9 +5,9 @@ use tauri::{AppHandle, Emitter, ExitRequestApi, Manager, Runtime};
 
 use crate::config::ManagedServerPolicy;
 use crate::contract::APP_QUIT_FAILED_EVENT;
-use crate::error::BridgeError;
 use crate::state::DesktopAppState;
 use crate::tauri_commands::{lifecycle, managed_server};
+use gents_store::client_error::BridgeError;
 
 /// Tauri emits another exit request when the prepared task calls `app.exit`.
 /// That request may proceed only after the native service owner has settled.
@@ -155,7 +155,7 @@ mod tests {
         let preparation = state.app_exit.clone().begin().expect("begin exit");
         assert!(matches!(
             crate::tauri_commands::lifecycle::single_flight::register_client_start(&state),
-            Err(error) if error.code == crate::error::BridgeErrorCode::ClientStartFailed
+            Err(error) if error.code == gents_store::client_error::BridgeErrorCode::ClientStartFailed
         ));
         assert!(state
             .bridge
@@ -193,7 +193,7 @@ mod tests {
         assert!(state.app_exit.is_quitting());
         assert!(matches!(
             crate::tauri_commands::lifecycle::single_flight::register_client_start(&state),
-            Err(error) if error.code == crate::error::BridgeErrorCode::ClientStartFailed
+            Err(error) if error.code == gents_store::client_error::BridgeErrorCode::ClientStartFailed
         ));
     }
 }

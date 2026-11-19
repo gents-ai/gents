@@ -1,14 +1,14 @@
+use crate::client_runtime::{ClientRuntime, RetainedGoalSubmission};
 use anyhow::{Context, Result};
-use gents_desktop_core::client::{ClientCore, RetainedGoalSubmission};
 use gents_protocol::goal_control::GoalControlOutcome;
 
-use crate::error::BridgeError;
 use crate::types::{
     GoalControlRequest, GoalControlResult, GoalSubmissionOutcome, GoalSubmissionQuery,
     GoalSubmissionReceipt, GoalSubmissionRecovery,
 };
+use gents_store::client_error::BridgeError;
 
-fn check_client(core: &ClientCore, client_did: &str) -> Result<()> {
+fn check_client(core: &ClientRuntime, client_did: &str) -> Result<()> {
     anyhow::ensure!(
         client_did == core.node_identity().did(),
         "Goal submission belongs to another native client"
@@ -17,7 +17,7 @@ fn check_client(core: &ClientCore, client_did: &str) -> Result<()> {
 }
 
 pub(super) fn reference(
-    core: &ClientCore,
+    core: &ClientRuntime,
     retained: &RetainedGoalSubmission,
 ) -> GoalSubmissionReceipt {
     GoalSubmissionReceipt {
@@ -45,7 +45,7 @@ pub(super) fn applied(
 }
 
 pub async fn recover_goal_submission(
-    core: &ClientCore,
+    core: &ClientRuntime,
     query: GoalSubmissionQuery,
 ) -> Result<GoalSubmissionRecovery> {
     check_client(core, &query.client_did)?;
@@ -53,6 +53,26 @@ pub async fn recover_goal_submission(
         .recover_goal_submission(&query.node_did, &query.command_id)
         .await?
     else {
+        if let Some(record) = gents_store::client_journal::outbox::lookup(
+            &core.node_arc(),
+            &query.client_did,
+            &query.node_did,
+            &query.command_id,
+        )
+        .await?
+        {
+            if record.pending {
+                if let gents_protocol::authored_submission::AuthoredSubmission::Goal(input) =
+                    record.authored()?
+                {
+                    return Ok(GoalSubmissionRecovery::Retained {
+                        node_did: input.node_did,
+                        command_id: input.command_id,
+                        session_id: input.session_id,
+                    });
+                }
+            }
+        }
         return Ok(GoalSubmissionRecovery::Unconfirmed {
             node_did: query.node_did,
             command_id: query.command_id,
@@ -76,7 +96,7 @@ pub async fn recover_goal_submission(
 }
 
 async fn exact(
-    core: &ClientCore,
+    core: &ClientRuntime,
     submission: &GoalSubmissionReceipt,
 ) -> Result<RetainedGoalSubmission> {
     check_client(core, &submission.client_did)?;
@@ -92,7 +112,7 @@ async fn exact(
 }
 
 pub async fn resume_goal_submission(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: GoalControlRequest,
     submission: GoalSubmissionReceipt,
 ) -> Result<GoalControlResult, BridgeError> {
@@ -100,7 +120,7 @@ pub async fn resume_goal_submission(
 }
 
 pub async fn acknowledge_goal_submission(
-    core: &ClientCore,
+    core: &ClientRuntime,
     submission: GoalSubmissionReceipt,
 ) -> Result<()> {
     exact(core, &submission).await?;

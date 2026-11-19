@@ -1,5 +1,5 @@
 use super::*;
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
 use std::sync::Arc;
 
 enum Cache {
@@ -13,13 +13,12 @@ async fn open(
     paths: &DesktopPaths,
     interactive: bool,
     cache: Cache,
-) -> (Result<ClientCore>, Option<Vec<u8>>) {
+) -> (Result<ClientRuntime>, Option<Vec<u8>>) {
     let (native, editor) = tokio::io::duplex(MAX_FRAME_BYTES);
     let provider = Arc::new(Provider::new(paths.root().to_owned(), interactive, native));
-    let options = ClientCoreOptions {
+    let options = ClientRuntimeOptions {
         store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::Keychain,
         store_key_provider: Some(provider),
-        ..ClientCoreOptions::local_only()
     };
     let exchange = async {
         let mut editor = frames(editor);
@@ -61,7 +60,7 @@ async fn open(
         Some(bytes)
     };
     tokio::join!(
-        ClientCore::start_with_paths_and_options(paths.clone(), options),
+        ClientRuntime::start_with_paths_and_options(paths.clone(), options),
         exchange
     )
 }

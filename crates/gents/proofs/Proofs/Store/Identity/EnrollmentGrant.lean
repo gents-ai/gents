@@ -76,10 +76,28 @@ stays held until the last enrollment accounting for it is revoked. -/
 def record (s : State) (member : String) : List Tuple :=
   derived.filter (fun t => !independent s member t)
 
-/-- One receipt per request: a repeated grant of the same request is
-idempotent. -/
+def liveReceipt (s : State) (request : String) : Option Receipt :=
+  s.receipts.find? (fun r => r.request == request && !r.withdrawn)
+
+/-- The tuples of a live receipt a repeated grant for `member` issues again:
+the derived ones it recorded that `member` does not hold. A receipt only ever
+names derived tuples (`EnrollmentGrantTuple::parse`). -/
+def reissued (s : State) (r : Receipt) (member : String) : List Tuple :=
+  r.tuples.filter (fun t => derived.contains t && !holds s member t)
+
+/-- Issue again every derived tuple a live receipt recorded that `member` does
+not hold. -/
+def reissue (s : State) (r : Receipt) (member : String) : State :=
+  { s with held := s.held ++ (reissued s r member).map (⟨member, ·⟩) }
+
+/-- One receipt per request: a repeated grant of a request with a live receipt
+reissues exactly what that receipt recorded, and a withdrawn request grants
+nothing. -/
 def grant (s : State) (request member : String) : State :=
-  if s.receipts.any (·.request == request) then s
+  if s.receipts.any (·.request == request) then
+    match liveReceipt s request with
+    | some r => reissue s r member
+    | none => s
   else
     { held := s.held ++ ((record s member).filter (fun t => !holds s member t)).map (⟨member, ·⟩)
       receipts := ⟨request, member, record s member, false⟩ :: s.receipts }
@@ -92,9 +110,6 @@ def grantIndependent (s : State) (a : Held) : State :=
 
 def withdraw (rs : List Receipt) (request : String) : List Receipt :=
   rs.map (fun r => if r.request == request then { r with withdrawn := true } else r)
-
-def liveReceipt (s : State) (request : String) : Option Receipt :=
-  s.receipts.find? (fun r => r.request == request && !r.withdrawn)
 
 /-- Removed by revoking `r`: a tuple `r` recorded for its member that no other
 live receipt still accounts for. -/
@@ -110,6 +125,35 @@ def revoke (s : State) (request : String) : State :=
   | some r =>
       { held := s.held.filter (fun a => !removedBy s r a)
         receipts := withdraw s.receipts request }
+
+/-- The tuples a grant of `request` issues, in order: those its receipt
+records that the member does not hold yet. A fresh request records them
+first. -/
+def toIssue (s : State) (request member : String) : List Tuple :=
+  match liveReceipt s request with
+  | some r => reissued s r member
+  | none => (record s member).filter (fun t => !holds s member t)
+
+/-- A grant whose issuing failed after its first `issued` tuples. The receipt
+is written before any tuple, and tuples are issued one at a time. -/
+def grantInterrupted (s : State) (request member : String) (issued : Nat) : State :=
+  match liveReceipt s request with
+  | some _ => { s with held := s.held ++ ((toIssue s request member).take issued).map (⟨member, ·⟩) }
+  | none =>
+      if s.receipts.any (·.request == request) then s
+      else
+        { held := s.held ++ ((toIssue s request member).take issued).map (⟨member, ·⟩)
+          receipts := ⟨request, member, record s member, false⟩ :: s.receipts }
+
+/-- Decision (gents#3930 review): an approval whose tuples could not all be
+issued removes every tuple its receipt alone accounts for, as revoking would,
+but keeps the receipt live and the request pending. A failed approval leaves
+no authority it granted; a retried approval reissues everything, and denying
+or revoking the request still withdraws its receipt. -/
+def abandon (s : State) (request : String) : State :=
+  match liveReceipt s request with
+  | none => s
+  | some r => { s with held := s.held.filter (fun a => !removedBy s r a) }
 
 theorem liveReceipt_spec {s : State} {request : String} {r : Receipt}
     (h : liveReceipt s request = some r) :
@@ -206,6 +250,82 @@ theorem revoke_idempotent (s : State) (request : String) :
       simp only [revoke, live]
       exact withdraw_has_no_live s.receipts request
 
+/-- An abandoned approval leaves its member none of the authority its receipt
+alone accounted for: the Node administrator relation and every permission
+another live receipt does not also account for are gone. -/
+theorem abandon_withdraws_derived (s : State) (request : String) (r : Receipt)
+    (live : liveReceipt s request = some r) (t : Tuple) (recorded : r.tuples.contains t = true)
+    (alone : (withdraw s.receipts r.request).any (accounts · r.member t) = false) :
+    holds (abandon s request) r.member t = false := by
+  simp only [abandon, live, holds, removedBy]
+  rw [Bool.eq_false_iff]
+  intro hc
+  simp only [List.contains_iff_mem, List.mem_filter] at hc
+  have hr := hc.2
+  simp only [recorded, Bool.true_and, beq_self_eq_true, alone, Bool.not_false,
+    Bool.not_true] at hr
+  exact absurd hr (by decide)
+
+/-- Abandoning keeps every receipt as it was: the request stays pending and
+its receipt live. -/
+theorem abandon_keeps_receipts (s : State) (request : String) :
+    (abandon s request).receipts = s.receipts := by
+  unfold abandon
+  split <;> rfl
+
+/-- Abandoning never removes an independent grant. -/
+theorem abandon_preserves_independent (s : State) (request subject : String) (t : Tuple)
+    (indep : independent s subject t = true) :
+    (abandon s request).held.contains ⟨subject, t⟩ = true := by
+  have heldA : s.held.contains ⟨subject, t⟩ = true := by
+    simp only [independent, holds, Bool.and_eq_true] at indep
+    exact indep.1
+  have notAcc : accounted s subject t = false := by
+    simp only [independent, Bool.and_eq_true, Bool.not_eq_true'] at indep
+    exact indep.2
+  unfold abandon
+  split
+  · exact heldA
+  · rename_i r live
+    have ⟨mem, _, notWithdrawn⟩ := liveReceipt_spec live
+    have notRemoved : removedBy s r ⟨subject, t⟩ = false := by
+      rw [Bool.eq_false_iff]
+      intro h
+      simp only [removedBy, Bool.and_eq_true, beq_iff_eq] at h
+      have acc : accounts r subject t = true := by
+        simp only [accounts, notWithdrawn, h.1.1, h.1.2, beq_self_eq_true, Bool.not_false,
+          Bool.and_self]
+      have : accounted s subject t = true := List.any_eq_true.mpr ⟨r, mem, acc⟩
+      rw [this] at notAcc
+      exact absurd notAcc (by decide)
+    rw [List.contains_iff_mem] at heldA ⊢
+    exact List.mem_filter.mpr ⟨heldA, by simp [notRemoved]⟩
+
+/-- Abandoning never removes a tuple another live approval accounts for. -/
+theorem abandon_preserves_other_approvals (s : State) (request : String) (a : Held)
+    (o : Receipt) (other : o ∈ s.receipts) (otherRequest : (o.request == request) = false)
+    (owns : accounts o a.subject a.tuple = true) (before : a ∈ s.held) :
+    a ∈ (abandon s request).held := by
+  unfold abandon
+  split
+  · exact before
+  · rename_i r live
+    have ⟨_, req, _⟩ := liveReceipt_spec live
+    refine List.mem_filter.mpr ⟨before, ?_⟩
+    simp only [removedBy, Bool.not_and, Bool.not_not]
+    by_cases hs : (a.subject == r.member) = true
+    · have still : o ∈ withdraw s.receipts r.request := by
+        simp only [withdraw, List.mem_map]
+        refine ⟨o, other, ?_⟩
+        rw [req, otherRequest]
+        rfl
+      have : (withdraw s.receipts r.request).any (accounts · r.member a.tuple) = true := by
+        rw [beq_iff_eq] at hs
+        rw [← hs]
+        exact List.any_eq_true.mpr ⟨o, still, owns⟩
+      simp [this]
+    · simp [Bool.eq_false_iff.mpr hs]
+
 /-- A grant never records a tuple the member held independently, so revoking
 it can never withdraw that tuple. -/
 theorem grant_records_no_independent (s : State) (member : String) (t : Tuple)
@@ -282,7 +402,9 @@ desktop's Approve and the Agent `p2p` tool's `enrollment_approve` all run one
 handler, `approve_enrollment`, which runs `grant` (receipt first, then the
 derived tuples) before the approval commits, so an approval never stands
 without its authority, a failed grant approves nothing, and a retried approval
-finds the receipt and reissues it (`grant` is idempotent per request). Denying
+finds the receipt and reissues it (`grant` is idempotent per request). An
+approval whose tuples could not all be issued runs `abandon`, so a failed
+approval leaves none of its authority behind. Denying
 runs `revoke`, so a grant whose approval never committed is withdrawn and no
 derived authority outlives a denial. Rust owners: `approve_enrollment` (grant,
 then approve) and the runtime enrollment store's denial, which withdraws the
@@ -355,6 +477,32 @@ theorem deny_withdraws_an_unapproved_grant :
 theorem deny_grants_nothing :
     heldOf (applyDecision fresh "request" "member" .deny) "member" = [] := by decide
 
+/-- Every point an approval's issuing can fail at. -/
+def issuePoints : List Nat := List.range (derived.length + 1)
+
+/-- An approval abandoned at any point leaves its member nothing, keeps a
+permission the member held independently, and keeps what another approval
+granted. -/
+theorem abandoned_approval_leaves_no_authority :
+    issuePoints.all (fun k =>
+      heldOf (abandon (grantInterrupted fresh "request" "member" k) "request") "member" = [] &&
+      heldOf (abandon (grantInterrupted
+          (grantIndependent fresh ⟨"member", .permission "read-document"⟩) "request" "member" k)
+          "request") "member" = ["read-document"] &&
+      heldOf (abandon (grantInterrupted (grant fresh "other" "member") "request" "member" k)
+          "request") "member" = derived.map Tuple.name) = true := by decide
+
+/-- A retried approval after an abandoned one is exactly a clean approval,
+and denying after an abandoned approval is exactly a denial of a clean one. -/
+theorem retried_approval_after_abandon_is_a_clean_approval :
+    issuePoints.all (fun k =>
+      [fresh, grantIndependent fresh ⟨"member", .permission "read-document"⟩,
+          grant fresh "other" "member"].all (fun s =>
+        grant (abandon (grantInterrupted s "request" "member" k) "request") "request" "member" ==
+            grant s "request" "member" &&
+        revoke (abandon (grantInterrupted s "request" "member" k) "request") "request" ==
+            revoke (grant s "request" "member") "request")) = true := by decide
+
 /-- A renewed membership: revoking only the current request's receipt leaves
 the first generation's receipt holding every derived tuple, which revoking
 the membership withdraws. -/
@@ -402,6 +550,70 @@ relation. External premise: the pinned DefraDB DAC relation management. -/
 def grantAdmitted (standing : Standing) : Bool :=
   Household.mayManage (standingState standing) "approver"
     ⟨"nodes", "node", "administrator", .actor "member"⟩
+
+/-- A named relation does not include the authority implied by ownership. -/
+def holdsAdministratorRelation (state : Household.State) (member : String) : Bool :=
+  Household.allowed 5 state member "nodes" "node" "administrator"
+
+theorem administrator_observation_distinguishes_owner_from_direct_grant :
+    holdsAdministratorRelation (standingState .owner) "approver" = false ∧
+    holdsAdministratorRelation (standingState .administrator) "approver" = true ∧
+    holdsAdministratorRelation (standingState .unrelated) "approver" = false ∧
+    holdsAdministratorRelation (standingState .runtimeReader) "approver" = false := by
+  native_decide
+
+/-- A wildcard relation satisfies a named permission check without proving a
+direct member tuple. A receipt must preserve the exact native tuple. -/
+theorem wildcard_is_not_evidence_of_a_direct_administrator_tuple :
+    let state : Household.State :=
+      { objects := [⟨"nodes", "node", "owner"⟩]
+        relations := [⟨"nodes", "node", "administrator", .wildcard⟩]
+        enrolled := [] }
+    (holdsAdministratorRelation state "member",
+     state.relations.contains ⟨"nodes", "node", "administrator", .actor "member"⟩) =
+      (true, false) := by native_decide
+
+/-- Only an actor who can manage the administrator relation may observe a
+member's exact administrator relationship. -/
+def observeAdministrator (state : Household.State) (approver member : String) : Option Bool :=
+  if Household.mayManage state approver
+      ⟨"nodes", "node", "administrator", .actor member⟩ then
+    some (state.relations.contains ⟨"nodes", "node", "administrator", .actor member⟩)
+  else none
+
+theorem administrator_observation_requires_native_management_authority :
+    observeAdministrator (standingState .owner) "approver" "member" = some false ∧
+    observeAdministrator (standingState .administrator) "approver" "approver" = some true ∧
+    observeAdministrator (standingState .runtimeReader) "approver" "approver" = none ∧
+    observeAdministrator (standingState .unrelated) "approver" "approver" = none := by
+  native_decide
+
+theorem exact_administrator_observation_excludes_wildcard :
+    let state : Household.State :=
+      { objects := [⟨"nodes", "node", "owner"⟩]
+        relations := [⟨"nodes", "node", "administrator", .wildcard⟩]
+        enrolled := [] }
+    observeAdministrator state "owner" "member" = some false := by
+  native_decide
+
+/-- The approver's Node with the member's `administrator` relations: a direct
+one naming the member, a wildcard one, both or neither. -/
+def observationState (standing : Standing) (direct wildcard : Bool) : Household.State :=
+  let base := standingState standing
+  { base with relations := base.relations ++
+      (if direct then [⟨"nodes", "node", "administrator", .actor "member"⟩] else []) ++
+      (if wildcard then [⟨"nodes", "node", "administrator", .wildcard⟩] else []) }
+
+/-- What the approver observes of the member's exact `administrator`
+relationship (`observeAdministrator`): `none` when it may not manage the
+relation, otherwise whether the direct tuple exists. A wildcard relation is
+never a direct tuple. Rust owner: `ConfigAccess::observe_actor_relationship`. -/
+def observeMemberAdministrator (standing : Standing) (direct wildcard : Bool) : Option Bool :=
+  observeAdministrator (observationState standing direct wildcard) "approver" "member"
+
+theorem a_wildcard_alone_is_not_observed_as_a_direct_administrator (standing : Standing) :
+    observeMemberAdministrator standing false true ≠ some true := by
+  cases standing <;> native_decide
 
 /-- What an approval does once its grant has run as the approver. -/
 inductive ApprovalStep where

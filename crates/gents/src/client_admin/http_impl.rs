@@ -1,0 +1,616 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use defra_p2p_adapter::ReplicationFilter;
+use reqwest::{header::CONTENT_TYPE, Client, Method};
+use serde::{Deserialize, Serialize};
+
+use defra_node::Node as EmbeddedNode;
+use gents_p2p::p2p_reconcile::{
+    resolve_embedded_collection_id, resolve_embedded_collection_name, to_replication_filters,
+    PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+};
+
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
+
+/// Remote administration must report an unresponsive endpoint rather than
+/// block route reconciliation indefinitely.
+const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+pub const ACTOR_DID_HEADER: &str = "x-defra-actor-did";
+pub const ACTOR_SIGNATURE_HEADER: &str = "x-defra-actor-signature";
+pub const ACTOR_SIGNATURE_VERSION_HEADER: &str = "x-defra-actor-signature-version";
+pub const ACTOR_SIGNATURE_VERSION: &str = "p2p-admin-v1";
+
+pub struct HttpRemoteP2pAdmin {
+    api_base: String,
+    api_base_path: String,
+    client: Client,
+    actor: Option<Arc<PrincipalIdentity>>,
+    node_identity: Option<gents_store::config_client::GraphqlEndpoint>,
+    local_resolver: Option<Arc<EmbeddedNode>>,
+}
+
+impl HttpRemoteP2pAdmin {
+    pub fn new(graphql_url: &str) -> RemoteP2pAdminResult<Self> {
+        Self::new_inner(graphql_url, None)
+    }
+
+    pub fn new_with_actor(
+        graphql_url: &str,
+        actor: Arc<PrincipalIdentity>,
+    ) -> RemoteP2pAdminResult<Self> {
+        Self::new_inner(graphql_url, Some(actor))
+    }
+
+    pub fn with_node_identity(
+        mut self,
+        endpoint: gents_store::config_client::GraphqlEndpoint,
+    ) -> Self {
+        self.node_identity = Some(endpoint);
+        self
+    }
+
+    pub fn with_local_resolver(mut self, node: Arc<EmbeddedNode>) -> Self {
+        self.local_resolver = Some(node);
+        self
+    }
+
+    fn new_inner(
+        graphql_url: &str,
+        actor: Option<Arc<PrincipalIdentity>>,
+    ) -> RemoteP2pAdminResult<Self> {
+        let trimmed = graphql_url.trim_end_matches('/');
+        let api_base = trimmed
+            .strip_suffix("/graphql")
+            .ok_or_else(|| {
+                RemoteP2pAdminError::LocalError(format!(
+                    "expected GraphQL URL ending in /graphql, got {trimmed}"
+                ))
+            })?
+            .to_string();
+        let client = Client::builder()
+            .timeout(DEFAULT_RPC_TIMEOUT)
+            .build()
+            .map_err(|e| RemoteP2pAdminError::LocalError(format!("reqwest build: {e}")))?;
+        let api_base_path = reqwest::Url::parse(&api_base)
+            .map_err(|e| RemoteP2pAdminError::LocalError(format!("invalid API base URL: {e}")))?
+            .path()
+            .trim_end_matches('/')
+            .to_string();
+        Ok(Self {
+            api_base,
+            api_base_path,
+            client,
+            actor,
+            node_identity: None,
+            local_resolver: None,
+        })
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.api_base, path)
+    }
+
+    /// Send one admin request, signed by the actor and authorized by the
+    /// node identity; a refusal of that credential reads the home's status
+    /// again and is sent once more.
+    async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> RemoteP2pAdminResult<reqwest::Response> {
+        let mut signed = Vec::new();
+        if let Some(actor) = self.actor.as_ref() {
+            let signed_path = signed_admin_path(&self.api_base_path, path);
+            let payload = signing_payload(
+                method.as_str(),
+                &signed_path,
+                body.as_deref().unwrap_or_default(),
+            );
+            let signature = actor.sign(&payload).map_err(|error| {
+                RemoteP2pAdminError::LocalError(format!("signing remote admin request: {error:#}"))
+            })?;
+            signed = vec![
+                (ACTOR_DID_HEADER, actor.did().to_owned()),
+                (ACTOR_SIGNATURE_HEADER, hex_encode(&signature)),
+                (
+                    ACTOR_SIGNATURE_VERSION_HEADER,
+                    ACTOR_SIGNATURE_VERSION.to_string(),
+                ),
+            ];
+        }
+        let build = || {
+            let mut request = self.client.request(method.clone(), self.url(path));
+            for (name, value) in &signed {
+                request = request.header(*name, value);
+            }
+            match &body {
+                Some(body) => request
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(body.clone()),
+                None => request,
+            }
+        };
+        match self.node_identity.as_ref() {
+            Some(endpoint) => endpoint
+                .send_resolving(|endpoint| endpoint.authorize(build()))
+                .await
+                .map_err(|error| {
+                    RemoteP2pAdminError::LocalError(format!(
+                        "authenticating remote admin request: {error:#}"
+                    ))
+                })?
+                .map_err(map_reqwest_err),
+            None => build().send().await.map_err(map_reqwest_err),
+        }
+    }
+
+    async fn json_send<T>(
+        &self,
+        method: Method,
+        path: &str,
+        body: &T,
+    ) -> RemoteP2pAdminResult<reqwest::Response>
+    where
+        T: Serialize + ?Sized,
+    {
+        let body = serde_json::to_vec(body).map_err(|error| {
+            RemoteP2pAdminError::LocalError(format!("encoding remote admin request body: {error}"))
+        })?;
+        self.send(method, path, Some(body)).await
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AddReplicatorBody<'a> {
+    #[serde(rename = "Collections")]
+    collections: &'a [String],
+    #[serde(rename = "Addresses")]
+    addresses: &'a [String],
+    #[serde(rename = "Filters", skip_serializing_if = "BTreeMap::is_empty")]
+    filters: BTreeMap<String, ReplicationFilter>,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteReplicatorBody<'a> {
+    #[serde(rename = "Collections")]
+    collections: &'a [String],
+    #[serde(rename = "ID")]
+    id: &'a str,
+}
+
+#[async_trait]
+impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
+    async fn peer_info(&self) -> RemoteP2pAdminResult<Vec<String>> {
+        let resp = self.send(Method::GET, "/p2p/info", None).await?;
+        let resp = check_status(resp).await?;
+        resp.json::<Vec<String>>()
+            .await
+            .map_err(|e| RemoteP2pAdminError::RpcError(format!("decoding peer_info: {e}")))
+    }
+
+    async fn active_peers(&self) -> RemoteP2pAdminResult<Vec<String>> {
+        let resp = self.send(Method::GET, "/p2p/active-peers", None).await?;
+        let resp = check_status(resp).await?;
+        resp.json::<Vec<String>>()
+            .await
+            .map_err(|e| RemoteP2pAdminError::RpcError(format!("decoding active_peers: {e}")))
+    }
+
+    async fn connect(&self, addresses: &[String]) -> RemoteP2pAdminResult<()> {
+        let resp = self
+            .json_send(Method::POST, "/p2p/connect", addresses)
+            .await?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    async fn list_replicators(&self) -> RemoteP2pAdminResult<Vec<RemoteReplicator>> {
+        #[derive(Deserialize)]
+        struct WireReplicator {
+            #[serde(default, rename = "ID")]
+            id: Option<String>,
+            #[serde(rename = "CollectionIDs")]
+            collection_ids: Vec<String>,
+            #[serde(rename = "Addresses")]
+            addresses: Vec<String>,
+            #[serde(default, rename = "Filters")]
+            filters: BTreeMap<String, ReplicationFilter>,
+        }
+
+        let resp = self.send(Method::GET, "/p2p/replicators", None).await?;
+        let resp = check_status(resp).await?;
+        let wire: Vec<WireReplicator> = resp.json().await.map_err(|e| {
+            RemoteP2pAdminError::RpcError(format!("decoding list_replicators: {e}"))
+        })?;
+        Ok(wire
+            .into_iter()
+            .map(|w| RemoteReplicator {
+                id: w.id,
+                collections: w.collection_ids,
+                address: w.addresses.into_iter().next(),
+                filters: Some(w.filters),
+            })
+            .collect())
+    }
+
+    async fn add_replicator(
+        &self,
+        addresses: &[String],
+        collections: &[String],
+        filters: &PairingFilters,
+    ) -> RemoteP2pAdminResult<()> {
+        let body = AddReplicatorBody {
+            collections,
+            addresses,
+            filters: to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?,
+        };
+        let resp = self
+            .json_send(Method::POST, "/p2p/replicators", &body)
+            .await?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    async fn delete_replicator(
+        &self,
+        id: &str,
+        collections: &[String],
+    ) -> RemoteP2pAdminResult<()> {
+        let body = DeleteReplicatorBody { collections, id };
+        let resp = self
+            .json_send(Method::DELETE, "/p2p/replicators", &body)
+            .await?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
+    async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
+        let Some(node) = self.local_resolver.as_ref() else {
+            return Ok(None);
+        };
+        resolve_embedded_collection_id(node, name)
+    }
+
+    async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
+        let Some(node) = self.local_resolver.as_ref() else {
+            return Ok(None);
+        };
+        resolve_embedded_collection_name(node, id)
+    }
+}
+
+pub(crate) fn signing_payload(method: &str, path: &str, body: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(
+        ACTOR_SIGNATURE_VERSION.len() + method.len() + path.len() + body.len() + 3,
+    );
+    payload.extend_from_slice(ACTOR_SIGNATURE_VERSION.as_bytes());
+    payload.push(b'\n');
+    payload.extend_from_slice(method.as_bytes());
+    payload.push(b'\n');
+    payload.extend_from_slice(path.as_bytes());
+    payload.push(b'\n');
+    payload.extend_from_slice(body);
+    payload
+}
+
+pub(crate) fn signed_admin_path(api_base_path: &str, path: &str) -> String {
+    let api_base_path = api_base_path.trim_end_matches('/');
+    if api_base_path.is_empty() {
+        path.to_string()
+    } else {
+        format!("{api_base_path}{path}")
+    }
+}
+
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn map_reqwest_err(e: reqwest::Error) -> RemoteP2pAdminError {
+    if e.is_timeout() {
+        RemoteP2pAdminError::RpcTimeout
+    } else {
+        RemoteP2pAdminError::RpcError(e.to_string())
+    }
+}
+
+async fn check_status(resp: reqwest::Response) -> RemoteP2pAdminResult<reqwest::Response> {
+    let status = resp.status();
+    if status.is_success() {
+        Ok(resp)
+    } else if status == reqwest::StatusCode::UNAUTHORIZED
+        || status == reqwest::StatusCode::FORBIDDEN
+    {
+        Err(RemoteP2pAdminError::RemoteUnauthorized)
+    } else if status == reqwest::StatusCode::NOT_FOUND {
+        let body = resp.text().await.unwrap_or_default();
+        Err(RemoteP2pAdminError::RemoteNotFound(body))
+    } else {
+        let body = resp.text().await.unwrap_or_default();
+        Err(RemoteP2pAdminError::RpcError(format!(
+            "status {status}: {body}"
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents_store::client_journal::paths::DesktopPaths;
+    use gents_store::client_journal::principal_identity::PrincipalIdentity;
+
+    use wiremock::matchers::{body_bytes, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn admin_for(server: &MockServer) -> HttpRemoteP2pAdmin {
+        let graphql = format!("{}/api/v0/graphql", server.uri());
+        HttpRemoteP2pAdmin::new(&graphql).expect("admin constructs")
+    }
+
+    async fn signed_admin_for(server: &MockServer) -> (HttpRemoteP2pAdmin, Arc<PrincipalIdentity>) {
+        let tempdir = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(tempdir.path());
+        let actor = Arc::new(PrincipalIdentity::load_or_create(&paths).await.unwrap());
+        let graphql = format!("{}/api/v0/graphql", server.uri());
+        let admin =
+            HttpRemoteP2pAdmin::new_with_actor(&graphql, Arc::clone(&actor)).expect("admin signs");
+        (admin, actor)
+    }
+
+    async fn mount_signed_request(
+        server: &MockServer,
+        actor: &PrincipalIdentity,
+        method_name: &str,
+        request_path: &str,
+        body: Option<Vec<u8>>,
+        response: ResponseTemplate,
+    ) {
+        let body_for_signature = body.as_deref().unwrap_or_default();
+        let expected_signature = hex_encode(
+            &actor
+                .sign(&signing_payload(
+                    method_name,
+                    &signed_admin_path("/api/v0", request_path),
+                    body_for_signature,
+                ))
+                .expect("signature"),
+        );
+
+        let mut mock = Mock::given(method(method_name))
+            .and(path(format!("/api/v0{request_path}")))
+            .and(header(ACTOR_DID_HEADER, actor.did()))
+            .and(header(
+                ACTOR_SIGNATURE_VERSION_HEADER,
+                ACTOR_SIGNATURE_VERSION,
+            ))
+            .and(header(ACTOR_SIGNATURE_HEADER, expected_signature));
+        if let Some(body) = body {
+            mock = mock.and(body_bytes(body));
+        }
+        mock.respond_with(response).mount(server).await;
+    }
+
+    fn json_body<T>(body: &T) -> Vec<u8>
+    where
+        T: Serialize,
+    {
+        serde_json::to_vec(body).expect("body")
+    }
+
+    #[tokio::test]
+    async fn signed_admin_attaches_actor_headers_to_every_admin_method() {
+        let server = MockServer::start().await;
+        let (admin, actor) = signed_admin_for(&server).await;
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "GET",
+            "/p2p/info",
+            None,
+            ResponseTemplate::new(200).set_body_json(Vec::<String>::new()),
+        )
+        .await;
+        admin.peer_info().await.expect("signed peer_info");
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "GET",
+            "/p2p/active-peers",
+            None,
+            ResponseTemplate::new(200).set_body_json(Vec::<String>::new()),
+        )
+        .await;
+        admin.active_peers().await.expect("signed active_peers");
+
+        let addresses = vec!["/ip4/1.2.3.4/tcp/9000/p2p/peer1".to_string()];
+        mount_signed_request(
+            &server,
+            &actor,
+            "POST",
+            "/p2p/connect",
+            Some(json_body(&addresses)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin.connect(&addresses).await.expect("signed connect");
+
+        mount_signed_request(
+            &server,
+            &actor,
+            "GET",
+            "/p2p/replicators",
+            None,
+            ResponseTemplate::new(200).set_body_json(Vec::<serde_json::Value>::new()),
+        )
+        .await;
+        admin
+            .list_replicators()
+            .await
+            .expect("signed list_replicators");
+
+        let collections = vec!["c1".to_string()];
+        let add_replicator = AddReplicatorBody {
+            collections: &collections,
+            addresses: &addresses,
+            filters: BTreeMap::new(),
+        };
+        mount_signed_request(
+            &server,
+            &actor,
+            "POST",
+            "/p2p/replicators",
+            Some(json_body(&add_replicator)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .add_replicator(&addresses, &collections, &PairingFilters::default())
+            .await
+            .expect("signed add_replicator");
+
+        let delete_replicator = DeleteReplicatorBody {
+            collections: &collections,
+            id: "peer1",
+        };
+        mount_signed_request(
+            &server,
+            &actor,
+            "DELETE",
+            "/p2p/replicators",
+            Some(json_body(&delete_replicator)),
+            ResponseTemplate::new(200),
+        )
+        .await;
+        admin
+            .delete_replicator("peer1", &collections)
+            .await
+            .expect("signed delete_replicator");
+    }
+
+    #[tokio::test]
+    async fn list_replicators_returns_remote_replicators() {
+        let server = MockServer::start().await;
+        let filters = to_replication_filters(&BTreeMap::from([(
+            "AgentRequest".to_string(),
+            gents_p2p::p2p_reconcile::equality_filter("node_did", "did:key:mandrake"),
+        )]))
+        .expect("representable filter");
+        let body = serde_json::json!([
+            {
+                "ID": "peer1",
+                "CollectionIDs": ["c1"],
+                "Addresses": ["/ip4/1.2.3.4/tcp/9000/p2p/peer1"],
+                "Filters": filters,
+                "status": 1,
+                "lastStatusChange": null
+            }
+        ]);
+        Mock::given(method("GET"))
+            .and(path("/api/v0/p2p/replicators"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let admin = admin_for(&server);
+        let reps = admin.list_replicators().await.expect("list");
+        assert_eq!(reps.len(), 1);
+        assert_eq!(reps[0].id.as_deref(), Some("peer1"));
+        assert_eq!(reps[0].collections, vec!["c1".to_string()]);
+        assert_eq!(
+            reps[0].address.as_deref(),
+            Some("/ip4/1.2.3.4/tcp/9000/p2p/peer1")
+        );
+        assert_eq!(reps[0].filters.as_ref(), Some(&filters));
+    }
+
+    #[tokio::test]
+    async fn list_replicators_decodes_current_wire_omission_as_empty_filters() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!([{
+            "ID": "peer1",
+            "CollectionIDs": ["c1"],
+            "Addresses": ["/ip4/1.2.3.4/tcp/9000/p2p/peer1"]
+        }]);
+        Mock::given(method("GET"))
+            .and(path("/api/v0/p2p/replicators"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let reps = admin_for(&server)
+            .list_replicators()
+            .await
+            .expect("list current Defra replicators");
+
+        assert_eq!(reps.len(), 1);
+        assert_eq!(reps[0].filters, Some(BTreeMap::new()));
+    }
+
+    #[tokio::test]
+    async fn list_replicators_rejects_noncanonical_wire_fields() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!([{
+            "id": "peer1",
+            "collections": ["c1"],
+            "addresses": ["/ip4/1.2.3.4/tcp/9000/p2p/peer1"]
+        }]);
+        Mock::given(method("GET"))
+            .and(path("/api/v0/p2p/replicators"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        admin_for(&server)
+            .list_replicators()
+            .await
+            .expect_err("noncanonical replicator response must fail closed");
+    }
+
+    #[tokio::test]
+    async fn local_collection_resolver_accepts_names_and_ids() {
+        let server = MockServer::start().await;
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path())
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        node.add_collection("type DesktopResolveThing { name: String }")
+            .await
+            .expect("test schema");
+        let definition = node
+            .get_collection("DesktopResolveThing")
+            .expect("collection lookup")
+            .expect("collection definition");
+        let admin = admin_for(&server).with_local_resolver(node);
+
+        assert_eq!(
+            admin
+                .resolve_collection_name("DesktopResolveThing")
+                .await
+                .expect("resolve name token"),
+            Some("DesktopResolveThing".to_string())
+        );
+        assert_eq!(
+            admin
+                .resolve_collection_name(&definition.collection_id)
+                .await
+                .expect("resolve id token"),
+            Some("DesktopResolveThing".to_string())
+        );
+    }
+}
