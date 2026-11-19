@@ -46,18 +46,13 @@ pub(super) async fn control_runtime() -> ControlRuntime {
     .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-    let status_node = owner.did().to_owned();
-    let routes = axum::Router::new().route(
-        "/status",
-        axum::routing::get(move || {
-            let node = status_node.clone();
-            async move {
-                axum::Json(
-                    serde_json::json!({"node_did": node, "client_authentication":{"kind":"local"}}),
-                )
-            }
-        }),
-    );
+    let routes = gents_store::test_support::local_authentication_route(Arc::new(
+        gents_store::identity::KeyIdentity::load_or_create(
+            directory.path().join("owner.key"),
+            None,
+        )
+        .unwrap(),
+    ));
     let runtime = Arc::new(
         gents::defra_node::Node::builder()
             .enable_signing()
