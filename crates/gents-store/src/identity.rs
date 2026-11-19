@@ -13,6 +13,7 @@ mod enrollment_grant;
 mod error;
 mod file_key;
 pub mod grant_sets;
+pub mod home_status;
 pub(crate) mod macos;
 pub(crate) mod provision_client;
 mod registered;
