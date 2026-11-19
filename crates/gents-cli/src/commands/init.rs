@@ -102,10 +102,12 @@ async fn acquire_init_store(
     home_dir: &Path,
     data_dir: &Path,
 ) -> Result<gents_store::local::home::StoreLock> {
-    Ok(
-        gents_store::local::home::acquire_store(home_dir, data_dir, crate::STORE_RELEASE_WAIT)
-            .await?,
+    Ok(gents_store::local::home::acquire_store(
+        home_dir,
+        data_dir,
+        gents_store::local::home::STORE_RELEASE_WAIT,
     )
+    .await?)
 }
 
 pub(crate) async fn lock_init_store_for_user(

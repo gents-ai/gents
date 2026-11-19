@@ -166,7 +166,7 @@ where
                 run_native(native_service(app, state)?, |service| service.status()).await?;
             ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
             ensure_home_not_served(home, user_status_signer(state, home).await.as_ref()).await?;
-            Some(lock_home_for_retirement(home)?)
+            Some(lock_home_for_retirement(home).await?)
         }
         None => None,
     };

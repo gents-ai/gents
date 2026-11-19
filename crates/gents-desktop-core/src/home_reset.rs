@@ -361,15 +361,19 @@ fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
     (parent == keys).then(|| keys.join(name))
 }
 
-pub fn lock_home_for_retirement(
+/// A runtime that is still releasing the home is awaited and a serving one
+/// refused (Lean `StoreHandoff.decide`).
+pub async fn lock_home_for_retirement(
     home: &Path,
 ) -> Result<gents_store::local::home::StoreLock, BridgeError> {
-    gents_store::local::home::lock_home_store(home).map_err(|error| {
-        BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            gents_protocol::error_chain::ErrorChain(&error).to_string(),
-        )
-    })
+    gents_store::local::home::acquire_home_store(home, gents_store::local::home::STORE_RELEASE_WAIT)
+        .await
+        .map_err(|error| {
+            BridgeError::new(
+                BridgeErrorCode::InvalidArgument,
+                gents_protocol::error_chain::ErrorChain(&error).to_string(),
+            )
+        })
 }
 
 fn is_store_lock(path: &Path) -> bool {
@@ -1365,16 +1369,22 @@ pub fn lock_reset(
 
 /// The locks desktop bootstrap takes on the client's state: the client
 /// store's lock, taken before the store opens, then the peer directory's
-/// writer lease. A desktop without the process lock is excluded by these.
-pub fn lock_client_state(
+/// writer lease. A desktop without the process lock is excluded by these; one
+/// that is still releasing its store is awaited (Lean `StoreHandoff.decide`).
+pub async fn lock_client_state(
     paths: &crate::client::DesktopPaths,
 ) -> anyhow::Result<(
     gents_store::local::home::StoreLock,
     gents_store::local::file_lock::FileLock,
 )> {
     use anyhow::Context;
-    let store = gents_store::local::home::lock_store_at(paths.root(), paths.node_data_dir())
-        .context("Quit Gents before resetting its desktop state")?;
+    let store = gents_store::local::home::acquire_store_at(
+        paths.root(),
+        paths.node_data_dir(),
+        gents_store::local::home::STORE_RELEASE_WAIT,
+    )
+    .await
+    .context("Quit Gents before resetting its desktop state")?;
     let peers = paths.peer_directory_path().with_extension("lock");
     reject_symlink_if_present(&peers, "peer directory lock")?;
     let file = std::fs::OpenOptions::new()
@@ -2095,17 +2105,17 @@ mod tests {
             .all(|path| !Path::new(path).starts_with(&home)));
     }
 
-    #[test]
-    fn client_state_lock_excludes_a_bootstrapping_desktop() {
+    #[tokio::test]
+    async fn client_state_lock_excludes_a_bootstrapping_desktop() {
         let temp = tempfile::tempdir().unwrap();
         let desktop = DesktopPaths::from_root(temp.path().join("desktop"));
         std::fs::create_dir_all(desktop.node_data_dir()).unwrap();
         // Bootstrap takes the store lock before the peer directory lease.
         let store =
             gents_store::local::home::lock_store(desktop.root(), desktop.node_data_dir()).unwrap();
-        assert!(lock_client_state(&desktop).is_err());
+        assert!(lock_client_state(&desktop).await.is_err());
         drop(store);
-        let held = lock_client_state(&desktop).unwrap();
+        let held = lock_client_state(&desktop).await.unwrap();
         assert!(
             gents_store::local::home::lock_store(desktop.root(), desktop.node_data_dir()).is_err()
         );
@@ -2113,7 +2123,7 @@ mod tests {
 
         let fresh = DesktopPaths::from_root(temp.path().join("fresh"));
         std::fs::create_dir_all(fresh.root()).unwrap();
-        let held = lock_client_state(&fresh).unwrap();
+        let held = lock_client_state(&fresh).await.unwrap();
         assert!(!fresh.node_data_dir().exists());
         std::fs::create_dir_all(fresh.node_data_dir()).unwrap();
         assert!(gents_store::local::home::lock_store(fresh.root(), fresh.node_data_dir()).is_err());

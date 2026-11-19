@@ -153,12 +153,12 @@ impl EmbeddedHome {
             ensure!(initialize_schemas, "retained trial store is unavailable");
             tokio::fs::create_dir_all(&data_path).await?;
         }
-        let lock_home = path.clone();
-        let lock_data = data_path.clone();
-        let store_lock = tokio::task::spawn_blocking(move || {
-            gents_store::local::home::lock_store(&lock_home, &lock_data)
-        })
-        .await??;
+        let store_lock = gents_store::local::home::acquire_store(
+            &path,
+            &data_path,
+            gents_store::local::home::STORE_RELEASE_WAIT,
+        )
+        .await?;
         let fresh = tokio::fs::read_dir(&data_path)
             .await?
             .next_entry()

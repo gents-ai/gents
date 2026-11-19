@@ -499,8 +499,13 @@ pub(crate) async fn finish_repair_backup(backup: Option<&RepairBackup>) -> Resul
     let Some(backup) = backup.cloned() else {
         return Ok(());
     };
+    let store = gents_store::local::home::acquire_home_store(
+        &backup.config.home,
+        gents_store::local::home::STORE_RELEASE_WAIT,
+    )
+    .await?;
     tokio::task::spawn_blocking(move || {
-        let _store = gents_store::local::home::lock_home_store(&backup.config.home)?;
+        let _store = store;
         files::backup_snapshot(
             &backup.config.home,
             &backup.definition,
@@ -612,14 +617,24 @@ pub(crate) async fn restore_repair_service(
         ),
         None => None,
     };
+    let mut locks = vec![
+        gents_store::local::home::acquire_home_store(
+            &backup.config.home,
+            gents_store::local::home::STORE_RELEASE_WAIT,
+        )
+        .await?,
+    ];
+    if let Some(home) = other_home {
+        locks.push(
+            gents_store::local::home::acquire_home_store(
+                &home,
+                gents_store::local::home::STORE_RELEASE_WAIT,
+            )
+            .await?,
+        );
+    }
     let locked = backup.clone();
     let store_locks = tokio::task::spawn_blocking(move || -> Result<_> {
-        let mut locks = vec![gents_store::local::home::lock_home_store(
-            &locked.config.home,
-        )?];
-        if let Some(home) = other_home {
-            locks.push(gents_store::local::home::lock_home_store(&home)?);
-        }
         let saved_init = locked.directory.join("before-stop/init.json");
         if saved_init.is_file() {
             anyhow::ensure!(

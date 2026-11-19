@@ -1,6 +1,6 @@
 ---- MODULE StoreHandoff ----
 \* lean: none
-\* crates: gents-store, gents-client-host, gents-desktop-core, gents-cli
+\* crates: gents-store, gents-client-host, gents-desktop-core, gents-desktop-bridge, gents-cli, gents-service, gents-host, gents
 \* models: StoreHandoff.decide, StoreHandoff.mayRelease, ClientInstallation.step
 (***************************************************************************)
 (* Handing one local store from the process that holds it to the next one *)
@@ -63,7 +63,11 @@
 (* `ReleaseWaitsForDirectory`; `Ack` is the retiring installation's answer *)
 (* once it let go of its core and the release notice resolved, and init's  *)
 (* return once its node and the pack installer's are gone and released    *)
-(* (gents-cli `commands/init.rs`, whose opener applies `decide` too).      *)
+(* (gents-cli `commands/init.rs`). `Read` is `try_store`: every opener   *)
+(* that takes the store to act on it applies it through `acquire_store`   *)
+(* (init, offline commands, desktop and service resets and repairs,       *)
+(* runtime preparation, trial homes); a probe that only reports whether   *)
+(* the store is held now takes `lock_store` and is no acquirer here.      *)
 (* Before the fix (#3802) the claim was released only when the last owner *)
 (* of the node's write gate dropped it (`ReleaseByShutdownOwner = FALSE`), *)
 (* at once, with the engine's lock still held (`ReleaseWaitsForDirectory  *)

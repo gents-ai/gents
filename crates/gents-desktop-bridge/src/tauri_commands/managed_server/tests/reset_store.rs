@@ -422,7 +422,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
         Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey),
     );
 
-    let lock = lock_home_for_retirement(&home).unwrap();
+    let lock = lock_home_for_retirement(&home).await.unwrap();
     let plan = plan_home_reset(
         Some(&home),
         Some(refused),
