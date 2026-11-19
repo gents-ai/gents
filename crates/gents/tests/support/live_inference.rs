@@ -572,10 +572,12 @@ impl LiveUser {
             &self.user,
             &self.node_did,
             agent_did,
-            session_id,
-            request_id,
-            content,
-            gents_protocol::request_input::QueueDelivery::Queue,
+            crate::support::agent_requests::UserMessage {
+                session: session_id,
+                id: request_id,
+                text: content,
+                delivery: gents_protocol::request_input::QueueDelivery::Queue,
+            },
         )
         .await
     }

@@ -65,28 +65,33 @@ async fn live_local_create_session() -> Result<()> {
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
     let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = configure_agent(
-        &live,
-        "Orchestrator",
-        &node_did,
-        &target,
-        &profile_id,
-        ORCHESTRATOR_SYSTEM_PROMPT,
-        None,
-        true,
-    )
-    .await;
-    let researcher_agent_did = configure_agent(
-        &live,
-        RESEARCHER_AGENT_NAME,
-        &node_did,
-        &target,
-        &profile_id,
-        "You answer the user's question concisely and factually in one short sentence.",
-        Some("Researches factual questions and returns a concise factual answer."),
-        false,
-    )
-    .await;
+    let orchestrator_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: "Orchestrator",
+                inference_profile_id: &profile_id,
+                system_prompt: ORCHESTRATOR_SYSTEM_PROMPT,
+                description: None,
+                default_for_node: true,
+            },
+        )
+        .await;
+    let researcher_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: RESEARCHER_AGENT_NAME,
+                inference_profile_id: &profile_id,
+                system_prompt:
+                    "You answer the user's question concisely and factually in one short sentence.",
+                description: Some(
+                    "Researches factual questions and returns a concise factual answer.",
+                ),
+                default_for_node: false,
+            },
+        )
+        .await;
     authorize_session_targets(
         &db,
         &node_did,
@@ -268,28 +273,30 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
     let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = configure_agent(
-        &live,
-        "Orchestrator",
-        &node_did,
-        &target,
-        &profile_id,
-        parent_system_prompt,
-        None,
-        true,
-    )
-    .await;
-    let background_worker_agent_did = configure_agent(
-        &live,
-        BACKGROUND_WORKER_AGENT_NAME,
-        &node_did,
-        &target,
-        &profile_id,
-        &child_system_prompt,
-        Some("Runs a deliberately blocked background integration-test job."),
-        false,
-    )
-    .await;
+    let orchestrator_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: "Orchestrator",
+                inference_profile_id: &profile_id,
+                system_prompt: parent_system_prompt,
+                description: None,
+                default_for_node: true,
+            },
+        )
+        .await;
+    let background_worker_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: BACKGROUND_WORKER_AGENT_NAME,
+                inference_profile_id: &profile_id,
+                system_prompt: &child_system_prompt,
+                description: Some("Runs a deliberately blocked background integration-test job."),
+                default_for_node: false,
+            },
+        )
+        .await;
     configure_standard_backgrounding_tools(
         &db,
         &node_did,
@@ -834,39 +841,42 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
     let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = configure_agent(
-        &live,
-        "Orchestrator",
-        &node_did,
-        &target,
-        &profile_id,
-        DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
-        None,
-        true,
-    )
-    .await;
-    let alpha_agent_did = configure_agent(
-        &live,
-        ALPHA_AGENT_NAME,
-        &node_did,
-        &target,
-        &profile_id,
-        &code_worker_prompt("alpha", &alpha_first, &alpha_second),
-        Some("Knows a code word."),
-        false,
-    )
-    .await;
-    let beta_agent_did = configure_agent(
-        &live,
-        BETA_AGENT_NAME,
-        &node_did,
-        &target,
-        &profile_id,
-        &code_worker_prompt("beta", &beta_first, &code_word("BETATWO")),
-        Some("Knows a code word."),
-        false,
-    )
-    .await;
+    let orchestrator_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: "Orchestrator",
+                inference_profile_id: &profile_id,
+                system_prompt: DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
+                description: None,
+                default_for_node: true,
+            },
+        )
+        .await;
+    let alpha_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: ALPHA_AGENT_NAME,
+                inference_profile_id: &profile_id,
+                system_prompt: &code_worker_prompt("alpha", &alpha_first, &alpha_second),
+                description: Some("Knows a code word."),
+                default_for_node: false,
+            },
+        )
+        .await;
+    let beta_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: BETA_AGENT_NAME,
+                inference_profile_id: &profile_id,
+                system_prompt: &code_worker_prompt("beta", &beta_first, &code_word("BETATWO")),
+                description: Some("Knows a code word."),
+                default_for_node: false,
+            },
+        )
+        .await;
     authorize_session_targets(
         &db,
         &node_did,
@@ -1103,32 +1113,34 @@ async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
     let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = configure_agent(
-        &live,
-        "Orchestrator",
-        &node_did,
-        &target,
-        &profile_id,
-        DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
-        None,
-        true,
-    )
-    .await;
-    let blocker_agent_did = configure_agent(
-        &live,
-        BLOCKER_AGENT_NAME,
-        &node_did,
-        &target,
-        &profile_id,
-        &format!(
+    let orchestrator_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: "Orchestrator",
+                inference_profile_id: &profile_id,
+                system_prompt: DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
+                description: None,
+                default_for_node: true,
+            },
+        )
+        .await;
+    let blocker_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: BLOCKER_AGENT_NAME,
+                inference_profile_id: &profile_id,
+                system_prompt: &format!(
             "You are a worker in an integration test. When asked to run the blocked job, call \
 bash_unrestricted exactly once with these arguments: {blocked_args}. Wait for it to finish, then \
 reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
         ),
-        Some("Runs a blocked job."),
-        false,
-    )
-    .await;
+                description: Some("Runs a blocked job."),
+                default_for_node: false,
+            },
+        )
+        .await;
     authorize_session_targets(
         &db,
         &node_did,
@@ -1302,29 +1314,21 @@ async fn live_hop_bound_stops_chain() -> Result<()> {
     let node_did = identity.did().to_string();
     let profile_id = format!("{node_did}:orchestrator-inference");
     let live = LiveUser::install(&db, &target).await;
-    let orchestrator_agent_did = configure_agent(
-        &live,
-        "Orchestrator",
-        &node_did,
-        &target,
-        &profile_id,
-        DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
-        None,
-        true,
-    )
-    .await;
-    let relay_agent_did = configure_agent(
-        &live,
-        RELAY_AGENT_NAME,
-        &node_did,
-        &target,
-        &profile_id,
-        "You are a relay in an integration test. For any request: first call agent_session_list exactly \
+    let orchestrator_agent_did = live
+        .agent(
+            &target,
+            LiveAgentSpec {
+                display_name: "Orchestrator",
+                inference_profile_id: &profile_id,
+                system_prompt: DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
+                description: None,
+                default_for_node: true,
+            },
+        )
+        .await;
+    let relay_agent_did = live.agent(&target, LiveAgentSpec { display_name: RELAY_AGENT_NAME, inference_profile_id: &profile_id, system_prompt: "You are a relay in an integration test. For any request: first call agent_session_list exactly \
 once. Then call agent_new exactly once with agent \"relay\" and prompt \"relay onward\". Whatever \
-agent_new returns, including an error, then reply exactly RELAY_DONE and call no other tool.",
-        Some("Relays work onward."),
-        false,
-    )
+agent_new returns, including an error, then reply exactly RELAY_DONE and call no other tool.", description: Some("Relays work onward."), default_for_node: false, })
     .await;
     let relay = || {
         agent_target(
@@ -1474,17 +1478,18 @@ impl LiveNode {
         let did = identity.did().to_string();
         let profile = format!("{did}:orchestrator-inference");
         let live = LiveUser::install(&db, target).await;
-        let orchestrator = configure_agent(
-            &live,
-            "Orchestrator",
-            &did,
-            target,
-            &profile,
-            orchestrator_prompt,
-            None,
-            true,
-        )
-        .await;
+        let orchestrator = live
+            .agent(
+                target,
+                LiveAgentSpec {
+                    display_name: "Orchestrator",
+                    inference_profile_id: &profile,
+                    system_prompt: orchestrator_prompt,
+                    description: None,
+                    default_for_node: true,
+                },
+            )
+            .await;
         Self {
             db,
             live,
@@ -1506,17 +1511,18 @@ impl LiveNode {
         system_prompt: &str,
         description: &str,
     ) -> String {
-        configure_agent(
-            &self.live,
-            display_name,
-            &self.did,
-            target,
-            &self.profile,
-            system_prompt,
-            Some(description),
-            false,
-        )
-        .await
+        self.live
+            .agent(
+                target,
+                LiveAgentSpec {
+                    display_name,
+                    inference_profile_id: &self.profile,
+                    system_prompt,
+                    description: Some(description),
+                    default_for_node: false,
+                },
+            )
+            .await
     }
 
     fn target(&self, name: &str, agent_did: &str) -> AgentTargetDocument {
@@ -2706,34 +2712,6 @@ async fn configure_bash_agent_tools(
         target_documents(targets),
     )
     .await;
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn configure_agent(
-    live: &LiveUser,
-    display_name: &str,
-    node_did: &str,
-    target: &InferenceTarget,
-    inference_profile_id: &str,
-    system_prompt: &str,
-    description: Option<&str>,
-    default_for_node: bool,
-) -> String {
-    assert_eq!(
-        node_did, live.node_did,
-        "a live Agent belongs to its User's node"
-    );
-    live.agent(
-        target,
-        LiveAgentSpec {
-            display_name,
-            inference_profile_id,
-            system_prompt,
-            description,
-            default_for_node,
-        },
-    )
-    .await
 }
 
 /// The User submits a request to `agent_did`, as desktop and the CLI do.
