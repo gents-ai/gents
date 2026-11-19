@@ -1078,6 +1078,7 @@ async fn job_step_runs_without_a_tool_dispatcher() {
             serde_json::to_value(&input).unwrap(),
             crate::plugin::executor::ToolInvocation {
                 tool_root: None,
+                own_folder: None,
                 tool_calls: true,
                 context: &envelope,
             },

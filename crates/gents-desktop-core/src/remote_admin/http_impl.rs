@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use defra_p2p_adapter::ReplicationFilter;
-use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
+use reqwest::{header::CONTENT_TYPE, Client, Method};
 use serde::{Deserialize, Serialize};
 
 use defra_node::Node as EmbeddedNode;
@@ -93,55 +93,74 @@ impl HttpRemoteP2pAdmin {
         format!("{}{}", self.api_base, path)
     }
 
-    fn request(
+    /// Send one admin request, signed by the actor and authorized by the
+    /// node identity; a refusal of that credential reads the home's status
+    /// again and is sent once more.
+    async fn send(
         &self,
         method: Method,
         path: &str,
         body: Option<Vec<u8>>,
-    ) -> RemoteP2pAdminResult<RequestBuilder> {
-        let mut request = self.client.request(method.clone(), self.url(path));
-        let body_bytes = body.as_deref().unwrap_or_default();
-
+    ) -> RemoteP2pAdminResult<reqwest::Response> {
+        let mut signed = Vec::new();
         if let Some(actor) = self.actor.as_ref() {
             let signed_path = signed_admin_path(&self.api_base_path, path);
-            let payload = signing_payload(method.as_str(), &signed_path, body_bytes);
+            let payload = signing_payload(
+                method.as_str(),
+                &signed_path,
+                body.as_deref().unwrap_or_default(),
+            );
             let signature = actor.sign(&payload).map_err(|error| {
                 RemoteP2pAdminError::LocalError(format!("signing remote admin request: {error:#}"))
             })?;
-            request = request
-                .header(ACTOR_DID_HEADER, actor.did())
-                .header(ACTOR_SIGNATURE_HEADER, hex_encode(&signature))
-                .header(ACTOR_SIGNATURE_VERSION_HEADER, ACTOR_SIGNATURE_VERSION);
+            signed = vec![
+                (ACTOR_DID_HEADER, actor.did().to_owned()),
+                (ACTOR_SIGNATURE_HEADER, hex_encode(&signature)),
+                (
+                    ACTOR_SIGNATURE_VERSION_HEADER,
+                    ACTOR_SIGNATURE_VERSION.to_string(),
+                ),
+            ];
         }
-
-        if let Some(endpoint) = self.node_identity.as_ref() {
-            request = endpoint.authorize(request).map_err(|error| {
-                RemoteP2pAdminError::LocalError(format!(
-                    "authenticating remote admin request: {error:#}"
-                ))
-            })?;
+        let build = || {
+            let mut request = self.client.request(method.clone(), self.url(path));
+            for (name, value) in &signed {
+                request = request.header(*name, value);
+            }
+            match &body {
+                Some(body) => request
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(body.clone()),
+                None => request,
+            }
+        };
+        match self.node_identity.as_ref() {
+            Some(endpoint) => endpoint
+                .send_resolving(|endpoint| endpoint.authorize(build()))
+                .await
+                .map_err(|error| {
+                    RemoteP2pAdminError::LocalError(format!(
+                        "authenticating remote admin request: {error:#}"
+                    ))
+                })?
+                .map_err(map_reqwest_err),
+            None => build().send().await.map_err(map_reqwest_err),
         }
-
-        if let Some(body) = body {
-            request = request.header(CONTENT_TYPE, "application/json").body(body);
-        }
-
-        Ok(request)
     }
 
-    fn json_request<T>(
+    async fn json_send<T>(
         &self,
         method: Method,
         path: &str,
         body: &T,
-    ) -> RemoteP2pAdminResult<RequestBuilder>
+    ) -> RemoteP2pAdminResult<reqwest::Response>
     where
         T: Serialize + ?Sized,
     {
         let body = serde_json::to_vec(body).map_err(|error| {
             RemoteP2pAdminError::LocalError(format!("encoding remote admin request body: {error}"))
         })?;
-        self.request(method, path, Some(body))
+        self.send(method, path, Some(body)).await
     }
 }
 
@@ -166,11 +185,7 @@ struct DeleteReplicatorBody<'a> {
 #[async_trait]
 impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     async fn peer_info(&self) -> RemoteP2pAdminResult<Vec<String>> {
-        let resp = self
-            .request(Method::GET, "/p2p/info", None)?
-            .send()
-            .await
-            .map_err(map_reqwest_err)?;
+        let resp = self.send(Method::GET, "/p2p/info", None).await?;
         let resp = check_status(resp).await?;
         resp.json::<Vec<String>>()
             .await
@@ -178,11 +193,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     }
 
     async fn active_peers(&self) -> RemoteP2pAdminResult<Vec<String>> {
-        let resp = self
-            .request(Method::GET, "/p2p/active-peers", None)?
-            .send()
-            .await
-            .map_err(map_reqwest_err)?;
+        let resp = self.send(Method::GET, "/p2p/active-peers", None).await?;
         let resp = check_status(resp).await?;
         resp.json::<Vec<String>>()
             .await
@@ -191,10 +202,8 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn connect(&self, addresses: &[String]) -> RemoteP2pAdminResult<()> {
         let resp = self
-            .json_request(Method::POST, "/p2p/connect", addresses)?
-            .send()
-            .await
-            .map_err(map_reqwest_err)?;
+            .json_send(Method::POST, "/p2p/connect", addresses)
+            .await?;
         check_status(resp).await?;
         Ok(())
     }
@@ -212,11 +221,7 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
             filters: BTreeMap<String, ReplicationFilter>,
         }
 
-        let resp = self
-            .request(Method::GET, "/p2p/replicators", None)?
-            .send()
-            .await
-            .map_err(map_reqwest_err)?;
+        let resp = self.send(Method::GET, "/p2p/replicators", None).await?;
         let resp = check_status(resp).await?;
         let wire: Vec<WireReplicator> = resp.json().await.map_err(|e| {
             RemoteP2pAdminError::RpcError(format!("decoding list_replicators: {e}"))
@@ -244,10 +249,8 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
             filters: to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?,
         };
         let resp = self
-            .json_request(Method::POST, "/p2p/replicators", &body)?
-            .send()
-            .await
-            .map_err(map_reqwest_err)?;
+            .json_send(Method::POST, "/p2p/replicators", &body)
+            .await?;
         check_status(resp).await?;
         Ok(())
     }
@@ -259,10 +262,8 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     ) -> RemoteP2pAdminResult<()> {
         let body = DeleteReplicatorBody { collections, id };
         let resp = self
-            .json_request(Method::DELETE, "/p2p/replicators", &body)?
-            .send()
-            .await
-            .map_err(map_reqwest_err)?;
+            .json_send(Method::DELETE, "/p2p/replicators", &body)
+            .await?;
         check_status(resp).await?;
         Ok(())
     }

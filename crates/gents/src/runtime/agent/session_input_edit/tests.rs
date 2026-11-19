@@ -233,6 +233,7 @@ impl Fixture {
             edit,
             replacements,
             replacement_evidence,
+            replacement_credentials: Vec::new(),
             signature: Vec::new(),
         };
         command.signature = self
@@ -633,6 +634,7 @@ impl ModeledQueue {
             edit,
             replacements,
             replacement_evidence,
+            replacement_credentials: Vec::new(),
             signature: Vec::new(),
         };
         command.signature = requester.sign(&command.signing_payload()).await.unwrap();

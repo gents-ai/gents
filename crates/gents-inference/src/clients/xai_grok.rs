@@ -320,7 +320,7 @@ pub async fn build_responses_client(
     let headers = build_xai_grok_oauth_headers()?;
     let endpoint = normalize_endpoint(endpoint);
     let http = build_authenticated_http(node, node_did, account_ref).await?;
-    crate::clients::inference_http::build_openai_responses_client(
+    crate::llm::rig_compat::providers::build_openai_responses_client(
         "xai-oauth-managed",
         &endpoint,
         http,
@@ -338,7 +338,7 @@ pub async fn build_chat_completions_client(
 {
     let endpoint = normalize_endpoint(endpoint);
     let http = build_authenticated_http(node, node_did, account_ref).await?;
-    crate::clients::inference_http::build_openai_chat_completions_client(
+    crate::llm::rig_compat::providers::build_openai_chat_completions_client(
         "xai-oauth-managed",
         &endpoint,
         http,
@@ -533,7 +533,7 @@ mod tests {
             .uri("https://cli-chat-proxy.grok.com/v1/files")
             .body(MultipartForm::default())
             .unwrap();
-        let _ = HttpClientExt::send_multipart::<Bytes>(&client, req).await;
+        let _ = gents_loop::rig_compat::http::Transport::send_multipart(&client, req).await;
         let headers = captured
             .lock()
             .expect("capture lock")
@@ -681,7 +681,7 @@ mod tests {
                     .expect("assembled body"),
                 ))
                 .expect("request");
-            let _ = HttpClientExt::send_streaming(&client, req)
+            let _ = gents_loop::rig_compat::http::Transport::send_streaming(&client, req)
                 .await
                 .expect("send");
         })

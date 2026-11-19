@@ -418,7 +418,13 @@ pub(crate) async fn init_home_with_core_packs(
             client_identity.did(),
         )
         .with_client_signing_capability(client_signing)?
-        .with_client_signed_agent_creates(),
+        .with_client_signed_agent_creates()
+        .with_reported_delegation_audience(
+            gents_store::local::document_acp::status_reports(
+                document_acp,
+                gents_store::local::document_acp::node_delegation_audience(&init_node),
+            ),
+        )?,
     );
     let result: Result<Value> = async {
         gents_store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;

@@ -114,25 +114,22 @@ impl ClientCore {
             .iter()
             .find(|record| record.node_did == node_did)
             .and_then(|record| {
-                record.operator_graphql().and_then(|url| {
-                    let capability =
-                        gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-                            self.node_identity.private_key_bytes(),
-                        )
-                        .ok()?;
-                    gents_store::config_client::GraphqlEndpoint::as_principal(
-                        url,
-                        self.node_identity.did(),
+                let capability =
+                    gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+                        self.node_identity.private_key_bytes(),
                     )
-                    .with_client_signing_capability(capability)
-                    .ok()
-                    .and_then(|endpoint| {
-                        gents::runtime::lifecycle_hooks::compose_endpoint(
-                            endpoint.with_client_signed_agent_creates(),
-                        )
-                        .ok()
-                    })
-                })
+                    .ok()?;
+                let endpoint = crate::client::home_endpoint::user_saved(
+                    record.operator_graphql()?,
+                    &capability,
+                    record,
+                    &self.sync_state,
+                )
+                .ok()?;
+                gents::runtime::lifecycle_hooks::compose_endpoint(
+                    endpoint.with_client_signed_agent_creates(),
+                )
+                .ok()
             })
     }
 
@@ -218,11 +215,12 @@ impl ClientCore {
                     )?;
                 Ok(ConfigAccess::Graphql(
                     gents::runtime::lifecycle_hooks::compose_endpoint(
-                        gents_store::config_client::GraphqlEndpoint::as_principal(
+                        crate::client::home_endpoint::user_saved(
                             url,
-                            self.node_identity.did(),
-                        )
-                        .with_client_signing_capability(capability)?
+                            &capability,
+                            &record,
+                            &self.sync_state,
+                        )?
                         .with_client_signed_agent_creates(),
                     )?,
                 ))
@@ -259,13 +257,9 @@ impl ClientCore {
         )
         .map_err(LocalHomeAccessError::Signing)?;
         Ok(
-            gents_store::config_client::GraphqlEndpoint::as_principal(
-                url,
-                self.node_identity.did(),
-            )
-            .with_client_signing_capability(capability)
-            .map_err(LocalHomeAccessError::Signing)?
-            .with_client_signed_agent_creates(),
+            crate::client::home_endpoint::user_saved(url, &capability, record, &self.sync_state)
+                .map_err(LocalHomeAccessError::Signing)?
+                .with_client_signed_agent_creates(),
         )
     }
 }

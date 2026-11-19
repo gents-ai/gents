@@ -335,9 +335,8 @@ pub(crate) async fn fetch_runtime_status(
         .build()
         .context("building runtime status client")?;
     graphql
-        .authorize(client.get(&status_url))?
-        .send()
-        .await
+        .send_resolving(|graphql| graphql.authorize(client.get(&status_url)))
+        .await?
         .and_then(reqwest::Response::error_for_status)
         .with_context(|| format!("reading runtime status from {status_url}"))?
         .json()

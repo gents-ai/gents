@@ -195,6 +195,7 @@ impl ClientCore {
                 )?,
             );
             let (p2p_control, p2p_control_rx) = mpsc::channel(8);
+            let owed_settlements = super::owed_settlement::OwedSettlements::default();
             let p2p_supervisor = spawn_p2p_supervisor_task(
                 Arc::clone(&node),
                 Arc::clone(&p2p),
@@ -204,6 +205,7 @@ impl ClientCore {
                 local_peer_id.clone(),
                 Arc::clone(&route_manager),
                 options.install_replicators_on_bootstrap,
+                owed_settlements.clone(),
             );
             Ok(Self {
                 store_access: tokio::sync::Mutex::new(None),
@@ -218,6 +220,7 @@ impl ClientCore {
                 observer: tokio::sync::Mutex::new(Some(observer)),
                 sync_state,
                 p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
+                owed_settlements,
                 inference_observations: Default::default(),
                 inference_observation_epoch: Default::default(),
                 request_patch_signatures: tokio::sync::Mutex::new(

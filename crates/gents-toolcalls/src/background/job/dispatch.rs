@@ -144,6 +144,7 @@ pub async fn run_step0(
             serde_json::to_value(&input)?,
             crate::plugin::executor::ToolInvocation {
                 tool_root: runtime.tool_root.as_deref(),
+                own_folder: None,
                 tool_calls: binding.plugin.tool_calls,
                 context,
             },

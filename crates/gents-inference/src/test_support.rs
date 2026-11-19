@@ -14,7 +14,6 @@ pub async fn capture_scripted_provider_request(
     request: &rig::completion::CompletionRequest,
     model: &str,
 ) -> Result<(), rig::completion::CompletionError> {
-    use rig::http_client::HttpClientExt;
     let body = rig::providers::openai::completion::CompletionRequest::try_from((
         model.to_string(),
         request.clone(),
@@ -35,8 +34,7 @@ pub async fn capture_scripted_provider_request(
             |error| rig::completion::CompletionError::ProviderError(error.to_string()),
         )?))
         .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    transport
-        .send_streaming(outbound)
+    gents_loop::rig_compat::http::Transport::send_streaming(&transport, outbound)
         .await
         .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
     assert_eq!(

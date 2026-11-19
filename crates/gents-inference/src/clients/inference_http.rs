@@ -9,67 +9,14 @@
 use rapidhash::RapidHashMap;
 use std::future::Future;
 
-use anyhow::{Context, Result};
+use crate::llm::rig_compat::http::{
+    self as http_client, HeaderMap, HeaderValue, LazyBody, MultipartForm, Request, ReqwestClient,
+    Response, StreamingResponse, Transport,
+};
 use bytes::Bytes;
 use reqwest::header::HeaderName;
-use rig::http_client::{
-    self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient,
-    Response, StreamingResponse,
-};
-use rig::wasm_compat::WasmCompatSend;
 
 const SESSION_ID_HEADER: &str = "x-session-id";
-
-pub fn build_openai_responses_client<H>(
-    api_key: &str,
-    base_url: &str,
-    http_client: H,
-    http_headers: HeaderMap,
-) -> Result<crate::llm::rig_compat::providers::ResponsesClient<H>>
-where
-    H: Default + HttpClientExt,
-{
-    crate::llm::rig_compat::providers::ResponsesClient::builder()
-        .api_key(api_key)
-        .base_url(base_url)
-        .http_headers(http_headers)
-        .http_client(http_client)
-        .build()
-        .context("building OpenAI Responses client")
-}
-
-pub fn build_openai_chat_completions_client<H>(
-    api_key: &str,
-    base_url: &str,
-    http_client: H,
-) -> Result<crate::llm::rig_compat::providers::ChatCompletionsClient<H>>
-where
-    H: Default + HttpClientExt,
-{
-    crate::llm::rig_compat::providers::ChatCompletionsClient::builder()
-        .api_key(api_key)
-        .base_url(base_url)
-        .http_client(http_client)
-        .build()
-        .context("building OpenAI Chat Completions client")
-}
-
-pub fn build_openrouter_client<H>(
-    api_key: &str,
-    base_url: &str,
-    http_client: H,
-) -> Result<crate::llm::rig_compat::providers::OpenRouterClient<H>>
-where
-    H: Default + HttpClientExt,
-{
-    Ok(
-        crate::llm::rig_compat::providers::OpenRouterClient::builder()
-            .api_key(api_key)
-            .base_url(base_url)
-            .http_client(http_client)
-            .build()?,
-    )
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct ResponsesNormalizingHttpClient<H = ReqwestClient> {
@@ -90,12 +37,8 @@ impl<H> ResponsesNormalizingHttpClient<H> {
         self
     }
 
-    fn normalize_json_body<T>(&self, req: Request<T>) -> Request<Bytes>
-    where
-        T: Into<Bytes>,
-    {
-        let (parts, body) = req.into_parts();
-        let mut body = body.into();
+    fn normalize_json_body(&self, req: Request<Bytes>) -> Request<Bytes> {
+        let (parts, mut body) = req.into_parts();
         if parts.uri.path().ends_with("/responses") {
             if let Some(normalized) = normalize_responses_body(&body, self.service_tier) {
                 body = normalized;
@@ -117,46 +60,34 @@ fn normalize_responses_body(
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
 
-impl<H> HttpClientExt for ResponsesNormalizingHttpClient<H>
+impl<H> Transport for ResponsesNormalizingHttpClient<H>
 where
-    H: Clone + HttpClientExt + 'static,
+    H: Clone + Transport + 'static,
 {
-    fn send<T, U>(
+    fn send(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        T: Into<Bytes> + WasmCompatSend,
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
         let req = self.normalize_json_body(req);
-        async move { HttpClientExt::send::<Bytes, U>(&inner, req).await }
+        async move { Transport::send(&inner, req).await }
     }
 
-    fn send_multipart<U>(
+    fn send_multipart(
         &self,
         req: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
-        async move { HttpClientExt::send_multipart(&inner, req).await }
+        async move { Transport::send_multipart(&inner, req).await }
     }
 
-    fn send_streaming<T>(
+    fn send_streaming(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-    where
-        T: Into<Bytes>,
-    {
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.inner.clone();
         let req = self.normalize_json_body(req);
-        async move { HttpClientExt::send_streaming(&inner, req).await }
+        async move { Transport::send_streaming(&inner, req).await }
     }
 }
 
@@ -170,26 +101,19 @@ impl<H> SessionTaggingHttpClient<H> {
         Self { inner }
     }
 
-    fn tag<T>(req: Request<T>) -> Request<Bytes>
-    where
-        T: Into<Bytes>,
-    {
+    fn tag(req: Request<Bytes>) -> Request<Bytes> {
         Self::tag_with_trace_context_headers(
             req,
             crate::trace_context::current_trace_context_headers(),
         )
     }
 
-    fn tag_with_trace_context_headers<T>(
-        req: Request<T>,
+    fn tag_with_trace_context_headers(
+        mut req: Request<Bytes>,
         trace_context_headers: RapidHashMap<String, String>,
-    ) -> Request<Bytes>
-    where
-        T: Into<Bytes>,
-    {
-        let (mut parts, body) = req.into_parts();
-        Self::inject_headers(&mut parts.headers, trace_context_headers);
-        Request::from_parts(parts, body.into())
+    ) -> Request<Bytes> {
+        Self::inject_headers(req.headers_mut(), trace_context_headers);
+        req
     }
 
     fn tag_multipart(req: Request<MultipartForm>) -> Request<MultipartForm> {
@@ -229,47 +153,35 @@ impl<H> SessionTaggingHttpClient<H> {
     }
 }
 
-impl<H> HttpClientExt for SessionTaggingHttpClient<H>
+impl<H> Transport for SessionTaggingHttpClient<H>
 where
-    H: Clone + HttpClientExt + 'static,
+    H: Clone + Transport + 'static,
 {
-    fn send<T, U>(
+    fn send(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        T: Into<Bytes> + WasmCompatSend,
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
         let req = Self::tag(req);
-        async move { HttpClientExt::send::<Bytes, U>(&inner, req).await }
+        async move { Transport::send(&inner, req).await }
     }
 
-    fn send_multipart<U>(
+    fn send_multipart(
         &self,
         req: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
         let req = Self::tag_multipart(req);
-        async move { HttpClientExt::send_multipart(&inner, req).await }
+        async move { Transport::send_multipart(&inner, req).await }
     }
 
-    fn send_streaming<T>(
+    fn send_streaming(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-    where
-        T: Into<Bytes>,
-    {
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.inner.clone();
         let req = Self::tag(req);
-        async move { HttpClientExt::send_streaming(&inner, req).await }
+        async move { Transport::send_streaming(&inner, req).await }
     }
 }
 
@@ -289,58 +201,48 @@ mod tests {
         }
     }
 
-    impl HttpClientExt for CapturingHttpClient {
-        fn send<T, U>(
+    impl Transport for CapturingHttpClient {
+        fn send(
             &self,
-            req: Request<T>,
-        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-        where
-            T: Into<Bytes> + WasmCompatSend,
-            U: From<Bytes>,
-            U: WasmCompatSend + 'static,
+            req: Request<Bytes>,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
         {
             let bodies = Arc::clone(&self.bodies);
-            let body = req.into_body().into();
+            let body = req.into_body();
             async move {
                 bodies
                     .lock()
                     .expect("capture lock")
                     .push(serde_json::from_slice(&body).expect("captured JSON body"));
-                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::from_static(b"{}"))) });
+                let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
                 Ok(Response::builder().status(200).body(body)?)
             }
         }
 
-        fn send_multipart<U>(
+        fn send_multipart(
             &self,
             req: Request<MultipartForm>,
-        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-        where
-            U: From<Bytes>,
-            U: WasmCompatSend + 'static,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
         {
             let _ = req;
             async move {
-                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::from_static(b"{}"))) });
+                let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
                 Ok(Response::builder().status(200).body(body)?)
             }
         }
 
-        fn send_streaming<T>(
+        fn send_streaming(
             &self,
-            req: Request<T>,
-        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-        where
-            T: Into<Bytes>,
-        {
+            req: Request<Bytes>,
+        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
             let bodies = Arc::clone(&self.bodies);
-            let body = req.into_body().into();
+            let body = req.into_body();
             async move {
                 bodies
                     .lock()
                     .expect("capture lock")
                     .push(serde_json::from_slice(&body).expect("captured JSON body"));
-                let stream: rig::http_client::sse::BoxedStream =
+                let stream: http_client::BoxedStream =
                     Box::pin(futures::stream::empty::<http_client::Result<Bytes>>());
                 Ok(Response::builder().status(200).body(stream)?)
             }
@@ -358,9 +260,7 @@ mod tests {
             ))
             .expect("request");
 
-        let _ = HttpClientExt::send::<Bytes, Vec<u8>>(&client, req)
-            .await
-            .expect("send");
+        let _ = Transport::send(&client, req).await.expect("send");
 
         let bodies = inner.bodies();
         assert_eq!(bodies.len(), 1);
@@ -384,7 +284,7 @@ mod tests {
             ))
             .expect("request");
 
-        let _ = HttpClientExt::send_streaming(&client, req)
+        let _ = Transport::send_streaming(&client, req)
             .await
             .expect("send streaming");
 
@@ -416,9 +316,7 @@ mod tests {
             ))
             .expect("request");
 
-        let _ = HttpClientExt::send::<Bytes, Vec<u8>>(&client, req)
-            .await
-            .expect("send");
+        let _ = Transport::send(&client, req).await.expect("send");
 
         assert_eq!(inner.bodies(), vec![original]);
     }

@@ -1,0 +1,4 @@
+---- MODULE MCOwedSettlementGivesUp ----
+EXTENDS OwedSettlement
+
+====
