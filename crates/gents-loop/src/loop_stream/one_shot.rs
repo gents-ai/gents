@@ -541,7 +541,7 @@ where
                         accumulator.push_tool_call(tool_call);
                     }
                 }
-                LoopStreamItem::ToolResult { .. } => {}
+                LoopStreamItem::ToolResult { .. } | LoopStreamItem::RetryWake => {}
                 LoopStreamItem::Final { text } => {
                     if auxiliary_enabled {
                         let identity = active_auxiliary.or(last_auxiliary).ok_or(OneShotError::FinalWithoutSource)?;

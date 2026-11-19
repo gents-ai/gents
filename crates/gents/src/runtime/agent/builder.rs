@@ -498,6 +498,11 @@ impl AgentBuilder {
         self
     }
 
+    pub fn completion_retry(mut self, completion_retry: CompletionRetryProfileFields) -> Self {
+        self.pending_agent.completion_retry = completion_retry;
+        self
+    }
+
     pub fn done(mut self) -> GentsBuilder {
         self.agent.agents.push(self.pending_agent);
         self.agent
@@ -536,6 +541,7 @@ pub(crate) struct PendingAgent {
     stream_liveness_timeout: Duration,
     provider_idle_timeout: Duration,
     deadline_duration: Duration,
+    completion_retry: CompletionRetryProfileFields,
     sampling: SamplingConfig,
     skills: Vec<gents_documents::skills::Skill>,
 }
@@ -562,6 +568,7 @@ impl PendingAgent {
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+            completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
         }
@@ -696,7 +703,7 @@ impl PendingAgent {
             stream_liveness_timeout: self.stream_liveness_timeout,
             provider_idle_timeout: self.provider_idle_timeout,
             deadline_duration: self.deadline_duration,
-            completion_retry: CompletionRetryProfileFields::default(),
+            completion_retry: self.completion_retry,
             sampling: self.sampling,
             skills: self.skills,
             oauth_pool: Vec::new(),

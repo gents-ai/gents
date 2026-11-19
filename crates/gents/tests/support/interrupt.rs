@@ -378,7 +378,7 @@ pub async fn wait_for_provider_output_contains<R>(node: &R, request_doc_id: &str
 where
     R: SnapshotReader + ?Sized,
 {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut changes = node.subscribe_changes("AgentOutputSegment").await;
     loop {
         let rows = fetch_output_segments_for_request(node, request_doc_id).await;
         let records = rows
@@ -415,11 +415,12 @@ where
         {
             return;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for canonical provider output to contain {expected:?}; last={visible:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("AgentOutputSegment stalled for {STALL_CEILING:?} before canonical provider output contained {expected:?}; last={visible:?}");
+        }
     }
 }
 
@@ -429,25 +430,29 @@ where
 {
     let expected = RequestLifecycleState::parse(expected)
         .expect("expected request lifecycle state must be canonical");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut changes = node.subscribe_changes("AgentRequest").await;
     loop {
         let snapshot = fetch_request_snapshot(node, request_doc_id).await;
         if snapshot.lifecycle_state == expected {
             return;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRequest {request_doc_id} lifecycle_state={expected}; last={}; failure_reason={:?}",
-            snapshot.lifecycle_state,
-            snapshot.failure_reason
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!(
+                "AgentRequest stalled for {STALL_CEILING:?} before {request_doc_id} reached lifecycle_state={expected}; last={}; failure_reason={:?}",
+                snapshot.lifecycle_state,
+                snapshot.failure_reason
+            );
+        }
     }
 }
 
-/// `budget` is a hang ceiling (`STALL_CEILING`), never a latency bound:
-/// terminal publication is scheduler-bound on a loaded host, so a fixed
-/// window fails a correct owner (`WallClockBound` `FixedWindow`).
+/// `budget` is a hang ceiling (`STALL_CEILING`) on the request's collection
+/// staying unchanged, never a latency bound: terminal publication is
+/// scheduler-bound on a loaded host, so a fixed window fails a correct owner
+/// (`WallClockBound` `FixedWindow`).
 pub async fn wait_for_request_terminal_state<R>(
     node: &R,
     request_doc_id: &str,
@@ -456,19 +461,19 @@ pub async fn wait_for_request_terminal_state<R>(
 where
     R: SnapshotReader + ?Sized,
 {
-    let deadline = tokio::time::Instant::now() + budget;
+    let mut changes = node.subscribe_changes("AgentRequest").await;
     loop {
         let snapshot = fetch_request_snapshot(node, request_doc_id).await;
         if snapshot.lifecycle_state.is_terminal() {
             return snapshot.lifecycle_state;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRequest {request_doc_id} terminal state; last={}; failure_reason={:?}",
-            snapshot.lifecycle_state,
-            snapshot.failure_reason
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        if tokio::time::timeout(budget, changes.recv()).await.is_err() {
+            panic!(
+                "AgentRequest stalled for {budget:?} before {request_doc_id} terminalized; last={}; failure_reason={:?}",
+                snapshot.lifecycle_state,
+                snapshot.failure_reason
+            );
+        }
     }
 }
 
@@ -489,7 +494,7 @@ pub async fn wait_for_inference_call_state<R>(
 where
     R: SnapshotReader + ?Sized,
 {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut changes = node.subscribe_changes("InferenceCall").await;
     loop {
         let row = fetch_latest_inference_call(node, request_id).await;
         if row
@@ -498,11 +503,12 @@ where
         {
             return row.expect("checked Some");
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for latest inference call request_id={request_id} call_state={expected}; last={row:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("InferenceCall stalled for {STALL_CEILING:?} before request_id={request_id} reached call_state={expected}; last={row:?}");
+        }
     }
 }
 

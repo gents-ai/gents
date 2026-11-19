@@ -1,0 +1,3 @@
+---- MODULE MCOfflineAccessRoutingPortWait ----
+EXTENDS OfflineAccessRouting
+====

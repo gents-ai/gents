@@ -6,7 +6,7 @@ pub mod relationships;
 pub mod wire_database;
 
 #[cfg(unix)]
-pub use executable_script::write_executable_script;
+pub use executable_script::{copy_executable, hold_sibling, write_executable_script, HeldSibling};
 
 /// Hang detector for a test wait that has no deadline of its own: the longest
 /// the awaited owner may go without a change before the wait fails. It is one

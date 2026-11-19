@@ -12,18 +12,35 @@ const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
-        .get_or_try_init(|| async {
-            tokio::task::spawn_blocking(|| {
-                reqwest::Client::builder()
-                    .timeout(HTTP_TIMEOUT)
-                    .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT)
-                    .build()
-                    .map_err(ConfigClientError::HttpClientBuild)
-            })
-            .await
-            .map_err(ConfigClientError::HttpClientJoin)?
-        })
+        .get_or_try_init(|| build_client(Some(HTTP_TIMEOUT)))
         .await
+}
+
+/// The client of an HTTP write (an auto-commit mutation or a transaction):
+/// its requests wait for the server's answer or a connection failure, never a
+/// client clock. A commit abandoned by a total request timeout while a loaded
+/// server is still committing has an unknown outcome that only the server's
+/// death justifies (`tla/CommitResponseWait.tla`, `ClientWindow`); bounding a
+/// wedged commit is the server's (`Wedged`).
+async fn write_http_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+    CLIENT.get_or_try_init(|| build_client(None)).await
+}
+
+async fn build_client(total: Option<std::time::Duration>) -> Result<reqwest::Client> {
+    tokio::task::spawn_blocking(move || {
+        let builder = reqwest::Client::builder()
+            .connect_timeout(HTTP_TIMEOUT)
+            .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT);
+        match total {
+            Some(total) => builder.timeout(total),
+            None => builder,
+        }
+        .build()
+        .map_err(ConfigClientError::HttpClientBuild)
+    })
+    .await
+    .map_err(ConfigClientError::HttpClientJoin)?
 }
 
 pub(super) async fn auto_commit(
@@ -67,7 +84,7 @@ async fn auto_commit_once(
     endpoint: &GraphqlEndpoint,
     body: &Value,
 ) -> Result<(Result<Value>, bool)> {
-    let client = http_client().await?;
+    let client = write_http_client().await?;
     let (response, resent) = endpoint
         .send_counting_resends(|endpoint| {
             Ok(endpoint.authorize(client.post(endpoint.url()))?.json(body))
@@ -161,7 +178,7 @@ pub(super) async fn txn_begin(
     endpoint: &GraphqlEndpoint,
     read_only: bool,
 ) -> Result<(reqwest::Client, String)> {
-    let client = http_client().await?.clone();
+    let client = write_http_client().await?.clone();
     let path = format!("{}/tx", graphql_api_base(endpoint.url())?);
     let url = if read_only {
         format!("{path}?read_only=true")

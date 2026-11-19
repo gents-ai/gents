@@ -13,6 +13,8 @@ use std::time::Duration;
 
 #[cfg(test)]
 mod backup_conformance;
+#[cfg(all(test, target_os = "linux"))]
+mod copy_executable_tests;
 mod execute;
 mod files;
 mod notices;
@@ -790,14 +792,19 @@ pub fn stage_repair_executable(
         if target.exists() && files::digest(&target)? == digest {
             return Ok(target);
         }
-        let staged = tempfile::NamedTempFile::new_in(&directory)?;
-        files::copy_executable(source, staged.path())?;
+        // A directory rather than a NamedTempFile: its open descriptor would
+        // be a writer of the executable (see `files::copy_executable`).
+        let staging = tempfile::Builder::new()
+            .prefix(".staging-")
+            .tempdir_in(&directory)?;
+        let staged = staging.path().join("gents");
+        files::copy_executable(source, &staged)?;
         anyhow::ensure!(
-            files::digest(staged.path())? == digest,
+            files::digest(&staged)? == digest,
             "repair source changed while staging"
         );
-        files::validate_native_executable(staged.path())?;
-        staged.persist(&target)?;
+        files::validate_native_executable(&staged)?;
+        std::fs::rename(&staged, &target)?;
         std::fs::File::open(&directory)?.sync_all()?;
         Ok(target)
     })()
