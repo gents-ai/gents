@@ -2145,13 +2145,15 @@ mod tests {
                     Box::pin(async move {
                         crate::session::ensure_session_in_txn(
                             txn,
-                            session_id,
-                            node_did,
-                            agent_did,
-                            requester_did,
-                            None,
-                            None,
-                            "2026-09-01T00:00:00Z",
+                            crate::session::NewAgentSession {
+                                session_id,
+                                node_did,
+                                agent_did,
+                                requester_did,
+                                title: None,
+                                provenance: None,
+                                created_at: "2026-09-01T00:00:00Z",
+                            },
                         )
                         .await
                     })

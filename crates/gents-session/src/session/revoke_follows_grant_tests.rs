@@ -39,13 +39,15 @@ async fn an_agent_revokes_the_share_it_granted() {
             Box::pin(async move {
                 crate::session::ensure_session_in_txn(
                     txn,
-                    "shared-session",
-                    node_did,
-                    agent.did(),
-                    None,
-                    None,
-                    None,
-                    "2026-01-01T00:00:00Z",
+                    crate::session::NewAgentSession {
+                        session_id: "shared-session",
+                        node_did,
+                        agent_did: agent.did(),
+                        requester_did: None,
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-01-01T00:00:00Z",
+                    },
                 )
                 .await
                 .map(|_| ())

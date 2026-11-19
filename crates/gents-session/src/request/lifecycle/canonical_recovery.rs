@@ -180,6 +180,17 @@ fn selection_from_choice(
     }
 }
 
+/// The facts a recovery attempt commits under: the generation it installs,
+/// the time it observes, and, from the conformance adapter, the terminal
+/// selection and outcome it must reproduce.
+pub struct RecoveryFacts {
+    pub fresh_generation: String,
+    pub observed_now: DateTime<Utc>,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub selection_choice: Option<RecoverySelectionChoice>,
+    pub expected_outcome: Option<RequestLifecycleState>,
+}
+
 pub(super) async fn recover_expired_generation(
     access: &ConfigAccess,
     observed: &AgentRequestRow,
@@ -191,57 +202,49 @@ pub(super) async fn recover_expired_generation(
         observed,
         expected_generation,
         expected_expiry,
-        uuid::Uuid::new_v4().to_string(),
-        Utc::now(),
-        #[cfg(any(test, feature = "test-fixtures"))]
-        None,
-        None,
+        RecoveryFacts {
+            fresh_generation: uuid::Uuid::new_v4().to_string(),
+            observed_now: Utc::now(),
+            #[cfg(any(test, feature = "test-fixtures"))]
+            selection_choice: None,
+            expected_outcome: None,
+        },
     )
     .await
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the conformance adapter supplies deterministic recovery facts"
-)]
 pub async fn recover_expired_generation_with_access_for_test(
     access: &ConfigAccess,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
-    fresh_generation: String,
-    observed_now: DateTime<Utc>,
-    selection_choice: Option<RecoverySelectionChoice>,
-    expected_outcome: Option<RequestLifecycleState>,
+    facts: RecoveryFacts,
 ) -> Result<RecoveryResult> {
     recover_expired_generation_with_access_and_facts(
         access,
         observed,
         expected_generation,
         expected_expiry,
-        fresh_generation,
-        observed_now,
-        selection_choice,
-        expected_outcome,
+        facts,
     )
     .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "recovery facts are supplied by the conformance adapter"
-)]
 async fn recover_expired_generation_with_access_and_facts(
     access: &ConfigAccess,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
-    fresh_generation: String,
-    observed_now: DateTime<Utc>,
-    #[cfg(any(test, feature = "test-fixtures"))] selection_choice: Option<RecoverySelectionChoice>,
-    expected_outcome: Option<RequestLifecycleState>,
+    facts: RecoveryFacts,
 ) -> Result<RecoveryResult> {
+    let RecoveryFacts {
+        fresh_generation,
+        observed_now,
+        #[cfg(any(test, feature = "test-fixtures"))]
+        selection_choice,
+        expected_outcome,
+    } = facts;
     let request_doc_id = observed
         .doc_id
         .as_deref()

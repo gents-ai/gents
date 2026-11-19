@@ -143,8 +143,18 @@ async fn drive_start(case: &StartInput<String>) -> bool {
             let identity = identity.as_ref();
             let session_agent = &session_agent;
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(txn, SESSION, identity.did(), session_agent,
-                    Some(requester), title, None, &time(session.created_at)).await?;
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    gents_session::session::NewAgentSession {
+                        session_id: SESSION,
+                        node_did: identity.did(),
+                        agent_did: session_agent,
+                        requester_did: Some(requester),
+                        title,
+                        provenance: None,
+                        created_at: &time(session.created_at),
+                    },
+                ).await?;
                 let record = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION)
                     .await?.expect("created modeled session");
                 let tags = if session.tags.is_empty() { Value::Null } else { json!(session.tags) };
@@ -246,13 +256,15 @@ async fn drive_start(case: &StartInput<String>) -> bool {
                 Box::pin(async move {
                     gents_session::session::ensure_session_in_txn(
                         txn,
-                        "separate-signing-session",
-                        identity.did(),
-                        &selected_agent,
-                        Some(user.did()),
-                        None,
-                        None,
-                        "2026-01-01T00:00:00Z",
+                        gents_session::session::NewAgentSession {
+                            session_id: "separate-signing-session",
+                            node_did: identity.did(),
+                            agent_did: &selected_agent,
+                            requester_did: Some(user.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-01-01T00:00:00Z",
+                        },
                     )
                     .await?;
                     let session =
@@ -568,13 +580,15 @@ async fn drive_start(case: &StartInput<String>) -> bool {
                         Box::pin(async {
                             gents_session::session::ensure_session_in_txn(
                                 txn,
-                                SESSION,
-                                identity.did(),
-                                &command.agent_did,
-                                Some(user.did()),
-                                None,
-                                None,
-                                &time(3),
+                                gents_session::session::NewAgentSession {
+                                    session_id: SESSION,
+                                    node_did: identity.did(),
+                                    agent_did: &command.agent_did,
+                                    requester_did: Some(user.did()),
+                                    title: None,
+                                    provenance: None,
+                                    created_at: &time(3),
+                                },
                             )
                             .await?;
                             gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
@@ -1299,10 +1313,12 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             );
             let result = stage_goal_backed_request_with_identity_in_txn(
                 &txn,
-                runtime.did(),
-                SESSION,
-                "new User work",
-                None,
+                crate::operations::goal::GoalStart {
+                    node_did: runtime.did(),
+                    session_id: SESSION,
+                    objective: "new User work",
+                    token_budget: None,
+                },
                 &request,
                 None,
                 Some(&graph),

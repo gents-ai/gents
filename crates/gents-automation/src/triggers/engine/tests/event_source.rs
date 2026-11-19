@@ -746,24 +746,26 @@ async fn admit_selected_event(
         .unwrap();
     let trigger_doc = response["data"]["Trigger"][0]["_docID"].as_str().unwrap();
     let spec = gents_session::request::lifecycle::materialize::pending_agent_request_spec(
-        owner,
-        agent.did(),
-        &intent.task.prompt_template,
-        gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
-        gents_session::request::lifecycle::TriggerLineage {
-            trigger_id: intent.trigger_id.clone(),
-            trigger_kind: Some("event".into()),
-            source_doc_id: Some(fire.identity.source_doc_id.clone()),
-            correlation: intent.correlation.clone(),
-            trigger_context: None,
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did: owner,
+            agent_did: agent.did(),
+            content: &intent.task.prompt_template,
+            execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                trigger_id: intent.trigger_id.clone(),
+                trigger_kind: Some("event".into()),
+                source_doc_id: Some(fire.identity.source_doc_id.clone()),
+                correlation: intent.correlation.clone(),
+                trigger_context: None,
+            },
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some(trigger_doc),
         },
-        None,
-        None,
         &fire.request_id,
         &fire.session_id,
         Some(&fire.fire_key),
-        None,
-        Some(trigger_doc),
     )
     .unwrap();
     let create = gents_session::request::lifecycle::build_signed_request(

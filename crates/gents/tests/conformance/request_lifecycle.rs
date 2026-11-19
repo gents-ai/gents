@@ -1090,9 +1090,11 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         db.node_identity.clone(),
         agent.clone(),
         "scheduled prompt body",
-        DEADLINE_SECS,
-        ExecutionOrigin::Scheduled,
-        BACKEND_ID,
+        gents_session::request::lifecycle::ExecutionBinding {
+            deadline_duration_secs: DEADLINE_SECS,
+            execution_origin: ExecutionOrigin::Scheduled,
+            backend_id: BACKEND_ID.into(),
+        },
         TriggerLineage::default(),
     )
     .await
@@ -1175,9 +1177,11 @@ async fn materialized_lineage_follows_the_lean_model() {
             db.node_identity.clone(),
             agent.clone(),
             "materialized prompt body with lineage",
-            DEADLINE_SECS,
-            origin,
-            BACKEND_ID,
+            gents_session::request::lifecycle::ExecutionBinding {
+                deadline_duration_secs: DEADLINE_SECS,
+                execution_origin: origin,
+                backend_id: BACKEND_ID.into(),
+            },
             lineage,
         )
         .await;

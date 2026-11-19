@@ -48,22 +48,24 @@ async fn keyed_delivery(
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
     };
     let spec = pending_agent_request_spec(
-        owner,
-        agent.did(),
-        "play",
-        gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
-        gents_session::request::lifecycle::TriggerLineage {
-            trigger_id: Some("player-red".to_owned()),
-            trigger_kind: Some("schedule".to_owned()),
-            ..Default::default()
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did: owner,
+            agent_did: agent.did(),
+            content: "play",
+            execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                trigger_id: Some("player-red".to_owned()),
+                trigger_kind: Some("schedule".to_owned()),
+                ..Default::default()
+            },
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some("player-red-document"),
         },
-        None,
-        None,
         &fire.request_id,
         session,
         Some(&fire.fire_key),
-        None,
-        Some("player-red-document"),
     )?;
     let create = build_request(spec)?;
     write_trigger_delivery_with_identity(
@@ -309,24 +311,26 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         created_at: "2026-01-01T00:00:00Z".into(),
     };
     let spec = pending_agent_request_spec(
-        node_did,
-        agent.did(),
-        "complete assignment",
-        ExecutionOrigin::Interactive,
-        TriggerLineage {
-            trigger_id: None,
-            trigger_kind: Some("manual".into()),
-            source_doc_id: None,
-            correlation: None,
-            trigger_context: None,
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did,
+            agent_did: agent.did(),
+            content: "complete assignment",
+            execution_origin: ExecutionOrigin::Interactive,
+            trigger_lineage: TriggerLineage {
+                trigger_id: None,
+                trigger_kind: Some("manual".into()),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+            },
+            conversation_title: Some("task"),
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: None,
         },
-        Some("task"),
-        None,
         &fire.request_id,
         &fire.session_id,
         Some(&fire.fire_key),
-        None,
-        None,
     )
     .unwrap();
     let create = build_signed_request(spec, RequestSigner::Identity(agent.as_ref()))
@@ -698,16 +702,18 @@ async fn reserved_trigger_cause_is_refused() {
     let err = write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         &node,
         actor,
-        node_did,
-        agent.did(),
-        "work",
-        ExecutionOrigin::Interactive,
-        lineage(),
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did,
+            agent_did: agent.did(),
+            content: "work",
+            execution_origin: ExecutionOrigin::Interactive,
+            trigger_lineage: lineage(),
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some("trigger-doc"),
+        },
         None,
-        None,
-        None,
-        None,
-        Some("trigger-doc"),
         None,
         agent.as_ref(),
     )
@@ -742,18 +748,20 @@ async fn reserved_trigger_cause_is_refused() {
         created_at: "2026-01-01T00:00:00Z".into(),
     };
     let spec = pending_agent_request_spec(
-        node_did,
-        agent.did(),
-        "work",
-        ExecutionOrigin::Interactive,
-        lineage(),
-        None,
-        None,
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did,
+            agent_did: agent.did(),
+            content: "work",
+            execution_origin: ExecutionOrigin::Interactive,
+            trigger_lineage: lineage(),
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some("trigger-doc"),
+        },
         &fire.request_id,
         &fire.session_id,
         Some(&fire.fire_key),
-        None,
-        Some("trigger-doc"),
     )
     .unwrap();
     let create = build_signed_request(spec, RequestSigner::Identity(agent.as_ref()))

@@ -242,13 +242,15 @@ impl Fixture {
                 Box::pin(async move {
                     gents_session::session::ensure_session_in_txn(
                         txn,
-                        session,
-                        identity.did(),
-                        &binding.agent_did,
-                        Some(user.did()),
-                        None,
-                        None,
-                        "2026-01-01T00:00:00Z",
+                        gents_session::session::NewAgentSession {
+                            session_id: session,
+                            node_did: identity.did(),
+                            agent_did: &binding.agent_did,
+                            requester_did: Some(user.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-01-01T00:00:00Z",
+                        },
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -462,8 +464,10 @@ impl Fixture {
             self.parent.agent_did.clone(),
             &self.goal.goal_id,
             "Original signed continuation",
-            1,
-            false,
+            gents_protocol::request_input::GoalContinuationInput {
+                sequence: 1,
+                wrapup: false,
+            },
             "2021-01-01T00:00:00Z",
             self.parent.request_hop,
         )
@@ -959,8 +963,10 @@ impl Fixture {
                 self.parent.agent_did.clone(),
                 &g.goal_id,
                 child.content.as_deref().unwrap(),
-                seq,
-                wrapup,
+                gents_protocol::request_input::GoalContinuationInput {
+                    sequence: seq,
+                    wrapup,
+                },
                 child.created_at.as_deref().unwrap(),
                 self.parent.request_hop,
             )

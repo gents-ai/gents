@@ -15,12 +15,14 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
         &db.agent_access,
         &db.node,
         &parent,
-        "gatekeeper answer",
-        "background-completion-notification:agent-new:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Return,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "gatekeeper answer",
+            message_key: "background-completion-notification:agent-new:tool",
+            wake_content: "review notifications",
+            queue: background_hints(&parent),
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Return,
+        },
     )
     .await
     .unwrap()

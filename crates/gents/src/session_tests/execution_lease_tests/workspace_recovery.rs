@@ -51,13 +51,15 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             Box::pin(async move {
                 gents_session::session::ensure_session_in_txn(
                     txn,
-                    "workspace-recovery-session",
-                    did,
-                    agent_did,
-                    Some(agent_did),
-                    None,
-                    None,
-                    "2026-09-01T00:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: "workspace-recovery-session",
+                        node_did: did,
+                        agent_did,
+                        requester_did: Some(agent_did),
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-09-01T00:00:00Z",
+                    },
                 )
                 .await
                 .map(|_| ())

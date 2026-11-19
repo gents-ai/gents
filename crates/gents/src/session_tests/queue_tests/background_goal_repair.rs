@@ -32,13 +32,15 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
                 &publish_access,
                 &publish_node,
                 &publish_parent,
-                "terminal output",
-                "canonical-goal-notification",
-                "review notifications",
-                queue,
-                None,
+                gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+                    content: "terminal output",
+                    message_key: "canonical-goal-notification",
+                    wake_content: "review notifications",
+                    queue,
+                    existing_notification_doc_id: None,
+                    wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                },
                 &prepared,
-                gents_protocol::request_lifecycle::RequestHopCause::Continuation,
             )
             .await
         });

@@ -1313,17 +1313,21 @@ pub async fn materialize_session_at(
             let caused = caused.clone();
             let created_at = created_at.clone();
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
-                    txn,
-                    &caused.session_id,
-                    &caused.node_did,
-                    &caused.agent_did,
-                    caused.requester_did.as_deref(),
-                    None,
+                let provenance =
                     gents_session::request::lifecycle::materialize::created_session_provenance(
                         &caused,
-                    ),
-                    &created_at,
+                    );
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    gents_session::session::NewAgentSession {
+                        session_id: &caused.session_id,
+                        node_did: &caused.node_did,
+                        agent_did: &caused.agent_did,
+                        requester_did: caused.requester_did.as_deref(),
+                        title: None,
+                        provenance,
+                        created_at: &created_at,
+                    },
                 )
                 .await
             })

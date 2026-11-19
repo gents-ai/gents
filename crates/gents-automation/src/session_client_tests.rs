@@ -54,10 +54,12 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
             let opened = crate::goal::submit_goal_backed_request_with_identity(
                 &node,
                 identity::Did::new(agent.did()).unwrap(),
-                db.node_identity.did(),
-                "task-session",
-                "finish work",
-                None,
+                crate::operations::goal::GoalStart {
+                    node_did: db.node_identity.did(),
+                    session_id: "task-session",
+                    objective: "finish work",
+                    token_budget: None,
+                },
                 &request,
                 Some(agent.as_ref()),
             )
@@ -131,10 +133,12 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
         let submitted = crate::goal::submit_goal_backed_request_with_identity(
             &node,
             identity::Did::new(actor).unwrap(),
-            db.node_identity.did(),
-            "task-session",
-            "finish work",
-            None,
+            crate::operations::goal::GoalStart {
+                node_did: db.node_identity.did(),
+                session_id: "task-session",
+                objective: "finish work",
+                token_budget: None,
+            },
             &attempt,
             Some(signer),
         )
@@ -229,10 +233,12 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
             let retry = crate::goal::submit_goal_backed_request_with_identity(
                 &node,
                 identity::Did::new(agent.did()).unwrap(),
-                db.node_identity.did(),
-                "task-session",
-                "finish work",
-                None,
+                crate::operations::goal::GoalStart {
+                    node_did: db.node_identity.did(),
+                    session_id: "task-session",
+                    objective: "finish work",
+                    token_budget: None,
+                },
                 &request,
                 Some(agent.as_ref()),
             )

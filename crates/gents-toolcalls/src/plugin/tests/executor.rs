@@ -2178,25 +2178,26 @@ mod job_calls {
             session_id: session.clone(),
         };
         let request_id = uuid::Uuid::new_v4().to_string();
-        let create =
-            gents_session::request::lifecycle::materialize::build_session_message_request_with_input(
-                &cause,
-                &target,
-                "child work",
-                Some("child"),
-                &request_id,
-                Some(job_spawn_key(&chain, "slot-a", 0)),
-                1,
-                gents_protocol::request_input::RequestInput {
+        let create = gents_session::request::lifecycle::materialize::build_session_message_request(
+            &cause,
+            &target,
+            gents_session::request::lifecycle::materialize::SessionMessageRequest {
+                content: "child work",
+                title: Some("child"),
+                request_id: &request_id,
+                retry_key: Some(job_spawn_key(&chain, "slot-a", 0)),
+                hop: 1,
+                input: gents_protocol::request_input::RequestInput {
                     session_creation: Some(
                         gents_protocol::request_input::SessionCreationIntent::PluginJob,
                     ),
                     ..Default::default()
                 },
-                &access.managed_agent_signer().unwrap(),
-            )
-            .await
-            .unwrap();
+            },
+            &access.managed_agent_signer().unwrap(),
+        )
+        .await
+        .unwrap();
         let mut wrong_pin = create.clone();
         wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
         let wrong_plan =
