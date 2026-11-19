@@ -178,15 +178,16 @@ impl GraphqlEndpoint {
     }
 
     async fn read_status(&self) -> Option<ReportedHome> {
-        let Some(resolver) = self.delegation_audience.0.resolver.clone() else {
-            return self.reread_runtime_home().await;
-        };
         // A task of its own keeps a caller's future `Sync`, as a tool's
-        // definition future must be, whatever future the resolver returns.
-        tokio::spawn(async move { resolver.resolve().await })
-            .await
-            .ok()
-            .flatten()
+        // definition future must be, whatever future the read returns.
+        let read = match self.delegation_audience.0.resolver.clone() {
+            Some(resolver) => tokio::spawn(async move { resolver.resolve().await }),
+            None => {
+                let endpoint = self.clone();
+                tokio::spawn(async move { endpoint.reread_runtime_home().await })
+            }
+        };
+        read.await.ok().flatten()
     }
 
     fn presented_credential(&self) -> PresentedCredential {
