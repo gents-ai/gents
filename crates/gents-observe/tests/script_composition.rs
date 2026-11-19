@@ -233,7 +233,7 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
             None,
             "start-script",
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {
@@ -250,7 +250,7 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
             None,
             "wait-script",
             &wait,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {

@@ -130,6 +130,7 @@ async fn a_vera_homes_heartbeats_stay_idle_and_a_local_homes_beat_as_before() ->
         ("GENTS_REGISTRY_HEARTBEAT_MS", INTERVAL),
         ("GENTS_ENDPOINT_HEARTBEAT_MS", INTERVAL),
         ("GENTS_PAIRING_SWEEP_MS", INTERVAL),
+        ("GENTS_REGISTRY_STALE_MS", INTERVAL * 3),
     ] {
         std::env::set_var(key, value.as_millis().to_string());
     }

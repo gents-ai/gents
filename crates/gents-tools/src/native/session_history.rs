@@ -342,7 +342,7 @@ impl Tool for SessionHistoryTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         let action = args.action.as_deref().unwrap_or("list").trim();
         if !ACTIONS.contains(&action) {
@@ -352,7 +352,7 @@ impl Tool for SessionHistoryTool {
             ))
             .into());
         }
-        let value = discovery::run(self, &args, action)
+        let value = discovery::run(self, context, &args, action)
             .await
             .map_err(|error| GuidedFailure::or_help(Self::NAME, error))?;
         Ok(if action == "output" {

@@ -34,6 +34,8 @@ pub struct P2pTool {
     agent: Option<Arc<dyn NodeIdentity>>,
     mutate: bool,
     approver: Option<ConfigAccess>,
+    /// The call this copy serves; [`Tool::call`] sets it on its own copy.
+    envelope: gents_loop::tool::ToolCallEnvelope,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -183,6 +185,7 @@ impl P2pTool {
             agent,
             mutate,
             approver: None,
+            envelope: gents_loop::tool::ToolCallEnvelope::default(),
         }
     }
 
@@ -202,7 +205,7 @@ impl P2pTool {
             self.node.node_identity_did() == Some(identity.did()),
             "P2P administration requires the running node DID"
         );
-        if let Some(context) = crate::runtime_context::current_tool_runtime_context() {
+        if let Some(context) = crate::runtime_context::tool_runtime_context(&self.envelope) {
             ensure!(
                 context.node_did.as_deref() == Some(identity.did()),
                 "P2P tool node DID differs from the running request"
@@ -234,7 +237,7 @@ impl P2pTool {
                 json!({"action":"help","topic":"scope"})
             )
         );
-        if let Some(context) = crate::runtime_context::current_tool_runtime_context() {
+        if let Some(context) = crate::runtime_context::tool_runtime_context(&self.envelope) {
             ensure!(
                 context.agent_did.as_deref() == Some(agent.did()),
                 "P2P tool agent differs from the running request"
@@ -1131,8 +1134,12 @@ impl Tool for P2pTool {
     async fn call(
         &self,
         args: P2pParams,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> std::result::Result<String, P2pError> {
+        let tool = Self {
+            envelope: context.clone(),
+            ..self.clone()
+        };
         let (argv, options) = args
             .command()
             .map_err(|error| P2pError(format!("{error:#}")))?;
@@ -1146,7 +1153,7 @@ impl Tool for P2pTool {
                 .to_string(),
             ));
         }
-        let result = self.call_one(argv, options).await.map_err(|error| {
+        let result = tool.call_one(argv, options).await.map_err(|error| {
             P2pError(format!("{:#}", GuidedFailure::or_help(Self::NAME, error)))
         })?;
         serde_json::to_string(&result).map_err(|error| P2pError(error.to_string()))

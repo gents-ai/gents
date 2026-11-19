@@ -542,21 +542,17 @@ pub async fn plugin_call(
     let coordinate = plugin_call_target(&home, &ux, &name)?;
     let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(&coordinate);
     tracing::info!(ux = %ux, pack = %coordinate, plugin = %name, "ux plugin call");
-    gents_tools::plugin::approval::scope_interactive(
-        true,
-        crate::commands::plugin::call_installed_for_operator(
-            &home,
-            namespace,
-            &name,
-            input,
-            operator,
-            &gents_loop::tool::ToolCallEnvelope::default().with_extension(
-                gents_tools::runtime_context::ToolHostContext {
-                    interactive: true,
-                    ..Default::default()
-                },
-            ),
-        ),
+    crate::commands::plugin::call_installed_for_operator(
+        &home,
+        namespace,
+        &name,
+        input,
+        operator,
+        &gents_tools::runtime_context::ToolHostContext {
+            interactive: true,
+            ..Default::default()
+        }
+        .call(),
     )
     .await
 }

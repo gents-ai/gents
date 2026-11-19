@@ -40,7 +40,7 @@ async fn invalid_tool_progress_composition_drives_owned_loop() {
             TaggedMessage::unassociated(Message::user("exercise typed outcomes")),
             Vec::new(),
             Arc::new(vec![Box::new(InvalidProgressProbe) as Box<dyn ToolDyn>]),
-            owned_config(64),
+            owned_config_for(64, &lifecycle),
         );
         let collected = collect_owned_scripted_stream(
             stream,

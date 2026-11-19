@@ -597,7 +597,11 @@ header, a TLC error or a timeout (`--timeout`, seconds per config) fails it.
 `--spec`, `--config`, `--crate`, `--lean` and `--files` narrow the run. The
 pull request gate runs the specs whose headers name a changed crate or Lean
 owner, declaration or path, or whose own files or generated imports changed; main
-and the nightly `TLA+ nightly` workflow run every config.
+and the nightly `TLA+ nightly` workflow run every config. TLC's outcome is
+recorded under a digest of the script, the pinned tools, the config and every
+module it reads, in `~/.cache/gents-tla/results`; a run reuses a recorded
+outcome for the same digest and judges it against the header again. The
+nightly passes `--fresh`, which runs TLC on every config regardless.
 `scripts/tla_check.py install` installs the pinned JDK and `tla2tools.jar`
 (version and SHA-256 in the script) under `~/.cache/gents-tla`.
 `scripts/run-tlc.sh <MC config>` runs TLC with them and prints its full

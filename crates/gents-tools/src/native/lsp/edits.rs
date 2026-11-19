@@ -107,6 +107,7 @@ struct EditApproval<'a> {
 /// Obtain consent for every mutation before taking locks or writing any file.
 /// Rename sources and destinations are independently bounded file targets.
 pub async fn apply_prepared_edits(
+    call: &gents_loop::tool::ToolCallEnvelope,
     context: &ToolContext,
     client: &LspClient,
     prepared: &[PreparedEdit],
@@ -136,6 +137,7 @@ pub async fn apply_prepared_edits(
         paths.dedup();
         for path in paths {
             if let Some(consent) = crate::plugin::approval::workspace::authorize_file_mutation(
+                call,
                 "lsp_edit",
                 &context.root(),
                 path,

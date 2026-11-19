@@ -27,32 +27,6 @@ const LISTENER_GRACE: Duration = if cfg!(test) {
     Duration::from_secs(5)
 };
 
-tokio::task_local! {
-    static INTERACTIVE: ();
-}
-
-pub async fn scope_interactive<F>(interactive: bool, future: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    if interactive {
-        INTERACTIVE.scope((), future).await
-    } else {
-        future.await
-    }
-}
-
-pub fn carry_interactive<F>(future: F) -> impl std::future::Future<Output = F::Output>
-where
-    F: std::future::Future,
-{
-    workspace::carry(scope_interactive(interactive(), future))
-}
-
-pub fn interactive() -> bool {
-    INTERACTIVE.try_with(|_| ()).is_ok()
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Consent {

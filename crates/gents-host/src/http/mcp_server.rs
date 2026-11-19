@@ -123,7 +123,7 @@ impl DefraQueryMcp {
             collection: args.collection,
             options: args.options,
         };
-        gents_loop::tool::Tool::call(&tool, call, &gents_loop::tool::ToolCallEnvelope::ambient())
+        gents_loop::tool::Tool::call(&tool, call, &gents_loop::tool::ToolCallEnvelope::default())
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }

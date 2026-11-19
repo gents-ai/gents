@@ -500,7 +500,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             gents_loop::tool::Tool::call(
                 &tool,
                 args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .is_ok(),

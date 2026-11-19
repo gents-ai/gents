@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use super::{context, ActionConsent, BindingAction};
 
 pub(crate) async fn authorize_file_mutation(
+    call: &gents_loop::tool::ToolCallEnvelope,
     tool: &str,
     root: &Path,
     path: &Path,
@@ -33,6 +34,7 @@ pub(crate) async fn authorize_file_mutation(
         return Ok(None);
     };
     let binding = super::authorize_binding(
+        call,
         &home,
         decision,
         "The file change was not approved for this workspace.",

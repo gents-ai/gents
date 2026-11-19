@@ -73,7 +73,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
                 None,
                 "approval-stop",
                 &args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             ),
         )
         .await;
@@ -269,7 +269,7 @@ async fn background_command_consent(
             None,
             "spawn-command",
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         ),
     )
     .await;
@@ -527,7 +527,7 @@ async fn spawned_target_rejection_case(
             None,
             "spawn-denied",
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(

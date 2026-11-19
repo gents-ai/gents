@@ -38,10 +38,7 @@ use crate::output_obligation::OutputObligationCheck;
 use crate::provider_audit::ClaudeAuditEvent;
 use crate::session_hook::SessionHook;
 use crate::stream_processor::{AssistantTurnAccumulator, StreamProcessorError};
-use crate::tool_call_lifecycle::runtime::{
-    current_tool_runtime_context, deadline_remaining, scope_request_tool_execution_with_session,
-    ToolOutcome,
-};
+use crate::tool_call_lifecycle::runtime::{deadline_remaining, ToolOutcome};
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
 mod aggregate_budget;
@@ -1344,8 +1341,7 @@ where
                 replay.required.push(tag.clone());
             }
 
-            let tool_scope = current_tool_runtime_context();
-            config.tool_context.debug_assert_ambient_runtime();
+            let tool_scope = config.tool_context.runtime();
             let tool_context = config.tool_context.clone();
             let mut pending_calls: std::collections::VecDeque<_> = pending_calls.into();
             while let Some((first_call, _)) = pending_calls.front() {
@@ -1355,8 +1351,8 @@ where
                     let name = call.function.name.as_str();
                     let args = value_to_json_string(&call.function.arguments);
                     let read = tools.iter().find(|tool| tool.name() == name)
-                        .is_some_and(|tool| tool.footprint(&args) == crate::tool::ToolFootprint::Read)
-                        && admit_tool(tools.as_slice(), name, &args).is_none();
+                        .is_some_and(|tool| tool.footprint(&args, &tool_context) == crate::tool::ToolFootprint::Read)
+                        && admit_tool(tools.as_slice(), name, &args, &tool_context).is_none();
                     (name, args, read)
                 }).collect();
                 let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch
@@ -1421,7 +1417,7 @@ where
                     )))?;
                     unreachable!("repeated tool failure ends the stream");
                 }
-                if let Some(outcome) = admit_tool(tools.as_slice(), &tool_name, &tool_args) {
+                if let Some(outcome) = admit_tool(tools.as_slice(), &tool_name, &tool_args, &tool_context) {
                     if let Some(hook) = hook.as_ref() {
                         let action = hook
                             .on_tool_admission_rejected(
@@ -1822,7 +1818,9 @@ where
     let rag_text = current_rag_text(&prompt, history, prior);
     let mut tool_defs = Vec::with_capacity(tools.len());
     for tool in tools {
-        let native = tool.definition(rag_text.clone()).await;
+        let native = tool
+            .definition_for(rag_text.clone(), &config.tool_context)
+            .await;
         tool_defs.push(crate::rig_compat::to_rig_tool_definition(&native));
     }
 

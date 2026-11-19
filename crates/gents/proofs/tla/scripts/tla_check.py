@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Model-check TLA+ configurations and compare TLC's result with each header.
 
-  tla_check.py run (--all | --spec S | --config C | --crate C | --lean O | --files F)...
+  tla_check.py run (--all | --spec S | --config C | --crate C | --lean O | --files F)... [--fresh]
   tla_check.py select --files F      print the specs a change selects
   tla_check.py check-headers         validate every spec and config header
   tla_check.py install               install the pinned JDK and tla2tools.jar
@@ -34,6 +34,10 @@ under it, selects the spec.
 
 TLC runs in breadth-first model-checking mode with one worker and a fixed
 fingerprint polynomial, so the first violation it reports is reproducible.
+Its outcome is therefore a function of the bytes it reads, and `run` records
+each outcome under a digest of those bytes (see `result_key`) in the user
+cache, shared by every checkout on the host. A later run with the same digest
+reuses the outcome, judged against the header again; `--fresh` runs TLC anyway.
 """
 
 import argparse
@@ -577,11 +581,87 @@ class Tlc:
         return outcome, seconds
 
 
+# ---- recorded outcomes ----
+
+RESULT_FORMAT = "1"
+
+
+def module_files(cfg, tla=TLA):
+    """The module files TLC reads to check `cfg`: the module named after it and,
+    transitively, every module it extends or instantiates that resolves beside
+    it or under generated/, TLC's search order. Other names are standard
+    modules inside tla2tools.jar, which the key covers by the jar's digest."""
+    files, seen, pending = [], set(), [cfg.stem]
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        path = next((directory / f"{name}.tla" for directory in (tla, tla / "generated")
+                     if (directory / f"{name}.tla").exists()), None)
+        if path is not None:
+            files.append(path)
+            pending += extends(path)
+    return sorted(files)
+
+
+def result_key(cfg, tla=TLA):
+    """SHA-256 of everything TLC's outcome for `cfg` depends on: the pinned
+    tools and JVM options, this script (which runs and parses TLC), the config
+    and every module file it reads, each named relative to `tla`."""
+    digest = hashlib.sha256()
+
+    def feed(label, data):
+        for part in (label.encode(), data):
+            digest.update(len(part).to_bytes(8, "big"))
+            digest.update(part)
+    feed("format", RESULT_FORMAT.encode())
+    feed("tools", f"{TLA_TOOLS['sha256']} {JDK_RELEASE} {' '.join(JVM_OPTIONS)}".encode())
+    feed("checker", Path(__file__).read_bytes())
+    for path in [cfg, *module_files(cfg, tla)]:
+        feed(path.relative_to(tla).as_posix(), path.read_bytes())
+    return digest.hexdigest()
+
+
+def results_dir():
+    return cache_dir() / "results"
+
+
+def recall(key, directory=None):
+    """The outcome recorded under `key`, or None when there is none readable."""
+    path = (directory or results_dir()) / f"{key}.json"
+    try:
+        data = json.loads(path.read_text())
+        return Outcome(data["verdict"], data["distinct"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def record(key, outcome, directory=None):
+    """Record a TLC verdict under `key`; errors and timeouts are not verdicts.
+
+    Concurrent jobs on one host share the directory. A record is written to a
+    private file and renamed over its key, so a reader sees a whole record or
+    none, and writers of one key write the same outcome."""
+    if outcome.verdict.startswith(("error:", "timeout")):
+        return
+    directory = directory or results_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    handle, staged = tempfile.mkstemp(dir=directory, prefix=f".{key}.", suffix=".partial")
+    try:
+        with os.fdopen(handle, "w") as stream:
+            json.dump({"verdict": outcome.verdict, "distinct": outcome.distinct}, stream)
+        os.replace(staged, directory / f"{key}.json")
+    except BaseException:
+        Path(staged).unlink(missing_ok=True)
+        raise
+
+
 def report(rows):
-    lines = ["| config | spec | expected | actual | distinct states | seconds | verdict |",
-             "|---|---|---|---|---|---|---|"]
-    lines += [f"| {cfg} | {spec} | {expected} | {actual} | {states} | {seconds:.0f} | {verdict} |"
-              for cfg, spec, expected, actual, states, seconds, verdict in rows]
+    lines = ["| config | spec | expected | actual | distinct states | seconds | source | verdict |",
+             "|---|---|---|---|---|---|---|---|"]
+    lines += [f"| {cfg} | {spec} | {expected} | {actual} | {states} | {seconds:.0f} | {source} | {verdict} |"
+              for cfg, spec, expected, actual, states, seconds, source, verdict in rows]
     table = "\n".join(lines)
     print(table, flush=True)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -615,19 +695,27 @@ def run(arguments):
     if not targets:
         print("tla: no configuration selected")
         return 0
-    java, jar = install()
-    tlc = Tlc(java, jar, arguments.timeout, arguments.heap)
+    keys = {cfg: result_key(cfg) for cfg in targets}
+    recalled = {} if arguments.fresh else {cfg: recall(key) for cfg, key in keys.items()}
+    tlc = None
+    if any(recalled.get(cfg) is None for cfg in targets):
+        java, jar = install()
+        tlc = Tlc(java, jar, arguments.timeout, arguments.heap)
     spec_for = {cfg: name for name, node in nodes.items() for cfg in node["configs"]}
 
     def one(cfg):
         try:
             expected = expectation(cfg)
         except HeaderError as error:
-            return cfg.stem, spec_for[cfg], "missing", str(error), "", 0.0, "NO HEADER"
-        outcome, seconds = tlc.check(cfg)
+            return cfg.stem, spec_for[cfg], "missing", str(error), "", 0.0, "-", "NO HEADER"
+        outcome, seconds, source = recalled.get(cfg), 0.0, "recorded"
+        if outcome is None:
+            outcome, seconds = tlc.check(cfg)
+            source = "TLC"
+            record(keys[cfg], outcome)
         floor = f" (>= {expected.floor} states)" if expected.floor != DEFAULT_FLOOR else ""
         states = "" if outcome.distinct is None else outcome.distinct
-        return (cfg.stem, spec_for[cfg], expected.verdict + floor, outcome.verdict, states, seconds,
+        return (cfg.stem, spec_for[cfg], expected.verdict + floor, outcome.verdict, states, seconds, source,
                 judge(expected, outcome))
 
     started = time.time()
@@ -635,12 +723,15 @@ def run(arguments):
         futures = [pool.submit(one, cfg) for cfg in targets]
         for future in as_completed(futures):
             row = future.result()
-            print(f"tla: {row[0]}: {row[3]}, {row[4]} distinct states ({row[5]:.0f}s, {row[6]})", flush=True)
+            print(f"tla: {row[0]}: {row[3]}, {row[4]} distinct states ({row[5]:.0f}s {row[6]}, {row[7]})",
+                  flush=True)
         rows = [future.result() for future in futures]
     report(rows)
-    failed = [row for row in rows if row[6] != "ok"]
+    failed = [row for row in rows if row[7] != "ok"]
+    checked = sum(1 for row in rows if row[6] == "TLC")
     print(f"tla: {len(rows) - len(failed)} of {len(rows)} configurations match their headers "
-          f"in {time.time() - started:.0f}s", flush=True)
+          f"({checked} checked by TLC, {len(rows) - checked} recorded) in {time.time() - started:.0f}s",
+          flush=True)
     return 1 if failed else 0
 
 
@@ -682,6 +773,8 @@ def main():
     runner.add_argument("--jobs", type=int, default=int(os.environ.get("TLA_JOBS", "4")),
                         help="configurations checked at once, one TLC worker each")
     runner.add_argument("--heap", default=os.environ.get("TLA_HEAP", "4g"), help="TLC heap per configuration")
+    runner.add_argument("--fresh", action="store_true",
+                        help="run TLC on every selected configuration, ignoring recorded outcomes")
     chooser = commands.add_parser("select")
     chooser.add_argument("--files", required=True)
     commands.add_parser("check-headers")

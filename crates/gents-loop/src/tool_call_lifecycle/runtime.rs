@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -161,22 +160,6 @@ fn strip_error_prefixes(mut value: &str) -> &str {
 }
 
 #[derive(Clone)]
-struct ToolRuntimeScope {
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    workspace_cwd: Option<PathBuf>,
-    session_id: Option<String>,
-    live_output: Option<LiveToolOutputWriter>,
-    background: bool,
-    correlation: Option<String>,
-    source_fields: std::collections::BTreeMap<String, String>,
-    requester_did: Option<String>,
-    node_did: Option<String>,
-    agent_did: Option<String>,
-    request_id: Option<String>,
-}
-
-#[derive(Clone)]
 pub struct CurrentToolRuntimeContext {
     pub deadline_at: Option<DateTime<Utc>>,
     pub cancellation_token: CancellationToken,
@@ -192,8 +175,8 @@ pub struct CurrentToolRuntimeContext {
     pub request_id: Option<String>,
 }
 
-/// The request a tool execution scope runs for. A scope entered without one
-/// keeps the identity of the scope enclosing it.
+/// The request a tool call runs for. A context entered without one keeps the
+/// identity of the context enclosing it.
 #[derive(Clone, Default)]
 pub struct ToolRequestIdentity {
     requester_did: Option<String>,
@@ -218,12 +201,8 @@ impl ToolRequestIdentity {
     }
 }
 
-tokio::task_local! {
-    static TOOL_RUNTIME_SCOPE: ToolRuntimeScope;
-}
-
-/// The values a tool execution scope is entered with. `identity: None` keeps
-/// the identity of the enclosing scope.
+/// The values a tool call's runtime context is entered with. `identity: None`
+/// keeps the identity of the enclosing context.
 pub struct ToolScopeEntry {
     pub identity: Option<ToolRequestIdentity>,
     pub deadline_at: Option<DateTime<Utc>>,
@@ -234,6 +213,29 @@ pub struct ToolScopeEntry {
     pub correlation: Option<String>,
     pub source_fields: std::collections::BTreeMap<String, String>,
     pub background: bool,
+}
+
+impl ToolScopeEntry {
+    /// An entry with only a deadline and a cancellation: no identity,
+    /// working directory, live output, session or trigger context.
+    pub fn new(deadline_at: Option<DateTime<Utc>>, cancellation_token: CancellationToken) -> Self {
+        Self {
+            identity: None,
+            deadline_at,
+            cancellation_token,
+            workspace_cwd: None,
+            live_output: None,
+            session_id: None,
+            correlation: None,
+            source_fields: Default::default(),
+            background: false,
+        }
+    }
+
+    /// The envelope of a call entered with this entry outside any other.
+    pub fn call(self) -> ToolCallEnvelope {
+        ToolCallEnvelope::new(Some(CurrentToolRuntimeContext::entered(None, self)))
+    }
 }
 
 impl CurrentToolRuntimeContext {
@@ -267,9 +269,9 @@ impl CurrentToolRuntimeContext {
         }
     }
 
-    /// The context `scope_request_tool_execution_with_trigger_context` enters
-    /// inside `enclosing`: the working directory and identity fall back to the
-    /// enclosing ones, and the correlation is stored as read.
+    /// The context of a call entered with `entry` inside `enclosing`: the
+    /// working directory and identity fall back to the enclosing ones, and the
+    /// correlation is the supplied one or else the request's.
     pub fn entered(enclosing: Option<&Self>, entry: ToolScopeEntry) -> Self {
         let mut entry = entry;
         entry.workspace_cwd = entry
@@ -285,10 +287,10 @@ impl CurrentToolRuntimeContext {
         Self::from_identity(identity, entry, correlation)
     }
 
-    /// The context `scope_request_tool_execution_with_session` enters inside
-    /// `enclosing`: the working directory is taken as given, the identity falls
-    /// back to the enclosing one, and correlation and source fields are the
-    /// enclosing ones.
+    /// The context of a call re-entered inside `enclosing` with its own
+    /// deadline, cancellation, working directory, live output and session:
+    /// the working directory is taken as given, the identity falls back to the
+    /// enclosing one, and correlation and source fields are the enclosing ones.
     pub fn entered_with_session(
         enclosing: Option<&Self>,
         identity: Option<ToolRequestIdentity>,
@@ -322,251 +324,11 @@ impl CurrentToolRuntimeContext {
     }
 }
 
-/// Debug builds only: panics when an explicit runtime context differs from the
-/// ambient one. Cancellation tokens have no identity, so only their state is
-/// compared. Exists while the task-local scope does (#3765).
-#[track_caller]
-pub fn debug_assert_same_runtime(
-    explicit: Option<&CurrentToolRuntimeContext>,
-    ambient: Option<&CurrentToolRuntimeContext>,
-) {
-    if !cfg!(debug_assertions) {
-        return;
-    }
-    let view = |context: Option<&CurrentToolRuntimeContext>| {
-        context.map(|context| {
-            (
-                context.deadline_at,
-                context.cancellation_token.is_cancelled(),
-                context.workspace_cwd.clone(),
-                context.session_id.clone(),
-                context.live_output.is_some(),
-                context.background,
-                context.correlation.clone(),
-                context.source_fields.clone(),
-                context.requester_did.clone(),
-                context.node_did.clone(),
-                context.agent_did.clone(),
-                context.request_id.clone(),
-            )
-        })
-    };
-    let (explicit, ambient) = (view(explicit), view(ambient));
-    assert!(
-        explicit == ambient,
-        "explicit tool runtime context differs from the ambient one: explicit {explicit:?}, ambient {ambient:?}"
-    );
-}
-
-/// Runs `future` with the task-local scope set from `runtime`, as a scope entry
-/// that computed the same context would. A test bridge while the task-local
-/// scope exists (#3765).
-pub async fn enter_ambient_runtime<F, T>(
-    runtime: Option<&CurrentToolRuntimeContext>,
-    future: F,
-) -> T
-where
-    F: Future<Output = T>,
-{
-    match runtime {
-        Some(runtime) => {
-            TOOL_RUNTIME_SCOPE
-                .scope(
-                    ToolRuntimeScope {
-                        deadline_at: runtime.deadline_at,
-                        cancellation_token: runtime.cancellation_token.clone(),
-                        workspace_cwd: runtime.workspace_cwd.clone(),
-                        session_id: runtime.session_id.clone(),
-                        live_output: runtime.live_output.clone(),
-                        background: runtime.background,
-                        correlation: runtime.correlation.clone(),
-                        source_fields: runtime.source_fields.clone(),
-                        requester_did: runtime.requester_did.clone(),
-                        node_did: runtime.node_did.clone(),
-                        agent_did: runtime.agent_did.clone(),
-                        request_id: runtime.request_id.clone(),
-                    },
-                    future,
-                )
-                .await
-        }
-        None => future.await,
-    }
-}
-
 fn normalized_identity(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let value = value.trim().to_string();
         (!value.is_empty()).then_some(value)
     })
-}
-
-fn enclosing_request_identity() -> ToolRequestIdentity {
-    TOOL_RUNTIME_SCOPE
-        .try_with(|scope| ToolRequestIdentity {
-            requester_did: scope.requester_did.clone(),
-            node_did: scope.node_did.clone(),
-            agent_did: scope.agent_did.clone(),
-            request_id: scope.request_id.clone(),
-        })
-        .unwrap_or_default()
-}
-
-#[cfg(test)]
-pub async fn scope_request_tool_execution<F, T>(
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    future: F,
-) -> T
-where
-    F: Future<Output = T>,
-{
-    let workspace_cwd = current_tool_runtime_context().and_then(|scope| scope.workspace_cwd);
-    scope_request_tool_execution_with_workspace(
-        deadline_at,
-        cancellation_token,
-        workspace_cwd,
-        future,
-    )
-    .await
-}
-
-#[cfg(test)]
-pub async fn scope_request_tool_execution_with_workspace<F, T>(
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    workspace_cwd: Option<PathBuf>,
-    future: F,
-) -> T
-where
-    F: Future<Output = T>,
-{
-    scope_request_tool_execution_with_session(
-        None,
-        deadline_at,
-        cancellation_token,
-        workspace_cwd,
-        None,
-        current_tool_runtime_context().and_then(|scope| scope.session_id),
-        future,
-    )
-    .await
-}
-
-pub async fn scope_request_tool_execution_with_session<F, T>(
-    identity: Option<ToolRequestIdentity>,
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    workspace_cwd: Option<PathBuf>,
-    live_output: Option<LiveToolOutputWriter>,
-    session_id: Option<String>,
-    future: F,
-) -> T
-where
-    F: Future<Output = T>,
-{
-    let inherited = current_tool_runtime_context();
-    let identity = identity.unwrap_or_else(enclosing_request_identity);
-    TOOL_RUNTIME_SCOPE
-        .scope(
-            ToolRuntimeScope {
-                deadline_at,
-                cancellation_token,
-                workspace_cwd,
-                session_id,
-                live_output,
-                background: false,
-                correlation: inherited
-                    .as_ref()
-                    .and_then(|scope| scope.correlation.clone()),
-                source_fields: inherited
-                    .map(|scope| scope.source_fields)
-                    .unwrap_or_default(),
-                requester_did: identity.requester_did,
-                node_did: identity.node_did,
-                agent_did: identity.agent_did,
-                request_id: identity.request_id,
-            },
-            future,
-        )
-        .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn scope_request_tool_execution_with_trigger_context<F, T>(
-    identity: Option<ToolRequestIdentity>,
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    workspace_cwd: Option<PathBuf>,
-    live_output: Option<LiveToolOutputWriter>,
-    session_id: Option<String>,
-    correlation: Option<String>,
-    source_fields: std::collections::BTreeMap<String, String>,
-    background: bool,
-    future: F,
-) -> T
-where
-    F: Future<Output = T>,
-{
-    let workspace_cwd = workspace_cwd.or_else(|| {
-        TOOL_RUNTIME_SCOPE
-            .try_with(|scope| scope.workspace_cwd.clone())
-            .ok()
-            .flatten()
-    });
-    let identity = identity.unwrap_or_else(enclosing_request_identity);
-    TOOL_RUNTIME_SCOPE
-        .scope(
-            ToolRuntimeScope {
-                deadline_at,
-                cancellation_token,
-                workspace_cwd,
-                session_id,
-                live_output,
-                background,
-                correlation,
-                source_fields,
-                requester_did: identity.requester_did,
-                node_did: identity.node_did,
-                agent_did: identity.agent_did,
-                request_id: identity.request_id,
-            },
-            future,
-        )
-        .await
-}
-
-#[cfg(test)]
-pub async fn scope_background_tool_execution<F, T>(
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    workspace_cwd: Option<PathBuf>,
-    live_output: Option<LiveToolOutputWriter>,
-    future: F,
-) -> T
-where
-    F: Future<Output = T>,
-{
-    let inherited = current_tool_runtime_context();
-    scope_request_tool_execution_with_trigger_context(
-        None,
-        deadline_at,
-        cancellation_token,
-        workspace_cwd,
-        live_output,
-        inherited
-            .as_ref()
-            .and_then(|scope| scope.session_id.clone()),
-        inherited
-            .as_ref()
-            .and_then(|scope| scope.correlation.clone()),
-        inherited
-            .map(|scope| scope.source_fields)
-            .unwrap_or_default(),
-        true,
-        future,
-    )
-    .await
 }
 
 pub fn invocation_correlation<'a>(
@@ -576,30 +338,6 @@ pub fn invocation_correlation<'a>(
     supplied
         .filter(|value| !value.trim().is_empty())
         .or_else(|| request.filter(|value| !value.trim().is_empty()))
-}
-
-pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
-    TOOL_RUNTIME_SCOPE
-        .try_with(Clone::clone)
-        .ok()
-        .map(|scope| CurrentToolRuntimeContext {
-            deadline_at: scope.deadline_at,
-            cancellation_token: scope.cancellation_token,
-            workspace_cwd: scope.workspace_cwd,
-            session_id: scope.session_id,
-            live_output: scope.live_output,
-            background: scope.background,
-            correlation: invocation_correlation(
-                scope.request_id.as_deref(),
-                scope.correlation.as_deref(),
-            )
-            .map(str::to_owned),
-            source_fields: scope.source_fields,
-            requester_did: scope.requester_did,
-            node_did: scope.node_did,
-            agent_did: scope.agent_did,
-            request_id: scope.request_id,
-        })
 }
 
 pub struct ToolExecutionBounds {
@@ -613,8 +351,11 @@ pub struct ToolExecutionBounds {
     pub request_deadline_at: Option<DateTime<Utc>>,
 }
 
-pub fn tool_execution_bounds(command_timeout: Duration) -> ToolExecutionBounds {
-    let runtime = current_tool_runtime_context();
+pub fn tool_execution_bounds(
+    call: &ToolCallEnvelope,
+    command_timeout: Duration,
+) -> ToolExecutionBounds {
+    let runtime = call.runtime();
     let request_deadline = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
     let armed_at = Instant::now();
     let command_deadline = Utc::now()
@@ -642,7 +383,6 @@ pub(crate) async fn dispatch_with_receipt(
     live_output: Option<LiveToolOutputWriter>,
     context: &ToolCallEnvelope,
 ) -> Result<String, ToolError> {
-    context.debug_assert_ambient();
     record_dispatch_receipt(tool.call_with_receipt(args, context).await, live_output).await
 }
 
@@ -697,13 +437,12 @@ where
     F: Fn(Option<&ToolOutcome>) -> bool,
 {
     let name = tool.name();
-    let Ok(scope) = TOOL_RUNTIME_SCOPE.try_with(Clone::clone) else {
+    let Some(scope) = context.runtime() else {
         return ToolOutcome::from_dispatch(
             &name,
             dispatch_with_receipt(tool, args, None, context).await,
         );
     };
-    context.debug_assert_ambient();
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
         let outcome = ToolOutcome::TimedOut {

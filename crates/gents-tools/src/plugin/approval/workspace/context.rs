@@ -37,11 +37,6 @@ impl Context {
         self
     }
 
-    /// Whether `other` is this request's context: the same review history.
-    pub(crate) fn same_request(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.review_history, &other.review_history)
-    }
-
     fn governs(&self, key: &WorkspaceKey) -> bool {
         key.base() == self.workspace
             && (key.session_id.is_none() || key.session_id == self.session_id)
@@ -164,11 +159,7 @@ where
     CURRENT.scope(context, future).await
 }
 
-pub(crate) fn current() -> Option<Context> {
-    CURRENT.try_with(Clone::clone).ok().flatten()
-}
-
-pub(crate) fn carry<F>(future: F) -> impl Future<Output = F::Output>
+pub fn carry<F>(future: F) -> impl Future<Output = F::Output>
 where
     F: Future,
 {
@@ -270,7 +261,7 @@ mod tests {
                     &expected.review_history
                 ));
             };
-            let inherited = tokio::spawn(super::super::super::carry_interactive(async {
+            let inherited = tokio::spawn(carry(async {
                 CURRENT.try_with(Clone::clone).ok().flatten()
             }))
             .await?;

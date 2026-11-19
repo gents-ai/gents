@@ -303,7 +303,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     None,
                     "goal-context-call",
                     args,
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 )
                 .await;
             let terminated = matches!(&action, ToolCallHookAction::Terminate { .. });

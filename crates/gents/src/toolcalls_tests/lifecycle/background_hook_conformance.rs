@@ -78,7 +78,7 @@ async fn publish_hook_action(
             None,
             internal_id,
             &args.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     (action, published.message_doc_id)

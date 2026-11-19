@@ -125,13 +125,15 @@ impl Tool for WriteFileTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        call: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        deny_workspace_file_writes()?;
-        let path = self.context.resolve_path_allow_create(&args.path)?;
+        let context = self.context.for_call(call);
+        deny_workspace_file_writes(call)?;
+        let path = context.resolve_path_allow_create(&args.path)?;
         let consent = crate::plugin::approval::workspace::authorize_file_mutation(
+            call,
             Self::NAME,
-            &self.context.root(),
+            &context.root(),
             &path,
             &args,
         )
@@ -149,13 +151,13 @@ impl Tool for WriteFileTool {
         let created = !path.exists();
         guard_existing_file_overwrite(
             &path,
-            &self.context.display_path(&path),
+            &context.display_path(&path),
             created,
             args.expected_content_hash.as_deref(),
             args.overwrite,
         )
         .await?;
-        let capture = change_capture::FileChangeCapture::start(&self.context.root(), &path).await;
+        let capture = change_capture::FileChangeCapture::start(call, &context.root(), &path).await;
         let mutation = async {
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
@@ -166,7 +168,7 @@ impl Tool for WriteFileTool {
             let mut note = None;
             if let Some(writethrough) = &self.writethrough {
                 note = writethrough
-                    .after_mutation_under_lock(&path, crate::native::lsp::MutationKind::Write)
+                    .after_mutation_under_lock(call, &path, crate::native::lsp::MutationKind::Write)
                     .await;
                 if let Ok(bytes) = tokio::fs::read(&path).await {
                     bytes_written = bytes.len();
@@ -183,7 +185,7 @@ impl Tool for WriteFileTool {
         drop(_guard);
         if let Some(writethrough) = &self.writethrough {
             let diag = writethrough
-                .diagnostics_after_unlock(&path, crate::native::lsp::MutationKind::Write)
+                .diagnostics_after_unlock(call, &path, crate::native::lsp::MutationKind::Write)
                 .await;
             note = merge_optional_notes(note, diag);
         }
@@ -194,7 +196,7 @@ impl Tool for WriteFileTool {
                 ok: true,
                 status: "success",
                 tool: Self::NAME,
-                path: self.context.display_path(&path),
+                path: context.display_path(&path),
                 returned_count: 0,
                 total_count: Some(0),
                 truncated: false,
