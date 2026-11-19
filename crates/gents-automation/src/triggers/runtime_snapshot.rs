@@ -189,7 +189,7 @@ impl ResolvedRuntimeSnapshot {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn from_parts(
         default_agent_did: String,
         agents: Vec<AgentWithTools>,
