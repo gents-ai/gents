@@ -40,11 +40,8 @@ impl ConfigApplyTxn<'_> {
                 | ConfigClientError::TransactionActorMismatch => RuntimeHopCapError::RuntimeScope,
                 error => RuntimeHopCapError::Access(error),
             })?;
-        let mut response = crate::graphql::into_data_envelope(response.data);
-        let runtime =
-            identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
-        self.retain_runtime_usable(&runtime, &mut response, "Node")
-            .await?;
+        let response = crate::graphql::into_data_envelope(response.data);
+
         let rows = response["data"]
             .get("Node")
             .and_then(Value::as_array)

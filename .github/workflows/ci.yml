@@ -554,6 +554,10 @@ jobs:
           echo "LEAN_CACHE_ROOT=$HOME/.cache/gents-lean" >> "$GITHUB_ENV"
           echo "SCCACHE_DIR=$HOME/.cache/sccache" >> "$GITHUB_ENV"
 
+      - name: Compile native tests directly with the runner's Cargo target cache
+        if: matrix.job == 'test:native' && runner.os == 'macOS'
+        run: echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+
       - uses: ./.github/actions/rust-runner
         with:
           lean: "true"

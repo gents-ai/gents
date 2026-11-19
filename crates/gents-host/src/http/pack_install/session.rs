@@ -123,6 +123,13 @@ pub async fn install_session(
         );
     }
     let runtime_access = ConfigAccess::local_as(node.clone(), runtime_did);
+    let authorization =
+        match gents_store::config_client::client_authentication::ClientAuthorization::from_http(
+            &identity, &headers,
+        ) {
+            Ok(authorization) => authorization,
+            Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
+        };
     let presented = gents_store::config_client::user_write::PresentedDelegation::of_request(
         &node,
         &identity.context(),
@@ -132,8 +139,14 @@ pub async fn install_session(
         node: node.clone(),
         presented: presented.clone(),
     };
+    let user_access = match ConfigAccess::local_as(node, actor.clone())
+        .with_client_authorization(authorization)
+    {
+        Ok(access) => access,
+        Err(error) => return refused(StatusCode::FORBIDDEN, error),
+    };
     let user = UserSession {
-        access: ConfigAccess::local_as(node, actor.clone()).with_presented_delegation(presented),
+        access: user_access.with_presented_delegation(presented),
         refresher,
     };
     upgrade

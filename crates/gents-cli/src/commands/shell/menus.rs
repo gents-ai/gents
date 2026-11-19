@@ -1,15 +1,15 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use gents_desktop_core::client::{
+use gents::client_operations::{
     delete_event_source_on, delete_schedule_on, delete_skill_on, delete_tool_service_registry_on,
     delete_trigger_on, patch_config_components_on, set_default_agent_on, upsert_event_source_on,
     upsert_schedule_on, upsert_skill_on, upsert_trigger_on,
 };
-use gents_desktop_core::inference::{load_inference_setup_state, AgentView, InferenceSetupState};
 use gents_documents::mailbox_write_decl::MailboxKind;
 use gents_documents::patch::SelfConfigTarget;
 use gents_documents::InferenceProfile;
+use gents_observe::client_inference::{load_inference_setup_state, AgentView, InferenceSetupState};
 use gents_pack::pack::BindAccess;
 use gents_pack::plugin::store::{list_records, InstalledPlugin};
 use gents_pack::plugin::{allowed, ux};

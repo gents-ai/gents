@@ -9,11 +9,6 @@ import type { ChatStore } from "./chatStore";
 import type { SendAttachmentStore } from "./sendAttachments";
 
 const PREFIX = "gents.chat.sendDraft.v1:";
-/** The base client's list of sends with an unknown outcome and no kept
- * payload. Nothing reads it: those sends are visible in their sessions if
- * they landed, and no payload remains to resend. */
-const ABANDONED_UNRESOLVED = "gents.chat.unresolvedSubmissions.v1";
-
 export type ChatDraft = {
   clientDid: string;
   nodeDid: string;
@@ -25,9 +20,9 @@ export type ChatDraft = {
 
   requestJson: string;
   /** The runtime holds this request. Only a mailbox answer stays saved once
-   * confirmed, until its question is observed closed. A draft saved by the
-   * base client with its receipt (`result`) was confirmed too. */
+   * confirmed, until its question is observed closed. */
   confirmed?: true;
+  locallyRetained?: true;
   /** The deadline (epoch ms) of the send in flight (Lean `timeout`,
    * `CHAT_SEND_DEADLINE_MS`). It is saved with the payload, so every window
    * derives the same status: pending until it passes, failed after. */
@@ -96,7 +91,8 @@ function decode(value: unknown): ChatDraft {
       summary: value.mailbox.summary,
     };
   }
-  if (value.confirmed === true || object(value.result)) draft.confirmed = true;
+  if (value.confirmed === true) draft.confirmed = true;
+  else if (value.locallyRetained === true) draft.locallyRetained = true;
   else if (
     typeof value.pendingUntil === "number" &&
     Number.isFinite(value.pendingUntil)
@@ -119,7 +115,6 @@ export function loadChatDrafts(): {
   chatDraftError: string | null;
 } {
   try {
-    localStorage.removeItem(ABANDONED_UNRESOLVED);
     const chatDrafts: ChatDraft[] = [];
     const released: string[] = [];
     for (let index = 0; index < localStorage.length; index++) {

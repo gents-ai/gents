@@ -74,7 +74,7 @@ impl HeldAudienceCell {
 
     /// Keep what `reported` says, read now, and say what it changed
     /// (`Identity.HeldAudience.observe`).
-    fn observe(&self, reported: ReportedHome) -> HeldAudienceChange {
+    pub(super) fn observe(&self, reported: ReportedHome) -> HeldAudienceChange {
         let held = self.get();
         let (held_clock, now) = self.minting_clock();
         let read = reported.provider_time.map(|provider_at_read| HomeClock {
@@ -178,13 +178,16 @@ impl GraphqlEndpoint {
     }
 
     async fn read_status(&self) -> Option<ReportedHome> {
-        let resolver = self.delegation_audience.0.resolver.clone()?;
         // A task of its own keeps a caller's future `Sync`, as a tool's
-        // definition future must be, whatever future the resolver returns.
-        tokio::spawn(async move { resolver.resolve().await })
-            .await
-            .ok()
-            .flatten()
+        // definition future must be, whatever future the read returns.
+        let read = match self.delegation_audience.0.resolver.clone() {
+            Some(resolver) => tokio::spawn(async move { resolver.resolve().await }),
+            None => {
+                let endpoint = self.clone();
+                tokio::spawn(async move { endpoint.reread_runtime_home().await })
+            }
+        };
+        read.await.ok().flatten()
     }
 
     fn presented_credential(&self) -> PresentedCredential {
@@ -226,6 +229,7 @@ impl GraphqlEndpoint {
     pub(super) async fn request_bound_audience(
         &self,
     ) -> Result<Option<RequestBoundAudience>, ConfigClientError> {
+        self.runtime_authentication().await?;
         if !self.mints_delegations() {
             return Ok(None);
         }
@@ -298,6 +302,7 @@ impl GraphqlEndpoint {
     where
         F: Fn(&Self) -> Result<reqwest::RequestBuilder, ConfigClientError>,
     {
+        self.runtime_authentication().await?;
         let response = build(self)?.send().await;
         match &response {
             Ok(answered) if self.recovers_refusal(answered.status()).await => {

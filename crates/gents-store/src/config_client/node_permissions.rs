@@ -106,15 +106,13 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => {
                 local.require_actor_signer()?;
-                let actor = local
+                local
                     .identity()
-                    .cloned()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                let context = local.request_context();
                 let subject = subject.clone();
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()));
                         Ok::<_, ConfigClientError>(
                             node.explain_nac_subject_as(&context, subject.as_str())
                                 .await?,
@@ -142,6 +140,67 @@ impl ConfigAccess {
         }
     }
 
+    pub async fn observe_actor_relationship(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        relation: &str,
+        target: &identity::Did,
+    ) -> Result<bool, ConfigClientError> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        match self {
+            Self::Local(local) => {
+                local.require_actor_signer()?;
+                let context = local.request_context();
+                let (collection, doc_id, relation, target) = (
+                    collection.to_owned(),
+                    doc_id.to_owned(),
+                    relation.to_owned(),
+                    target.to_string(),
+                );
+                local
+                    .run_owned(move |node| async move {
+                        Ok::<_, ConfigClientError>(
+                            node.observe_dac_actor_relationship_as(
+                                &context,
+                                &collection,
+                                &doc_id,
+                                &relation,
+                                &target,
+                            )
+                            .await?,
+                        )
+                    })
+                    .await
+            }
+            Self::Graphql(endpoint) => {
+                let url = format!(
+                    "{}/acp/document/relationship",
+                    graphql_api_base(endpoint.url())?
+                );
+                let client = graphql::http_client().await?;
+                let response = endpoint
+                    .send_resolving(|endpoint| {
+                        endpoint.authorize(client.get(&url).query(&[
+                            ("collection", collection),
+                            ("docID", doc_id),
+                            ("relation", relation),
+                            ("targetActor", target.as_str()),
+                        ]))
+                    })
+                    .await??;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(ConfigClientError::HttpOperationStatus {
+                        operation: "observe document actor relationship",
+                        status,
+                    });
+                }
+                Ok(response.json().await?)
+            }
+        }
+    }
+
     /// Every relationship on a document, for an actor that owns it or holds a
     /// relation managing its resource. Native DefraDB decides the gate.
     pub async fn list_document_relationships(
@@ -152,18 +211,14 @@ impl ConfigAccess {
         crate::graphql::validate_collection_identifier(collection)?;
         match self {
             Self::Local(local) => {
+                local.require_actor_signer()?;
                 local
-                    .agent_signer()
-                    .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
-                let actor = local
                     .identity()
-                    .cloned()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                let context = local.request_context();
                 let (collection, doc_id) = (collection.to_owned(), doc_id.to_owned());
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()));
                         Ok::<_, ConfigClientError>(
                             node.list_dac_relationships_as(&context, &collection, &doc_id)
                                 .await?,
@@ -200,6 +255,11 @@ impl ConfigAccess {
 
     /// Native NAC decides the change as this access's actor: locally its
     /// identity under its managed signer, over HTTP the endpoint principal.
+    /// The runtime principal's own change is issued as the NAC owner, which
+    /// is never the Node (`Identity.NodeProvisioning.nacOwner`): native admits
+    /// a NAC change with no node exception, so the runtime names the owner in
+    /// process and keeps the NAC authority it had as owner without its read
+    /// bypass.
     async fn change_node_relation(
         &self,
         relation: &'static str,
@@ -211,13 +271,22 @@ impl ConfigAccess {
                 local.require_mutation_signer()?;
                 let actor = local
                     .identity()
-                    .cloned()
-                    .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                    .ok_or(ConfigClientError::NodePermissionActorRequired)?
+                    .clone();
+                let context = local.request_context();
                 let target = target.clone();
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()));
+                        let context = match node.node_identity_did() == Some(actor.as_str()) {
+                            true => defra_core::RequestContext::default().with_identity(Some(
+                                node.nac_manager()
+                                    .owner()
+                                    .await
+                                    .ok_or(ConfigClientError::NodeAcpOwnerUnknown)?
+                                    .to_string(),
+                            )),
+                            false => context,
+                        };
                         if delete {
                             node.delete_nac_actor_relationship_as(
                                 &context,

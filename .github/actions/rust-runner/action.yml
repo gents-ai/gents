@@ -111,7 +111,7 @@ runs:
       shell: bash
       working-directory: crates/gents/proofs
       run: |
-        lake build Cache.Main
+        lake --verbose build Cache.Main
         lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
 
     # Lean-backed tests build this target on first use under a shared lock with

@@ -256,7 +256,7 @@ fn session_snapshot_projection_matches_the_lean_model() {
             })
             .expect("selected case row");
         let refs = rows.iter().collect::<Vec<_>>();
-        let answer = gents_desktop_core::client::request_answer_owner(&refs, selected);
+        let answer = gents_observe::client_projection::store::request_answer_owner(&refs, selected);
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
                 "session-1",
@@ -316,7 +316,8 @@ fn session_snapshot_projection_matches_the_lean_model() {
             .collect::<Vec<_>>();
         let bounded_refs = bounded_rows.iter().collect::<Vec<_>>();
         assert_eq!(
-            gents_desktop_core::client::request_answer_owner(&bounded_refs, selected).doc_id,
+            gents_observe::client_projection::store::request_answer_owner(&bounded_refs, selected)
+                .doc_id,
             answer.doc_id,
             "{} bounded read closure retains the answer owner",
             input.name

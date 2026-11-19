@@ -2,14 +2,15 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use gents_tools::plugin::approval;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::approvals_watch::{watch_queue, PromptSubscriptions, HEARTBEAT_INTERVAL};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::plugin_access::{PluginApprovalView, PluginApprovalsView};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 #[derive(Default)]
 struct Subscriptions {
@@ -53,7 +54,7 @@ impl AttachmentApprovals {
 
     pub async fn subscribe(
         &self,
-        core: &ClientCore,
+        core: &ClientRuntime,
         node_did: &str,
         token: &str,
     ) -> Result<(), BridgeError> {
@@ -147,7 +148,7 @@ impl AttachmentApprovals {
 
     async fn home(
         &self,
-        core: &ClientCore,
+        core: &ClientRuntime,
         node_did: &str,
         token: &str,
     ) -> Result<PathBuf, BridgeError> {
@@ -171,7 +172,7 @@ impl AttachmentApprovals {
 
     pub async fn pending(
         &self,
-        core: &ClientCore,
+        core: &ClientRuntime,
         node_did: &str,
         token: &str,
     ) -> Result<PluginApprovalsView, BridgeError> {
@@ -187,7 +188,7 @@ impl AttachmentApprovals {
 
     pub async fn decide(
         &self,
-        core: &ClientCore,
+        core: &ClientRuntime,
         node_did: &str,
         token: &str,
         id: &str,
@@ -219,10 +220,10 @@ impl Drop for AttachmentApprovals {
 }
 
 pub(super) async fn peer(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
-) -> Result<gents_desktop_core::client::PeerRecord, BridgeError> {
-    let records = core.peer_records().await;
+) -> Result<gents_protocol::runtime_connection::RuntimeConnection, BridgeError> {
+    let records = core.runtime_connections();
     let mut records = records.iter().filter(|record| record.node_did == node_did);
     let record = records.next().ok_or_else(|| {
         BridgeError::new(
@@ -236,9 +237,9 @@ pub(super) async fn peer(
     Ok(record.clone())
 }
 
-async fn local_home(core: &ClientCore, node_did: &str) -> Result<PathBuf, BridgeError> {
+async fn local_home(core: &ClientRuntime, node_did: &str) -> Result<PathBuf, BridgeError> {
     let record = peer(core, node_did).await?;
-    gents_desktop_core::local_runtime::hosted_runtime_home(&record)
+    gents::client_runtime::hosted_runtime_home(&record)
         .and_then(|home| home.canonicalize().map_err(Into::into))
         .map_err(|_| {
             BridgeError::new(

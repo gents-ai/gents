@@ -1,5 +1,5 @@
+use crate::client_runtime::ClientRuntime;
 use anyhow::{anyhow, bail, Result};
-use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::ToolServiceHealthStateRow;
 use gents_protocol::tool_service_health::ToolServiceHealthState;
 use gents_tools::mcp::pool::McpPool;
@@ -9,7 +9,7 @@ use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
 /// The MCP services of the caller's node; a caller without a node has none.
 pub async fn load_mcp_services_with_health(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: Option<&str>,
 ) -> Result<Vec<MCPServiceHealthView>> {
     let Some(node_did) = node_did else {
@@ -19,7 +19,7 @@ pub async fn load_mcp_services_with_health(
 }
 
 pub(crate) async fn load_mcp_services_with_health_for_node(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
 ) -> Result<Vec<MCPServiceHealthView>> {
     let rows = core
@@ -61,7 +61,7 @@ pub(crate) fn view_from_row(row: ToolServiceHealthStateRow) -> Result<MCPService
 }
 
 pub async fn probe_mcp_service(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
     service_id: &str,
 ) -> Result<McpServiceProbeResult> {

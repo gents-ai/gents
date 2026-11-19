@@ -4,19 +4,18 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 export const deployment: DeploymentView = {
-  peerId: "peer-1",
   label: "Local Agent",
   nodeDid: "did:key:z6MkAgent",
-  addr: "iroh://local",
-  source: "local",
+
+  local: true,
   graphql: null,
-  dialSucceeded: true,
+
   runtimeConnection: "connected",
   chatSafe: true,
   chatRefusal: null,
-  leaseExpiresAt: null,
+
   operatorAccess: true,
-  lastError: null,
+
   node: {
     nodeDid: "did:key:z6MkAgent",
     displayName: "Local Agent",
@@ -385,5 +384,5 @@ export const bootstrap: BootstrapSummary = {
   nodeHomeExists: true,
   clientStateExists: false,
   localSetupUnfinished: false,
-  savedPeers: [],
+  savedRuntimes: [],
 };

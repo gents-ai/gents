@@ -1,10 +1,10 @@
+use crate::client_runtime::ClientRuntime;
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::client::ClientCore;
 
 use super::super::types::{MailboxItemObservation, MailboxItemObservationRequest, MailboxItemView};
 
 pub async fn observe_mailbox_item(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: &MailboxItemObservationRequest,
 ) -> Result<Option<MailboxItemObservation>> {
     let requester = core.node_identity().did();
@@ -25,7 +25,7 @@ pub async fn observe_mailbox_item(
     match item {
         Ok(item) => Some(item),
         Err(MailboxOperationError::ItemMissing) => None,
-        Err(error) => return Err(gents_desktop_core::error::mailbox_operation_failure(error)),
+        Err(error) => return Err(gents_store::client_error::mailbox_operation_failure(error)),
     }
     .map(|item| {
         anyhow::ensure!(
@@ -54,7 +54,7 @@ fn mailbox_observation(
 
 /// The open item `item_id` as `node_did`'s own store lists it.
 pub fn start_mailbox_request(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
     item_id: &str,
 ) -> Result<MailboxItemView> {
@@ -74,7 +74,7 @@ pub fn start_mailbox_request(
 }
 
 pub(crate) fn question_reply_content(
-    core: &ClientCore,
+    core: &ClientRuntime,
     item_id: Option<&str>,
     session_id: Option<&str>,
     node_did: &str,
@@ -104,10 +104,10 @@ pub(crate) fn question_reply_content(
                 .map(ToOwned::to_owned),
         },
     )
-    .map_err(gents_desktop_core::error::mailbox_operation_failure)
+    .map_err(gents_store::client_error::mailbox_operation_failure)
 }
 
-pub async fn dismiss_mailbox(core: &ClientCore, node_did: &str, item_id: &str) -> Result<()> {
+pub async fn dismiss_mailbox(core: &ClientRuntime, node_did: &str, item_id: &str) -> Result<()> {
     core.dismiss_mailbox_item(node_did, item_id)
         .await
         .map(|_| ())

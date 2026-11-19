@@ -2,4 +2,4 @@
 import type { GoalSubmissionOutcome } from "./GoalSubmissionOutcome.js";
 import type { GoalSubmissionReceipt } from "./GoalSubmissionReceipt.js";
 
-export type GoalSubmissionRecovery = { "kind": "unconfirmed", nodeDid: string, commandId: string, } | { "kind": "prepared", receipt: GoalSubmissionReceipt, outcome: GoalSubmissionOutcome | null, acknowledged: boolean, };
+export type GoalSubmissionRecovery = { "kind": "retained", nodeDid: string, commandId: string, sessionId: string, } | { "kind": "unconfirmed", nodeDid: string, commandId: string, } | { "kind": "prepared", receipt: GoalSubmissionReceipt, outcome: GoalSubmissionOutcome | null, acknowledged: boolean, };

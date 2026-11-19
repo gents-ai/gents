@@ -267,8 +267,13 @@ pub(super) fn export(dir: &Path) -> Result<(), String> {
         .into_iter()
         .map(|command| command.name)
         .collect();
-    if commands.keys().cloned().collect::<BTreeSet<_>>() != inventory {
-        return Err("native command signatures differ from the command inventory".into());
+    let signatures = commands.keys().cloned().collect::<BTreeSet<_>>();
+    if signatures != inventory {
+        return Err(format!(
+            "native command signatures differ from the command inventory: missing {:?}; extra {:?}",
+            inventory.difference(&signatures).collect::<Vec<_>>(),
+            signatures.difference(&inventory).collect::<Vec<_>>()
+        ));
     }
     let source = format!("// Generated from the native command signatures.\n{}\n\nexport type DesktopCommands = {{\n{}\n}};\n", types.imports.into_iter().collect::<Vec<_>>().join("\n"), commands.into_values().collect::<Vec<_>>().join("\n"));
     std::fs::write(dir.join("DesktopCommands.ts"), source).map_err(|e| e.to_string())

@@ -1,3 +1,5 @@
+mod client_access;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -178,10 +180,19 @@ impl EmbeddedHome {
         };
         let store_key = trial_store_key(&path, &data_path, fresh).await?;
         if let Some(fresh_store) = fresh_store {
+            // A trial node's NAC is owned by its home's own owner key, never
+            // its Node (`Identity.NodeProvisioning.nacOwner`); installation
+            // issues the evaluator's direct set as that owner.
+            let owner_path = path.join("owner.key");
+            let owner =
+                tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(owner_path, None))
+                    .await?
+                    .context("trial NAC owner identity")?;
             fresh_store
                 .initialize(
                     &store_key,
                     &identity,
+                    &::identity::Did::new(owner.did())?,
                     gents_store::local::document_acp::DocumentAcp::Local,
                 )
                 .await?;
@@ -431,9 +442,76 @@ async fn trial_http(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+    let status = served.clone();
+    let metadata = axum::Router::new().route(
+        "/status",
+        axum::routing::get(move || {
+            let served = status.clone();
+            async move {
+                use axum::response::IntoResponse;
+                let Some((node, runtime)) = served
+                    .get()
+                    .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                else {
+                    return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                };
+                match gents_store::config_client::client_authentication::runtime_authentication(
+                    &gents_store::config_client::ConfigAccess::local(node),
+                )
+                .await
+                {
+                    Ok(authentication) => axum::Json(serde_json::json!({
+                        "node_did": runtime.did(),
+                        (gents_protocol::client_authentication::STATUS_FIELD): authentication,
+                    }))
+                    .into_response(),
+                    Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                }
+            }
+        }),
+    );
     let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?
-        .with_extra_routes(agent_identity_routes(served).merge(owner_staged.router()));
+        .with_extra_routes(metadata)
+        .with_authenticated_routes(
+            agent_identity_routes(served.clone())
+                .merge(trial_inference_settings_routes(served.clone()))
+                .merge(client_access::routes(served))
+                .merge(owner_staged.router()),
+        );
     Ok((config, endpoint, owner_staged))
+}
+
+fn trial_inference_settings_routes(served: ServedNode) -> axum::Router {
+    axum::Router::new().route(
+        gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
+        axum::routing::get(move |identity: defra_http::ExtractIdentity, headers: axum::http::HeaderMap| {
+            let served = served.clone();
+            async move {
+                use axum::response::IntoResponse;
+                let Some((node, runtime)) = served.get().and_then(|(node, runtime)| Some((node.upgrade()?, runtime))) else {
+                    return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                };
+                let Some(actor) = identity.did().cloned() else {
+                    return axum::http::StatusCode::UNAUTHORIZED.into_response();
+                };
+                let authorization = match gents_store::config_client::client_authentication::ClientAuthorization::from_http(&identity, &headers) {
+                    Ok(authorization) => authorization,
+                    Err(_) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+                };
+                let access = match gents_store::config_client::ConfigAccess::local_as(node, actor).with_client_authorization(authorization) {
+                    Ok(access) => access,
+                    Err(_) => return axum::http::StatusCode::FORBIDDEN.into_response(),
+                };
+                match gents_observe::client_inference::load_inference_setup_state(&access, runtime.did()).await {
+                    Ok(settings) => axum::Json(gents_observe::client_inference::InferenceSettingsResponse {
+                        contract_version: gents_observe::client_inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
+                        state: settings.for_client_observation(),
+                    }).into_response(),
+                    Err(_) => axum::http::StatusCode::FORBIDDEN.into_response(),
+                }
+            }
+        }),
+    )
 }
 
 /// A trial home serves Agent identity provisioning and agent admission facts
@@ -447,8 +525,33 @@ pub fn agent_identity_routes(served: ServedNode) -> axum::Router {
     let failure = |status: StatusCode, message: &str| {
         (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
     };
+    let goal = served.clone();
     let admission = served.clone();
     axum::Router::new()
+        .route(
+            gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH,
+            axum::routing::post(
+                move |identity: defra_http::ExtractIdentity,
+                      headers: axum::http::HeaderMap,
+                      axum::Json(request): axum::Json<
+                    gents_protocol::goal_control::ApplyGoalControl,
+                >| {
+                    let served = goal.clone();
+                    async move {
+                        let Some((node, runtime)) = served
+                            .get()
+                            .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                        else {
+                            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        };
+                        gents_automation::goal::client_application::apply_http(
+                            &node, runtime, &identity, &headers, request,
+                        )
+                        .await
+                    }
+                },
+            ),
+        )
         .route(
             gents_protocol::agent_identity::AGENT_ADMISSION_PATH,
             axum::routing::post(

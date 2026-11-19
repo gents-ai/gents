@@ -26,7 +26,11 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
         .data_path(data_dir)
         .with_storage_backend(StorageBackend::Regolith)
         .with_http(
-            HttpConfig::with_listener(std::net::TcpListener::bind(address).unwrap()).unwrap(),
+            HttpConfig::with_listener(std::net::TcpListener::bind(address).unwrap())
+                .unwrap()
+                .with_extra_routes(gents_store::test_support::local_authentication_route(
+                    principal,
+                )),
         )
         .with_p2p(gents_p2p::test_support::transport::test_p2p_config(
             &gents_p2p::test_support::transport::TestP2pAdmission::default(),
@@ -126,7 +130,7 @@ async fn assert_access_control(
         admitted.is_err(),
         "P2P admits exactly the application collections the model admits: {outcome:?}"
     );
-    let replicated = gents_store::identity::node_p2p(node)
+    let replicated = gents_p2p::node_access::operations(node)
         .expect("P2P transport")
         .get_collections()
         .await

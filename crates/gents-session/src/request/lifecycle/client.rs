@@ -1905,7 +1905,7 @@ mod tests {
             (&access, 1),
             (&agent_access, 1),
             (&sibling_access, 0),
-            (&runtime_access, 1),
+            (&runtime_access, 0),
         ] {
             let result = reader.execute(session_query).await.unwrap();
             assert_eq!(

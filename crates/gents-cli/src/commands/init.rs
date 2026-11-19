@@ -303,14 +303,11 @@ pub(crate) async fn init_home_with_core_packs(
         None
     };
 
-    if fresh_store {
-        reserve_fresh_bootstrap(&home_dir).await?;
-    }
-    let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
-    if installs_core_packs {
-        default_packs::record_installing(&home_dir)?;
-    }
-
+    let client_identity = if fresh_store {
+        gents_service::home_state::client_identity_for_new_node().await?
+    } else {
+        gents_service::home_state::client_identity_for(&home_dir).await?
+    };
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: &home_dir,
         node_name: &args.node_name,
@@ -325,6 +322,14 @@ pub(crate) async fn init_home_with_core_packs(
         .await
         .context("creating or loading node identity key")?;
     stage("identity_ready");
+
+    if fresh_store {
+        reserve_fresh_bootstrap(&home_dir).await?;
+    }
+    let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
+    if installs_core_packs {
+        default_packs::record_installing(&home_dir)?;
+    }
 
     gents_store::local::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
@@ -351,7 +356,12 @@ pub(crate) async fn init_home_with_core_packs(
     .await?;
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
-            .initialize(&store_key, &initialized_identity.identity, document_acp)
+            .initialize(
+                &store_key,
+                &initialized_identity.identity,
+                &identity::Did::new(client_identity.did())?,
+                document_acp,
+            )
             .await?;
     }
     stage("store_key_initialized");
@@ -395,11 +405,6 @@ pub(crate) async fn init_home_with_core_packs(
         .context("building embedded DefraDB node for init")?,
     );
     stage("embedded_node_built");
-    let client_identity = if fresh_store {
-        gents_service::home_state::client_identity_for_new_node().await?
-    } else {
-        gents_service::home_state::client_identity_for(&home_dir).await?
-    };
     let held_store_access = ConfigAccess::claimed_local_as(
         node_arc,
         store_lock,
@@ -941,7 +946,6 @@ pub(crate) async fn write_identity_only_home_metadata(
             options.store_lock,
         )
         .await?;
-        reserve_fresh_bootstrap(options.home).await?;
         Some(fresh)
     } else {
         None
@@ -960,6 +964,10 @@ pub(crate) async fn write_identity_only_home_metadata(
         .sign(b"gents init identity")
         .await
         .context("creating or loading node identity key")?;
+
+    if fresh_backend.is_some() {
+        reserve_fresh_bootstrap(options.home).await?;
+    }
 
     let tool_ceiling = tool_ceiling_for_package(options.tool_package);
     let tool_root = resolve_tool_root_for_package(options.tool_package, options.tool_root)?
@@ -988,7 +996,12 @@ pub(crate) async fn write_identity_only_home_metadata(
     .await?;
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
-            .initialize(&store_key, &initialized_identity.identity, document_acp)
+            .initialize(
+                &store_key,
+                &initialized_identity.identity,
+                &identity::Did::new(options.owner)?,
+                document_acp,
+            )
             .await?;
         bootstrap_identity_only_owner(
             options.home,
@@ -1026,7 +1039,7 @@ pub(crate) async fn write_identity_only_home_metadata(
 
 /// An identity-only home has no default Agent, so its fresh-store bootstrap
 /// grants only the init User's direct set, under the same consumed reservation
-/// and from the same Node principal as full initialization.
+/// and as the same NAC owner as full initialization.
 async fn bootstrap_identity_only_owner(
     home: &Path,
     data_dir: &Path,
@@ -1976,6 +1989,42 @@ mod tests {
     use gents::runtime::embedded::EmbeddedHome;
 
     #[tokio::test]
+    async fn identity_failure_does_not_consume_fresh_bootstrap() {
+        let temp = tempfile::tempdir().unwrap();
+        let owner = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+        let home = temp.path().join("home");
+        let data = default_data_dir(&home);
+        let (lock_home, lock_data) = (home.clone(), data.clone());
+        let lock =
+            tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
+                .await
+                .unwrap()
+                .unwrap();
+        let obstruction = temp.path().join("not-a-directory");
+        fs::write(&obstruction, b"file").unwrap();
+        let bad_key = obstruction.join("identity.key");
+        let options = || IdentityOnlyHomeOptions {
+            home: &home,
+            node_name: "identity-retry",
+            key_path: Some(&bad_key),
+            identity_backend: IdentityBackendArg::File,
+            keychain_label: None,
+            secure_enclave_label: None,
+            tool_package: ToolPackageArg::Readonly,
+            tool_root: None,
+            reset: false,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            store_lock: &lock,
+            owner: owner.did(),
+        };
+        assert!(write_identity_only_home_metadata(options()).await.is_err());
+        assert!(!home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
+        fs::remove_file(&obstruction).unwrap();
+        write_identity_only_home_metadata(options()).await.unwrap();
+        assert!(home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
+    }
+
+    #[tokio::test]
     async fn an_identity_only_home_protects_its_fresh_store_for_later_openers() {
         let temp = tempfile::tempdir().unwrap();
         let owner = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
@@ -2655,10 +2704,17 @@ mod tests {
             }
             let key = gents_store::local::store_key::StoreKey::from_host(&[7; 32])?;
             let path = directory.path().join("node.key");
-            let runtime = tokio::task::spawn_blocking(move || -> Result<Arc<dyn NodeIdentity>> {
-                Ok(Arc::new(KeyIdentity::load_or_create(path, None)?))
-            })
-            .await??;
+            let owner_path = directory.path().join("owner.key");
+            let (runtime, owner) =
+                tokio::task::spawn_blocking(move || -> Result<(Arc<dyn NodeIdentity>, String)> {
+                    Ok((
+                        Arc::new(KeyIdentity::load_or_create(path, None)?),
+                        KeyIdentity::load_or_create(owner_path, None)?
+                            .did()
+                            .to_owned(),
+                    ))
+                })
+                .await??;
             let did = runtime.did().to_owned();
             let initialized =
                 match gents_store::local::backend_protection::FreshBackendStore::observe(
@@ -2671,6 +2727,7 @@ mod tests {
                         .initialize(
                             &key,
                             &runtime,
+                            &identity::Did::new(owner)?,
                             gents_store::local::document_acp::DocumentAcp::Local,
                         )
                         .await
@@ -2736,11 +2793,12 @@ mod tests {
         let stored = read_init_config(&home).unwrap().unwrap();
         let identity =
             gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
-        let client = gents_desktop_core::client::PrincipalIdentity::load_or_create(
-            &gents_service::home_state::cli_identity_paths().unwrap(),
-        )
-        .await
-        .unwrap();
+        let client =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &gents_service::home_state::cli_identity_paths().unwrap(),
+            )
+            .await
+            .unwrap();
         let agent = identity::Did::new(initial["default_agent_did"].as_str().unwrap()).unwrap();
         let client_did = identity::Did::new(client.did()).unwrap();
         let data = default_data_dir(&home);
@@ -2865,9 +2923,8 @@ mod tests {
         agent_sets.extend(default_agent.projected);
         let granted = holds(client_did.clone(), client_sets.clone()).await
             && holds(agent.clone(), agent_sets).await;
-        for set in &client_sets {
-            set.revoke(&runtime, &client_did).await.unwrap();
-        }
+        // The init User owns NAC, whose admin native never revokes; the
+        // default Agent's direct grants are what revocation withdraws.
         for set in &agent_direct {
             set.revoke(&runtime, &agent).await.unwrap();
         }
@@ -2897,10 +2954,9 @@ mod tests {
         drop(worker);
         drop(runtime);
         drop(node);
-        assert!(
-            initialize_disposable_home(&home, false).await.is_err(),
-            "reinit must not restore revoked permissions"
-        );
+        initialize_disposable_home(&home, false)
+            .await
+            .expect("the init User keeps owning NAC, so setting the home up again succeeds");
         let node = Arc::new(
             crate::persistent_node_builder(&home, &data)
                 .await
@@ -2911,9 +2967,10 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        assert!(
-            !node.nac_manager().is_admin(&client_did).await.unwrap(),
-            "revocation must survive reinit"
+        assert_eq!(
+            node.nac_manager().owner().await.as_ref(),
+            Some(&client_did),
+            "the init User keeps owning NAC across reinit"
         );
         for (permission, held) in after_revoke {
             assert_eq!(
