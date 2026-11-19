@@ -45,8 +45,13 @@ echo "$(wc -l < "${archives}/uris.txt") packages to fetch for $(wc -l <<< "${pac
 fetch() {
   local uri="$1" file="$2" target="${archives}/$2"
   [[ -s "${target}" ]] && return 0
-  local path="${uri#*://*/}"
-  for source in "${uri}" "http://archive.ubuntu.com/${path}"; do
+  local source
+  local -a sources=()
+  case "${uri}" in http://*|https://*) sources+=("${uri}");; esac
+  if [[ "${uri}" == */pool/* ]]; then
+    sources+=("https://archive.ubuntu.com/ubuntu/pool/${uri#*/pool/}")
+  fi
+  for source in "${sources[@]}"; do
     if curl -fsSL --retry 2 --connect-timeout 15 --speed-limit 20000 --speed-time 20 \
       -o "${target}.part" "${source}"; then
       mv "${target}.part" "${target}"
@@ -59,6 +64,6 @@ fetch() {
 export -f fetch
 export archives
 # shellcheck disable=SC2016 # expanded by the inner bash
-xargs -P 16 -n 2 bash -c 'fetch "$1" "$2"' _ < "${archives}/uris.txt"
+xargs -r -P 16 -n 2 bash -c 'fetch "$1" "$2"' _ < "${archives}/uris.txt"
 
 sudo apt-get install -y --no-install-recommends -o "Dir::Cache::Archives=${archives}" "${names[@]}"
