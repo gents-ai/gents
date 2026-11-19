@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::post,
     Json, Router,
 };
 use gents_inference::rendered_request::RenderedCompletionRequest;
