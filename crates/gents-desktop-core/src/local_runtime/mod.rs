@@ -129,10 +129,7 @@ pub fn operator_endpoint(
     record: &crate::client::PeerRecord,
     capability: &gents_store::config_client::ClientSigningCapability,
 ) -> Option<gents_store::config_client::GraphqlEndpoint> {
-    let url = record.operator_graphql()?;
-    gents_store::config_client::GraphqlEndpoint::as_principal(url, capability.did())
-        .with_client_signing_capability(capability.clone())
-        .ok()
+    crate::client::home_endpoint::user_for(record, capability)
 }
 
 /// The operational HTTP endpoint of a co-hosted runtime, acting as that
@@ -149,9 +146,7 @@ pub fn runtime_operator_endpoint(
     let url = record.operator_graphql()?;
     Some(match load_operator_node_identity(record) {
         Ok(capability) => {
-            gents_store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
-                .with_client_signing_capability(capability)
-                .ok()?
+            crate::client::home_endpoint::node_at(url, &record.node_did, capability).ok()?
         }
         Err(error) => {
             tracing::warn!(
@@ -159,7 +154,7 @@ pub fn runtime_operator_endpoint(
                 error = %format!("{error:#}"),
                 "runtime node identity key unavailable; using anonymous operator access"
             );
-            gents_store::config_client::GraphqlEndpoint::anonymous(url)
+            crate::client::home_endpoint::anonymous_at(url)
         }
     })
 }
@@ -169,7 +164,7 @@ pub fn cached_runtime_operator_endpoint(
     record: &crate::client::PeerRecord,
 ) -> Option<gents_store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
-    Some(gents_store::config_client::GraphqlEndpoint::anonymous(url))
+    Some(crate::client::home_endpoint::anonymous_at(url))
 }
 
 fn load_operator_node_identity(
@@ -387,6 +382,17 @@ pub fn graphql_endpoint_for_desktop_access(
     Some(graphql_url.to_string())
 }
 
+/// What a home's public status reports of its delegation audience and its
+/// provider's time, read with no credential: the edge of a Vera home judges
+/// only presented ones.
+pub async fn public_delegation_audience(
+    record: &crate::client::PeerRecord,
+) -> Result<Option<gents_protocol::delegation_audience::ReportedHome>> {
+    Ok(http::peer_status(record).await?.map(|status| {
+        gents_protocol::delegation_audience::ReportedHome::of_home(&status, &record.node_did)
+    }))
+}
+
 pub fn augment_peer_status_payload_for_desktop(mut payload: Value, status_url: &str) -> Value {
     let desktop_graphql = graphql_endpoint_for_desktop_access(&payload, status_url);
     if let (Some(map), Some(desktop_graphql)) = (payload.as_object_mut(), desktop_graphql) {
@@ -504,9 +510,8 @@ async fn read_runtime_status(
     let status_url = runtime_status_url(endpoint.url())?;
     let client = runtime_http_client().await?;
     let response = endpoint
-        .authorize(client.get(&status_url))?
-        .send()
-        .await
+        .send_resolving(|endpoint| endpoint.authorize(client.get(&status_url)))
+        .await?
         .map_err(|error| {
             crate::error::BridgeError::runtime_http_error(
                 error,
@@ -517,7 +522,12 @@ async fn read_runtime_status(
         response.status(),
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
     ) {
-        return Ok(RuntimeStatusRead::Refused(response.status()));
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_default();
+        if let Some(update) = crate::error::BridgeError::home_refusal(status, &body) {
+            return Err(update.into());
+        }
+        return Ok(RuntimeStatusRead::Refused(status));
     }
     let response = response.error_for_status()?;
     anyhow::ensure!(
@@ -836,7 +846,7 @@ async fn fetch_graphql_runtime_connection_payload(
         None,
     )
     .context("runtime reported a shareable P2P address but no usable peer id")?;
-    let (node_did, node_name) = fetch_graphql_node_identity(graphql, reader).await?;
+    let (node_did, node_name) = fetch_graphql_node_identity(client, graphql, reader).await?;
 
     Ok(json!({
         "status": "ok",
@@ -859,11 +869,16 @@ async fn fetch_graphql_runtime_connection_payload(
 }
 
 async fn fetch_graphql_node_identity(
+    client: &reqwest::Client,
     graphql: &str,
     reader: &dyn gents_store::identity::NodeIdentity,
 ) -> Result<(String, String)> {
-    let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(graphql, reader.did())
-        .with_client_signing_capability(reader.client_signing_capability()?)?;
+    let endpoint = crate::client::home_endpoint::user_resolving(
+        client,
+        graphql,
+        &reader.client_signing_capability()?,
+    )
+    .await?;
     let nodes = gents_store::config_client::ConfigAccess::Graphql(endpoint)
         .read_view(&gents_documents::views::config::VisibleNodes::new().enabled_only())
         .await?;

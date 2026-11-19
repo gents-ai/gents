@@ -86,8 +86,8 @@ pub use desired_state::validate::{
     event_trigger_document_field_names, validate_event_trigger_document_fields,
 };
 pub use desired_state::{
-    apply_desired_state_plan, grant_agent_catalog, grant_selected_self_configuration,
-    provision_engineer, revoke_agent_catalog,
+    apply_desired_state_plan, grant_node_administration, grant_selected_self_configuration,
+    provision_engineer, revoke_node_administration,
 };
 pub use desired_state::{
     apply_desired_state_plan_with_node_binding, configuration_node_doc, ConfigurationNodeBinding,

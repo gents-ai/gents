@@ -104,6 +104,12 @@ theorem admission_iff_wire_witness (field : Field) (maximum : Nat) (h : 10 ≤ m
   · rintro ⟨encoding, accepted, _⟩
     cases encoding <;> simp_all [canCarry]
 
+/-- An `Int` field carries a count only as a JSON integer: text is not one of
+its input kinds, so no decimal string reaches it, canonical or not. -/
+theorem integer_field_takes_no_text :
+    admitsEncoding .integer .decimal = false ∧ admitsEncoding .integer .integer = true := by
+  decide
+
 theorem datetime_has_no_count : canCarry .dateTime = false := by decide
 
 theorem docid_has_no_count : canCarry .docId = false := by decide

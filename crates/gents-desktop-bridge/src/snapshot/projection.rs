@@ -412,6 +412,7 @@ mod tests {
                     }],
                 }],
                 ended_access: Vec::new(),
+                unkept_changes: Vec::new(),
             }),
             repair_note: None,
         }

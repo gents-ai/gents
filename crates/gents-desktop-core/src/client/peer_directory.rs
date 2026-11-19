@@ -108,6 +108,8 @@ pub struct PeerRecord {
     pub graphql: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_node_home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_audience: Option<gents_protocol::delegation_audience::DelegationAudience>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -231,6 +233,7 @@ impl PeerRecord {
             pairing_ready: false,
             graphql: None,
             local_node_home: None,
+            delegation_audience: None,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -598,6 +601,7 @@ impl PeerDirectory {
             pairing_ready: false,
             graphql: None,
             local_node_home: None,
+            delegation_audience: None,
             created_at: now.clone(),
             updated_at: now,
         });

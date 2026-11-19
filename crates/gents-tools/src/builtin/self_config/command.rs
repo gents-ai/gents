@@ -34,6 +34,7 @@ mod observe;
 mod pack;
 mod patch;
 mod policy;
+mod policy_names;
 mod reads;
 mod skill;
 mod trigger_explain;

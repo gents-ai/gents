@@ -227,6 +227,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         edit,
         replacements,
         replacement_evidence,
+        replacement_credentials: Vec::new(),
         signature: Vec::new(),
     };
     command.signature = home

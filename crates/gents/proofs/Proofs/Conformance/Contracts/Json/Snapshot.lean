@@ -99,6 +99,7 @@ import Proofs.Conformance.Identity.WorkspaceCapability
 import Proofs.Conformance.Identity.MailboxAccess
 import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
 import Proofs.Conformance.Identity.NodeProvisioning
+import Proofs.Conformance.Identity.RuntimeUse
 import Proofs.Conformance.Identity.WorkspaceRootAccess
 import Proofs.Conformance.HomeResolution
 import Proofs.Conformance.GraphqlName
@@ -245,6 +246,10 @@ import Proofs.Conformance.HomeRetirement
 import Proofs.Conformance.StoreHandoff
 import Proofs.Conformance.StoreKeyCustody
 import Proofs.Conformance.DocumentAcpChoice
+import Proofs.Conformance.UserDelegation
+import Proofs.Conformance.OwedRegistration
+import Proofs.Conformance.HeldAudience
+import Proofs.Conformance.NodePublication
 import Proofs.Conformance.BackgroundExecutionRegistry
 import Proofs.Conformance.BackgroundWaitChange
 import Proofs.Conformance.InvocationReply

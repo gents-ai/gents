@@ -1,12 +1,11 @@
 use std::fmt;
 use std::future::Future;
 
+use crate::rig_compat::http::{
+    self as http_client, LazyBody, MultipartForm, Request, Response, StreamingResponse, Transport,
+};
 use bytes::Bytes;
 use gents_protocol::error_chain::ErrorChain;
-use rig::http_client::{
-    self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
-};
-use rig::wasm_compat::WasmCompatSend;
 use sha2::{Digest, Sha256};
 
 use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
@@ -117,7 +116,7 @@ fn route_identity_path(path: &str) -> std::borrow::Cow<'_, str> {
 
 pub fn replay_issuer_for_destination(
     family: &str,
-    destination: &rig::http_client::Uri,
+    destination: &http_client::Uri,
 ) -> Option<crate::claude_messages_body::ReplayIssuer> {
     replay_issuer_from_capture(
         family,
@@ -291,23 +290,17 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
     }
 }
 
-impl<H> HttpClientExt for RenderedRequestCapturingHttpClient<H>
+impl<H> Transport for RenderedRequestCapturingHttpClient<H>
 where
-    H: Clone + HttpClientExt + fmt::Debug + 'static,
+    H: Clone + Transport + fmt::Debug + 'static,
 {
-    fn send<T, U>(
+    fn send(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        T: Into<Bytes> + WasmCompatSend,
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let inner = self.inner.clone();
         let (parts, body) = req.into_parts();
-        let body: Bytes = body.into();
-        // The decision must happen here, in the caller's task: `HttpClientExt::
+        // The decision must happen here, in the caller's task: `Transport::
         // send` returns a `'static` future the provider client may poll from
         // anywhere, and a task-local is not visible from a task that did not
         // install it.
@@ -326,34 +319,26 @@ where
         async move {
             capture_or_refuse(decision, &body).await?;
             let req = Request::from_parts(parts, body);
-            HttpClientExt::send::<Bytes, U>(&inner, req).await
+            Transport::send(&inner, req).await
         }
     }
 
-    fn send_multipart<U>(
+    fn send_multipart(
         &self,
         req: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         // No provider in this runtime posts a completion as multipart; do not
         // consume an armed capture.
         let inner = self.inner.clone();
-        async move { HttpClientExt::send_multipart(&inner, req).await }
+        async move { Transport::send_multipart(&inner, req).await }
     }
 
-    fn send_streaming<T>(
+    fn send_streaming(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-    where
-        T: Into<Bytes>,
-    {
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.inner.clone();
         let (parts, body) = req.into_parts();
-        let body: Bytes = body.into();
         let protocol = crate::provider_stream::ProviderStreamProtocol::for_path(parts.uri.path());
         let decision = decide(
             parts.uri.path(),
@@ -377,7 +362,7 @@ where
                 activity.touch();
             }
             let req = Request::from_parts(parts, body);
-            let response = match HttpClientExt::send_streaming(&inner, req).await {
+            let response = match Transport::send_streaming(&inner, req).await {
                 Ok(response) => response,
                 Err(error) => {
                     if let Some(activity) = &activity {
@@ -418,59 +403,51 @@ mod counting_inner_impl {
 
     use super::*;
 
-    impl HttpClientExt for CountingInner {
-        fn send<T, U>(
+    impl Transport for CountingInner {
+        fn send(
             &self,
-            req: Request<T>,
-        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-        where
-            T: Into<Bytes> + WasmCompatSend,
-            U: From<Bytes> + WasmCompatSend + 'static,
+            req: Request<Bytes>,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
         {
             let sends = Arc::clone(&self.sends);
             let bodies = Arc::clone(&self.bodies);
-            let body: Bytes = req.into_body().into();
+            let body = req.into_body();
             async move {
                 sends.fetch_add(1, Ordering::SeqCst);
                 if let Ok(value) = serde_json::from_slice(&body) {
                     bodies.lock().expect("bodies").push(value);
                 }
-                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::from_static(b"{}"))) });
+                let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
                 Ok(Response::builder().status(200).body(body)?)
             }
         }
 
-        fn send_multipart<U>(
+        fn send_multipart(
             &self,
             _req: Request<MultipartForm>,
-        ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-        where
-            U: From<Bytes> + WasmCompatSend + 'static,
+        ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static
         {
             let sends = Arc::clone(&self.sends);
             async move {
                 sends.fetch_add(1, Ordering::SeqCst);
-                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::from_static(b"{}"))) });
+                let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
                 Ok(Response::builder().status(200).body(body)?)
             }
         }
 
-        fn send_streaming<T>(
+        fn send_streaming(
             &self,
-            req: Request<T>,
-        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-        where
-            T: Into<Bytes>,
-        {
+            req: Request<Bytes>,
+        ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
             let sends = Arc::clone(&self.sends);
             let bodies = Arc::clone(&self.bodies);
-            let body: Bytes = req.into_body().into();
+            let body = req.into_body();
             async move {
                 sends.fetch_add(1, Ordering::SeqCst);
                 if let Ok(value) = serde_json::from_slice(&body) {
                     bodies.lock().expect("bodies").push(value);
                 }
-                let stream: rig::http_client::sse::BoxedStream =
+                let stream: http_client::BoxedStream =
                     Box::pin(futures::stream::empty::<http_client::Result<Bytes>>());
                 Ok(Response::builder().status(200).body(stream)?)
             }
@@ -675,7 +652,7 @@ mod tests {
 
         scope_request(scope, async {
             arm(CaptureScopeKind::Inference, 3, 1, trace()).expect("armed");
-            let _ = HttpClientExt::send_streaming(
+            let _ = Transport::send_streaming(
                 &client,
                 responses_request(json!({
                     "model": "wire-model",
@@ -782,7 +759,7 @@ mod tests {
                         .uri(format!("https://example.test{path}"))
                         .body(body)
                         .expect("request");
-                    let refused_at = match HttpClientExt::send_streaming(&client, request).await {
+                    let refused_at = match Transport::send_streaming(&client, request).await {
                         Ok(_) => None,
                         Err(http_client::Error::Instance(refusal)) => {
                             match refusal.downcast_ref::<TransportError>() {
@@ -851,7 +828,7 @@ mod tests {
 
         let error = scope_request(scope, async {
             arm(CaptureScopeKind::Inference, 0, 0, trace()).expect("armed");
-            HttpClientExt::send_streaming(&client, responses_request(json!({"input": []})))
+            Transport::send_streaming(&client, responses_request(json!({"input": []})))
                 .await
                 .err()
                 .expect("send must fail when capture fails")
@@ -883,7 +860,7 @@ mod tests {
                 .uri("https://example.test/v1/models")
                 .body(Bytes::from_static(b"{}"))
                 .expect("request");
-            let _ = HttpClientExt::send::<Bytes, Bytes>(&client, req)
+            let _ = Transport::send(&client, req)
                 .await
                 .expect("models listing succeeds");
             assert!(
@@ -905,7 +882,7 @@ mod tests {
         let scope = test_scope(context(), sink);
 
         let error = scope_request(scope, async {
-            HttpClientExt::send_streaming(
+            Transport::send_streaming(
                 &client,
                 responses_request(json!({"input": [{"role": "user", "content": "hi"}]})),
             )
@@ -944,10 +921,10 @@ mod tests {
         scope_request(scope, async {
             arm(CaptureScopeKind::Inference, 2, 1, trace()).expect("armed");
             let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
-            let _ = HttpClientExt::send_streaming(&client, responses_request(body.clone()))
+            let _ = Transport::send_streaming(&client, responses_request(body.clone()))
                 .await
                 .expect("first send");
-            let _ = HttpClientExt::send_streaming(&client, responses_request(body))
+            let _ = Transport::send_streaming(&client, responses_request(body))
                 .await
                 .expect("reconnect send");
         })
@@ -969,7 +946,7 @@ mod tests {
         scope_request(scope, async {
             arm(CaptureScopeKind::Inference, 2, 1, trace()).expect("armed");
             let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
-            HttpClientExt::send_streaming(&client, responses_request(body.clone()))
+            Transport::send_streaming(&client, responses_request(body.clone()))
                 .await
                 .expect("first send");
             let changed = Request::builder()
@@ -977,7 +954,7 @@ mod tests {
                 .uri("https://example.test/proxy/v1/responses")
                 .body(Bytes::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap();
-            HttpClientExt::send_streaming(&client, changed)
+            Transport::send_streaming(&client, changed)
                 .await
                 .expect("recording sink accepts changed test destination");
         })
@@ -1011,9 +988,7 @@ mod tests {
                     .expect("body"),
                 ))
                 .expect("request");
-            let _ = HttpClientExt::send::<Bytes, Bytes>(&client, req)
-                .await
-                .expect("send");
+            let _ = Transport::send(&client, req).await.expect("send");
         })
         .await;
 

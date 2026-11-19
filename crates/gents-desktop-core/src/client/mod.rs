@@ -1,5 +1,6 @@
 pub mod canonical_output;
 mod core;
+pub mod home_endpoint;
 mod mutations;
 mod observe;
 mod paths;
@@ -18,7 +19,7 @@ pub use core::{
     ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
     EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
     InferenceTarget, LocalHomeAccessError, P2PHealth, P2PHealthStatus, RefreshedRequestProjection,
-    RetainedGoalSubmission, StoreRefresh, CLIENT_START_STALL_TIMEOUT,
+    RetainedGoalSubmission, StoreRefresh, UnkeptChange, CLIENT_START_STALL_TIMEOUT,
 };
 
 pub use mutations::{apply_config_components_on, patch_config_components_on, set_default_agent_on};

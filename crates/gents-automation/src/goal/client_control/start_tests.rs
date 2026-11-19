@@ -470,6 +470,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         .await
         .unwrap(),
         replacement_delete: None,
+        request_credentials: Vec::new(),
     });
     command.signature = user
         .sign(&command.signing_payload().unwrap())
@@ -1109,6 +1110,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 native_evidence: Some(gents_protocol::goal_control::GoalNativeEvidence {
                     request: request_graph,
                     replacement_delete: deletion,
+                    request_credentials: Vec::new(),
                 }),
                 signature: Vec::new(),
             };

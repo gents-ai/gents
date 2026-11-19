@@ -380,14 +380,12 @@ approve at all. -/
 inductive Standing where
   | owner
   | administrator
-  | agentManager
   | runtimeReader
   | unrelated
   deriving DecidableEq, Repr
 
 def Standing.relation : Standing → Option String
   | .administrator => some "administrator"
-  | .agentManager => some "agent_manager"
   | .runtimeReader => some "runtime_reader"
   | .owner | .unrelated => none
 
@@ -420,11 +418,11 @@ def approval (standing : Standing) : ApprovalStep :=
   afterGrant (grantAdmitted standing)
 
 /-- The Node owner and a Node administrator (the Engineer holds
-`administrator`) approve; `agent_manager`, `runtime_reader` and an Agent with
+`administrator`) approve; `runtime_reader` and an Agent with
 no Node relation are refused by ACP, whatever its tool grant. -/
 theorem approval_follows_node_administration :
     approval .owner = .approve ∧ approval .administrator = .approve ∧
-    approval .agentManager = .refuse ∧ approval .runtimeReader = .refuse ∧
+    approval .runtimeReader = .refuse ∧
     approval .unrelated = .refuse := by native_decide
 
 theorem refused_grant_approves_nothing : afterGrant false = .refuse := rfl

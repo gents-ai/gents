@@ -639,12 +639,15 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
         "{error:#}"
     );
     assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
-    assert!(server
-        .received_requests()
-        .await
-        .unwrap()
+    let requests = server.received_requests().await.unwrap();
+    let (signed, public): (Vec<_>, Vec<_>) = requests
         .iter()
-        .all(|request| request.headers.contains_key("authorization")));
+        .partition(|request| request.headers.contains_key("authorization"));
+    assert!(signed.len() >= 2);
+    assert!(
+        public.iter().all(|request| request.url.path() == "/status"),
+        "only the public status, read after a refusal, goes unsigned"
+    );
 }
 
 #[test]
@@ -814,6 +817,90 @@ async fn runtime_status_uses_the_caller_and_rejects_another_node() {
                 .unwrap()
                 .to_string(),
             caller.did()
+        );
+    }
+}
+
+/// A home whose edge requires a delegation this client cannot learn to
+/// present is told as an update of Gents, never as a raw refusal.
+#[tokio::test]
+async fn a_status_read_refused_at_a_vera_edge_asks_for_an_update() {
+    use wiremock::matchers::{header_exists, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .and(header_exists("authorization"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+            "error": "refused",
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "node_did": "did:key:home",
+            "delegation_audience": { "worker": "w", "deployment": 1, "version": 2 },
+        })))
+        .mount(&server)
+        .await;
+    let user = gents_store::test_support::test_identity("update-required-user");
+    let capability = gents_store::identity::NodeIdentity::client_signing_capability(&user).unwrap();
+    let mut record = crate::client::PeerRecord::new("Home", "iroh://peer", "did:key:home");
+    record.graphql = Some(format!("{}/api/v0/graphql", server.uri()));
+    let error = super::fetch_hosted_runtime_status(&record, Some(&capability))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, super::HostedRuntimeStatusError::Failed(failed)
+            if failed.downcast_ref::<crate::error::BridgeError>().map(|bridge| bridge.code)
+                == Some(crate::error::BridgeErrorCode::UpdateRequired)),
+        "{error:#}"
+    );
+    assert!(format!("{error:#}").contains("update Gents"));
+}
+
+/// A GraphQL request whose identity token the edge of a Vera home refuses is
+/// told as the same update of Gents, not as a raw HTTP 401; any other 401
+/// stays the refusal it was.
+#[tokio::test]
+async fn a_graphql_request_refused_at_a_vera_edge_asks_for_an_update() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    for (body, update) in [
+        (
+            json!({
+                "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+                "error": "refused",
+            }),
+            true,
+        ),
+        (json!({ "error": "refused" }), false),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(body))
+            .mount(&server)
+            .await;
+        let user = gents_store::test_support::test_identity("graphql-update-user");
+        let capability =
+            gents_store::identity::NodeIdentity::client_signing_capability(&user).unwrap();
+        let endpoint = crate::client::home_endpoint::user_at(
+            &format!("{}/api/v0/graphql", server.uri()),
+            &capability,
+            None,
+        )
+        .unwrap();
+        let error =
+            gents_store::config_client::post_graphql(&endpoint, "query { Node { _docID } }")
+                .await
+                .unwrap_err();
+        let bridge = crate::error::BridgeError::classify_transport_error(error.into());
+        assert_eq!(
+            bridge.code == crate::error::BridgeErrorCode::UpdateRequired,
+            update,
+            "{bridge:?}"
         );
     }
 }

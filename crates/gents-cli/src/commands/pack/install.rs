@@ -123,16 +123,32 @@ async fn install_documents_pack_inner(
             .map_err(Into::into);
         }
         if needs_runtime_store {
-            return gents_host::http::pack_install_client::install_remote(
+            let installing = gents_pack::pack::install_flow::DocumentsInstallRequest {
+                wire: Vec::new(),
+                ..request.clone()
+            };
+            let mut output = gents_host::http::pack_install_client::install_remote(
                 endpoint,
                 owner,
                 pack,
                 &dependencies,
-                &request,
+                &installing,
                 explicit,
             )
-            .await
-            .map_err(Into::into);
+            .await?;
+            if !request.wire.is_empty() {
+                output["wired"] = wire_pack_plugins(
+                    access,
+                    owner,
+                    &request.home,
+                    pack,
+                    &request.wire,
+                    gents_host::http::pack_wire_client::SIGNERS,
+                )
+                .await?
+                .into();
+            }
+            return Ok(output);
         }
     }
     install_documents_pack_resolved_inner(
@@ -335,7 +351,7 @@ pub(super) async fn install_documents_report(
                 &home,
                 pack,
                 &args.wire,
-                gents_service::home_state::load_held_user_identity,
+                gents_host::http::pack_wire_client::SIGNERS,
             )
             .await?
             .into();
@@ -503,7 +519,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                     &home,
                     &pack,
                     &args.wire,
-                    gents_service::home_state::load_held_user_identity,
+                    gents_host::http::pack_wire_client::SIGNERS,
                 )
                 .await?
                 .into();
