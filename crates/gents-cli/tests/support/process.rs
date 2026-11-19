@@ -178,7 +178,7 @@ fn spawn_server_with_ready_json_inner(
                 .child
                 .try_wait()
                 .context("checking serve child status")?;
-            let timed_out = progressed_at.elapsed() >= super::waits::STALL_CEILING;
+            let timed_out = progressed_at.elapsed() >= gents_store::test_support::STALL_CEILING;
             if exited.is_some() || timed_out {
                 let (stdout, stderr) = serve.captured_output()?;
                 let addr = format!("127.0.0.1:{port}");
@@ -202,7 +202,7 @@ fn spawn_server_with_ready_json_inner(
                 }
                 bail!(
                     "gents server wrote nothing for {:?} before its readiness JSON\nstdout:\n{}\nstderr:\n{}",
-                    super::waits::STALL_CEILING,
+                    gents_store::test_support::STALL_CEILING,
                     stdout,
                     stderr
                 );

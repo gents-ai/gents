@@ -2341,13 +2341,8 @@ fn ambient_context_skips_only_named_documented_statics() {
 /// even with O_CLOEXEC (`tla/ScriptFixtureExec.tla`). A static script is
 /// checked in; a generated one goes through
 /// `gents_store::test_support::write_executable_script` and a copied one
-/// through `gents_store::test_support::copy_executable`. Entries name why
-/// each remaining site is safe or where it is fixed; the list only shrinks.
-#[rustfmt::skip]
-const EXECUTABLE_WRITE_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-tools/src/native/file_tools/change_capture/tests.rs", 1, "reads the mode back as an observation; never executes the file"),
-];
-
+/// through `gents_store::test_support::copy_executable`. No site
+/// remains and none is admitted.
 #[derive(Default)]
 struct ExecutableWriteScan {
     written: BTreeSet<String>,
@@ -2487,7 +2482,7 @@ fn executables_are_never_written_in_process() {
     for directory in ["crates", "apps"] {
         all_rust_sources(&root.join(directory), &mut sources);
     }
-    let actual = sources
+    let violations = sources
         .into_iter()
         .filter_map(|path| {
             let source = std::fs::read_to_string(&path)
@@ -2501,30 +2496,12 @@ fn executables_are_never_written_in_process() {
                     .expect("source under repo root")
                     .to_string_lossy()
                     .into_owned();
-                (relative, sites)
+                format!(
+                    "{relative}: {sites} function(s) write a file and then make it executable; check in a static script or use gents_store::test_support::write_executable_script"
+                )
             })
         })
-        .collect::<BTreeMap<_, _>>();
-    let allowed = EXECUTABLE_WRITE_ALLOWLIST
-        .iter()
-        .map(|(path, count, _)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let found = actual.get(path).copied().unwrap_or_default();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} function(s) write a file and then make it executable; check in a static script or use gents_store::test_support::write_executable_script"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} in-process executable writes exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} in-process executable writes; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
+        .collect::<Vec<_>>();
     assert!(
         violations.is_empty(),
         "executable write ratchet failed:\n{}",

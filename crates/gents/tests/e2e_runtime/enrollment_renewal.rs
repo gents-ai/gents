@@ -17,10 +17,11 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::live_inference::{rows_when, STALL_CEILING};
+use crate::support::live_inference::rows_when;
 use crate::support::snapshots::SnapshotReader;
 use crate::support::{self, TestDb};
 use gents_p2p::test_support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
+use gents_store::test_support::STALL_CEILING;
 
 struct Stop(CancellationToken);
 impl Drop for Stop {

@@ -226,7 +226,12 @@ async fn session_fork_against_a_ready_server_is_answered_by_that_server() -> Res
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_state_graphql(&home_dir, &graphql, waits::STALL_CEILING).await?;
+    wait_for_runtime_state_graphql(
+        &home_dir,
+        &graphql,
+        gents_store::test_support::STALL_CEILING,
+    )
+    .await?;
 
     let stderr = fork_an_unknown_session(&home_dir, &node_did)?;
 
