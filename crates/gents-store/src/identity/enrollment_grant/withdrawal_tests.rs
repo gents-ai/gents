@@ -497,3 +497,214 @@ async fn a_reapproval_on_a_local_home_takes_the_owed_withdrawal_over() -> anyhow
 async fn a_reapproval_on_a_vera_home_takes_the_owed_withdrawal_over() -> anyhow::Result<()> {
     a_reapproval_takes_the_owed_withdrawal_over(Provider::Vera).await
 }
+
+/// A held client of the home with its own runtime credential.
+struct Client {
+    _key: RawIdentity,
+    did: identity::Did,
+    endpoint: GraphqlEndpoint,
+    _endpoints: RuntimeEndpoints,
+}
+
+impl Client {
+    async fn new(home: &Home) -> anyhow::Result<Self> {
+        let (key, capability) = held_client()?;
+        let did: identity::Did = capability.did().parse()?;
+        crate::identity::GrantSet::OperatorUser
+            .grant(&home.runtime()?, &did)
+            .await?;
+        let endpoints = RuntimeEndpoints::new(capability);
+        let endpoint = endpoints.endpoint(home.runtime.did(), home.owner_endpoint.url())?;
+        Ok(Self {
+            _key: key,
+            did,
+            endpoint,
+            _endpoints: endpoints,
+        })
+    }
+
+    async fn authorization(&self) -> anyhow::Result<ClientAuthorization> {
+        Ok(ClientAuthorization::from_authenticated_bearer(
+            self.did.clone(),
+            &self
+                .endpoint
+                .runtime_authorization()
+                .await?
+                .expect("a held client authorizes its requests"),
+        )?)
+    }
+}
+
+/// Lean `settlementStep` with the owner away: a Node administrator who is not
+/// the owner sees the owed removal and settles it.
+async fn an_administrator_settles_when_the_owner_is_away(provider: Provider) -> anyhow::Result<()> {
+    let home = home(provider).await?;
+    let (_member_key, member) = enrolled_client().await?;
+    let administrator = Client::new(&home).await?;
+    home.owner()
+        .await?
+        .add_actor_relationship("Node", &home.node_doc, "administrator", &administrator.did)
+        .await?;
+    home.approve("first", &member).await?;
+    home.withdraw_as_node(Trigger::Denied, &member).await?;
+    let owed = home
+        .access_owner()
+        .owed_removals(administrator.authorization().await?)
+        .await?;
+    assert_eq!(
+        owed,
+        [gents_protocol::owed_settlement::OwedRemoval {
+            member_did: member.as_str().to_owned(),
+            administrator_held: true,
+        }],
+        "{provider:?}"
+    );
+    assert_eq!(
+        home.settle_as(administrator.authorization().await?).await?,
+        [gents_protocol::owed_settlement::OwedStanding::Settled],
+        "{provider:?}"
+    );
+    assert!(!home.administers(&member).await?, "{provider:?}");
+    assert!(
+        home.access_owner()
+            .owed_removals(home.authorization().await?)
+            .await?
+            .is_empty(),
+        "{provider:?}"
+    );
+    home.shutdown().await
+}
+
+#[tokio::test]
+async fn an_administrator_settles_on_a_local_home_when_the_owner_is_away() -> anyhow::Result<()> {
+    an_administrator_settles_when_the_owner_is_away(Provider::Local).await
+}
+
+#[tokio::test]
+async fn an_administrator_settles_on_a_vera_home_when_the_owner_is_away() -> anyhow::Result<()> {
+    an_administrator_settles_when_the_owner_is_away(Provider::Vera).await
+}
+
+/// Lean `an_owed_member_gains_no_node_permission`: while the removal is owed
+/// neither a grant set nor a direct permission reaches the member; once it is
+/// settled they do.
+async fn an_owed_member_is_refused_node_permissions(provider: Provider) -> anyhow::Result<()> {
+    let home = home(provider).await?;
+    let (_member_key, member) = enrolled_client().await?;
+    home.approve("first", &member).await?;
+    home.withdraw_as_node(Trigger::Denied, &member).await?;
+    let runtime = home.runtime()?;
+    let pending = |error: &ConfigClientError| matches!(error, ConfigClientError::AdministrationRemovalPending { member: pending } if pending == member.as_str());
+    let direct = runtime
+        .grant_node_permission(&member, NodePermission::DocumentRead)
+        .await
+        .expect_err("a direct permission waits for the owed removal");
+    assert!(pending(&direct), "{provider:?}: {direct:?}");
+    let set = crate::identity::GrantSet::OperatorUser
+        .grant(&runtime, &member)
+        .await
+        .expect_err("a grant set waits for the owed removal");
+    assert!(
+        matches!(&set, crate::identity::GrantSetError::Grant { source, .. } if pending(source)),
+        "{provider:?}: {set:?}"
+    );
+    assert_eq!(home.direct_permissions(&member).await?, 0, "{provider:?}");
+    home.settle_as(home.authorization().await?).await?;
+    runtime
+        .grant_node_permission(&member, NodePermission::DocumentRead)
+        .await?;
+    assert_eq!(home.direct_permissions(&member).await?, 1, "{provider:?}");
+    home.shutdown().await
+}
+
+#[tokio::test]
+async fn an_owed_member_is_refused_node_permissions_on_a_local_home() -> anyhow::Result<()> {
+    an_owed_member_is_refused_node_permissions(Provider::Local).await
+}
+
+#[tokio::test]
+async fn an_owed_member_is_refused_node_permissions_on_a_vera_home() -> anyhow::Result<()> {
+    an_owed_member_is_refused_node_permissions(Provider::Vera).await
+}
+
+/// Lean `a_deliberate_grant_closes_the_owed_removal`: the owner granting the
+/// relation while its removal is owed closes the removal, and the next pass
+/// keeps the relation.
+async fn a_deliberate_grant_closes_the_owed_removal(provider: Provider) -> anyhow::Result<()> {
+    let home = home(provider).await?;
+    let (_member_key, member) = enrolled_client().await?;
+    home.approve("first", &member).await?;
+    home.withdraw_as_node(Trigger::Denied, &member).await?;
+    home.owner()
+        .await?
+        .add_actor_relationship("Node", &home.node_doc, "administrator", &member)
+        .await?;
+    assert!(
+        !administration_owed(member.as_str(), &home.receipts(&member).await?),
+        "{provider:?}"
+    );
+    assert_eq!(
+        home.settle_as(home.authorization().await?).await?,
+        [],
+        "{provider:?}"
+    );
+    assert!(home.administers(&member).await?, "{provider:?}");
+    home.shutdown().await
+}
+
+#[tokio::test]
+async fn a_deliberate_grant_on_a_local_home_closes_the_owed_removal() -> anyhow::Result<()> {
+    a_deliberate_grant_closes_the_owed_removal(Provider::Local).await
+}
+
+#[tokio::test]
+async fn a_deliberate_grant_on_a_vera_home_closes_the_owed_removal() -> anyhow::Result<()> {
+    a_deliberate_grant_closes_the_owed_removal(Provider::Vera).await
+}
+
+/// Lean `membershipLapsed` and `Step.expire`: a renewal still fresh on the
+/// home's lapse clock keeps the membership; once every lease ended the
+/// membership withdraws as a revocation does, permissions at once and the
+/// removal owed until the owner settles.
+async fn an_expiry_withdraws_unless_a_renewal_is_fresh(provider: Provider) -> anyhow::Result<()> {
+    let home = home(provider).await?;
+    let (_member_key, member) = enrolled_client().await?;
+    home.approve("first", &member).await?;
+    home.approve("renewal", &member).await?;
+    let clock = lapse_clock(
+        crate::local::document_acp::node_provider_time(&home.node),
+        u64::try_from(chrono::Utc::now().timestamp())?,
+    );
+    assert!(
+        !membership_lapsed(None, clock, &[clock - 60, clock + 600]),
+        "{provider:?}"
+    );
+    assert!(home.direct_permissions(&member).await? > 0, "{provider:?}");
+    assert!(
+        membership_lapsed(None, clock, &[clock - 60, clock]),
+        "{provider:?}"
+    );
+    home.withdraw_as_node(Trigger::Revoked, &member).await?;
+    assert_eq!(home.direct_permissions(&member).await?, 0, "{provider:?}");
+    assert!(
+        administration_owed(member.as_str(), &home.receipts(&member).await?),
+        "{provider:?}"
+    );
+    assert_eq!(
+        home.settle_as(home.authorization().await?).await?,
+        [gents_protocol::owed_settlement::OwedStanding::Settled],
+        "{provider:?}"
+    );
+    assert!(!home.administers(&member).await?, "{provider:?}");
+    home.shutdown().await
+}
+
+#[tokio::test]
+async fn an_expiry_on_a_local_home_withdraws_unless_a_renewal_is_fresh() -> anyhow::Result<()> {
+    an_expiry_withdraws_unless_a_renewal_is_fresh(Provider::Local).await
+}
+
+#[tokio::test]
+async fn an_expiry_on_a_vera_home_withdraws_unless_a_renewal_is_fresh() -> anyhow::Result<()> {
+    an_expiry_withdraws_unless_a_renewal_is_fresh(Provider::Vera).await
+}

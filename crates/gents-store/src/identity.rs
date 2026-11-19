@@ -29,10 +29,14 @@ pub use enrollment_approval::{
     EnrollmentApproval, EnrollmentApprovalError,
 };
 pub use enrollment_grant::{
-    administration_owed, after_removal, grant_enrollment_authority, load_enrollment_grant_receipts,
+    administration_owed, after_removal, grant_enrollment_authority, lapse_clock,
+    load_enrollment_grant_receipts, membership_lapsed, owed_removals, permission_grant_admitted,
     plan_grant, plan_membership_withdrawal, plan_owing, plan_withdrawal, settle_owed_withdrawals,
     settlement_step, AfterRemoval, EnrollmentGrantError, EnrollmentGrantOutcome,
     EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal, SettlementStep,
+};
+pub(crate) use enrollment_grant::{
+    close_owed_removal, owed_removal_receipts, NODE_ADMINISTRATOR_RELATION,
 };
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};

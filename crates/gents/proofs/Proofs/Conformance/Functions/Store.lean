@@ -20,6 +20,7 @@ namespace Identity.EnrollmentGrant
 deriving instance Lean.ToJson for ApprovalStep, Standing, SettlementStep, AfterRemoval
 
 attribute [conformance_function] afterGrant observeMemberAdministrator settlementStep afterRemoval
+  permissionGrantAdmitted
 
 end Identity.EnrollmentGrant
 

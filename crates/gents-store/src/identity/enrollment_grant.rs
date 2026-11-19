@@ -7,11 +7,13 @@ use crate::identity::{GrantSet, Recipient};
 mod settlement;
 
 pub use settlement::{
-    after_removal, settle_owed_withdrawals, settlement_step, AfterRemoval, SettlementStep,
+    after_removal, lapse_clock, membership_lapsed, owed_removals, permission_grant_admitted,
+    settle_owed_withdrawals, settlement_step, AfterRemoval, SettlementStep,
 };
+pub(crate) use settlement::{close_owed_removal, owed_removal_receipts};
 
 const RECEIPT_COLLECTION: &str = gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT_NAME;
-const NODE_ADMINISTRATOR_RELATION: &str = "administrator";
+pub(crate) const NODE_ADMINISTRATOR_RELATION: &str = "administrator";
 
 /// One native tuple an explicit enrollment grant derives for its member
 /// (Lean `Identity.EnrollmentGrant.Tuple`): the Node document's

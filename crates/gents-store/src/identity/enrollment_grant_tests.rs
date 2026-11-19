@@ -237,6 +237,33 @@ fn grant_and_revocation_planners_replay_lean_traces() {
                     owe(member, &retired, &removed, &mut held, &mut receipts);
                 }
                 "settle" => settle(&step.member, &mut held, &mut receipts),
+                "grant_other" => {
+                    let member = step.member.clone();
+                    let tuple = EnrollmentGrantTuple::parse(&step.tuple).unwrap();
+                    let owed = administration_owed(&member, &receipts);
+                    let admitted = match tuple {
+                        EnrollmentGrantTuple::Permission(_) => permission_grant_admitted(owed),
+                        EnrollmentGrantTuple::NodeAdministrator => {
+                            for receipt in &mut receipts {
+                                receipt.owed &= receipt.member_did != member;
+                            }
+                            true
+                        }
+                    };
+                    if admitted && !held.contains(&(member.clone(), tuple)) {
+                        held.push((member, tuple));
+                    }
+                }
+                "expire" => {
+                    let member = step.member.as_str();
+                    let removed = plan_membership_withdrawal(member, &receipts);
+                    let retired: Vec<_> = receipts
+                        .iter()
+                        .filter(|receipt| receipt.member_did == member)
+                        .map(|receipt| receipt.doc_id.clone())
+                        .collect();
+                    owe(member, &retired, &removed, &mut held, &mut receipts);
+                }
                 "settle_by_node" => {}
                 other => panic!("{}: unknown action {other}", input.name),
             }
@@ -279,6 +306,17 @@ fn settlement_steps_match_lean() {
     });
     gents_lean_vocab::families::identity_enrollment_grant_after_removal::replay(|i| {
         after_removal(i.taken_over)
+    });
+}
+
+#[test]
+fn the_permission_rule_and_lapse_match_lean() {
+    gents_lean_vocab::families::identity_enrollment_grant_permission_grant_admitted::replay(|i| {
+        permission_grant_admitted(i.owed)
+    });
+    gents_lean_vocab::families::enrollment_grant_traces_lapse_cases::replay(|i| {
+        let leases: Vec<u64> = i.leases.iter().map(|lease| *lease as u64).collect();
+        membership_lapsed(i.provider.map(|time| time as u64), i.wall as u64, &leases)
     });
 }
 

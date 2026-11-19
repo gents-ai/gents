@@ -356,6 +356,19 @@ impl ClientAccessOwner {
             .with_client_authorization(caller)?;
         Ok(crate::identity::settle_owed_withdrawals(&issuer, &runtime, &node_doc_id).await?)
     }
+
+    /// The administration removals this home owes that `caller` may
+    /// complete, for a client to show its person.
+    pub async fn owed_removals(
+        &self,
+        caller: ClientAuthorization,
+    ) -> Result<Vec<gents_protocol::owed_settlement::OwedRemoval>, ClientAccessError> {
+        let runtime = self.runtime()?;
+        let node_doc_id = self.node_document(&runtime).await?;
+        let observer = ConfigAccess::local_as(self.node.clone(), caller.actor().clone())
+            .with_client_authorization(caller)?;
+        Ok(crate::identity::owed_removals(&observer, &runtime, &node_doc_id).await?)
+    }
 }
 
 pub async fn list_requests(

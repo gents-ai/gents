@@ -825,24 +825,101 @@ def revokeBy (issuer : Standing) (s : State) (request : String) : State :=
 def revokeMemberBy (issuer : Standing) (s : State) (member : String) : State :=
   if withdrawAdmitted issuer then revokeMember s member else oweRevokeMember s member
 
+/-- Decision (owner, gents#3979): the runtime grants no node permission to a
+member whose administration removal is still owed, whatever grants it (a
+grant set, a direct permission, a session share, an approval), so the
+`administrator` relation left behind never turns into access again. An
+enrollment grant of that member is admitted: its receipt write takes the
+owed removal over before it issues any tuple
+(`a_reapproval_closes_the_owed_removal_first`). Rust owner: the one funnel of
+the runtime's node permission changes, `ConfigAccess::change_node_relation`,
+which refuses with `ConfigClientError::AdministrationRemovalPending`. -/
+def permissionGrantAdmitted (owed : Bool) : Bool := !owed
+
+/-- A grant from outside any enrollment, checked by the runtime: a node
+permission is refused to a member whose administration removal is owed
+(`permissionGrantAdmitted`); the Node `administrator` relation, which only a
+manager of it can add, is a deliberate grant that closes the owed removal.
+
+Decision (owner, gents#3979): someone who may manage the relation and grants
+it to a member whose removal is owed means it, so a later settlement must not
+undo it. Rust owner: `ConfigAccess::add_actor_relationship` on the Node
+`administrator` relation. -/
+def grantOther (s : State) (a : Held) : State :=
+  match a.tuple with
+  | .permission _ =>
+      if permissionGrantAdmitted (owedFor s a.subject) then grantIndependent s a else s
+  | .nodeAdministrator => { grantIndependent s a with receipts := clearOwed s.receipts a.subject }
+
+/-! ### Expiry -/
+
+/-- The clock an enrollment lease lapses on.
+
+Decision (owner, gents#3979): a lapsed lease withdraws the grant exactly as a
+revocation does. The provider's time is used where there is one, so the
+runtime and the provider agree on when a lease ended; the node's wall clock
+bounds it, so a provider that has not produced a block since the home came
+back (its time stands where it stopped, `UserDelegation.idleTrailSeconds`)
+cannot extend a lease. A home that was offline past a lease withdraws it on
+its first enrollment sweep after it starts, not after the provider catches
+up. External premise: the provider's time is in Unix seconds
+(`node_provider_time`). -/
+def lapseClock (provider : Option Nat) (wall : Nat) : Nat := max (provider.getD 0) wall
+
+def lapsed (provider : Option Nat) (wall expiresAt : Nat) : Bool :=
+  decide (expiresAt ≤ lapseClock provider wall)
+
+/-- A membership lapses when every current authorization of the member has:
+a renewal approved before expiry carries a later lease and keeps it. Rust
+owner: `membership_lapsed`, run by the enrollment sweep under the decision
+lock on a projection read under it, so a renewal and an expiry of the same
+member are decided one after the other; an expiry withdrawn first leaves a
+renewal approved after it a fresh enrollment, which takes the owed removal
+over (`grant`). -/
+def membershipLapsed (provider : Option Nat) (wall : Nat) (leases : List Nat) : Bool :=
+  !leases.isEmpty && leases.all (lapsed provider wall)
+
+theorem a_lease_never_outlives_either_clock (provider : Option Nat) (wall expiresAt : Nat)
+    (live : lapsed provider wall expiresAt = false) :
+    wall < expiresAt ∧ ∀ t, provider = some t → t < expiresAt := by
+  simp only [lapsed, lapseClock, decide_eq_false_iff_not, Nat.not_le, Nat.max_lt] at live
+  refine ⟨live.2, fun t h => ?_⟩
+  simpa [h] using live.1
+
+/-- A home back after its lease withdraws it whatever its provider's stale
+time says. -/
+theorem a_home_back_after_its_lease_withdraws (provider : Option Nat) (wall expiresAt : Nat)
+    (past : expiresAt ≤ wall) : lapsed provider wall expiresAt = true := by
+  simp only [lapsed, lapseClock, decide_eq_true_eq]
+  exact Nat.le_trans past (Nat.le_max_right _ _)
+
+theorem a_fresh_renewal_keeps_the_membership (provider : Option Nat) (wall renewal : Nat)
+    (leases : List Nat) (renewed : renewal ∈ leases) (fresh : lapsed provider wall renewal = false) :
+    membershipLapsed provider wall leases = false := by
+  simp only [membershipLapsed, Bool.and_eq_false_iff, Bool.not_eq_false', List.all_eq_false]
+  exact Or.inr ⟨renewal, renewed, by simp [fresh]⟩
+
 /-- Every step that changes enrollment authority, with its actor where the
 actor decides what it may change. An approval's grant and an abandoned
 approval run as the approver, which ACP admits only when it manages the
-relation (`approval`). -/
+relation (`approval`). An expiry runs as the Node, like the enrollment
+reconciliation's revocation. -/
 inductive Step where
   | grant (request member : String)
   | independent (a : Held)
   | revoke (issuer : Standing) (request : String)
   | revokeMember (issuer : Standing) (member : String)
+  | expire (member : String)
   | abandon (request : String)
   | settle (issuer : Standing) (member : String)
   deriving DecidableEq, Repr
 
 def Step.apply (s : State) : Step → State
   | .grant request member => Identity.EnrollmentGrant.grant s request member
-  | .independent a => grantIndependent s a
+  | .independent a => grantOther s a
   | .revoke issuer request => revokeBy issuer s request
   | .revokeMember issuer member => revokeMemberBy issuer s member
+  | .expire member => revokeMemberBy nodeStanding s member
   | .abandon request => Identity.EnrollmentGrant.abandon s request
   | .settle issuer member => Identity.EnrollmentGrant.settle issuer s member
 
@@ -889,6 +966,20 @@ theorem owed_after_independent (s : State) (a : Held) (member : String)
   · exact owed
   · exact owed
 
+theorem owed_after_other_grant (s : State) (a : Held) (member : String)
+    (owed : owedFor s member = true)
+    (notAdministration : a.subject ≠ member ∨ a.tuple ≠ .nodeAdministrator) :
+    owedFor (grantOther s a) member = true := by
+  unfold grantOther
+  split
+  · split
+    · exact owed_after_independent s a member owed
+    · exact owed
+  · rename_i h
+    rcases notAdministration with other | notAdmin
+    · exact owed_after_clear_of_other other owed
+    · exact absurd h notAdmin
+
 theorem owed_after_revoke (s : State) (request member : String)
     (owed : owedFor s member = true) : owedFor (revoke s request) member = true := by
   unfold revoke
@@ -921,15 +1012,27 @@ relation issues it or a new enrollment of the member takes it over. -/
 theorem owed_withdrawal_is_never_dropped (s : State) (member : String) (step : Step)
     (owed : owedFor s member = true) (gone : owedFor (step.apply s) member = false) :
     (∃ issuer, step = .settle issuer member ∧ withdrawAdmitted issuer = true) ∨
-      (∃ request, step = .grant request member) := by
+      (∃ request, step = .grant request member) ∨
+      step = .independent ⟨member, .nodeAdministrator⟩ := by
   cases step with
   | grant request m =>
       by_cases hm : m = member
-      · exact Or.inr ⟨request, by rw [hm]⟩
+      · exact Or.inr (Or.inl ⟨request, by rw [hm]⟩)
       · rw [Step.apply, owed_after_grant_of_other s request m member hm owed] at gone
         exact absurd gone (by decide)
   | independent a =>
-      rw [Step.apply, owed_after_independent s a member owed] at gone
+      by_cases deliberate : a.subject = member ∧ a.tuple = .nodeAdministrator
+      · obtain ⟨subject, tuple⟩ := deliberate
+        right; right
+        cases a; simp_all
+      · have : a.subject ≠ member ∨ a.tuple ≠ .nodeAdministrator := by
+          by_cases h : a.subject = member
+          · exact Or.inr fun t => deliberate ⟨h, t⟩
+          · exact Or.inl h
+        rw [Step.apply, owed_after_other_grant s a member owed this] at gone
+        exact absurd gone (by decide)
+  | expire m =>
+      rw [Step.apply, owed_after_revokeMember s nodeStanding m member owed] at gone
       exact absurd gone (by decide)
   | revoke issuer request =>
       have : owedFor (Step.apply s (.revoke issuer request)) member = true := by
@@ -969,17 +1072,20 @@ is refused. With `node_alone_neither_grants_nor_withdraws_administration`, no
 path lets the Node grant or remove Node administration by itself. -/
 theorem node_withdrawal_keeps_administration (s : State) (member : String) (step : Step)
     (byNode : (∃ request, step = .revoke nodeStanding request) ∨
-      (∃ m, step = .revokeMember nodeStanding m) ∨ (∃ m, step = .settle nodeStanding m))
+      (∃ m, step = .revokeMember nodeStanding m) ∨ (∃ m, step = .expire m) ∨
+      (∃ m, step = .settle nodeStanding m))
     (holding : holds s member .nodeAdministrator = true) :
     holds (step.apply s) member .nodeAdministrator = true := by
   have refused : withdrawAdmitted nodeStanding = false := by native_decide
   simp only [holds, List.contains_iff_mem] at holding ⊢
-  rcases byNode with ⟨request, rfl⟩ | ⟨m, rfl⟩ | ⟨m, rfl⟩
+  rcases byNode with ⟨request, rfl⟩ | ⟨m, rfl⟩ | ⟨m, rfl⟩ | ⟨m, rfl⟩
   · simp only [Step.apply, revokeBy, refused, Bool.false_eq_true, if_false]
     unfold oweRevoke
     split
     · exact holding
     · exact List.mem_filter.mpr ⟨holding, by simp⟩
+  · simp only [Step.apply, revokeMemberBy, refused, Bool.false_eq_true, if_false]
+    exact List.mem_filter.mpr ⟨holding, by simp [oweRevokeMember]⟩
   · simp only [Step.apply, revokeMemberBy, refused, Bool.false_eq_true, if_false]
     exact List.mem_filter.mpr ⟨holding, by simp [oweRevokeMember]⟩
   · simp only [Step.apply, settle, refused, Bool.false_and, Bool.false_eq_true, if_false]
@@ -1048,6 +1154,61 @@ theorem reapproval_takes_the_owed_withdrawal_over :
     let s := grant (oweRevoke (grant fresh "a" "member") "a") "b" "member"
     owedFor s "member" = false ∧ accounted s "member" .nodeAdministrator = true ∧
       heldOf (revoke s "b") "member" = [] := by
+  native_decide
+
+
+/-- A member whose administration removal is owed gains no node permission
+from any grant outside an enrollment. -/
+theorem an_owed_member_gains_no_node_permission (s : State) (member p : String)
+    (owed : owedFor s member = true) :
+    grantOther s ⟨member, .permission p⟩ = s := by
+  simp [grantOther, permissionGrantAdmitted, owed]
+
+/-- A fresh enrollment grant of the member writes its receipt and closes the
+owed removal in one step, before it issues any tuple, so the permission rule
+admits its tuples. -/
+theorem a_reapproval_closes_the_owed_removal_first (s : State) (request member : String)
+    (fresh : s.receipts.any (·.request == request) = false) :
+    owedFor (grant s request member) member = false := by
+  rw [grant, if_neg (by simp [fresh])]
+  simp only [owedFor, List.any_cons, clearOwed, List.any_map, Bool.false_and, Bool.false_or]
+  rw [List.any_eq_false]
+  intro r _
+  by_cases h : r.member == member <;> simp_all
+
+/-- A deliberate grant of the relation by a manager closes the owed removal,
+so a later settlement keeps the relation. -/
+theorem a_deliberate_grant_closes_the_owed_removal (s : State) (member : String) :
+    owedFor (grantOther s ⟨member, .nodeAdministrator⟩) member = false ∧
+      settle .owner (grantOther s ⟨member, .nodeAdministrator⟩) member =
+        grantOther s ⟨member, .nodeAdministrator⟩ := by
+  have closed : owedFor (grantOther s ⟨member, .nodeAdministrator⟩) member = false := by
+    simp only [grantOther, owedFor, clearOwed, List.any_map]
+    rw [List.any_eq_false]
+    intro r _
+    by_cases h : r.member == member <;> simp_all
+  exact ⟨closed, by simp [settle, closed]⟩
+
+/-- An expired member holds no node permission its grants alone accounted
+for, from the moment of the expiry. -/
+theorem expiry_withdraws_every_permission (s : State) (member p : String)
+    (accountedFor : accounted s member (.permission p) = true) :
+    holds (Step.apply s (.expire member)) member (.permission p) = false := by
+  have refused : withdrawAdmitted nodeStanding = false := by native_decide
+  simp only [Step.apply, revokeMemberBy, refused, Bool.false_eq_true, if_false, holds,
+    oweRevokeMember, removedByMembership]
+  rw [Bool.eq_false_iff]
+  intro h
+  simp only [accounted] at accountedFor
+  simp [List.contains_iff_mem, List.mem_filter, accountedFor] at h
+
+/-- An expiry owes the administration removal like a revocation; a renewal
+approved after it is a fresh enrollment and takes the removal over. -/
+theorem expiry_owes_administration_and_a_later_renewal_takes_it_over :
+    let s := Step.apply (grant fresh "first" "member") (.expire "member")
+    heldOf s "member" = ["node-administrator"] ∧ owedFor s "member" = true ∧
+      owedFor (grant s "renewal" "member") "member" = false ∧
+      heldOf (grant s "renewal" "member") "member" = derived.map Tuple.name := by
   native_decide
 
 end Identity.EnrollmentGrant

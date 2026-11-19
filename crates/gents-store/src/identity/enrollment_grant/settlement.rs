@@ -4,7 +4,7 @@ use super::{
     close_owed_in_txn, decode_receipts, load_enrollment_grant_receipts, EnrollmentGrantError,
     EnrollmentGrantTuple, NODE_ADMINISTRATOR_RELATION,
 };
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigClientError};
 
 /// Lean `Identity.EnrollmentGrant.SettlementStep`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -184,4 +184,101 @@ pub async fn settle_owed_withdrawals(
         }
     }
     Ok(standings)
+}
+
+/// Lean `permissionGrantAdmitted`.
+pub fn permission_grant_admitted(owed: bool) -> bool {
+    !owed
+}
+
+/// The runtime principal's access to `node`, when `node` serves a runtime
+/// that keeps enrollment grant receipts.
+fn receipt_reader(node: &std::sync::Arc<defra_node::Node>) -> Option<ConfigAccess> {
+    let runtime = identity::Did::new(node.node_identity_did()?).ok()?;
+    node.get_collection(super::RECEIPT_COLLECTION)
+        .ok()
+        .flatten()?;
+    Some(ConfigAccess::local_as(node.clone(), runtime))
+}
+
+/// The receipts on `node` that owe the removal of `member`'s Node
+/// `administrator` relation (Lean `owedFor`), as the runtime reads them.
+pub(crate) async fn owed_removal_receipts(
+    node: &std::sync::Arc<defra_node::Node>,
+    member: &str,
+) -> Result<Vec<String>, ConfigClientError> {
+    use gents_protocol::document_query::{
+        fields::network_enrollment_grant as fields, Filter, Query, Selection,
+    };
+    let Some(runtime) = receipt_reader(node) else {
+        return Ok(Vec::new());
+    };
+    let rendered = Query::select(Selection::doc_id())
+        .filter(
+            Filter::eq(fields::MEMBER_DID, member)
+                .and(Filter::not_null(fields::WITHDRAWAL_OWED_AT)),
+        )
+        .render();
+    let response = runtime.read(&rendered).await?;
+    Ok(
+        gents_protocol::graphql::graphql_rows_from_response(&response, super::RECEIPT_COLLECTION)
+            .iter()
+            .filter_map(|row| row["_docID"].as_str().map(str::to_owned))
+            .collect(),
+    )
+}
+
+/// Close `member`'s owed removal on `node` after a deliberate grant of the
+/// relation (Lean `grantOther`).
+pub(crate) async fn close_owed_removal(
+    node: &std::sync::Arc<defra_node::Node>,
+    member: &str,
+) -> Result<(), ConfigClientError> {
+    let owed = owed_removal_receipts(node, member).await?;
+    let Some(runtime) = receipt_reader(node) else {
+        return Ok(());
+    };
+    close(&runtime, &owed).await.map_err(|error| match error {
+        EnrollmentGrantError::Retire(error) => error,
+        _ => ConfigClientError::OwedRemovalUnconfirmed,
+    })
+}
+
+/// Lean `lapseClock`: the provider's time where there is one, bounded below by
+/// the node's wall clock, in Unix seconds.
+pub fn lapse_clock(provider: Option<u64>, wall: u64) -> u64 {
+    provider.unwrap_or(0).max(wall)
+}
+
+/// Lean `membershipLapsed`: every current authorization lease of the member,
+/// in Unix seconds, has ended on the lapse clock.
+pub fn membership_lapsed(provider: Option<u64>, wall: u64, leases: &[u64]) -> bool {
+    let now = lapse_clock(provider, wall);
+    !leases.is_empty() && leases.iter().all(|expires| *expires <= now)
+}
+
+/// The administration removals the home owes that `caller` may complete:
+/// those whose relation it may observe, which only a manager of the relation
+/// may (Lean `observeAdministrator`).
+pub async fn owed_removals(
+    caller: &ConfigAccess,
+    runtime: &ConfigAccess,
+    node_doc_id: &str,
+) -> Result<Vec<gents_protocol::owed_settlement::OwedRemoval>, EnrollmentGrantError> {
+    let mut removals = Vec::new();
+    for member in owed_members(runtime).await? {
+        let did = identity::Did::new(&member).map_err(EnrollmentGrantError::MemberIdentity)?;
+        match caller
+            .observe_actor_relationship("Node", node_doc_id, NODE_ADMINISTRATOR_RELATION, &did)
+            .await
+        {
+            Ok(administrator_held) => removals.push(gents_protocol::owed_settlement::OwedRemoval {
+                member_did: member,
+                administrator_held,
+            }),
+            Err(refused) if refused.is_permission_denied() => {}
+            Err(error) => return Err(EnrollmentGrantError::Observe(error)),
+        }
+    }
+    Ok(removals)
 }
