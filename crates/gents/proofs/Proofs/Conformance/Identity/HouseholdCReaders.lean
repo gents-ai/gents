@@ -33,12 +33,6 @@ structure ResetInput where
   asset : Configuration.DesktopResetAsset
   deriving ToJson
 
-structure HandoffInput where
-  request : Bool
-  owner : Bool
-  node : Bool
-  deriving ToJson
-
 structure ReceiptInput where
   name : String
   state : UnattendedReceipt.DurableState
@@ -105,16 +99,9 @@ def clientGoalGraphHandoff : Family GraphHandoffInput Bool where
 @[conformance_family]
 def desktopReset : Family ResetInput Bool where
   inputs := ([false, true] : List Bool).flatMap fun full =>
-    ([.cache, .binding, .upgrade, .userKey, .userMetadata, .p2pKey, .custody, .peers] :
+    ([.cache, .binding, .upgrade, .userKey, .userMetadata, .custody, .connections] :
       List Configuration.DesktopResetAsset).map fun asset => { full, asset }
   model := fun i => Configuration.desktopResetRetires i.full i.asset
-
-@[conformance_family]
-def managedClientHandoff : Family HandoffInput Bool where
-  inputs := ([false, true] : List Bool).flatMap fun request =>
-    ([false, true] : List Bool).flatMap fun owner =>
-      ([false, true] : List Bool).map fun node => { request, owner, node }
-  model := fun i => Configuration.managedClientMayApprove i.request i.owner i.node
 
 /-- model-production-gap: production has no native transaction-scoped receipt
 witness. No production owner observes a receipt as absent, pending, admitted or

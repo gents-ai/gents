@@ -68,11 +68,47 @@ pub(super) fn private_dir(path: &Path) -> Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
+/// Copies an executable that is exec'd afterwards, here or by the service
+/// manager. The updater never opens `target` for writing: Linux execve refuses
+/// a file any process holds open for writing (ETXTBSY), and a spawn on another
+/// thread copies this process's descriptors into its child until that child
+/// execs, even with O_CLOEXEC. A `/bin/cp` child this call reaps writes it
+/// instead (`tla/ExecutableStaging.tla`); `target` must not be held open by
+/// the caller either.
 pub(super) fn copy_executable(source: &Path, target: &Path) -> Result<()> {
-    fs::copy(source, target)?;
+    copy_in_child(source, target)?;
     #[cfg(unix)]
     fs::set_permissions(target, fs::Permissions::from_mode(0o700))?;
     File::open(target)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn copy_in_child(source: &Path, target: &Path) -> Result<()> {
+    let mut command = std::process::Command::new("/bin/cp");
+    command
+        .arg("--")
+        .arg(source)
+        .arg(target)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    let output = gents_session::exec::native_spawn::output_std(&mut command)
+        .context("starting /bin/cp to stage an executable")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "copying {} to {} failed ({}): {}",
+        source.display(),
+        target.display(),
+        output.status,
+        gents_protocol::failure_text::bounded_text(&String::from_utf8_lossy(&output.stderr))
+    );
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn copy_in_child(source: &Path, target: &Path) -> Result<()> {
+    fs::copy(source, target)?;
     Ok(())
 }
 

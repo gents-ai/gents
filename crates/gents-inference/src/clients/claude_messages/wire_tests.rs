@@ -12,7 +12,9 @@ use gents_claude::request::RequestHead;
 use gents_claude::retry::{DEFAULT_MAX_RETRIES, OAUTH_REFRESH_ATTEMPTS};
 use rapidhash::{HashSetExt, RapidHashSet};
 use rig::completion::CompletionError;
-use rig::http_client::{HttpClientExt, MultipartForm, Request};
+use rig::http_client::{MultipartForm, Request};
+
+use crate::llm::rig_compat::http::Transport;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -576,10 +578,10 @@ async fn usage_headers_are_observed_on_success_and_on_error() {
         let _ = client
             .send_streaming(first_party_request(server.port, "{}"))
             .await;
-        let stored =
-            crate::clients::provider_http::tests::stored_usage_eventually(&cache, &node, &account)
-                .await
-                .expect("usage recorded");
+        let stored = crate::clients::provider_http::tests::stored_usage_when_recorded(
+            &cache, &node, &account,
+        )
+        .await;
         let window = &stored.report.windows[0];
         assert_eq!((window.label.as_str(), window.used_pct), ("5h", 50.0));
         assert_eq!(window.source, source);
@@ -595,7 +597,7 @@ async fn multipart_is_a_typed_error() {
         .body(MultipartForm::new())
         .expect("request");
     let error = client
-        .send_multipart::<Bytes>(request)
+        .send_multipart(request)
         .await
         .err()
         .expect("multipart");

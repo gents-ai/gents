@@ -111,6 +111,7 @@ async fn call_installed_inner(
             input,
             gents_toolcalls::plugin::executor::ToolInvocation {
                 tool_root: None,
+                own_folder: None,
                 tool_calls: false,
                 context,
             },
@@ -237,7 +238,7 @@ mod tests {
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
             data_collection_schemas: Default::default(),
-            plugin_interface: None,
+            gents_version: None,
         }
     }
 

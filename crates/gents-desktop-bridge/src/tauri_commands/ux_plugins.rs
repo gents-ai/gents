@@ -10,10 +10,11 @@ use serde_json::Value;
 use tauri::State;
 use ts_rs::TS;
 
-use crate::error::{BridgeError, BridgeErrorCode};
+use crate::runtime_pack_watch::{WatchAcquireError, WatchDelivery, WatchNotice};
 use crate::state::{current_core, DesktopAppState};
-use gents_desktop_core::pack_watch::{WatchAcquireError, WatchDelivery, WatchNotice};
 use gents_server::packs;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {
@@ -310,8 +311,8 @@ where
         let observe = |phase, event, next| {
             tracing::debug!(?phase, ?event, ?next, "pack observation transition");
         };
-        gents_desktop_core::pack_watch::run(
-            gents_desktop_core::pack_watch::WATCH_TIMING,
+        crate::runtime_pack_watch::run(
+            crate::runtime_pack_watch::WATCH_TIMING,
             acquire,
             &request,
             deliver,
@@ -381,7 +382,7 @@ mod tests {
             serde_json::to_value(reconnecting).unwrap(),
             serde_json::json!({"kind": "reconnecting", "delay_ms": 2000})
         );
-        let reason = gents_desktop_core::pack_watch::TerminalReason::Unreachable;
+        let reason = crate::runtime_pack_watch::TerminalReason::Unreachable;
         let error =
             UxDataWatchEvent::from(WatchDelivery::Notice(WatchNotice::Unavailable { reason }));
         assert_eq!(

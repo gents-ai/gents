@@ -6,6 +6,7 @@ use defra_node::Node as EmbeddedNode;
 
 use crate::backends::provider::BackendProviderKind;
 use crate::llm::rig_compat::http::Uri;
+use crate::llm::rig_compat::model::LiftedClient;
 use crate::llm::rig_compat::providers::{ChatCompletionsClient, OpenRouterClient, ResponsesClient};
 use crate::resolved::ResolvedAgent;
 
@@ -52,15 +53,19 @@ pub enum BackendClient {
     ),
     XaiGrokResponses(ResponsesClient<crate::clients::xai_grok::CapturingXaiGrokOAuthHttpClient>),
     ClaudeSubscription(
-        crate::clients::claude_subscription::ClaudeSubscriptionClient<
-            crate::auth::credential::DbCredentialBearer,
+        LiftedClient<
+            crate::clients::claude_subscription::ClaudeSubscriptionModel<
+                crate::auth::credential::DbCredentialBearer,
+            >,
         >,
     ),
     /// A Messages client with a static credential: the Anthropic API key, or a
     /// Claude platform backend, whose route names its provider kind.
     AnthropicApiKey(
-        crate::clients::claude_subscription::ClaudeSubscriptionClient<
-            crate::clients::claude_subscription::ApiKeyBearer,
+        LiftedClient<
+            crate::clients::claude_subscription::ClaudeSubscriptionModel<
+                crate::clients::claude_subscription::ApiKeyBearer,
+            >,
         >,
     ),
 }
@@ -78,7 +83,7 @@ impl BackendClient {
             Self::AnthropicApiKey(client) => {
                 return messages_replay_issuer(
                     self.provider_family(),
-                    client.route.issuer_uri()?.parse()?,
+                    client.0.route.issuer_uri()?.parse()?,
                 )
             }
         }
@@ -94,8 +99,8 @@ impl BackendClient {
     /// Other accounts a refused request can be reissued on at once: the pool's size, none for a single account.
     pub fn account_hops(&self) -> u32 {
         match self {
-            Self::ClaudeSubscription(client) if client.rotation.is_some() => {
-                u32::try_from(client.accounts.len()).unwrap_or(u32::MAX)
+            Self::ClaudeSubscription(client) if client.0.rotation.is_some() => {
+                u32::try_from(client.0.accounts.len()).unwrap_or(u32::MAX)
             }
             _ => 0,
         }
@@ -113,6 +118,7 @@ impl BackendClient {
             }
             Self::ClaudeSubscription(_) => BackendProviderKind::ClaudeCliSubscription.as_str(),
             Self::AnthropicApiKey(client) => client
+                .0
                 .route
                 .platform_kind
                 .unwrap_or(BackendProviderKind::AnthropicApiKey)
@@ -195,19 +201,20 @@ pub async fn build_backend_client(
                 agent.agent_did, agent.backend_endpoint
             );
             if agent.openai_wire_api == gents_loop::openai_wire::OpenAiWireApi::ChatCompletions {
-                let client = crate::clients::inference_http::build_openai_chat_completions_client(
-                    api_key,
-                    &agent.backend_endpoint,
-                    crate::clients::inference_http::SessionTaggingHttpClient::new(
-                        crate::rendered_request::RenderedRequestCapturingHttpClient::new(
-                            api_key_http(&cache, &node, agent)?,
+                let client =
+                    crate::llm::rig_compat::providers::build_openai_chat_completions_client(
+                        api_key,
+                        &agent.backend_endpoint,
+                        crate::clients::inference_http::SessionTaggingHttpClient::new(
+                            crate::rendered_request::RenderedRequestCapturingHttpClient::new(
+                                api_key_http(&cache, &node, agent)?,
+                            ),
                         ),
-                    ),
-                )
-                .with_context(|| build_context.clone())?;
+                    )
+                    .with_context(|| build_context.clone())?;
                 Ok(BackendClient::OpenAiChatCompletions(client))
             } else {
-                let client = crate::clients::inference_http::build_openai_responses_client(
+                let client = crate::llm::rig_compat::providers::build_openai_responses_client(
                     api_key,
                     &agent.backend_endpoint,
                     crate::clients::inference_http::SessionTaggingHttpClient::new(
@@ -229,7 +236,7 @@ pub async fn build_backend_client(
                 "building OpenRouter completion client for agent {} against {}",
                 agent.agent_did, agent.backend_endpoint
             );
-            let client = crate::clients::inference_http::build_openrouter_client(
+            let client = crate::llm::rig_compat::providers::build_openrouter_client(
                 api_key,
                 &agent.backend_endpoint,
                 crate::rendered_request::RenderedRequestCapturingHttpClient::<
@@ -345,7 +352,7 @@ pub async fn build_backend_client(
                     agent.agent_did
                 )
             })?;
-            Ok(BackendClient::ClaudeSubscription(client))
+            Ok(BackendClient::ClaudeSubscription(client.lifted()))
         }
         BackendProviderKind::AnthropicApiKey => {
             let usage = crate::usage_observation::UsageAccount::for_agent(agent)
@@ -355,7 +362,8 @@ pub async fn build_backend_client(
                     agent.node_did(),
                     api_key.to_owned(),
                     usage,
-                ),
+                )
+                .lifted(),
             ))
         }
         BackendProviderKind::ClaudeGateway
@@ -465,7 +473,8 @@ pub async fn build_backend_client(
                     agent.backend_id.as_deref().unwrap_or(""),
                     bearer,
                     route,
-                ),
+                )
+                .lifted(),
             ))
         }
     }
@@ -1069,6 +1078,6 @@ mod tests {
         let BackendClient::AnthropicApiKey(client) = &client else {
             panic!("not a Messages client");
         };
-        assert!(client.route.gateway_mark_from_token);
+        assert!(client.0.route.gateway_mark_from_token);
     }
 }

@@ -12,9 +12,9 @@ use super::sse::{self, stream_sse_body_observed, MessagesSseState};
 use super::transport::{send_capturing, url_parts, ClaudeHttpClient};
 use super::MESSAGES_URI;
 use crate::auth::credential::BearerSource;
-use crate::clients::claude_subscription::ClaudeStreamResponse;
 use crate::llm::rig_compat::completion::{CompletionError, CompletionRequest, RawStreamingChoice};
 use crate::llm::rig_compat::http::{self as http_client, Request};
+use crate::llm::rig_compat::model::StreamEnd;
 use bytes::Bytes;
 use rapidhash::RapidHashSet;
 use reqwest::header::HeaderValue;
@@ -39,7 +39,7 @@ pub async fn stream_messages<S>(
     bearer: &S,
     usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
 >
 where
@@ -82,7 +82,7 @@ pub(crate) async fn stream_messages_at<S>(
     bearer: &S,
     usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
 >
 where
@@ -109,7 +109,7 @@ pub(crate) async fn stream_messages_routed<S>(
     bearer: &S,
     usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     CompletionError,
 >
 where
@@ -265,7 +265,7 @@ pub(crate) async fn open_messages_at<S>(
     bearer: &S,
     usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     MessagesOpenError,
 >
 where
@@ -289,7 +289,7 @@ async fn open_messages<S>(
     bearer: &S,
     usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
-    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    impl futures::Stream<Item = Result<RawStreamingChoice<StreamEnd>, CompletionError>>,
     MessagesOpenError,
 >
 where

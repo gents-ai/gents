@@ -15,6 +15,8 @@ pub struct IdentityKeyUnavailable {
 
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
+    #[error("registering a held signing identity")]
+    RegisterSigningIdentity(#[from] defra_core::signing::IdentityConflict),
     #[error(
         "agent creation_nonce must contain 32 bytes encoded as 64 lowercase hexadecimal characters"
     )]
@@ -114,8 +116,6 @@ pub enum IdentityError {
     NodePublicKeyMismatch { did: String },
     #[error("loading Ed25519 node signing identity")]
     LoadNodeSigning(#[source] identity::Error),
-    #[error("registering the signing identity")]
-    SigningIdentityConflict(#[from] defra_core::signing::IdentityConflict),
     #[error("parsing commit signer DID {did}")]
     ParseCommitSignerDid {
         did: String,

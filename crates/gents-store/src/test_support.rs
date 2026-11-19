@@ -6,7 +6,7 @@ pub mod relationships;
 pub mod wire_database;
 
 #[cfg(unix)]
-pub use executable_script::write_executable_script;
+pub use executable_script::{copy_executable, hold_sibling, write_executable_script, HeldSibling};
 
 /// Hang detector for a test wait that has no deadline of its own: the longest
 /// the awaited owner may go without a change before the wait fails. It is one
@@ -247,6 +247,46 @@ impl tracing::Subscriber for CapturedTargetSubscriber {
     fn enter(&self, _span: &tracing::Id) {}
 
     fn exit(&self, _span: &tracing::Id) {}
+}
+
+pub fn unbound_journal_schema() -> String {
+    use gents_protocol::schemas::{CLIENT_JOURNAL_POLICY_ID, CLIENT_JOURNAL_POLICY_RESOURCE};
+    let directive = format!(
+        r#" @policy(id: "{CLIENT_JOURNAL_POLICY_ID}", resource: "{CLIENT_JOURNAL_POLICY_RESOURCE}")"#
+    );
+    let sdl = gents_protocol::schemas::PENDING_CHAT_SUBMISSION;
+    assert!(sdl.contains(&directive));
+    sdl.replacen(&directive, "", 1)
+}
+
+pub async fn client_journal_node(
+    client_did: &str,
+) -> anyhow::Result<std::sync::Arc<defra_node::Node>> {
+    let node = std::sync::Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(client_did)
+            .build()
+            .await?,
+    );
+    node.add_collection(&unbound_journal_schema()).await?;
+    Ok(node)
+}
+
+pub fn local_authentication_route(node_did: impl Into<String>) -> axum::Router {
+    let node_did = node_did.into();
+    axum::Router::new().route(
+        "/status",
+        axum::routing::get(move || {
+            let node_did = node_did.clone();
+            async move {
+                axum::Json(serde_json::json!({
+                    "node_did": node_did,
+                    (gents_protocol::client_authentication::STATUS_FIELD):
+                        gents_protocol::client_authentication::ClientAuthentication::Local,
+                }))
+            }
+        }),
+    )
 }
 
 pub async fn unrelated_document_reader(

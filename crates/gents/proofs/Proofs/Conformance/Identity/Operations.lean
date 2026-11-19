@@ -541,14 +541,6 @@ def enrollmentPolicyAllowed (i : EnrollmentPolicyInput) : Allowed :=
   { allowed := allowed 5 (enrollmentPolicyState i.name) i.actor "enrollment_records" i.document
       i.permission }
 
-/-- The thin-client scenario writes its own enrollment request with no local
-Node and asks native ACP and the authenticated GraphQL server for each actor's
-access to it. -/
-@[conformance_family]
-def enrollmentPolicyThin : Family EnrollmentPolicyInput Allowed where
-  inputs := enrollmentPolicyInputs.filter (·.name.startsWith "thin-")
-  model := enrollmentPolicyAllowed
-
 /-- model-production-gap: the thin-client scenario builds only the request a
 client writes before it has a Node; no production scenario builds the admin's
 received request, its parent, the revoked admin reader or the terminal
@@ -563,11 +555,11 @@ structure ReplicaInput where
   deriving ToJson
 
 def replicaPending : State :=
-  replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime" "local-node" "user"
+  replicaGrant privateReplicaFixture "foreign" "enrollment_records" "remote" "runtime" "local-node" "user"
     true true true false false
 
 def replicaLinked : State :=
-  replicaLinkPending replicaPending "enrollment_records" "remote" "runtime" "local-node" "user"
+  replicaLinkPending replicaPending "foreign" "enrollment_records" "remote" "runtime" "local-node" "user"
     true true true
 
 def replicaRevoked : State :=
@@ -577,7 +569,7 @@ def replicaState : String → State
   | "pending" => replicaPending
   | "linked" => replicaLinked
   | "revoked" => replicaRevoked
-  | "after-repair" => replicaLinkPending replicaRevoked "enrollment_records" "remote" "runtime"
+  | "after-repair" => replicaLinkPending replicaRevoked "foreign" "enrollment_records" "remote" "runtime"
       "local-node" "user" true true true
   | _ => privateReplicaFixture
 

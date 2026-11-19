@@ -13,6 +13,7 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
     let runtime = Arc::new(gents_store::identity::KeyIdentity::load_or_create(&runtime_path, None)?);
     let runtime_key =
         gents_store::identity::load_file_identity(&runtime_path)?.private_key_bytes();
+    let operator = Arc::new(gents_store::identity::KeyIdentity::load_or_create(directory.path().join("operator"), None)?);
     let user = gents_store::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
     let outsider = gents_store::identity::KeyIdentity::load_or_create(directory.path().join("outsider"), None)?;
     let binding = gents_store::identity::provision_agent_identity(runtime.as_ref())?;
@@ -22,6 +23,7 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
         gents_store::identity::resolve_agent_identity(runtime.as_ref(), &sibling_binding)?;
     let open = |key: Vec<u8>| {
         let runtime = runtime.clone();
+        let operator = operator.clone();
         let data_path = directory.path().join("database");
         async move {
             let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -30,7 +32,7 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
                 EmbeddedNode::builder()
                     .with_node_identity_did(runtime.did())
                     .with_signing_key(defra_node::SigningKey::Ed25519(key))
-                    .with_node_acp_enabled()
+                    .with_node_acp_owner(operator.did())
                     .with_http(defra_node::HttpConfig::with_listener(listener)?)
                     .with_storage_backend(defra_node::StorageBackend::Regolith)
                     .data_path(data_path)
@@ -41,6 +43,16 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
         }
     };
     let (node, address) = open(runtime_key.clone()).await?;
+    let setup = defra_core::RequestContext::default().with_identity(Some(operator.did().to_owned()));
+    for permission in [
+        NodePermission::CollectionPatch, NodePermission::CollectionGet,
+        NodePermission::DacPolicyAdd, NodePermission::NacRelationAdd,
+        NodePermission::DocumentRead, NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd, NodePermission::DacRelationDelete,
+    ] {
+        node.add_nac_actor_relationship_as(&setup, permission.as_str(), runtime.did()).await?;
+    }
+
     node.add_dac_policy_with_counter_as(
         &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
         gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,

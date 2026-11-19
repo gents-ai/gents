@@ -138,6 +138,18 @@ def configurationActions : List Action :=
 def configurationTrace : PolicyTraceInput :=
   traceInput "configuration-explicit-grants" ConfigurationFixture.initial configurationActions
 
+def foreignReplicaTrace : PolicyTraceInput :=
+  let state : State := { objects := [⟨"nodes", "local-node", userDid⟩,
+      ⟨"enrollment_records", "remote", strangerDid⟩], relations := [], enrolled := [] }
+  let reader : Relation := ⟨"enrollment_records", "remote", "reader", .actor runtimeDid⟩
+  let manager : Relation := ⟨"enrollment_records", "remote", "reader_manager", .actor runtimeDid⟩
+  let userReader : Relation := ⟨"enrollment_records", "remote", "reader", .actor userDid⟩
+  let parent : Relation := ⟨"enrollment_records", "remote", "parent", .object "nodes" "local-node"⟩
+  traceInput "foreign-replica-explicit-authority" state
+    [.grantAs runtimeDid reader, .grantAs strangerDid manager,
+     .grantAs runtimeDid userReader, .check userDid "enrollment_records" "remote" "read",
+     .grantAs runtimeDid parent]
+
 /-- Every household fixture's trace, replayed against native document ACP
 with the production policy installed. -/
 @[conformance_family]
@@ -145,7 +157,7 @@ def policyTrace : Family PolicyTraceInput (List (Option Bool)) where
   inputs := [traceInput "user-node-agents-mixed-session-ownership-policy-followup"
       HouseholdFixture.initial householdActions,
     traceInput "operations-parent-publication" OperationsFixture.initial OperationsFixture.actions,
-    configurationTrace,
+    configurationTrace, foreignReplicaTrace,
     traceInput "secret-configuration-publication" SecretConfigurationFixture.initial
       SecretConfigurationFixture.actions]
   model := PolicyTraceInput.outcomes

@@ -692,7 +692,12 @@ mod tests {
     }
 
     async fn node_with_findings() -> Arc<EmbeddedNode> {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            gents_store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         node.add_collection(
             r#"
             type CandidateFinding {

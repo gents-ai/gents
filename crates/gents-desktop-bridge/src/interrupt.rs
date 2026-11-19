@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use gents_protocol::operations::request::{RequestInterruptInput, RequestRef};
 
-use crate::error::BridgeError;
 use crate::types::{DesktopInterruptRequest, InterruptRequestResult};
+use gents_store::client_error::BridgeError;
 
 /// Interrupt exactly `req.request_id`. Only `"userCancelled"` is
 /// operator-authentic; the runtime derives every other cause.
 pub async fn interrupt_request(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     req: &DesktopInterruptRequest,
 ) -> Result<InterruptRequestResult, BridgeError> {
     if req.cause != "userCancelled" {
@@ -37,7 +37,7 @@ pub async fn interrupt_request(
     )
     .await
     .map_err(|error| {
-        BridgeError::classify_transport_error(gents_desktop_core::error::request_operation_failure(
+        BridgeError::classify_transport_error(gents_store::client_error::request_operation_failure(
             error,
         ))
     })?;

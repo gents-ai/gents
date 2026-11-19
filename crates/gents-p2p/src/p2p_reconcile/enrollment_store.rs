@@ -401,7 +401,7 @@ impl GraphqlEnrollmentStore {
             "renewal intent signature is invalid"
         );
         let p2p =
-            gents_store::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+            crate::node_access::operations(&self.node).context("runtime P2P is unavailable")?;
         let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
             .await?
             .map_err(anyhow::Error::msg)?;
@@ -589,6 +589,7 @@ impl GraphqlEnrollmentStore {
             self.node.node_identity_did() == Some(self.identity.did()),
             "enrollment publication requires the local runtime identity"
         );
+        gents_store::local::document_acp::ensure_node_publication(&self.node)?;
         let runtime = identity::Did::new(self.identity.did())?;
         let reader = identity::Did::new(recipient)?;
         let access = ConfigAccess::local_as(self.node.clone(), runtime.clone());
@@ -629,7 +630,7 @@ impl GraphqlEnrollmentStore {
                             .await?;
                     }
                     if let Some(withdrawal) = withdrawal {
-                        withdrawal.stage_in_txn(txn, parent).await?;
+                        withdrawal.retire_owing_in_txn(txn).await?;
                     }
                     Ok::<_, anyhow::Error>(response)
                 })
@@ -1077,11 +1078,12 @@ impl GraphqlEnrollmentStore {
         ))
     }
 
-    /// Lean `Identity.EnrollmentGrant.revoke` for a denied request, or
-    /// `revokeMember` for a revoked membership, whose every generation's
+    /// Lean `Identity.EnrollmentGrant.oweRevoke` for a denied request, or
+    /// `oweRevokeMember` for a revoked membership, whose every generation's
     /// receipt is withdrawn: plan the withdrawal and revoke its node
-    /// permissions now, before the revision commits; the receipts and the
-    /// Node `administrator` relation retire in the revision's transaction.
+    /// permissions now, as the NAC owner, before the revision commits; the
+    /// receipts retire in the revision's transaction, owing the Node
+    /// `administrator` relation's withdrawal to the owner's client.
     async fn prepare_grant_withdrawal(
         &self,
         request_id: &str,
@@ -1119,31 +1121,17 @@ impl GraphqlEnrollmentStore {
         member: &str,
         scope: WithdrawalScope,
     ) -> Result<()> {
-        use gents_store::graphql::escape_graphql_string;
         let Some(withdrawal) = self
             .prepare_grant_withdrawal(request_id, member, scope)
             .await?
         else {
             return Ok(());
         };
-        let runtime = identity::Did::new(self.identity.did())?;
         self.runtime_access()?
             .transact_write("p2p.withdraw_enrollment_grant", |txn| {
-                let (withdrawal, runtime) = (&withdrawal, &runtime);
+                let withdrawal = &withdrawal;
                 Box::pin(async move {
-                    let query = format!(
-                        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
-                        escape_graphql_string(runtime.as_str())
-                    );
-                    let nodes = txn.execute(&query).await?;
-                    let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
-                    let [node] = nodes.as_slice() else {
-                        anyhow::bail!("grant withdrawal requires exactly one visible local Node");
-                    };
-                    let node = node["_docID"]
-                        .as_str()
-                        .context("grant withdrawal Node has no document ID")?;
-                    withdrawal.stage_in_txn(txn, node).await?;
+                    withdrawal.retire_owing_in_txn(txn).await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -1155,7 +1143,7 @@ impl GraphqlEnrollmentStore {
         request: &EnrollmentRequestRecord,
     ) -> Result<DateTime<Utc>> {
         let p2p =
-            gents_store::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+            crate::node_access::operations(&self.node).context("runtime P2P is unavailable")?;
         let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
             .await
             .context("timed out reading the enrollment server peer identity")?
@@ -1269,7 +1257,6 @@ impl GraphqlEnrollmentStore {
         };
         receipt.admin_sig = self.identity.sign(&receipt.signing_payload()).await?;
         receipt.validate_against_approval(&active.request, &active.decision)?;
-        let mutation = route_receipt_mutation(&receipt);
         let recipient = if self.identity.did() == active.request.admin_did {
             &active.request.candidate_did
         } else {
@@ -1279,6 +1266,7 @@ impl GraphqlEnrollmentStore {
             );
             &active.request.admin_did
         };
+        let mutation = route_receipt_mutation(&receipt, recipient);
         let committed = self
             .publish_records(
                 "p2p.write_enrollment_route_receipt",
@@ -1336,7 +1324,7 @@ impl GraphqlEnrollmentStore {
                 "suppressed stale enrollment terminal delivery");
             return true;
         }
-        let Some(p2p) = gents_store::identity::node_p2p(&self.node) else {
+        let Some(p2p) = crate::node_access::operations(&self.node) else {
             return true;
         };
         let documents = terminal_documents(decision_doc_id, revision_doc_id, route_receipt_doc_id);
@@ -1946,12 +1934,13 @@ fn decision_mutation(
     let decision_sig = bs58::encode(&decision.admin_sig).into_string();
     let decision_input = format!(
         r#"{{
-          protocol_version: {}, decision_id: "{}", request_id: "{}",
+          initial_reader_did: "{}", protocol_version: {}, decision_id: "{}", request_id: "{}",
           request_digest: "{}", network_id: "{}", admin_did: "{}",
           candidate_did: "{}", candidate_peer: "{}", owner_node_did: "{}",
           decision: "{}", authorization_sequence: {}, authorization_expires_at: "{}", decided_at: "{}",
           signer_did: "{}", admin_sig: "{}"
         }}"#,
+        escaped(&decision.candidate_did),
         decision.protocol_version,
         escaped(&decision.decision_id),
         escaped(&decision.request_id),
@@ -1973,12 +1962,13 @@ fn decision_mutation(
         format!(
             r#"
               create_NetworkAuthorizationRevision(input: {{
-                protocol_version: {}, revision_id: "{}", request_id: "{}",
+                initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
                 request_digest: "{}", network_id: "{}", admin_did: "{}",
                 member_did: "{}", member_peer: "{}", owner_node_did: "{}",
                 sequence: {}, authorization_expires_at: "{}", kind: "{}", issued_at: "{}", signer_did: "{}",
                 admin_sig: "{}"
               }}) {{ _docID }}"#,
+            escaped(&revision.member_did),
             revision.protocol_version,
             escaped(&revision.revision_id),
             escaped(&revision.request_id),
@@ -2010,13 +2000,14 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
     format!(
         r#"mutation {{
           create_NetworkAuthorizationRevision(input: {{
-            protocol_version: {}, revision_id: "{}", request_id: "{}",
+            initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
             member_did: "{}", member_peer: "{}", owner_node_did: "{}",
             sequence: {}, authorization_expires_at: "{}", kind: "{}",
             issued_at: "{}", signer_did: "{}", admin_sig: "{}"
           }}) {{ _docID }}
         }}"#,
+        escaped(&revision.member_did),
         revision.protocol_version,
         escaped(&revision.revision_id),
         escaped(&revision.request_id),
@@ -2035,19 +2026,20 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
     )
 }
 
-fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord) -> String {
+fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord, recipient: &str) -> String {
     let escaped = |value: &str| gents_store::graphql::escape_graphql_string(value);
     let admin_sig = bs58::encode(&receipt.admin_sig).into_string();
     format!(
         r#"mutation {{
           create_NetworkEnrollmentRouteReceipt(input: {{
-            protocol_version: {}, receipt_id: "{}", request_id: "{}",
+            initial_reader_did: "{}", protocol_version: {}, receipt_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
             member_did: "{}", member_peer: "{}", server_peer: "{}",
             owner_node_did: "{}", authorization_sequence: {}, authorization_expires_at: "{}", direction: "{}",
             applied_at: "{}", signer_did: "{}", admin_sig: "{}"
           }}) {{ _docID }}
         }}"#,
+        escaped(recipient),
         receipt.protocol_version,
         escaped(&receipt.receipt_id),
         escaped(&receipt.request_id),

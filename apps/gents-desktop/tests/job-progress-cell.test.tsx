@@ -238,7 +238,7 @@ describe("JobProgressCell", () => {
     const remote = renderIn(
       testApp({
         api: { getDynamicWorkflow: remoteLookup },
-        deployments: [node({ nodeDid: "did:test:remote", source: "enrollment" })],
+        deployments: [node({ nodeDid: "did:test:remote", local: false })],
         selection: { nodeDid: "did:test:remote", sessionId: "session-1" },
       }),
       <JobProgressCell
@@ -257,7 +257,7 @@ describe("JobProgressCell", () => {
   it("closes an open local promotion dialog when the selected owner changes", async () => {
     const getDynamicWorkflow = vi.fn().mockReturnValue(new Promise(() => {}));
     const localNode = node({ nodeDid: "did:test:row-owner", source: "local" });
-    const remoteNode = node({ nodeDid: "did:test:remote", source: "enrollment" });
+    const remoteNode = node({ nodeDid: "did:test:remote", local: false });
     const app = testApp({
       api: { getDynamicWorkflow },
       deployments: [localNode, remoteNode],

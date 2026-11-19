@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use gents_inference::rendered_request::RenderedCompletionRequest;
@@ -2349,6 +2349,7 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
         allowed: Arc::new(allowed),
     };
     let router = Router::new()
+        .route("/status", get(projection_status_mock))
         .route("/api/v0/graphql", post(projection_graphql_mock))
         .route("/api/v0/tx", post(projection_txn_begin))
         .route(
@@ -2364,6 +2365,14 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
     Ok(ProjectionGraphqlAcpMock {
         graphql: format!("http://{addr}/api/v0/graphql"),
     })
+}
+
+async fn projection_status_mock() -> Json<Value> {
+    Json(json!({
+        "node_did": "did:test:projection-node",
+        (gents_protocol::client_authentication::STATUS_FIELD):
+            gents_protocol::client_authentication::ClientAuthentication::Local,
+    }))
 }
 
 async fn projection_graphql_mock(

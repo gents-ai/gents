@@ -3,8 +3,8 @@ use crate::{enrollment::canonical_domain_payload, request_admission::AgentReques
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const SESSION_INPUT_EDIT_VERSION: u8 = 2;
-pub const AUTHORED_QUEUE_EDIT_VERSION: u64 = 2;
+pub const SESSION_INPUT_EDIT_VERSION: u8 = 3;
+pub const AUTHORED_QUEUE_EDIT_VERSION: u64 = 3;
 pub const STATUS_AUTHORED_QUEUE_EDIT_FIELD: &str = "authored_queue_edit_version";
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +27,8 @@ pub enum SessionInputEditError {
     ReplacementCountMismatch,
     #[error("native replacement evidence does not match replacement count")]
     ReplacementEvidenceCountMismatch,
+    #[error("replacement credentials do not match replacement count")]
+    ReplacementCredentialCountMismatch,
     #[error("replacement signer or physical targets differ from the edit")]
     ReplacementTargetsDiffer,
     #[error("unsupported session input edit receipt version")]
@@ -86,6 +88,11 @@ pub struct SessionInputEdit {
     pub edit: PendingQueueEdit,
     pub replacements: Vec<AgentRequestCreate>,
     pub replacement_evidence: Vec<serde_json::Value>,
+    /// For each replacement, the request-bound credentials its create carries
+    /// for its User on a home whose document access runs on Vera, one for
+    /// each policy command it sends (`Identity.UserDelegation.storedCreateCommands`);
+    /// empty, or empty for each, on any other home.
+    pub replacement_credentials: Vec<Vec<String>>,
     pub signature: Vec<u8>,
 }
 
@@ -156,6 +163,11 @@ impl SessionInputEdit {
                 &serde_json::to_vec(evidence).expect("native evidence serializes")
             ));
         }
+        fields.push(self.replacement_credentials.len().to_string());
+        for credentials in &self.replacement_credentials {
+            fields.push(credentials.len().to_string());
+            fields.extend(credentials.iter().cloned());
+        }
         canonical_domain_payload(
             "gents-session-input-edit-v2",
             fields.iter().map(String::as_str),
@@ -214,6 +226,11 @@ impl SessionInputEdit {
         }
         if self.replacement_evidence.len() != self.replacements.len() {
             return Err(SessionInputEditError::ReplacementEvidenceCountMismatch);
+        }
+        if !self.replacement_credentials.is_empty()
+            && self.replacement_credentials.len() != self.replacements.len()
+        {
+            return Err(SessionInputEditError::ReplacementCredentialCountMismatch);
         }
         if self.replacements.iter().any(|create| {
             create.admission.signer_did != self.requester_did
@@ -366,6 +383,7 @@ mod tests {
             },
             replacements: vec![replacement],
             replacement_evidence: vec![serde_json::json!({"signature": [1, 2]})],
+            replacement_credentials: Vec::new(),
             signature: vec![1; 64],
         };
         command.validate_shape().unwrap();
@@ -432,6 +450,7 @@ mod tests {
             },
             replacements: Vec::new(),
             replacement_evidence: Vec::new(),
+            replacement_credentials: Vec::new(),
             signature: Vec::new(),
         };
         let legacy = command.signing_payload();

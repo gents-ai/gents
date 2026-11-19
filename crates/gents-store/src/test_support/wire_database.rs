@@ -22,10 +22,17 @@ pub struct WireDatabase {
 impl WireDatabase {
     pub async fn spawn(rows: Value, hook: CollectionHook) -> Self {
         use crate::identity::NodeIdentity as _;
-        use axum::routing::post;
+        use axum::routing::{get, post};
 
         let state = std::sync::Arc::new((rows, hook));
+        let status_rows = state.0.clone();
         let router = axum::Router::new()
+            .route("/status", get(move || { let rows = status_rows.clone(); async move {
+                axum::Json(serde_json::json!({
+                    "node_did": rows["Node"][0]["node_did"],
+                    (gents_protocol::client_authentication::STATUS_FIELD): gents_protocol::client_authentication::ClientAuthentication::Local,
+                }))
+            }}))
             .route(
                 "/api/v0/tx",
                 post(|| async { axum::Json(serde_json::json!({ "id": "wire" })) }),

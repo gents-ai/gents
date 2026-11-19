@@ -86,7 +86,7 @@ impl Fixture {
                 .with_http(
                     defra_node::HttpConfig::with_listener(listener)
                         .unwrap()
-                        .with_extra_routes(route.router()),
+                        .with_authenticated_routes(route.router()),
                 )
                 .build()
                 .await
@@ -277,7 +277,10 @@ impl Fixture {
         url.set_path(OWNER_STAGED_PATH);
         let request = reqwest::Client::new().post(url).json(command);
         let request = match bearer {
-            Some(key) => endpoint(&self.graphql, key).authorize(request).unwrap(),
+            Some(key) => endpoint(&self.graphql, key)
+                .authorize_runtime(request)
+                .await
+                .unwrap(),
             None => request,
         };
         let response = request.send().await.unwrap();

@@ -1,3 +1,4 @@
+import Proofs.Conformance.ClientDelegation
 import Proofs.Conformance.BackendPreflight
 import Proofs.Conformance.Identity.SessionChild
 import Proofs.Conformance.RemoteDelivery
@@ -246,6 +247,10 @@ import Proofs.Conformance.HomeRetirement
 import Proofs.Conformance.StoreHandoff
 import Proofs.Conformance.StoreKeyCustody
 import Proofs.Conformance.DocumentAcpChoice
+import Proofs.Conformance.UserDelegation
+import Proofs.Conformance.OwedRegistration
+import Proofs.Conformance.HeldAudience
+import Proofs.Conformance.NodePublication
 import Proofs.Conformance.BackgroundExecutionRegistry
 import Proofs.Conformance.BackgroundWaitChange
 import Proofs.Conformance.InvocationReply
@@ -392,11 +397,19 @@ def snapshotPromptTailJson : String :=
 
 set_option maxHeartbeats 2000000 in
 /-- Every family's schema elaborates in one list term, whose definitional
-checks grow with the family count past the default heartbeat budget. -/
+checks grow with the family count past the default heartbeat budget. It is a
+definition of its own: checked in one term with the vocabularies, it exceeds
+the kernel's recursion limit. -/
+def snapshotFamiliesJson : String :=
+  (conformance_families%).compress
+
+def snapshotVocabulariesJson : String :=
+  (conformance_vocabularies%).compress
+
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"families\":" ++ (conformance_families%).compress ++ ","
-    ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
+    ++ "\"families\":" ++ snapshotFamiliesJson ++ ","
+    ++ "\"family_vocabularies\":" ++ snapshotVocabulariesJson ++ ","
 
 def snapshotCoverageTailJson : String :=
   ""

@@ -33,7 +33,6 @@ export function SyncHealth({
     ["Cause", d.cause ?? "—"],
     ["Next action", d.nextAction ?? "—"],
     ["Runtimes connected", `${d.connectedRuntimeCount} of ${d.runtimeCount}`],
-    ["Enrollment failures", d.activationErrorCount],
   ];
   return (
     <Popover
@@ -89,12 +88,6 @@ export function SyncHealth({
             </div>
           ))}
         </dl>
-        {d.lastError && (
-          <div className="mt-3 border-t border-border/60 pt-3">
-            <p className="text-sm text-muted-foreground">Last error</p>
-            <p className="mt-1 font-mono text-xs leading-5 break-all">{d.lastError}</p>
-          </div>
-        )}
       </PopoverContent>
     </Popover>
   );

@@ -193,7 +193,7 @@ describe("WorkflowsPanel", () => {
     renderIn(
       testApp({ api: { listDynamicWorkflows, listJobs } }),
       <WorkflowsPanel
-        deployment={node({ nodeDid: "did:test:remote", source: "enrollment" })}
+        deployment={node({ nodeDid: "did:test:remote", local: false })}
       />,
     );
     expect((await screen.findByTestId("running-empty")).textContent).toBe(
@@ -224,7 +224,7 @@ describe("WorkflowsPanel", () => {
         api: { listDynamicWorkflows: vi.fn(), listJobs },
         deployments: [node({ nodeDid: NODE, sessions: sessionsOf("Fix the build") })],
       }),
-      <WorkflowsPanel deployment={node({ nodeDid: NODE, source: "enrollment" })} />,
+      <WorkflowsPanel deployment={node({ nodeDid: NODE, local: false })} />,
     );
     const rows = await screen.findAllByTestId("running-run");
     expect(rows).toHaveLength(2);
@@ -253,7 +253,7 @@ describe("WorkflowsPanel", () => {
           getJobView,
         },
       }),
-      <WorkflowsPanel deployment={node({ nodeDid: NODE, source: "enrollment" })} />,
+      <WorkflowsPanel deployment={node({ nodeDid: NODE, local: false })} />,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Review the diff" }));
     const sheet = await screen.findByRole("dialog");
@@ -279,7 +279,7 @@ describe("WorkflowsPanel", () => {
     });
     renderIn(
       app,
-      <WorkflowsPanel deployment={node({ nodeDid: NODE, source: "enrollment" })} />,
+      <WorkflowsPanel deployment={node({ nodeDid: NODE, local: false })} />,
     );
     fireEvent.click(await screen.findByRole("button", { name: "Review the diff" }));
     const sheet = await screen.findByRole("dialog");
@@ -297,12 +297,12 @@ describe("WorkflowsPanel", () => {
     });
     const view = renderIn(
       app,
-      <WorkflowsPanel deployment={node({ nodeDid: NODE, source: "enrollment" })} />,
+      <WorkflowsPanel deployment={node({ nodeDid: NODE, local: false })} />,
     );
     await screen.findByTestId("running-empty");
     expect(listJobs).toHaveBeenCalledTimes(1);
     view.rerender(
-      <WorkflowsPanel deployment={node({ nodeDid: NODE, source: "enrollment" })} />,
+      <WorkflowsPanel deployment={node({ nodeDid: NODE, local: false })} />,
     );
     expect(listJobs).toHaveBeenCalledTimes(1);
     await act(async () => {

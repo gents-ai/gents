@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::identity::NodeIdentity;
 use gents_store::test_support::bounded_process::BoundedProcess;
 use serde_json::{json, Value};
@@ -67,9 +68,6 @@ mod passive_settings;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/ports.rs"]
 mod ports;
-#[cfg(unix)]
-#[path = "support/retained_schema_upgrade.rs"]
-mod retained_schema_upgrade;
 #[path = "support/runtime_replacement.rs"]
 mod runtime_replacement;
 use crate::support;
@@ -433,13 +431,6 @@ async fn editor_observes_related_worker_failure_without_losing_completed_work_or
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
 }
 
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires GENTS_PREVIOUS_CLIENT_HOST with the packaged RC predecessor"]
-async fn retained_client_schema_upgrades_from_a_packaged_predecessor() -> Result<()> {
-    retained_schema_upgrade::exercise().await
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn enrolled_model_settings_refresh_without_the_runtime_key_file() -> Result<()> {
     let root = tempfile::tempdir()?;
@@ -528,24 +519,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .transpose()?;
     let current_cli = support::native_binary("gents")?;
     let current_host_binary = support::native_binary("gents-client-host")?;
-    let predecessor = if std::env::var_os("GENTS_VSCODE_RETAINED_UPGRADE_VSIX").is_some() {
-        ensure!(
-            matches!(journey, Journey::EditorHistory) && cfg!(unix),
-            "retained package upgrades require the Unix history journey"
-        );
-        let binary = std::path::PathBuf::from(
-            std::env::var_os("GENTS_PREVIOUS_CLIENT_HOST")
-                .context("retained upgrades require the packaged predecessor helper")?,
-        );
-        ensure!(binary.is_absolute() && binary.is_file());
-        Some(binary)
-    } else {
-        None
-    };
-    let host_binary = predecessor
-        .clone()
-        .unwrap_or_else(|| current_host_binary.clone());
-    let cli = predecessor.clone().unwrap_or_else(|| current_cli.clone());
+    let host_binary = current_host_binary;
+    let cli = current_cli;
     if journey.editor_scenario().is_some() {
         std::fs::write(
             root.join("AGENTS.md"),
@@ -817,32 +792,19 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .as_str()
         .context("runtime GraphQL endpoint")?;
     let paths = DesktopPaths::from_root(root.join("client"));
-    let client_did = if predecessor.is_some() {
-        #[cfg(unix)]
-        {
-            paths.ensure_root_dirs().await?;
-            retained_schema_upgrade::prepare_file_store(&paths).await?;
-            gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths)
-                .await?
-                .did()
-                .to_owned()
-        }
-        #[cfg(not(unix))]
-        {
-            anyhow::bail!("retained package upgrades require a Unix predecessor")
-        }
-    } else {
-        let seed = Arc::new(
-            ClientCore::start_with_paths_and_options(
-                paths.clone(),
-                ClientCoreOptions::local_only(),
-            )
-            .await?,
-        );
-        let did = seed.node_identity().did().to_owned();
-        seed.shutdown().await?;
-        did
-    };
+    let seed = Arc::new(
+        ClientRuntime::start_with_paths_and_options(
+            paths.clone(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
+        )
+        .await?,
+    );
+    let client_did = seed.node_identity().did().to_owned();
+    seed.shutdown().await?;
+    drop(seed);
     let mut host_command = Command::new(&host_binary);
     host_command
         .envs(homes.env())
@@ -874,112 +836,36 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     // administrator, whose `session_read` covers the client's sessions and
     // requests; the Node key holds no relation on them.
     let operator =
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())?;
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+            &homes.cli_identity(),
+        )?;
     let access = gents_store::config_client::ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(graphql, operator.did())
             .with_client_signing_capability(operator.client_signing_capability()?)?,
     );
-    if matches!(journey, Journey::Conversation | Journey::RuntimeReplacement) {
-        client
-            .call(1, "client_connect_local", json!({"nodeHome":node_home}))
-            .await;
-        if matches!(journey, Journey::Conversation) && predecessor.is_none() {
-            let pending =
-                gents_service::server_host::pending_managed_enrollments(&node_home, graphql)
-                    .await?;
-            let members =
-                gents_service::server_host::managed_enrollment_members(&node_home, graphql).await?;
-            ensure!(
-                pending
-                    .iter()
-                    .all(|entry| entry.candidate_did != client_did),
-                "ordinary local connect authored an enrollment request"
-            );
-            ensure!(
-                members
-                    .iter()
-                    .all(|entry| entry.candidate_did != client_did),
-                "ordinary local connect granted enrollment authority"
-            );
-        }
-        client
-            .call(2, "client_enroll_local", json!({"nodeHome":node_home}))
-            .await;
-    } else {
-        let pending = client
-            .call(
-                1,
-                "desktop_peer_enroll_status",
-                json!({
-                    "request": { "serverAddress": format!("http://127.0.0.1:{port}") }
-                }),
-            )
-            .await;
-        let pending_id = pending["requestId"]
-            .as_str()
-            .context("pending enrollment")?;
-        let pending_query = format!(
-            "{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-            gents_store::graphql::escape_graphql_string(pending_id)
-        );
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let response = access.execute(&pending_query).await?;
-                if response["data"]["NetworkEnrollmentRequest"]
-                    .as_array()
-                    .is_some_and(|rows| !rows.is_empty())
-                {
-                    return Ok::<_, anyhow::Error>(());
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
+    let pending = client
+        .call(
+            1,
+            "desktop_runtime_access_request",
+            json!({
+                "request": { "serverAddress": format!("http://127.0.0.1:{port}") }
+            }),
+        )
+        .await;
+    let request_id = pending["requestId"]
+        .as_str()
+        .context("pending client access")?;
+    let gents_store::config_client::ConfigAccess::Graphql(endpoint) = &access else {
+        anyhow::bail!("the fixture requires its User-signed HTTP endpoint");
+    };
+    let receipt = endpoint
+        .decide_runtime_access(&gents_protocol::client_access::DecideClientAccess {
+            node_did: node_did.to_owned(),
+            request_id: request_id.to_owned(),
+            decision: gents_protocol::client_access::ClientAccessDecision::Approve,
         })
-        .await
-        .context("runtime did not observe the enrollment request")??;
-        // Approval admits the route only; the Node's authority for the
-        // enrolled User is the separate explicit grant (Lean
-        // `Identity.EnrollmentGrant`).
-        let granted = Command::new(&cli)
-            .current_dir(root)
-            .envs(homes.env())
-            .args([
-                "runtime",
-                "p2p",
-                "enrollment",
-                "grant",
-                pending_id,
-                "--home",
-            ])
-            .arg(&node_home)
-            .kill_on_drop(true)
-            .output();
-        let granted = tokio::time::timeout(Duration::from_secs(30), granted).await??;
-        ensure!(
-            granted.status.success(),
-            "enrollment grant failed: {}",
-            String::from_utf8_lossy(&granted.stderr)
-        );
-        let approved = Command::new(&cli)
-            .current_dir(root)
-            .envs(homes.env())
-            .args([
-                "runtime",
-                "p2p",
-                "enrollment",
-                "approve",
-                pending_id,
-                "--home",
-            ])
-            .arg(&node_home)
-            .kill_on_drop(true)
-            .output();
-        let approved = tokio::time::timeout(Duration::from_secs(30), approved).await??;
-        ensure!(
-            approved.status.success(),
-            "enrollment approval failed: {}",
-            String::from_utf8_lossy(&approved.stderr)
-        );
-    }
+        .await?;
+    ensure!(receipt.state == gents_protocol::client_access::ClientAccessState::Approved);
     let mut id = 2;
     let deployment = wait_chat_deployment(&mut client, &mut id, node_did, &access).await?;
     if matches!(
@@ -1723,63 +1609,17 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 }
             }))
         });
-        if predecessor.is_some() {
-            #[cfg(unix)]
-            {
-                client.close().await;
-                tokio::try_join!(
-                    run_editor_journey(
-                        root,
-                        &paths,
-                        &host_binary,
-                        session,
-                        provider.endpoint(),
-                        "history"
-                    ),
-                    retained_schema_upgrade::replace_when_requested(
-                        root,
-                        &paths,
-                        &client_did,
-                        &mut host,
-                        &current_host_binary,
-                        &mut runtime,
-                        &current_cli,
-                        &node_home,
-                        port,
-                        node_did
-                    ),
-                )?;
-                client = Attachment::start(&paths).await;
-                let rows = editor_history::verified_requests(
-                    &access,
-                    node_did,
-                    session,
-                    &client_did,
-                    evidence["completedRequests"]
-                        .as_u64()
-                        .context("seeded history request count")? as usize
-                        + 1,
-                )
-                .await?;
-                ensure!(
-                    rows.iter()
-                        .filter(|row| row.content.as_deref() == Some("History fixture turn 46"))
-                        .count()
-                        == 1,
-                    "the post-update message did not complete exactly once"
-                );
-            }
-        } else {
-            run_editor_journey(
-                root,
-                &paths,
-                &host_binary,
-                session,
-                provider.endpoint(),
-                "history",
-            )
-            .await?;
-        }
+
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "history",
+        )
+        .await?;
+
         if options.profile {
             let evidence = editor_history::verify_profile(
                 &mut client,
@@ -2410,22 +2250,24 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         // the client's own store holds the Goal caller receipts it wrote, and
         // no Goal.
         let reopened = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 paths.clone(),
-                ClientCoreOptions::local_only(),
+                ClientRuntimeOptions {
+                    store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                    ..Default::default()
+                },
             )
             .await?,
         );
         let local = gents_store::config_client::ConfigAccess::local(reopened.node_arc())
-            .execute("{ Goal { _docID } PendingChatSubmission { _docID } }")
+            .execute("{ PendingChatSubmission { _docID } }")
             .await;
         reopened.shutdown().await?;
         let local = local?;
         ensure!(
             local["data"]["PendingChatSubmission"]
                 .as_array()
-                .is_some_and(|rows| !rows.is_empty())
-                && local["data"]["Goal"].as_array().is_some_and(Vec::is_empty),
+                .is_some_and(|rows| !rows.is_empty()),
             "ordinary client routes must not replicate raw Goal documents: {local}"
         );
     }
@@ -2771,9 +2613,12 @@ async fn run_editor_journey(
     {
         let startup_paths = DesktopPaths::from_root(root.join("startup-client"));
         let startup = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 startup_paths.clone(),
-                ClientCoreOptions::local_only(),
+                ClientRuntimeOptions {
+                    store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                    ..Default::default()
+                },
             )
             .await?,
         );
@@ -2823,7 +2668,8 @@ async fn read_session(
             match result {
                 Ok(projection) => return Ok(projection),
                 Err(error)
-                    if error.code == gents_desktop_bridge::BridgeErrorCode::ProjectionPending =>
+                    if error.code
+                        == gents_store::client_error::BridgeErrorCode::ProjectionPending =>
                 {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }

@@ -47,12 +47,7 @@ pub enum PortObservation {
 }
 
 pub async fn observe_port(config: &ServerConfig, initialized_did: Option<&str>) -> PortObservation {
-    match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
-        &config.status_url(),
-        None,
-    )
-    .await
-    {
+    match gents::client_runtime::fetch_runtime_connection_payload(&config.status_url()).await {
         Ok(payload) => PortObservation::Gents {
             identity: served_identity(initialized_did, &payload),
             payload,

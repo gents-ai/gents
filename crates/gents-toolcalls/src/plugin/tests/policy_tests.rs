@@ -391,7 +391,11 @@ async fn explain_reports_missing_add_nac_relation_when_permission_is_held() {
     let fixture = PolicyFixture::new("policy-explain-no-operation").await;
     let sibling = fixture.install_sibling("Reviewer").await;
     fixture
-        .grant_engineer(&[NodePermission::NacStatus, NodePermission::DocumentDelete])
+        .grant_engineer(&[
+            NodePermission::NacStatus,
+            NodePermission::CollectionGet,
+            NodePermission::DocumentDelete,
+        ])
         .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);

@@ -1,3 +1,4 @@
+pub mod journal;
 pub mod migration;
 
 #[cfg(test)]
@@ -185,12 +186,20 @@ mod legacy_backend_tests {
                 },
             )
             .await??;
+            let owner_path = home.join("owner.key");
+            let owner = tokio::task::spawn_blocking(move || -> anyhow::Result<identity::Did> {
+                Ok(identity::Did::new(
+                    crate::identity::KeyIdentity::load_or_create(owner_path, None)?.did(),
+                )?)
+            })
+            .await??;
             let did = runtime.did().to_owned();
             let initialized = match FreshBackendStore::observe(&data, &lock).await {
                 Ok(fresh) => fresh
                     .initialize(
                         &key,
                         &runtime,
+                        &owner,
                         crate::local::document_acp::DocumentAcp::Local,
                     )
                     .await

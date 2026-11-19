@@ -67,7 +67,9 @@ import type {
   ClaudeLoginResult,
   GrokLoginResult,
   DesktopClientSnapshot,
-  EnrollmentRequestView,
+  ClientAccessRequestView,
+  RuntimeAccessDecisionRequest,
+  RuntimeRemoveResponse,
   DesktopInterruptRequestRequest,
   DesktopSessionProvenanceRequest,
   DesktopSessionSnapshot,
@@ -231,13 +233,11 @@ export type DesktopApiAdapter = {
   setSelectedNode: (nodeDid: string | null) => Promise<void>;
 
   reconnectNode?: (nodeDid: string | null) => Promise<string | null>;
-  removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
-  renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
-  dismissEndedAccess: (nodeDid: string) => Promise<DesktopClientSnapshot>;
-  requestStatusEnrollment: (
-    serverAddress: string,
-    candidateName?: string,
-  ) => Promise<EnrollmentRequestView>;
+  removeRuntime: (nodeDid: string) => Promise<RuntimeRemoveResponse>;
+  renameRuntime: (nodeDid: string, label: string) => Promise<DesktopClientSnapshot>;
+  requestRuntimeAccess: (serverAddress: string) => Promise<ClientAccessRequestView>;
+  listRuntimeAccess: (nodeDid: string) => Promise<ClientAccessRequestView[]>;
+  decideRuntimeAccess: (request: RuntimeAccessDecisionRequest) => Promise<ClientAccessRequestView>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;
   fetchRequestTimeline: (
     nodeDid: string,

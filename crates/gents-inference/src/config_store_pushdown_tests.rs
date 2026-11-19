@@ -134,9 +134,6 @@ async fn agent_transaction_uses_the_node_cap_only_while_the_runtime_may_use_its_
             &identity::Did::new(runtime.did())?,
         )
         .await?;
-    // Document ACP withdraws the runtime's read of its Node; the hosting node
-    // key still reads the cap past document ACP (gents#3747), but the runtime
-    // may no longer use it, so the cap is unavailable (gents#3935).
     let usable = {
         let (runtime, doc) = (identity::Did::new(runtime.did())?, node_doc.to_owned());
         admin
@@ -156,8 +153,21 @@ async fn agent_transaction_uses_the_node_cap_only_while_the_runtime_may_use_its_
         admin.execute("{ Node { _docID } }").await?["data"]["Node"]
             .as_array()
             .map(Vec::len),
-        Some(1)
+        Some(0)
     );
+    assert_eq!(single_doc_id(&user_access, "Node", "{}").await?, node_doc);
+    assert_eq!(observe(runtime.did().to_owned()).await?, None);
+    admin
+        .grant_node_permission(
+            &identity::Did::new(user.did())?,
+            NodePermission::DocumentDelete,
+        )
+        .await?;
+    user_access
+        .transact_write("test.runtime_hop_cap.remove_node", |txn| {
+            Box::pin(async move { txn.delete_configuration_document("Node", node_doc).await })
+        })
+        .await?;
     assert_eq!(observe(runtime.did().to_owned()).await?, None);
     Ok(())
 }
@@ -182,9 +192,7 @@ async fn single_doc_id(
 }
 
 /// Each runtime use after revoking the Node's `runtime_reader`, the
-/// credential's `runtime_writer`, both or neither: the hosting runtime still
-/// reads every document past document ACP, and uses it only as document ACP
-/// answers for its DID (`Identity.Household.runtimeMayUse`).
+/// credential's `runtime_writer`, both or neither, on a separately owned store.
 #[tokio::test]
 async fn runtime_uses_follow_document_acp_as_the_lean_model_says() -> anyhow::Result<()> {
     use gents_lean_vocab::families::runtime_use_revocation::RevocationObserved;

@@ -232,14 +232,14 @@ describe("managed server startup waits", () => {
         repaired: ["Earlier note."],
         outcome: "ready",
         blocker: null,
-        savedPeers: [],
+        savedRuntimes: [],
         localNodeLost: false,
       })
       .mockResolvedValueOnce({
         repaired: [note],
         outcome: "needsSetup",
         blocker: null,
-        savedPeers: [],
+        savedRuntimes: [],
         localNodeLost: false,
       });
     const api = {
@@ -264,7 +264,7 @@ describe("managed server startup waits", () => {
       repaired: [],
       outcome: "ready" as const,
       blocker: null,
-      savedPeers: [],
+      savedRuntimes: [],
       localNodeLost: false,
     }));
     const api = {
@@ -284,11 +284,9 @@ describe("managed server startup waits", () => {
   });
 
   const studio = {
-    peerId: "studio",
     label: "Studio",
     nodeDid: "did:key:studio",
-    addr: "a",
-    source: "enrollment",
+
     graphql: null,
     local: false,
   };
@@ -618,7 +616,7 @@ describe("first-run local node startup", () => {
       ...deployment,
       nodeDid: "did:key:z6MkRemote",
       label: "Remote Node",
-      source: "status",
+      local: false,
     };
     run.api.fetchDesktopSnapshot = vi.fn(async () => ({
       bootstrap,
@@ -644,7 +642,7 @@ describe("first-run local node startup", () => {
     const remote = {
       ...deployment,
       nodeDid: "did:key:unrelated",
-      source: "enrollment",
+      local: false,
     };
     run.api.fetchDesktopSnapshot = vi.fn(async () => ({
       bootstrap,
@@ -759,7 +757,7 @@ describe("first-run local node startup", () => {
       repaired: [],
       outcome: "ready",
       blocker: null,
-      savedPeers: [],
+      savedRuntimes: [],
       localNodeLost: false,
       ...overrides,
     });
@@ -843,16 +841,17 @@ describe("first-run local node startup", () => {
 
     it("repair_notes_are_kept_for_the_banner", async () => {
       const peer = {
-        peerId: "p",
         label: "Studio",
         nodeDid: "did:key:studio",
-        addr: "a",
-        source: "enrollment",
+
         graphql: null,
         local: false,
       };
       const app = repairApp(async () =>
-        repairResult({ repaired: ["Moved the old folder aside."], savedPeers: [peer] }),
+        repairResult({
+          repaired: ["Moved the old folder aside."],
+          savedRuntimes: [peer],
+        }),
       );
       await app.lifecycle.initializeDesktop();
       expect(app.stores.client.getState().repairNotes).toEqual([

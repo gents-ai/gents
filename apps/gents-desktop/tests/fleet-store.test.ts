@@ -34,7 +34,7 @@ const read = (parentTitle = "parent") =>
       deployments: [
         {
           nodeDid: "a",
-          source: "enrollment",
+          local: false,
           label: "home",
           agents: [{ agentDid: "a:default" }],
           sessions: [
@@ -45,7 +45,7 @@ const read = (parentTitle = "parent") =>
         },
         {
           nodeDid: "b",
-          source: "enrollment",
+          local: false,
           label: "remote",
           agents: [],
           sessions: [session("b", "remote-worker", "parent"), session("b", "alone")],
