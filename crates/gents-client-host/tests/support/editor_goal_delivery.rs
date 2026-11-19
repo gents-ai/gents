@@ -250,12 +250,7 @@ pub async fn verify(
     }
     let resumed_request = resumed_request.context("resumed Goal request receipt")?;
     ensure!(
-        gents::support::live_inference::wait_for_request_terminal(
-            &access,
-            &resumed_request,
-            Duration::from_secs(30),
-        )
-        .await
+        gents::support::live_inference::wait_for_request_terminal(&access, &resumed_request,).await
             == "completed"
     );
     let value = access.execute(&query).await?;
