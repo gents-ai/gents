@@ -555,9 +555,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         })
         .await?;
     // With the catalog held, revoking the Node's `runtime_reader` refuses the
-    // create end to end: the hosting node key still reads the Node past
-    // document ACP (gents#3747) but may not use it to admit or provision the
-    // Agent (gents#3935, `Identity.Household.runtimeMayUse`).
+    // create end to end: the hosting node key reads only what document ACP
+    // grants it (`GrantSets.node_runtime_does_not_read_past_dac`), so
+    // it neither reads the Node nor uses it to admit or provision the Agent
+    // (gents#3935, `Identity.Household.runtimeMayUse`).
     let runtime_actor = identity::Did::new(runtime.did())?;
     user_access
         .delete_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
@@ -565,7 +566,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let hosting_read = admin.execute("{ Node { _docID } }").await?;
     assert_eq!(
         hosting_read["data"]["Node"].as_array().map(Vec::len),
-        Some(1)
+        Some(0)
     );
     assert!(tool
         .call(
