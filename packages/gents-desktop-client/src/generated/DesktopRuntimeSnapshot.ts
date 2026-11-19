@@ -2,5 +2,6 @@
 import type { ClientAccessRequestView } from "./ClientAccessRequestView.js";
 import type { DeploymentView } from "./DeploymentView.js";
 import type { SyncHealthView } from "./SyncHealthView.js";
+import type { UnkeptChangeView } from "./UnkeptChangeView.js";
 
-export type DesktopRuntimeSnapshot = { clientDid: string, syncHealth: SyncHealthView, accessRequests: Array<ClientAccessRequestView>, rowCount: number, approxSerializedBytes: number, operatorConfigAuthoritativeNodeDids?: Array<string>, deployments: Array<DeploymentView>, };
+export type DesktopRuntimeSnapshot = { clientDid: string, syncHealth: SyncHealthView, accessRequests: Array<ClientAccessRequestView>, rowCount: number, approxSerializedBytes: number, operatorConfigAuthoritativeNodeDids?: Array<string>, deployments: Array<DeploymentView>, unkeptChanges: Array<UnkeptChangeView>, };

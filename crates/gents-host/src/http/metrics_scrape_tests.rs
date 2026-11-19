@@ -205,6 +205,7 @@ fn runtime_state(graphql: &str, node_did: &str) -> crate::http::router::RuntimeH
         observation,
         Default::default(),
         Default::default(),
+        Default::default(),
     )
     .scrape_state
 }

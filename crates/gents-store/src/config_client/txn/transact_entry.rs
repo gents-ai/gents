@@ -85,6 +85,7 @@ impl ConfigAccess {
                 .await?;
                 txn.agent_proof = local.agent_proof.clone();
                 txn.client_authorization = local.client_authorization.clone();
+                txn.presented_delegation = local.presented_delegation();
                 Ok(txn)
             }
         }

@@ -183,7 +183,7 @@ mod conformance {
             let presented = (identity != "anonymous").then(|| format!("Bearer {identity}"));
             let forwarded =
                 match caller_endpoint("http://127.0.0.1:1/api/v0/graphql", presented.as_deref()) {
-                    Some(endpoint) => endpoint.unwrap().authorization().await.unwrap(),
+                    Some(endpoint) => endpoint.unwrap().runtime_authorization().await.unwrap(),
                     None => None,
                 };
             case.check(

@@ -656,6 +656,7 @@ impl ConfigAccess {
             move |operation, rollback| {
                 let actor = actor.clone();
                 let proof = local.agent_proof.clone();
+                let presented = local.presented_delegation();
                 Box::pin(async move {
                     let mut txn = ConfigApplyTxn::begin_local_owned(
                         local.node(),
@@ -666,6 +667,7 @@ impl ConfigAccess {
                     )
                     .await?;
                     txn.agent_proof = proof;
+                    txn.presented_delegation = presented;
                     Ok(txn)
                 })
             },

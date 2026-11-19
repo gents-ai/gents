@@ -627,6 +627,11 @@ async fn resolve_config_access_inner(
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
             let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql).await?;
+            gents_store::config_client::owed::spawn_settlement(
+                endpoint.clone(),
+                runtime_state.node_did,
+                |failed| tracing::warn!("{failed}"),
+            );
             return Ok((
                 ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
                 home_dir,
@@ -720,6 +725,12 @@ async fn resolve_config_access_inner(
             .await?
         }
     };
+    let endpoint = endpoint.with_reported_delegation_audience(
+        gents_store::local::document_acp::status_reports(
+            config.document_acp,
+            gents_store::local::document_acp::node_delegation_audience(&node),
+        ),
+    )?;
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
         node.clone(),

@@ -360,6 +360,7 @@ pub async fn build_runtime_snapshot(core: &ClientRuntime) -> DesktopRuntimeSnaps
                 .then_some(operator_config_authoritative_node_dids)
         },
         deployments,
+        unkept_changes: core.owed.unkept(),
     }
 }
 

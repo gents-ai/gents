@@ -70,6 +70,7 @@ impl ClientRuntime {
             stages.send_replace("runtime_observation_ready");
         }
         Ok(Self {
+            owed: Default::default(),
             delivery_started: Default::default(),
             delivery_cancel: Default::default(),
             delivery_lock: Default::default(),

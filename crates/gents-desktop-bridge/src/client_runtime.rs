@@ -9,6 +9,7 @@ mod goal;
 mod inference_activity;
 mod inference_observation;
 mod inference_setup;
+mod owed_settlement;
 mod writes;
 
 use anyhow::{Context, Result};
@@ -66,6 +67,7 @@ impl StoreRefresh {
 type ShutdownOutcome = std::result::Result<(), String>;
 
 pub struct ClientRuntime {
+    pub(crate) owed: owed_settlement::OwedSettlements,
     delivery_started: std::sync::atomic::AtomicBool,
     delivery_cancel: tokio_util::sync::CancellationToken,
     delivery_lock: Mutex<()>,
@@ -257,6 +259,7 @@ impl ClientRuntime {
         if let Some(observer) = self.observer.lock().await.take() {
             observer.shutdown().await;
         }
+        self.owed.stop().await;
         self.journal.shutdown().await?;
         Ok(())
     }

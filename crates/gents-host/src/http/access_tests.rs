@@ -118,6 +118,7 @@ fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
         observation,
         Default::default(),
         Default::default(),
+        Default::default(),
     )
     .contract
     .merge(gents_store::config_client::OwnerStagedRoute::new().router())
@@ -415,7 +416,7 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
         assert_eq!(response.status(), expected, "{path}");
     }
     let response = principal_endpoint(format!("{endpoint}/api/v0/graphql"), &owner)
-        .authorize(client.get(format!("{endpoint}/api/v0/collections")))
+        .authorize_runtime(client.get(format!("{endpoint}/api/v0/collections")))
         .await
         .unwrap()
         .send()
@@ -469,7 +470,7 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
         if let Some(identity) = identity {
             let authorization =
                 principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), identity)
-                    .authorization()
+                    .runtime_authorization()
                     .await
                     .unwrap()
                     .unwrap();
@@ -576,7 +577,7 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
 async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work() {
     let f = Fixture::start().await;
     let authorization = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.other)
-        .authorization()
+        .runtime_authorization()
         .await
         .unwrap()
         .unwrap();
@@ -844,7 +845,7 @@ async fn remote_pack_install_requires_authenticated_client_before_work() {
             .json(&body);
         if let Some(identity) = identity {
             request = principal_endpoint(format!("{}/api/v0/graphql", fixture.endpoint), identity)
-                .authorize(request)
+                .authorize_runtime(request)
                 .await
                 .unwrap();
         }
@@ -872,7 +873,7 @@ async fn agent_identity_provisioning_requires_client_authentication_and_writes_n
     assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
     let endpoint = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.owner);
     let response = endpoint
-        .authorize(
+        .authorize_runtime(
             f.client
                 .post(&url)
                 .json(&serde_json::json!({"node_did":"different-node"})),

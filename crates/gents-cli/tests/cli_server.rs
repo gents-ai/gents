@@ -621,7 +621,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
             "{phase}: principal could not read its row: {owner_rows}"
         );
         let operator_authorization = support::graphql::node_principal_endpoint(&graphql)
-            .authorization()
+            .runtime_authorization()
             .await?
             .context("served principal authorization")?;
         for surface in ["self", "sessions"] {
@@ -714,7 +714,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let authorization = support::graphql::node_principal_endpoint(&graphql)
-        .authorization()
+        .runtime_authorization()
         .await?
         .context("fixture operator is missing")?;
     let mut headers = reqwest::header::HeaderMap::new();
@@ -834,7 +834,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .header(
             reqwest::header::AUTHORIZATION,
             support::graphql::node_principal_endpoint(&graphql)
-                .authorization()
+                .runtime_authorization()
                 .await?
                 .context("fixture operator is missing")?,
         )
@@ -1052,7 +1052,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .header(
             reqwest::header::AUTHORIZATION,
             support::graphql::node_principal_endpoint(&graphql)
-                .authorization()
+                .runtime_authorization()
                 .await?
                 .context("fixture operator is missing")?,
         )
@@ -1482,7 +1482,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     // The client key, as the node's native admin, reads the slot snapshot as
     // itself and so sees the Agent-owned inference calls.
     let authorization = support::graphql::served_endpoint(&graphql)
-        .authorization()
+        .runtime_authorization()
         .await?
         .context("fixture client key is missing")?;
     let mut headers = reqwest::header::HeaderMap::new();
@@ -1872,7 +1872,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         .header(
             reqwest::header::AUTHORIZATION,
             support::graphql::node_principal_endpoint(&graphql)
-                .authorization()
+                .runtime_authorization()
                 .await?
                 .context("fixture operator is missing")?,
         )
@@ -2874,7 +2874,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     );
 
     let user_bearer = support::graphql::served_endpoint(&graphql)
-        .authorization()
+        .runtime_authorization()
         .await?
         .context("served user authorization")?;
     let user_config =
@@ -3274,7 +3274,7 @@ async fn restarted_server_never_reports_the_killed_process_ready() -> Result<()>
     .await??;
 
     let authorization = support::graphql::node_principal_endpoint(&graphql_url(port))
-        .authorization()
+        .runtime_authorization()
         .await?
         .context("served home has no node principal")?;
     let mut headers = reqwest::header::HeaderMap::new();

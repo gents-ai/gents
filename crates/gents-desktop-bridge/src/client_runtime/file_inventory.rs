@@ -28,16 +28,16 @@ impl ClientRuntime {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
+        let request = DirectFileInventoryRequest {
+            node_did: node_did.to_owned(),
+            session_id: session_id.to_owned(),
+            action,
+        };
         let response = endpoint
-            .authorize(client.post(url))
-            .await?
-            .json(&DirectFileInventoryRequest {
-                node_did: node_did.to_owned(),
-                session_id: session_id.to_owned(),
-                action,
+            .send_resolving(|endpoint| {
+                Ok(endpoint.authorize(client.post(url.clone()))?.json(&request))
             })
-            .send()
-            .await
+            .await?
             .map_err(|error| {
                 gents_store::client_error::BridgeError::runtime_http_error(
                     error,

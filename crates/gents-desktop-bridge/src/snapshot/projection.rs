@@ -382,6 +382,7 @@ mod tests {
                         created_at: "2026-08-25T12:00:00Z".into(),
                     }],
                 }],
+                unkept_changes: Vec::new(),
             }),
             repair_note: None,
         }

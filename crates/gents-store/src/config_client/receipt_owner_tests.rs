@@ -181,7 +181,7 @@ async fn delegated_bearer_remains_caller_owned_and_is_redacted() {
     )
     .unwrap();
     assert_eq!(
-        endpoint.authorization().await.unwrap().as_deref(),
+        endpoint.runtime_authorization().await.unwrap().as_deref(),
         Some(secret)
     );
     assert!(!format!("{endpoint:?}").contains(secret));

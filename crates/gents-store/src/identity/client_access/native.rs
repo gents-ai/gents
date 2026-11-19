@@ -47,7 +47,7 @@ async fn credential(
     Ok(ClientAuthorization::from_authenticated_bearer(
         client.did().parse()?,
         &endpoint
-            .authorization()
+            .runtime_authorization()
             .await?
             .expect("held client authorization"),
     )?)
@@ -117,7 +117,7 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
                 start_deadline: Duration::from_secs(60),
                 stop_deadline: Duration::from_secs(30),
                 actor: EmbeddedVeraActor::Signer(Arc::new(
-                    vera::vera_rs::Ed25519Signer::from_slice(
+                    vera_delegation::Ed25519Signer::from_slice(
                         &runtime.identity.private_key_bytes(),
                     )?,
                 )),

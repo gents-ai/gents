@@ -304,8 +304,11 @@ async fn read_runtime_status(
     );
     let status_url = runtime_status_url(endpoint.url())?;
     let client = runtime_http_client().await?;
-    let request = match endpoint.authorize(client.get(&status_url)).await {
-        Ok(request) => request,
+    let result = match endpoint
+        .send_resolving(|endpoint| endpoint.authorize(client.get(&status_url)))
+        .await
+    {
+        Ok(result) => result,
         Err(error) => {
             if let Some(status) = error
                 .transport_error()
@@ -322,7 +325,7 @@ async fn read_runtime_status(
             return Err(error.into());
         }
     };
-    let response = request.send().await.map_err(|error| {
+    let response = result.map_err(|error| {
         gents_store::client_error::BridgeError::runtime_http_error(
             error,
             format!("sending runtime status request to {status_url}"),
@@ -332,7 +335,12 @@ async fn read_runtime_status(
         response.status(),
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
     ) {
-        return Ok(RuntimeStatusRead::Refused(response.status()));
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_default();
+        if let Some(update) = gents_store::client_error::BridgeError::home_refusal(status, &body) {
+            return Err(update.into());
+        }
+        return Ok(RuntimeStatusRead::Refused(status));
     }
     let response = response.error_for_status()?;
     anyhow::ensure!(

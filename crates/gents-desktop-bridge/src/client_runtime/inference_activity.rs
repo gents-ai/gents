@@ -19,6 +19,20 @@ impl crate::client_runtime::ClientRuntime {
         let endpoint = self
             .operator_observation_graphql(&key.node)
             .context("runtime connection is unavailable")?;
+        let operator = self
+            .operator_observation_endpoint(&key.node)
+            .await
+            .filter(|endpoint| !endpoint.is_anonymous());
+        let endpoint = if let Some(operator) = operator {
+            operator
+        } else if record.is_enrollment() {
+            let Some(graphql) = record.graphql.as_deref() else {
+                return Ok(None);
+            };
+            self.saved_user_endpoint(graphql, record)?
+        } else {
+            return Ok(None);
+        };
         let graphql = endpoint.url();
         let mut url = reqwest::Url::parse(graphql)?;
         anyhow::ensure!(
@@ -42,10 +56,8 @@ impl crate::client_runtime::ClientRuntime {
             .timeout(std::time::Duration::from_secs(2))
             .build()?;
         let mut response = endpoint
-            .authorize(client.post(url).json(key))
+            .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(key)))
             .await?
-            .send()
-            .await
             .map_err(|error| {
                 let message = error.to_string();
                 gents_store::client_error::BridgeError::runtime_http_error(error, message)
@@ -57,8 +69,13 @@ impl crate::client_runtime::ClientRuntime {
             response.status(),
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
         ) {
-            return Err(gents_store::client_error::BridgeError::new(
-                gents_store::client_error::BridgeErrorCode::PermissionDenied,
+            let status = response.status();
+            let body = response.bytes().await.unwrap_or_default();
+            if let Some(update) = crate::error::BridgeError::home_refusal(status, &body) {
+                return Err(update.into());
+            }
+            return Err(crate::error::BridgeError::new(
+                crate::error::BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
             )
             .into());

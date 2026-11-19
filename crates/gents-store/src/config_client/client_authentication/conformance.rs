@@ -39,7 +39,7 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
                 start_deadline: Duration::from_secs(60),
                 stop_deadline: Duration::from_secs(30),
                 actor: EmbeddedVeraActor::Signer(Arc::new(
-                    vera::vera_rs::Ed25519Signer::from_slice(&key)?,
+                    vera_delegation::Ed25519Signer::from_slice(&key)?,
                 )),
                 rpc_listen: None,
                 worker_dir: directory.path().join("worker"),
@@ -123,7 +123,7 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
             let endpoint = endpoints.endpoint(&node_did, &url)?;
             endpoint.refresh_runtime_authentication().await?;
             endpoint
-                .authorization()
+                .runtime_authorization()
                 .await?
                 .expect("the held client signs its own delegation")
                 .strip_prefix("Bearer ")
@@ -131,8 +131,8 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
                 .to_owned()
         } else {
             let signer =
-                vera::vera_rs::Ed25519Signer::from_slice(&capability.config.private_key_bytes)?;
-            vera::vera_rs::caller_delegation(&signer, &audience, Duration::from_secs(1)).await?
+                vera_delegation::Ed25519Signer::from_slice(&capability.config.private_key_bytes)?;
+            vera_delegation::caller_delegation(&signer, &audience, Duration::from_secs(1)).await?
         };
         if !input.verified {
             let signature = token.rfind('.').expect("JWT signature") + 1;
@@ -160,13 +160,13 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
     let endpoints = crate::config_client::runtime_endpoints::RuntimeEndpoints::new(client.clone());
     let endpoint = endpoints.endpoint(&node_did, &url)?;
     assert!(matches!(
-        endpoint.authorization().await,
+        endpoint.runtime_authorization().await,
         Err(crate::config_client::ConfigClientError::RuntimeAuthenticationIdentity)
     ));
     metadata.write().await["node_did"] = serde_json::json!(node_did);
     metadata.write().await["redirect"] = serde_json::json!("http://127.0.0.1:9/not-selected");
     assert!(
-        matches!(endpoint.authorization().await, Err(crate::config_client::ConfigClientError::RuntimeAuthenticationStatus(status)) if status == reqwest::StatusCode::FOUND)
+        matches!(endpoint.runtime_authorization().await, Err(crate::config_client::ConfigClientError::RuntimeAuthenticationStatus(status)) if status == reqwest::StatusCode::FOUND)
     );
     let local = defra_node::Node::builder().build().await?;
     for case in gents_lean_vocab::families::client_delegation_client_graph::cases() {

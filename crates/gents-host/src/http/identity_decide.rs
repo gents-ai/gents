@@ -339,6 +339,7 @@ mod tests {
             activation_observation,
             Default::default(),
             Default::default(),
+            Default::default(),
         )
         .contract
         .merge(
@@ -372,7 +373,7 @@ mod tests {
                         owner.private_key_bytes(),
                     )?,
                 )?
-                .authorization()
+                .runtime_authorization()
                 .await?
                 .expect("operator authorization"),
             )

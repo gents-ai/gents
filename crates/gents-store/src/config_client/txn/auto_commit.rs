@@ -60,6 +60,7 @@ impl ConfigAccess {
             client_endpoint: None,
             agent_proof: None,
             client_authorization: None,
+            presented_delegation: None,
         })))
     }
 

@@ -279,7 +279,7 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     assert_eq!(identity.did(), changed_did);
     // Bearer authorization requires a held signing key; the home's operator reads status.
     let status: serde_json::Value = operator
-        .authorize(reqwest::Client::new().get(format!("http://127.0.0.1:{port}/status")))
+        .authorize_runtime(reqwest::Client::new().get(format!("http://127.0.0.1:{port}/status")))
         .await
         .unwrap()
         .send()

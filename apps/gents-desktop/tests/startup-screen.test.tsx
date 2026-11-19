@@ -55,6 +55,7 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
           approxSerializedBytes: 2048,
           operatorConfigAuthoritativeNodeDids: configured ? [deployment.nodeDid] : [],
           deployments: [deployment],
+          unkeptChanges: [],
         }
       : null,
   };

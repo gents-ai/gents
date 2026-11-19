@@ -160,3 +160,168 @@ fn the_choice_round_trips_through_the_init_config() {
     assert_eq!(config.document_acp, DocumentAcp::Vera);
     assert_eq!(serde_json::to_value(&config).unwrap(), recorded);
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Reported {
+    Absent,
+    Named,
+    Unavailable,
+}
+
+#[test]
+fn the_reported_delegation_audience_matches_the_lean_model() {
+    use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
+    gents_lean_vocab::families::identity_user_delegation_status_reports::replay::<Provider, Reported>(
+        |input| {
+            let audience = input.node_reports_audience.then(|| DelegationAudience {
+                worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
+                deployment: 7,
+                genesis_id: None,
+            });
+            match super::status_reports(document_acp(input.provider), audience.clone()) {
+                ReportedDelegationAudience::Absent => Reported::Absent,
+                ReportedDelegationAudience::Named(named) => {
+                    assert_eq!(Some(named), audience);
+                    Reported::Named
+                }
+                ReportedDelegationAudience::Unavailable => Reported::Unavailable,
+            }
+        },
+    );
+}
+
+#[test]
+fn signing_with_a_held_user_key_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_user_delegation_runtime_signs_with_held_user_key::replay::<
+        Provider,
+    >(
+        |input| match super::runtime_signs_with_held_user_key(document_acp(input.provider)) {
+            Ok(()) => true,
+            Err(DocumentAcpError::HeldUserKey) => false,
+            Err(error) => panic!("{error}"),
+        },
+    );
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Author {
+    User,
+    Node,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Presented {
+    IdentityToken,
+    Delegation,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Edge {
+    Unchanged,
+    DelegationRequired,
+}
+
+#[test]
+fn the_http_edge_matches_the_lean_model() {
+    use crate::config_client::user_write::Author as Caller;
+    gents_lean_vocab::families::identity_user_delegation_edge::replay::<
+        Author,
+        Edge,
+        Presented,
+        Provider,
+    >(|input| {
+        let caller = match input.author {
+            Author::User => Caller::User,
+            Author::Node => Caller::Node,
+            Author::Agent => Caller::Agent,
+        };
+        let presented = match input.presented {
+            Presented::IdentityToken => super::Presented::IdentityToken,
+            Presented::Delegation => super::Presented::Delegation,
+        };
+        match super::edge(document_acp(input.provider), caller, presented) {
+            Ok(()) => Edge::Unchanged,
+            Err(DocumentAcpError::DelegationRequired) => Edge::DelegationRequired,
+            Err(error) => panic!("{error}"),
+        }
+    });
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Publication {
+    Proceeds,
+    AwaitsTransportGrants,
+}
+
+#[test]
+fn node_publication_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_node_publication_publication::replay::<
+        Provider,
+        Publication,
+    >(
+        |input| match super::publication(document_acp(input.provider)) {
+            super::Publication::Proceeds => Publication::Proceeds,
+            super::Publication::AwaitsTransportGrants => Publication::AwaitsTransportGrants,
+        },
+    );
+}
+
+#[test]
+fn what_a_person_reads_names_no_internals() {
+    let path = std::path::PathBuf::from("/home/data/vera/node");
+    let refusals = [
+        DocumentAcpError::Switch {
+            recorded: DocumentAcp::Local,
+            requested: DocumentAcp::Vera,
+        },
+        DocumentAcpError::Unavailable,
+        DocumentAcpError::NodeKeyCannotSign {
+            node: "did:key:z6Mk".into(),
+        },
+        DocumentAcpError::NotYetUsable,
+        DocumentAcpError::HeldUserKey,
+        DocumentAcpError::DelegationRequired,
+        DocumentAcpError::TransportGrantsAwaitProvider,
+        DocumentAcpError::DeploymentDiffers {
+            what: "consensus key",
+        },
+        DocumentAcpError::DeploymentMissing { path: path.clone() },
+        DocumentAcpError::DeploymentReplaced { path },
+    ];
+    let delegation = [crate::config_client::DelegationError::AudienceUnavailable];
+    let read = refusals
+        .iter()
+        .map(ToString::to_string)
+        .chain(delegation.iter().map(ToString::to_string))
+        .chain([
+            crate::config_client::user_write::REFUSED_FOR_A_PERSON.to_owned(),
+            crate::config_client::owed::OWED_FAILED_FOR_A_PERSON.to_owned(),
+        ]);
+    for text in read {
+        let lowered = text.replace("/home/data/vera/node", "").to_lowercase();
+        let words: Vec<&str> = lowered
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .collect();
+        for internal in [
+            "vera",
+            "defradb",
+            "acp",
+            "delegation",
+            "audience",
+            "registration",
+            "deployment",
+            "credential",
+            "chain",
+        ] {
+            assert!(!words.contains(&internal), "{text:?} names {internal:?}");
+        }
+        assert!(!lowered.contains("access control"), "{text:?}");
+    }
+}

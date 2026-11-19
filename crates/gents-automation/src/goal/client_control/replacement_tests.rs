@@ -295,6 +295,7 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
             .await
             .unwrap(),
         ),
+        request_credentials: Vec::new(),
     });
     command.signature = fixture
         .user

@@ -2136,6 +2136,7 @@ export function createDesktopUiHarness(
         approxSerializedBytes: rowCount * 512,
         operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
+        unkeptChanges: [],
       },
     };
     return clone(next);

@@ -1,3 +1,4 @@
+use gents_protocol::delegation_audience::ReportedHome;
 use std::sync::{Arc, RwLock};
 
 use gents_protocol::client_authentication::ClientAuthentication;
@@ -85,6 +86,35 @@ impl GraphqlEndpoint {
     }
 
     async fn discover_runtime_authentication(&self, node: &str) -> Result<ClientAuthentication> {
+        let (authentication, reported) = self.fetch_runtime_status(node).await?;
+        self.delegation_audience.observe(reported);
+        Ok(authentication)
+    }
+
+    pub(super) async fn reread_runtime_home(&self) -> Option<ReportedHome> {
+        let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication else {
+            return None;
+        };
+        let mut current = current.lock().await;
+        let (authentication, reported) = self.fetch_runtime_status(node).await.ok()?;
+        *current = Some(authentication);
+        Some(reported)
+    }
+
+    pub async fn observe_runtime_status(&self, status: &serde_json::Value) -> Result<()> {
+        if let EndpointAuthentication::Runtime { node, current } = &*self.client_authentication {
+            let mut current = current.lock().await;
+            let (authentication, reported) = Self::decode_runtime_status(node, status)?;
+            self.delegation_audience.observe(reported);
+            *current = Some(authentication);
+        }
+        Ok(())
+    }
+
+    async fn fetch_runtime_status(
+        &self,
+        node: &str,
+    ) -> Result<(ClientAuthentication, ReportedHome)> {
         let base = self
             .url()
             .trim()
@@ -108,6 +138,13 @@ impl GraphqlEndpoint {
             .json()
             .await
             .map_err(ConfigClientError::RuntimeAuthenticationHttp)?;
+        Self::decode_runtime_status(node, &body)
+    }
+
+    fn decode_runtime_status(
+        node: &str,
+        body: &serde_json::Value,
+    ) -> Result<(ClientAuthentication, ReportedHome)> {
         if body.get("node_did").and_then(serde_json::Value::as_str) != Some(node) {
             return Err(ConfigClientError::RuntimeAuthenticationIdentity);
         }
@@ -119,7 +156,27 @@ impl GraphqlEndpoint {
         if authentication == ClientAuthentication::Unavailable {
             return Err(ConfigClientError::RuntimeAuthenticationUnavailable);
         }
-        Ok(authentication)
+        use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
+        let mut reported = ReportedHome::of_home(body, node);
+        match (&authentication, &reported.audience) {
+            (
+                ClientAuthentication::Vera { worker, deployment },
+                ReportedDelegationAudience::Absent,
+            ) => {
+                reported.audience = ReportedDelegationAudience::Named(DelegationAudience {
+                    worker: worker.clone(),
+                    deployment: *deployment,
+                    genesis_id: None,
+                });
+            }
+            (ClientAuthentication::Local, ReportedDelegationAudience::Absent) => {}
+            (
+                ClientAuthentication::Vera { worker, deployment },
+                ReportedDelegationAudience::Named(audience),
+            ) if worker == &audience.worker && deployment == &audience.deployment => {}
+            _ => return Err(ConfigClientError::RuntimeAuthenticationUnavailable),
+        }
+        Ok((authentication, reported))
     }
 }
 

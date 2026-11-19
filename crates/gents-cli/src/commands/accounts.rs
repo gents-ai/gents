@@ -336,11 +336,8 @@ pub async fn request_usage_reads(
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
     let response = graphql
-        .authorize(client.post(url))
+        .send_resolving(|graphql| Ok(graphql.authorize(client.post(url.clone()))?.json(&command)))
         .await?
-        .json(&command)
-        .send()
-        .await
         .context("asking the runtime to read usage")?;
     let status = response.status();
     if !status.is_success() {

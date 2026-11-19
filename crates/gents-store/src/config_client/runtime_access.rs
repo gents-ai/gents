@@ -86,7 +86,7 @@ impl GraphqlEndpoint {
             }
         })?;
         let response = self
-            .authorize(
+            .authorize_runtime(
                 super::runtime_endpoints::discovery_client()
                     .await?
                     .post(format!("{base}{path}")),

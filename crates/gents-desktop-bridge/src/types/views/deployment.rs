@@ -420,6 +420,17 @@ pub struct DesktopRuntimeSnapshot {
     #[ts(optional)]
     pub operator_config_authoritative_node_dids: Option<Vec<String>>,
     pub deployments: Vec<DeploymentView>,
+    pub unkept_changes: Vec<UnkeptChangeView>,
+}
+
+/// A change a home did not keep; `message` is what the person reads.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnkeptChangeView {
+    pub node_did: String,
+    pub label: String,
+    pub at: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

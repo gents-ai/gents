@@ -52,21 +52,21 @@ impl ConfigApplyTxn<'_> {
             return Err(ConfigClientError::ClientConfigurationUpdateInvalid);
         }
         let context = self.request_context(Some(signer.clone()));
-        let relations = [
-            (
-                "parent",
-                super::super::relationships::resource_target("agents", agent_doc)?,
-            ),
-            (
-                "session",
-                super::super::relationships::resource_target("sessions", session_doc)?,
-            ),
-            ("working_agent", create.agent_did.clone()),
-        ];
-        for (relation, target) in relations {
+        let stored = self.stored_create(&created);
+        let relations =
+            super::super::stored_create::request_relations(create, session_doc, agent_doc)?;
+        for (index, (relation, target)) in relations.into_iter().enumerate() {
             let node = Arc::clone(node);
             let handle = handle.clone();
-            let context = context.clone();
+            let context = match stored
+                .as_ref()
+                .and_then(|stored| stored.relationship_credential(index))
+            {
+                Some(token) => context
+                    .clone()
+                    .with_request_delegation(signer.to_string(), token.to_owned()),
+                None => context.clone(),
+            };
             let doc = created.clone();
             execute_owned_native(
                 async move {

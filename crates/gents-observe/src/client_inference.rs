@@ -495,14 +495,13 @@ impl InferenceSetupState {
     }
 }
 
-/// A runtime endpoint can be unavailable or unresponsive while settings are
-/// opened; bound the HTTP wait as well as the response body.
 pub async fn read_inference_setup_state_from(
     endpoint: &gents_store::config_client::GraphqlEndpoint,
     node_did: &str,
 ) -> anyhow::Result<InferenceSetupState> {
+    let graphql = endpoint.url();
     use anyhow::Context;
-    let mut url = reqwest::Url::parse(endpoint.url()).context("runtime endpoint is invalid")?;
+    let mut url = reqwest::Url::parse(graphql).context("runtime endpoint is invalid")?;
     anyhow::ensure!(
         matches!(url.scheme(), "http" | "https")
             && url.username().is_empty()
@@ -522,16 +521,25 @@ pub async fn read_inference_setup_state_from(
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let mut response = endpoint
-        .authorize(client.get(url))
+        .send_resolving(|endpoint| endpoint.authorize(client.get(url.clone())))
         .await?
-        .send()
-        .await
         .map_err(|error| {
             gents_store::client_error::BridgeError::runtime_http_error(
                 error,
                 "reading runtime model settings".to_owned(),
             )
         })?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_default();
+        if let Some(update) = gents_store::client_error::BridgeError::home_refusal(status, &body) {
+            return Err(update.into());
+        }
+        anyhow::bail!(
+            "runtime model settings are unavailable (HTTP {}); reconnect the runtime and try again",
+            status.as_u16()
+        );
+    }
     anyhow::ensure!(
         response.status().is_success(),
         "runtime model settings are unavailable (HTTP {}); reconnect the runtime and try again",
@@ -619,7 +627,8 @@ mod tests {
             .mount(&server)
             .await;
         let state = read_inference_setup_state_from(
-            &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
+            &format!("{}/api/v0/graphql", server.uri()),
+            None,
             node,
         )
         .await
@@ -660,7 +669,8 @@ mod tests {
                 .mount(&server)
                 .await;
             assert!(read_inference_setup_state_from(
-                &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
+                &format!("{}/api/v0/graphql", server.uri()),
+                None,
                 "did:runtime",
             )
             .await
@@ -683,7 +693,8 @@ mod tests {
                 .mount(&server)
                 .await;
             let error = read_inference_setup_state_from(
-                &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
+                &format!("{}/api/v0/graphql", server.uri()),
+                None,
                 "did:runtime",
             )
             .await
@@ -706,7 +717,8 @@ mod tests {
             .mount(&server)
             .await;
         let error = read_inference_setup_state_from(
-            &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
+            &format!("{}/api/v0/graphql", server.uri()),
+            None,
             "did:runtime",
         )
         .await

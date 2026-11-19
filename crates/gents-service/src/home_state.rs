@@ -282,7 +282,7 @@ pub async fn resolve_graphql_endpoint(
     }
 
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
-        return home_endpoint_as(&home_dir, runtime_state.graphql, &identity);
+        return home_endpoint_as(&home_dir, runtime_state.graphql, &identity).await;
     }
 
     anyhow::ensure!(
@@ -297,6 +297,7 @@ pub async fn resolve_graphql_endpoint(
         format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"),
         &identity,
     )
+    .await
 }
 
 /// Client document access retains the user's identity. Credentials remain bound to
@@ -314,10 +315,10 @@ async fn home_graphql_endpoint_with_paths(
     paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> Result<GraphqlEndpoint> {
     let identity = client_identity_in(home_dir, paths).await?;
-    home_endpoint_as(home_dir, url, &identity)
+    home_endpoint_as(home_dir, url, &identity).await
 }
 
-fn home_endpoint_as(
+async fn home_endpoint_as(
     home_dir: &Path,
     url: impl Into<String>,
     identity: &gents_store::client_journal::principal_identity::PrincipalIdentity,
@@ -331,17 +332,20 @@ fn home_endpoint_as(
     client_signed_endpoint(url, identity, &node_did)
 }
 
+/// Reads the public status of the CLI's runtime again through the readiness
+/// probe; the CLI keeps what it reports only with its endpoint.
 fn client_signed_endpoint(
     url: impl Into<String>,
     identity: &gents_store::client_journal::principal_identity::PrincipalIdentity,
     node_did: &str,
 ) -> Result<GraphqlEndpoint> {
+    let url = url.into();
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         identity.private_key_bytes(),
     )?;
     Ok(gents::runtime::lifecycle_hooks::compose_endpoint(
         gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(capability)
-            .endpoint(node_did, &url.into())?
+            .endpoint(node_did, &url)?
             .with_client_signed_agent_creates(),
     )?)
 }
@@ -700,6 +704,149 @@ mod tests {
         )
         .await
         .is_err());
+    }
+
+    /// A runtime whose status and audience the test sets: it refuses a User's
+    /// identity token with the edge's code while it reports an audience, and
+    /// a delegation for any other deployment.
+    struct Runtime {
+        url: String,
+        status: std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
+        presented: std::sync::Arc<std::sync::Mutex<Vec<Option<u64>>>>,
+    }
+
+    impl Runtime {
+        fn reports(&self, status: serde_json::Value) {
+            *self.status.lock().unwrap() = status;
+        }
+
+        fn presented(&self) -> Vec<Option<u64>> {
+            std::mem::take(&mut *self.presented.lock().unwrap())
+        }
+    }
+
+    fn presented_for(headers: &axum::http::HeaderMap) -> Option<u64> {
+        use base64::Engine as _;
+        let bearer = headers.get("authorization")?.to_str().ok()?;
+        let claims = bearer.strip_prefix("Bearer ")?.split('.').nth(1)?;
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(claims)
+                .ok()?,
+        )
+        .ok()?;
+        claims["aud"].as_str()?.strip_prefix("vera:")?.parse().ok()
+    }
+
+    fn ready(deployment: Option<u64>) -> serde_json::Value {
+        let mut status = serde_json::json!({ "node_did": "did:key:test-runtime", "client_authentication": {"kind":"local"}, "lifecycle": "ready" });
+        if let Some(deployment) = deployment {
+            status["client_authentication"] = serde_json::json!({"kind":"vera","worker":"did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK","deployment":deployment});
+            status["delegation_audience"] = serde_json::json!({
+                "worker": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+                "deployment": deployment,
+            });
+        }
+        status
+    }
+
+    async fn runtime() -> Runtime {
+        use axum::http::StatusCode;
+        let status = std::sync::Arc::new(std::sync::Mutex::new(
+            serde_json::json!({ "lifecycle": "starting" }),
+        ));
+        let presented = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (reported, taking, seen) = (status.clone(), status.clone(), presented.clone());
+        let router = axum::Router::new()
+            .route(
+                "/status",
+                axum::routing::get(move || {
+                    let reported = reported.clone();
+                    async move { axum::Json(reported.lock().unwrap().clone()) }
+                }),
+            )
+            .fallback(move |headers: axum::http::HeaderMap| {
+                let (taking, seen) = (taking.clone(), seen.clone());
+                async move {
+                    let audience = presented_for(&headers);
+                    seen.lock().unwrap().push(audience);
+                    let takes = taking.lock().unwrap()["delegation_audience"]["deployment"].as_u64();
+                    match (takes, audience) {
+                        (None, None) => (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({"data": {"Node": []}})),
+                        ),
+                        (Some(takes), Some(presented)) if takes == presented => (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({"data": {"Node": []}})),
+                        ),
+                        (Some(_), None) => (
+                            StatusCode::UNAUTHORIZED,
+                            axum::Json(serde_json::json!({
+                                "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+                            })),
+                        ),
+                        _ => (StatusCode::FORBIDDEN, axum::Json(serde_json::json!({}))),
+                    }
+                }
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        Runtime {
+            url: format!("http://{address}/api/v0/graphql"),
+            status,
+            presented,
+        }
+    }
+
+    async fn cli_endpoint(url: &str) -> gents_store::config_client::GraphqlEndpoint {
+        let home = tempfile::tempdir().unwrap();
+        let paths = gents_store::client_journal::paths::DesktopPaths::from_root(home.path());
+        paths.ensure_root_dirs().await.unwrap();
+        let identity =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &paths,
+            )
+            .await
+            .unwrap();
+        super::client_signed_endpoint(url, &identity, "did:key:test-runtime").unwrap()
+    }
+
+    async fn reads(endpoint: &gents_store::config_client::GraphqlEndpoint) -> bool {
+        gents_store::config_client::post_graphql(endpoint, "query { Node { _docID } }")
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_cli_endpoint_built_before_its_runtime_answered_recovers_on_first_use() {
+        let runtime = runtime().await;
+        let endpoint = cli_endpoint(&runtime.url).await;
+        runtime.reports(ready(Some(1)));
+        assert!(reads(&endpoint).await);
+        assert_eq!(runtime.presented(), vec![Some(1)]);
+    }
+
+    #[tokio::test]
+    async fn a_long_cli_command_survives_a_restart_under_another_audience() {
+        let runtime = runtime().await;
+        runtime.reports(ready(Some(1)));
+        let endpoint = cli_endpoint(&runtime.url).await;
+        assert!(reads(&endpoint).await);
+        assert_eq!(runtime.presented(), vec![Some(1)]);
+        runtime.reports(ready(Some(2)));
+        assert!(reads(&endpoint).await);
+        assert_eq!(runtime.presented(), vec![Some(1), Some(2)]);
+    }
+
+    #[tokio::test]
+    async fn a_cli_endpoint_on_a_local_home_presents_its_identity_token_once() {
+        let runtime = runtime().await;
+        runtime.reports(ready(None));
+        let endpoint = cli_endpoint(&runtime.url).await;
+        assert!(reads(&endpoint).await);
+        assert_eq!(runtime.presented(), vec![None]);
     }
 
     #[test]

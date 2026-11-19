@@ -126,7 +126,7 @@ impl GraphqlEndpoint {
         let Some(actor) = self.principal_did.as_deref() else {
             return Ok(None);
         };
-        let Some(authorization) = self.authorization().await? else {
+        let Some(authorization) = self.runtime_authorization().await? else {
             return Ok(None);
         };
         let actor =
@@ -135,84 +135,21 @@ impl GraphqlEndpoint {
     }
 
     pub async fn requires_client_delegation(&self) -> Result<bool> {
-        Ok(matches!(
-            self.runtime_authentication().await?,
-            ClientAuthentication::Vera { .. }
-        ))
+        self.runtime_authentication().await?;
+        Ok(self.mints_delegations())
     }
 
-    pub async fn authorization(&self) -> Result<Option<String>> {
-        if let Some(value) = &self.delegated_authorization {
-            return Ok(Some(value.to_str()?.to_owned()));
-        }
-        let Some(did) = self.principal_did.as_deref() else {
-            return Ok(None);
-        };
-        let capability = self
-            .client_signing_capability
-            .as_ref()
-            .ok_or(ConfigClientError::ClientAgentSignerRequired)?;
-        let authentication = self.runtime_authentication().await?;
-        let authorization = match &authentication {
-            gents_protocol::client_authentication::ClientAuthentication::Local => {
-                crate::identity::defradb_bearer_authorization_with_config(
-                    did,
-                    &self.audience()?,
-                    &capability.config,
-                )?
-            }
-            gents_protocol::client_authentication::ClientAuthentication::Vera {
-                worker,
-                deployment,
-            } => {
-                let signer =
-                    vera::vera_rs::Ed25519Signer::from_slice(&capability.config.private_key_bytes)
-                        .map_err(|error| {
-                            ConfigClientError::ClientDelegationSigner(Box::new(error))
-                        })?;
-                let audience = acp::DelegationAudience {
-                    genesis_id: None,
-                    worker: worker.clone(),
-                    deployment: *deployment,
-                };
-                let token = tokio::spawn(async move {
-                    vera::vera_rs::caller_delegation(
-                        &signer,
-                        &audience,
-                        crate::identity::DEFRADB_BEARER_LIFETIME,
-                    )
-                    .await
-                })
-                .await
-                .map_err(ConfigClientError::ClientDelegationTask)?
-                .map_err(|error| ConfigClientError::ClientDelegation(Box::new(error)))?;
-                format!("Bearer {token}")
-            }
-            gents_protocol::client_authentication::ClientAuthentication::Unavailable => {
-                return Err(ConfigClientError::RuntimeAuthenticationUnavailable);
-            }
-        };
-        Ok(Some(authorization))
+    pub async fn runtime_authorization(&self) -> Result<Option<String>> {
+        self.runtime_authentication().await?;
+        self.authorization()
     }
 
-    async fn authorization_header(&self) -> Result<Option<reqwest::header::HeaderValue>> {
-        let Some(authorization) = self.authorization().await? else {
-            return Ok(None);
-        };
-        let mut value = reqwest::header::HeaderValue::from_str(&authorization)
-            .map_err(ConfigClientError::BearerHeader)?;
-        value.set_sensitive(true);
-        Ok(Some(value))
-    }
-
-    pub async fn authorize(
+    pub async fn authorize_runtime(
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::RequestBuilder> {
-        Ok(match self.authorization_header().await? {
-            Some(value) => request.header(reqwest::header::AUTHORIZATION, value),
-            None => request,
-        })
+        self.runtime_authentication().await?;
+        self.authorize(request)
     }
 }
 

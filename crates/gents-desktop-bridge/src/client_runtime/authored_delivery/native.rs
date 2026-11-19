@@ -148,7 +148,7 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
         let mut url = reqwest::Url::parse(endpoint.url())?;
         url.set_path(gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH);
         let response = endpoint
-            .authorize(reqwest::Client::new().post(url))
+            .authorize_runtime(reqwest::Client::new().post(url))
             .await?
             .json(&gents_protocol::goal_control::ApplyGoalControl {
                 node_did,

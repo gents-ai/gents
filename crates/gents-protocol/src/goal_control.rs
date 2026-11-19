@@ -178,6 +178,11 @@ pub enum GoalOperation {
 pub struct GoalNativeEvidence {
     pub request: serde_json::Value,
     pub replacement_delete: Option<serde_json::Value>,
+    /// The request-bound credentials the first request's create carries for
+    /// its User on a home whose document access runs on Vera, one for each
+    /// policy command it sends (`Identity.UserDelegation.storedCreateCommands`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request_credentials: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -440,6 +445,7 @@ mod tests {
         original.native_evidence = Some(GoalNativeEvidence {
             request: json!({"public_key_hex": "user", "doc_id": "request", "signature": [1]}),
             replacement_delete: Some(json!({"doc_id": "goal", "signature": [2]})),
+            request_credentials: Vec::new(),
         });
         let payload = original.signing_payload().unwrap();
         let digest = original.computed_digest().unwrap();

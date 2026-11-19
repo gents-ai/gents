@@ -108,7 +108,7 @@ async fn seed_live_agent_documents(
     use gents_documents::{
         load_inference_backend_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+    use gents_store::config_client::ConfigAccess;
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
     let tool_root = tool_root
@@ -135,12 +135,12 @@ async fn seed_live_agent_documents(
         config_actor.private_key_bytes(),
     )?;
     let access = ConfigAccess::Graphql(
-        GraphqlEndpoint::as_principal(
+        gents_desktop_core::client::home_endpoint::user_at(
             home.graphql_endpoint()
                 .context("runtime HTTP endpoint missing")?,
-            config_actor_did,
-        )
-        .with_client_signing_capability(capability)?
+            &capability,
+            None,
+        )?
         .with_client_signed_agent_creates(),
     );
     let node_input =

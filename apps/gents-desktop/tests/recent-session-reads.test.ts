@@ -229,7 +229,6 @@ describe("recent session reads", () => {
       ({
         clientDid,
         deployments: nodeDids.map((nodeDid) => ({ nodeDid })),
-        endedAccess: [],
       }) as unknown as DesktopClientSnapshot["client"];
     t.reads.forgetWithdrawnReads(client("did:key:me", [NODE, OTHER_NODE]));
     await readAll(t, ["s-1"]);

@@ -5,6 +5,7 @@ import type {
   DesktopClientSnapshot,
   MailboxItemView,
   SessionSummary,
+  UnkeptChangeView,
 } from "@source-inc/gents-desktop-client";
 
 export type NodeKey = string;
@@ -29,6 +30,8 @@ export type FleetState = {
   parentOf: Readonly<Record<SessionKey, SessionSummary>>;
   workersOf: Readonly<Record<SessionKey, readonly SessionSummary[]>>;
   bySessionId: Readonly<Record<string, SessionSummary>>;
+  /** the latest change each node did not keep */
+  unkeptChanges: readonly UnkeptChangeView[];
 };
 
 export type FleetStore = StoreApi<FleetState>;
@@ -69,6 +72,7 @@ const EMPTY: FleetState = {
   parentOf: {},
   workersOf: {},
   bySessionId: {},
+  unkeptChanges: [],
 };
 
 export function createFleetStore() {
@@ -110,6 +114,9 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
     mailboxOf[key] = keepList(prev.mailboxOf[key], items);
   }
   const nodeKeys = deployments.map(nodeKeyOf);
+  const unkept = (snapshot.client?.unkeptChanges ?? []).map((entry, i) =>
+    keep(prev.unkeptChanges[i], entry),
+  );
   const sessionsChanged = !sameRecord(prev.sessions, sessions);
   const lineage = sessionsChanged
     ? lineageOf(sessions, prev)
@@ -127,6 +134,7 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
       ? prev.byNodeSessionId
       : byNodeSessionId,
     mailboxOf: sameRecord(prev.mailboxOf, mailboxOf) ? prev.mailboxOf : mailboxOf,
+    unkeptChanges: keepList(prev.unkeptChanges, unkept),
     ...lineage,
   };
   return (Object.keys(next) as (keyof FleetState)[]).every(

@@ -63,6 +63,12 @@ impl ClientRuntime {
                         }
                     }
                     if changed && status == Some(RuntimeConnectionStatus::Connected) {
+                        if let Some(endpoint) =
+                            core.operator_observation_graphql(&connection.node_did)
+                        {
+                            core.owed
+                                .settle(&connection, endpoint, core.stores().clone());
+                        }
                         if let Err(error) = core.deliver_authored_for(&connection.node_did).await {
                             tracing::warn!(node_did = %connection.node_did, error = %format!("{error:#}"), "authored delivery remains retained");
                         }

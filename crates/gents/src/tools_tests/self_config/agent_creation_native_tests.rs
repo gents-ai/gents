@@ -214,7 +214,7 @@ async fn user_signed_node(
     let request = defra_http::client_signed_create::websocket_request(
         url.as_str(),
         &endpoint
-            .authorization()
+            .runtime_authorization()
             .await?
             .context("test user authorization missing")?,
     )?;

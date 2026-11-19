@@ -408,6 +408,10 @@ impl ObservedStores {
         self.fleet.version_tx.subscribe()
     }
 
+    pub fn notify_client_change(&self) {
+        self.fleet.changed();
+    }
+
     pub fn version(&self) -> u64 {
         *self.fleet.version_tx.borrow()
     }

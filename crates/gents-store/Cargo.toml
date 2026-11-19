@@ -65,6 +65,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 uuid.workspace = true
+vera-crypto.workspace = true
+vera-delegation.workspace = true
+hex = "0.4"
 vera-embedded = { workspace = true, optional = true, features = ["node"] }
 vera-node = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["stream"] }

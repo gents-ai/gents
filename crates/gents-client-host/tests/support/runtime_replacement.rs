@@ -398,7 +398,7 @@ impl Replaced {
             },
         };
         let receipt: RuntimeControlReceipt = endpoint
-            .authorize(client.post(url).json(&command))
+            .authorize_runtime(client.post(url).json(&command))
             .await?
             .send()
             .await?

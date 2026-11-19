@@ -36,7 +36,11 @@ pub async fn prepare_session_goal_control(
             "goal request differs from its signed command scope"
         );
         let input = gents_store::config_client::client_request_input(request)?;
+        let create = request;
         let request = gents_store::config_client::prepare_request_evidence(signer, input).await?;
+        let request_credentials = access
+            .stored_create_credentials(signer, create, &request)
+            .await?;
         let replacement_delete = match command.expected.as_ref() {
             Some(revision) => Some(
                 gents_store::config_client::prepare_goal_delete_evidence(
@@ -51,6 +55,7 @@ pub async fn prepare_session_goal_control(
         Some(gents_protocol::goal_control::GoalNativeEvidence {
             request,
             replacement_delete,
+            request_credentials,
         })
     } else {
         None
@@ -229,7 +234,7 @@ pub async fn submit_prepared_session_goal_control(
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?;
             endpoint
-                .authorize(client.post(url))
+                .authorize_runtime(client.post(url))
                 .await?
                 .json(&gents_protocol::goal_control::ApplyGoalControl {
                     node_did: command.node_did.clone(),

@@ -128,7 +128,7 @@ async fn authenticated_delegation_preserves_actor_without_minting_a_token() {
     )
     .unwrap();
     assert_eq!(
-        endpoint.authorization().await.unwrap().as_deref(),
+        endpoint.runtime_authorization().await.unwrap().as_deref(),
         Some("Bearer original-caller-token")
     );
     let access = super::ConfigAccess::Graphql(endpoint);
