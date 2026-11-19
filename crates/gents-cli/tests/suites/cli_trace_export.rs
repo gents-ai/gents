@@ -2348,8 +2348,11 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
     let state = ProjectionGraphqlAcpState {
         allowed: Arc::new(allowed),
     };
+    let node: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
+        tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("projection-node"))
+            .await?,
+    );
     let router = Router::new()
-        .route("/status", get(projection_status_mock))
         .route("/api/v0/graphql", post(projection_graphql_mock))
         .route("/api/v0/tx", post(projection_txn_begin))
         .route(
@@ -2357,7 +2360,8 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
             post(projection_txn_finish).delete(projection_txn_finish),
         )
         .route("/api/v0/acp/document/decide", post(projection_acp_mock))
-        .with_state(state);
+        .with_state(state)
+        .merge(gents_store::test_support::local_authentication_route(node));
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
@@ -2365,14 +2369,6 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
     Ok(ProjectionGraphqlAcpMock {
         graphql: format!("http://{addr}/api/v0/graphql"),
     })
-}
-
-async fn projection_status_mock() -> Json<Value> {
-    Json(json!({
-        "node_did": "did:test:projection-node",
-        (gents_protocol::client_authentication::STATUS_FIELD):
-            gents_protocol::client_authentication::ClientAuthentication::Local,
-    }))
 }
 
 async fn projection_graphql_mock(
