@@ -55,6 +55,9 @@ where
         gents_desktop_core::local_runtime::fetch_runtime_status_for_node(&endpoint, &node_did),
     );
     let tool_call_rows = tool_call_rows?;
+    if let Ok(status) = &status {
+        core.observe_runtime_status(&node_did, status).await;
+    }
     let liveness = status.and_then(|status| {
         serde_json::from_value::<RuntimeLivenessView>(
             status

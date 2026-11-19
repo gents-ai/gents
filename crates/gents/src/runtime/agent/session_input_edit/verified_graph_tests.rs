@@ -194,6 +194,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             edit,
             replacements,
             replacement_evidence,
+            replacement_credentials: Vec::new(),
             signature: vec![],
         };
         command.signature = author.sign(&command.signing_payload()).await?;
@@ -435,6 +436,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             },
             replacements: vec![],
             replacement_evidence: vec![],
+            replacement_credentials: Vec::new(),
             signature: vec![],
         };
         removal.signature = user.sign(&removal.signing_payload()).await?;

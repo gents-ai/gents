@@ -113,6 +113,7 @@ async fn submit_prepared_edit(
         })
         .await?;
     let mut replacement_evidence = Vec::with_capacity(replacements.len());
+    let mut replacement_credentials = Vec::with_capacity(replacements.len());
     for create in &replacements {
         anyhow::ensure!(
             create.session_doc_id.as_deref() == Some(session_doc_id.as_str())
@@ -121,15 +122,19 @@ async fn submit_prepared_edit(
                 && create.admission.signer_did == requester_did,
             "replacement physical targets or signer changed"
         );
-        replacement_evidence.push(
-            gents_store::config_client::prepare_request_evidence(
-                signer,
-                gents_store::config_client::client_request_input(create)?,
-            )
-            .await?,
+        let evidence = gents_store::config_client::prepare_request_evidence(
+            signer,
+            gents_store::config_client::client_request_input(create)?,
+        )
+        .await?;
+        replacement_credentials.push(
+            access
+                .stored_create_credentials(signer, create, &evidence)
+                .await?,
         );
+        replacement_evidence.push(evidence);
     }
-    let now = chrono::Utc::now();
+    let now = access.home_now().await;
     let mut command = SessionInputEdit {
         version: SESSION_INPUT_EDIT_VERSION,
         command_id: uuid::Uuid::new_v4().to_string(),
@@ -145,6 +150,7 @@ async fn submit_prepared_edit(
         edit,
         replacements,
         replacement_evidence,
+        replacement_credentials,
         signature: Vec::new(),
     };
     command.signature = signer.sign(&command.signing_payload()).await?;

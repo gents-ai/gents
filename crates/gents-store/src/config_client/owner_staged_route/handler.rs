@@ -86,8 +86,14 @@ async fn decide(
             "The command signature is invalid or was already used.",
         );
     }
-    let access =
-        ConfigAccess::local_as(node.clone(), requester.clone()).with_runtime_agent_proof(proof);
+    let presented = crate::config_client::user_write::PresentedDelegation::of_request(
+        &node,
+        &actor.context(),
+        requester.as_str(),
+    );
+    let access = ConfigAccess::local_as(node.clone(), requester.clone())
+        .with_runtime_agent_proof(proof)
+        .with_presented_delegation(presented);
     // Authority before the nonce: an unauthorized signer is refused with the
     // decision's own fixed denial and makes the runtime write nothing.
     match access
@@ -129,6 +135,14 @@ async fn decide(
             OwnerStagedRefusal::OutOfKind,
             "This operation may not grant that target.",
         ),
+        Err(ConfigClientError::UserWrite(refusal)) => {
+            tracing::info!(%refusal, "owner-staged change refused for its User");
+            failure(
+                StatusCode::FORBIDDEN,
+                "updateRequired",
+                crate::config_client::user_write::REFUSED_FOR_A_PERSON,
+            )
+        }
         Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { .. }) => failure(
             StatusCode::CONFLICT,
             OwnerStagedRefusal::Unmanaged,

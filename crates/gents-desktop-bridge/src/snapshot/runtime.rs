@@ -374,6 +374,12 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             .into_iter()
             .map(Into::into)
             .collect(),
+        unkept_changes: sync_state
+            .unkept_changes
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect(),
     }
 }
 

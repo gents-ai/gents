@@ -739,6 +739,10 @@ async fn serve_foreground(
         activation_rx,
         replicated_schema.clone(),
         serve_lifecycle.clone(),
+        init_config
+            .as_ref()
+            .map(|config| config.document_acp)
+            .unwrap_or_default(),
     );
     let scrape_state = runtime_routers.scrape_state;
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
@@ -760,9 +764,18 @@ async fn serve_foreground(
         .with_startup_gate(client_access_ready.clone(), bind_probe_path.clone());
     let streams =
         crate::http::shutdown_streams::ShutdownStreams::new(runtime.shutdown_tx.subscribe());
+    let edge = gents_store::local::document_acp::HttpEdge::new(
+        init_config
+            .as_ref()
+            .map(|config| config.document_acp)
+            .unwrap_or_default(),
+        identity.did(),
+    );
     let http_config = defra_node::HttpConfig::with_addr(http_addr)
         .with_extra_routes(extra_routes)
-        .with_router_transform(Arc::new(move |router| authority.wrap(streams.wrap(router))));
+        .with_router_transform(Arc::new(move |router| {
+            authority.wrap(streams.wrap(edge.wrap(router)))
+        }));
     anyhow::ensure!(
         server_identity.node_identity_did.as_deref() == Some(identity.did()),
         "runtime identity does not match the protected store identity"

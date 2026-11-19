@@ -118,6 +118,7 @@ fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
         observation,
         Default::default(),
         Default::default(),
+        Default::default(),
     )
     .contract
     .merge(gents_store::config_client::OwnerStagedRoute::new().router())

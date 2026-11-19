@@ -44,23 +44,21 @@ pub async fn decide_document_access(
     question: &DocumentAccessQuestion<'_>,
 ) -> Result<bool, DocumentDecideError> {
     let url = format!("{}/acp/document/decide", api_base.trim_end_matches('/'));
-    let mut request = client.post(url);
-    if let Some(endpoint) = authorization {
-        request = endpoint
-            .authorize(request)
-            .map_err(DocumentDecideError::Authorize)?;
+    let body = json!({
+        "actor": question.actor,
+        "permission": question.permission,
+        "policyID": question.policy_id,
+        "resourceName": question.resource_name,
+        "docID": question.doc_id,
+    });
+    let response = match authorization {
+        Some(endpoint) => endpoint
+            .send_resolving(|endpoint| endpoint.authorize(client.post(&url).json(&body)))
+            .await
+            .map_err(DocumentDecideError::Authorize)?,
+        None => client.post(&url).json(&body).send().await,
     }
-    let response = request
-        .json(&json!({
-            "actor": question.actor,
-            "permission": question.permission,
-            "policyID": question.policy_id,
-            "resourceName": question.resource_name,
-            "docID": question.doc_id,
-        }))
-        .send()
-        .await
-        .map_err(DocumentDecideError::Request)?;
+    .map_err(DocumentDecideError::Request)?;
     let status = response.status();
     let body = response
         .text()

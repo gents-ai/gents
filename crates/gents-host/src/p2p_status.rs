@@ -126,7 +126,9 @@ async fn get_authorized_json<T>(graphql: &GraphqlEndpoint, url: &str) -> Result<
 where
     T: serde::de::DeserializeOwned,
 {
-    http_get_json(graphql.authorize(p2p_http_client()?.get(url))?).await
+    let client = p2p_http_client()?;
+    crate::http_client::endpoint_get_json(graphql, |graphql| graphql.authorize(client.get(url)))
+        .await
 }
 
 pub async fn fetch_live_http_p2p_status(

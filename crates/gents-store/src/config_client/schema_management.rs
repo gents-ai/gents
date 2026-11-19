@@ -94,11 +94,13 @@ impl ConfigAccess {
                 let url = format!("{}/collections/default", graphql_api_base(endpoint.url())?);
                 let client = super::graphql::http_client().await?;
                 endpoint
-                    .authorize(client.post(&url))?
-                    .timeout(std::time::Duration::from_secs(120))
-                    .body(version_id.to_owned())
-                    .send()
-                    .await?
+                    .send_resolving(|endpoint| {
+                        Ok(endpoint
+                            .authorize(client.post(&url))?
+                            .timeout(std::time::Duration::from_secs(120))
+                            .body(version_id.to_owned()))
+                    })
+                    .await??
                     .error_for_status()?;
                 Ok(())
             }
@@ -264,20 +266,21 @@ impl ConfigAccess {
         };
         let url = format!("{}/{}", graphql_api_base(endpoint.url())?, route);
         let client = super::graphql::http_client().await?;
-        let mut request = endpoint
-            .authorize(client.request(method, &url))?
-            .timeout(std::time::Duration::from_secs(120));
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-        let response =
-            request
-                .send()
-                .await
-                .map_err(|source| ConfigClientError::SchemaOperation {
-                    url: url.clone(),
-                    source,
-                })?;
+        let response = endpoint
+            .send_resolving(|endpoint| {
+                let request = endpoint
+                    .authorize(client.request(method.clone(), &url))?
+                    .timeout(std::time::Duration::from_secs(120));
+                Ok(match &body {
+                    Some(body) => request.json(body),
+                    None => request,
+                })
+            })
+            .await?
+            .map_err(|source| ConfigClientError::SchemaOperation {
+                url: url.clone(),
+                source,
+            })?;
         let status = response.status();
         let bytes = response.bytes().await?;
         if !status.is_success() {
