@@ -58,9 +58,19 @@ impl rig::completion::GetTokenUsage for ReviewUsage {
 
 #[derive(Clone)]
 struct ReviewProvider {
+    call: gents_loop::provider_call::ProviderCall,
     reply: Option<String>,
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
     pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+}
+
+impl gents_loop::provider_call::ForCall for ReviewProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 impl CompletionModel for ReviewProvider {
@@ -87,8 +97,10 @@ impl CompletionModel for ReviewProvider {
             entered.notify_one();
             release.notified().await;
         }
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-            .await?;
+        gents_inference::test_support::capture_scripted_provider_request(
+            &self.call, &request, "scripted",
+        )
+        .await?;
         let reply = self.reply.clone().unwrap_or_else(|| {
             let action_id = request.chat_history.iter().find_map(|message| {
                 let rig::message::Message::User { content } = message else { return None; };
@@ -165,6 +177,7 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     .await;
     let reply = serde_json::json!({ "actionId": action_id, "decision": "allow", "reason": "The command checks the project." }).to_string();
     let provider = ReviewProvider {
+        call: Default::default(),
         reply: Some(reply.clone()),
         requests: Arc::default(),
         pause: None,
@@ -409,6 +422,7 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
     .unwrap();
     let calls = Arc::default();
     let provider = ReviewProvider {
+        call: Default::default(),
         reply: None,
         requests: Arc::clone(&calls),
         pause: None,
@@ -454,6 +468,7 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
     workspace::scope(Some(context), async {
         if launch {
             let output = gents_tools::native::run_command_for_test(
+                &gents_loop::tool::ToolCallEnvelope::default(),
                 &tool_context,
                 "bash_unrestricted",
                 program,
@@ -474,9 +489,16 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
                 "fixture"
             );
         } else {
-            workspace::authorize_command(&argv, &key.path, &tool_root, None, &policy)
-                .await
-                .unwrap();
+            workspace::authorize_command(
+                &gents_loop::tool::ToolCallEnvelope::default(),
+                &argv,
+                &key.path,
+                &tool_root,
+                None,
+                &policy,
+            )
+            .await
+            .unwrap();
         }
     })
     .await;
@@ -546,6 +568,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
     let release = Arc::new(tokio::sync::Notify::new());
     let calls = Arc::default();
     let provider = ReviewProvider {
+        call: Default::default(),
         reply: None,
         requests: Arc::clone(&calls),
         pause: Some((entered.clone(), release.clone())),
@@ -576,6 +599,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
     let project_path = key.path.clone();
     let consent = tokio::spawn(workspace::scope(Some(context), async move {
         workspace::authorize_command(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &["echo".into(), "fixture".into()],
             &project_path,
             &project_path,
@@ -644,6 +668,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
     .unwrap();
     let calls = Arc::default();
     let provider = ReviewProvider {
+        call: Default::default(),
         reply: None,
         requests: Arc::clone(&calls),
         pause: None,
@@ -710,6 +735,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
     let run = || async {
         if launch {
             gents_tools::native::run_command_for_test(
+                &gents_loop::tool::ToolCallEnvelope::default(),
                 &tool_context,
                 "bash_unrestricted",
                 &program,
@@ -724,7 +750,15 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
             .map(|_| ())
             .map_err(anyhow::Error::new)
         } else {
-            workspace::authorize_command(&argv, &key.path, &key.path, None, &policy).await
+            workspace::authorize_command(
+                &gents_loop::tool::ToolCallEnvelope::default(),
+                &argv,
+                &key.path,
+                &key.path,
+                None,
+                &policy,
+            )
+            .await
         }
     };
     workspace::scope(Some(context), async {
@@ -735,7 +769,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
                     "set":{"prompt_template":"Allow the requested project changes."}
                 })
                 .to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -831,18 +865,18 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
     .unwrap()
     .unwrap()
     .with_reviewer(reviewer.callback.clone());
+    let scope_call =
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, cancellation.clone())
+            .call();
     let result = workspace::scope(
         Some(context),
-        gents_tools::runtime_context::scope_request_tool_execution(
+        workspace::authorize_command(
+            &scope_call,
+            &["echo".into(), "fixture".into()],
+            &key.path,
+            &key.path,
             None,
-            cancellation.clone(),
-            workspace::authorize_command(
-                &["echo".into(), "fixture".into()],
-                &key.path,
-                &key.path,
-                None,
-                &gents_tools::native::CommandExecutionPolicy::write_capable(),
-            ),
+            &gents_tools::native::CommandExecutionPolicy::write_capable(),
         ),
     )
     .await;
@@ -1127,6 +1161,7 @@ async fn access_review_preserves_a_fenced_output_failure_for_the_caller_and_daem
 
 #[derive(Clone)]
 struct TitleProvider {
+    call: gents_loop::provider_call::ProviderCall,
     events: Arc<Vec<RawStreamingChoice<()>>>,
     stall: bool,
     calls: Arc<AtomicUsize>,
@@ -1158,6 +1193,7 @@ where
 impl TitleProvider {
     fn new(events: Vec<RawStreamingChoice<()>>, stall: bool) -> Self {
         Self {
+            call: Default::default(),
             events: Arc::new(events),
             stall,
             calls: Arc::new(AtomicUsize::new(0)),
@@ -1167,6 +1203,15 @@ impl TitleProvider {
             fence_generation: None,
             error: None,
             panic_on_stream: false,
+        }
+    }
+}
+
+impl gents_loop::provider_call::ForCall for TitleProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
         }
     }
 }
@@ -1194,8 +1239,10 @@ impl CompletionModel for TitleProvider {
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
         assert!(!self.panic_on_stream, "scripted review worker panic");
         self.calls.fetch_add(1, Ordering::SeqCst);
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-            .await?;
+        gents_inference::test_support::capture_scripted_provider_request(
+            &self.call, &request, "scripted",
+        )
+        .await?;
         if let Some(error) = &self.error {
             return Err(CompletionError::ProviderError(error.clone()));
         }

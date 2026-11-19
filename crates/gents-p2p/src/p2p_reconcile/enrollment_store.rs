@@ -630,7 +630,7 @@ impl GraphqlEnrollmentStore {
                             .await?;
                     }
                     if let Some(withdrawal) = withdrawal {
-                        withdrawal.stage_in_txn(txn, parent).await?;
+                        withdrawal.retire_owing_in_txn(txn).await?;
                     }
                     Ok::<_, anyhow::Error>(response)
                 })
@@ -1078,11 +1078,12 @@ impl GraphqlEnrollmentStore {
         ))
     }
 
-    /// Lean `Identity.EnrollmentGrant.revoke` for a denied request, or
-    /// `revokeMember` for a revoked membership, whose every generation's
+    /// Lean `Identity.EnrollmentGrant.oweRevoke` for a denied request, or
+    /// `oweRevokeMember` for a revoked membership, whose every generation's
     /// receipt is withdrawn: plan the withdrawal and revoke its node
-    /// permissions now, before the revision commits; the receipts and the
-    /// Node `administrator` relation retire in the revision's transaction.
+    /// permissions now, as the NAC owner, before the revision commits; the
+    /// receipts retire in the revision's transaction, owing the Node
+    /// `administrator` relation's withdrawal to the owner's client.
     async fn prepare_grant_withdrawal(
         &self,
         request_id: &str,
@@ -1120,31 +1121,17 @@ impl GraphqlEnrollmentStore {
         member: &str,
         scope: WithdrawalScope,
     ) -> Result<()> {
-        use gents_store::graphql::escape_graphql_string;
         let Some(withdrawal) = self
             .prepare_grant_withdrawal(request_id, member, scope)
             .await?
         else {
             return Ok(());
         };
-        let runtime = identity::Did::new(self.identity.did())?;
         self.runtime_access()?
             .transact_write("p2p.withdraw_enrollment_grant", |txn| {
-                let (withdrawal, runtime) = (&withdrawal, &runtime);
+                let withdrawal = &withdrawal;
                 Box::pin(async move {
-                    let query = format!(
-                        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
-                        escape_graphql_string(runtime.as_str())
-                    );
-                    let nodes = txn.execute(&query).await?;
-                    let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
-                    let [node] = nodes.as_slice() else {
-                        anyhow::bail!("grant withdrawal requires exactly one visible local Node");
-                    };
-                    let node = node["_docID"]
-                        .as_str()
-                        .context("grant withdrawal Node has no document ID")?;
-                    withdrawal.stage_in_txn(txn, node).await?;
+                    withdrawal.retire_owing_in_txn(txn).await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })

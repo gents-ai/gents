@@ -91,11 +91,12 @@ impl ConfigCommandTool {
         } else {
             let listing = ux::find(home, id)?;
             let plugins = self.plugins.clone();
+            let envelope = self.envelope.clone();
             ux::resolve_module(home, &listing, |namespace, plugin| async move {
                 let coordinate = format!("{namespace}/{plugin}");
                 let record = plugins.resolve(&coordinate, None)?;
                 plugins
-                    .call_outcome(&record, ux::producer_input())
+                    .call_outcome(&record, ux::producer_input(), &envelope)
                     .await?
                     .into_output(&coordinate)
             })

@@ -10,9 +10,19 @@ use gents_tools::builtin::self_config::test_support::{
 
 #[derive(Clone)]
 struct RootReadModel {
+    call: gents_loop::provider_call::ProviderCall,
     path: String,
     turns: Arc<std::sync::atomic::AtomicUsize>,
     provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl gents_loop::provider_call::ForCall for RootReadModel {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -41,8 +51,10 @@ impl rig::completion::CompletionModel for RootReadModel {
     {
         use std::sync::atomic::Ordering;
 
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-            .await?;
+        gents_inference::test_support::capture_scripted_provider_request(
+            &self.call, &request, "scripted",
+        )
+        .await?;
         if !request.tools.iter().any(|tool| tool.name == "read_file") {
             let stream: rig::streaming::StreamingResult<()> = Box::pin(futures::stream::iter([
                 Ok(rig::streaming::RawStreamingChoice::Message(
@@ -300,7 +312,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     .to_string();
 
     let output = tool
-        .call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+        .call(args, &gents_loop::tool::ToolCallEnvelope::default())
         .await
         .expect("direct agent create commits");
     let agents = gents_documents::list_agents(&node, &node_did)
@@ -673,6 +685,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             surface.clone(),
             &runtime,
             RootReadModel {
+                call: Default::default(),
                 path,
                 turns: turns.clone(),
                 provider_inputs: provider_inputs.clone(),
@@ -984,7 +997,7 @@ async fn a_profile_edit_is_fenced_alike_through_its_agent_and_by_its_exact_id() 
         let text = tool
             .call(
                 json!({"argv": argv, "set": {"backend_id": backend}}).to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap_or_else(|error| panic!("{input}: {error:#}"));

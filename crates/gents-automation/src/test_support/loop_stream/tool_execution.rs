@@ -204,7 +204,7 @@ pub async fn owned_tool_result_threaded(
         ],
     ]);
     let profile = counter.profile();
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
         model.clone(),
@@ -237,7 +237,7 @@ pub async fn persisted_plugin_image_result_replay(
     let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let node = db.node.clone();
     let profile = counter.profile();
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
         ScriptedModel::new_turns(plugin_call_then_text_turns()),
@@ -309,7 +309,7 @@ pub async fn terminalization_with_principal_output(
         TaggedMessage::unassociated(Message::user("run echo")),
         Vec::new(),
         Arc::new(tools),
-        owned_config(turns + 2),
+        owned_config_for(turns + 2, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -482,7 +482,7 @@ impl ToolDyn for ComposingParent {
         context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            let dispatcher = context.effects().expect("live dispatcher");
             let mut spawned = String::new();
             let mut session = String::new();
             for (ordinal, name, arguments) in &self.children {
@@ -491,11 +491,7 @@ impl ToolDyn for ComposingParent {
                     .replace(NEW_SESSION, &session);
                 // A child runs without the parent's dispatcher, as the plugin
                 // host's `tool_calls` service runs it (`children_cannot_delegate`).
-                let outcome = gents_loop::tool_effects::scope(
-                    None,
-                    dispatcher.call(context, *ordinal, name, &arguments),
-                )
-                .await;
+                let outcome = dispatcher.call(context, *ordinal, name, &arguments).await;
                 assert!(
                     !matches!(
                         outcome,
@@ -546,7 +542,11 @@ impl ToolDyn for AdmissionChild {
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         let args: serde_json::Value = serde_json::from_str(args).unwrap();
         if args.get("admit").is_none_or(|value| value == true) {
             return Ok(());
@@ -740,15 +740,12 @@ impl ToolDyn for StoppingParent {
         context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            let dispatcher = context.effects().expect("live dispatcher");
             // A script that exhausts its own allowance drops the child call it awaits.
             tokio::select! {
                 biased;
                 _ = self.0.notified() => {}
-                finished = gents_loop::tool_effects::scope(
-                    None,
-                    dispatcher.call(context, 1, "stall", "{}"),
-                ) => {
+                finished = dispatcher.call(context, 1, "stall", "{}") => {
                     panic!("the child outlives the script: {finished:?}")
                 }
             }
@@ -809,7 +806,11 @@ impl ToolDyn for ParallelReadProbe {
             }
         })
     }
-    fn footprint(&self, _: &str) -> gents_loop::tool::ToolFootprint {
+    fn footprint(
+        &self,
+        _: &str,
+        _: &gents_loop::tool::ToolCallEnvelope,
+    ) -> gents_loop::tool::ToolFootprint {
         gents_loop::tool::ToolFootprint::Read
     }
     fn call<'a>(
@@ -929,7 +930,11 @@ impl ToolDyn for SerialReadMeasurement {
     ) -> BoxFuture<'a, gents_loop::tool::ToolDispatchResult> {
         self.0.call_with_receipt(args, context)
     }
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
-        self.0.admit(args)
+    fn admit(
+        &self,
+        args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
+        self.0.admit(args, context)
     }
 }

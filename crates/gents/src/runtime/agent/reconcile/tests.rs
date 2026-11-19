@@ -906,7 +906,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
             "req-rotated-slot",
             "backend-general",
             &agent_config.agent,
-            gents_inference::admission::CallKind::Inference,
+            gents_loop::provider_call::admission::CallKind::Inference,
             &new_connection,
             Some(signer),
         )

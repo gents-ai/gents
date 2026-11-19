@@ -52,19 +52,22 @@ pub(super) struct CommandLaunch {
 }
 
 impl CommandLaunch {
-    pub(super) async fn revalidate(&self) -> Result<()> {
+    pub(super) async fn revalidate(&self, call: &gents_loop::tool::ToolCallEnvelope) -> Result<()> {
         if let Some(protection) = &self.protection {
             protection.revalidate()?;
         }
         #[cfg(target_os = "macos")]
         if let Some(credentials) = &self.credentials {
-            credentials.revalidate().await?;
+            credentials.revalidate(call).await?;
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = call;
         Ok(())
     }
 }
 
 pub(super) async fn prepare_command_launch(
+    call: &gents_loop::tool::ToolCallEnvelope,
     source_root: &Path,
     command: &str,
     args: &[String],
@@ -73,7 +76,7 @@ pub(super) async fn prepare_command_launch(
     let mut environment = build_shell_env();
     // Diagnostic provenance only, never authorization. Unrestricted commands
     // can remove it; supported service commands use it to avoid self-stop.
-    if let Some(scope) = crate::runtime_context::current_tool_runtime_context() {
+    if let Some(scope) = crate::runtime_context::tool_runtime_context(call) {
         for (key, value) in [
             (
                 "GENTS_CALLER_RUNTIME_HOME",
@@ -90,7 +93,7 @@ pub(super) async fn prepare_command_launch(
         }
     }
     let artifact = if policy.mode == CommandExecutionMode::ArtifactWrite {
-        let scope = crate::runtime_context::current_tool_runtime_context().ok_or_else(|| {
+        let scope = crate::runtime_context::tool_runtime_context(call).ok_or_else(|| {
             artifact_policy_denial("artifact_write requires a live sealed workspace request")
         })?;
         if scope.workspace_authority != Some(WorkspaceAuthority::ReadOnly) {
@@ -101,9 +104,13 @@ pub(super) async fn prepare_command_launch(
         let grant = scope.workspace_artifact.ok_or_else(|| {
             artifact_policy_denial("artifact_write requires a runtime-owned artifact grant")
         })?;
-        grant.validate_for_launch().await.map_err(|error| {
-            artifact_policy_denial(format!("artifact execution grant rejected: {error:#}"))
-        })?;
+        let recorder = gents_session::exec::ownership::process_recorder(call);
+        grant
+            .validate_for_launch(recorder.as_ref())
+            .await
+            .map_err(|error| {
+                artifact_policy_denial(format!("artifact execution grant rejected: {error:#}"))
+            })?;
         let source_root = std::fs::canonicalize(source_root).map_err(|error| {
             artifact_policy_denial(format!("artifact source unavailable: {error}"))
         })?;
@@ -158,7 +165,7 @@ pub(super) async fn prepare_command_launch(
     };
     #[cfg(target_os = "macos")]
     let (argv, credentials) = if policy.mode.protects_credentials() {
-        let credentials = command_credentials::capture()
+        let credentials = command_credentials::capture(call)
             .await
             .map_err(command_guard_error)?;
         let mut argv = argv;
@@ -188,6 +195,7 @@ pub(super) fn command_guard_error(error: anyhow::Error) -> ToolError {
 }
 
 pub(crate) async fn prepare_declared_cli_command(
+    call: &gents_loop::tool::ToolCallEnvelope,
     cwd: &Path,
     command: &str,
     args: &[String],
@@ -218,7 +226,7 @@ pub(crate) async fn prepare_declared_cli_command(
     let argv: Vec<_> = std::iter::once(command.to_owned())
         .chain(args.iter().cloned())
         .collect();
-    crate::plugin::approval::workspace::authorize_command(&argv, cwd, cwd, None, &policy)
+    crate::plugin::approval::workspace::authorize_command(call, &argv, cwd, cwd, None, &policy)
         .await
         .map_err(command_guard_error)?;
     match protection {

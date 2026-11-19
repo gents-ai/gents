@@ -427,7 +427,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let tools_id = format!("{}:tools", creator.agent_did);
     tool.call(
         json!({"argv":["tools","update"],"set":{"display_name":"configured"}}).to_string(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .map_err(|error| anyhow::anyhow!("{error:#}"))?;
@@ -447,7 +447,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     assert!(tool
         .call(
             json!({"argv":["tools","update"],"set":{"display_name":"revoked"}}).to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await
         .is_err());
@@ -477,7 +477,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         &tool
             .call(
                 json!({"argv":["agent","list"]}).to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .map_err(|error| anyhow::anyhow!("{error:#}"))?,
@@ -492,7 +492,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         &tool
             .call(
                 json!({"argv":["agent","get", creator.agent_did]}).to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .map_err(|error| anyhow::anyhow!("{error:#}"))?,
@@ -541,7 +541,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                 "options":{"display-name":"Child", "system-prompt":"Work", "profile":"profile"}
             })
             .to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await
         .is_err());
@@ -575,7 +575,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                 "options":{"display-name":"Child", "system-prompt":"Work", "profile":"profile"}
             })
             .to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await
         .is_err());
@@ -597,7 +597,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                     "options":{"display-name":"Child", "system-prompt":"Work", "profile":"profile"}
                 })
                 .to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .map_err(|error| anyhow::anyhow!("{error:#}"))?,
@@ -645,7 +645,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         json!({"argv":["agent","update"], "target_id":child,
         "set":{"display_name":"Tool-edited child"}})
         .to_string(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .map_err(|error| anyhow::anyhow!("{error:#}"))?;
@@ -669,7 +669,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             json!({"argv":["agent","update"], "target_id":sibling.agent_did,
         "set":{"display_name":"Not allowed"}})
             .to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await
         .is_err());
@@ -772,6 +772,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         node: node.clone(),
         actor: Some(signer.clone()),
         home: Some(plugin_home.path().to_owned()),
+        envelope: gents_loop::tool::ToolCallEnvelope::default(),
     };
     let args = gents_protocol::operations::pack::PackChangeInput {
         package: "fixture/native_echo_pack".into(),
@@ -1054,7 +1055,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let written = cached_write
         .call(
             serde_json::from_value(json!({"name":"selected-agent-write"}))?,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .map_err(|error| anyhow::anyhow!("cached write failed: {error}"))?;
@@ -1068,7 +1069,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             Some(1),
             cached_write.call(
                 serde_json::from_value(json!({"name":"rolled-back-write"}))?,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             ),
         )
         .await;
@@ -1107,7 +1108,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let found = cached_tool
         .call(
             gents_tools::builtin::defra_query::bounded::BoundedQueryParams(Default::default()),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .map_err(|error| anyhow::anyhow!("cached query failed: {error}"))?;
@@ -1142,7 +1143,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                 payload: None,
                 question: None,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &mailbox_context,
         )
         .await
@@ -1193,7 +1194,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                     payload: None,
                     question: None,
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
                 &rollback_context,
             ),
         )
@@ -1307,7 +1308,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let revoked_write = cached_write
         .call(
             serde_json::from_value(json!({"name":"revoked-source-write"}))?,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     writes.insert("source-revoked", revoked_write.is_ok());
@@ -1447,7 +1448,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let error = gents_loop::tool::Tool::call(
         &cached_tool,
         gents_tools::builtin::defra_query::bounded::BoundedQueryParams(Default::default()),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap_err();
@@ -1466,7 +1467,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let denied = cached_write
         .call(
             serde_json::from_value(json!({"name":"denied"}))?,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err();
@@ -1484,7 +1485,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                 payload: None,
                 question: None,
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &mailbox_context,
         )
         .await
@@ -1912,6 +1913,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         node: node.clone(),
         actor: Some(signer.clone()),
         home: None,
+        envelope: gents_loop::tool::ToolCallEnvelope::default(),
     };
     let args = gents_protocol::operations::pack::PackChangeInput {
         package: "fixture/native_child".into(),

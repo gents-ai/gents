@@ -23,6 +23,7 @@ use gents_claude::transport::{
     Target, TransportError,
 };
 use gents_loop::account_usage::UsageSource;
+use gents_loop::provider_call::ProviderCall;
 use rand::Rng;
 use reqwest::header::HeaderName;
 use reqwest::StatusCode;
@@ -530,6 +531,7 @@ fn body_stream(body: Body) -> http_client::BoxedStream {
 impl Transport for ClaudeHttpClient {
     fn send(
         &self,
+        _call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<Bytes>>>> + Send + 'static
     {
@@ -558,6 +560,7 @@ impl Transport for ClaudeHttpClient {
 
     fn send_multipart(
         &self,
+        _call: &ProviderCall,
         _req: Request<MultipartForm>,
     ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<Bytes>>>> + Send + 'static
     {
@@ -566,6 +569,7 @@ impl Transport for ClaudeHttpClient {
 
     fn send_streaming(
         &self,
+        _call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let (parts, body) = req.into_parts();
@@ -597,15 +601,17 @@ pub(super) fn capturing(
     RenderedRequestCapturingHttpClient::new(MessagesTransport { fixture, live })
 }
 
-/// The capture layer decides at this future's first poll, so it is awaited
-/// in the task that armed the capture.
+/// The capture layer claims the capture `call` armed at this future's first
+/// poll.
 pub(super) fn send_capturing(
+    call: &ProviderCall,
     fixture: Option<String>,
     live: ClaudeHttpClient,
     request: Request<Bytes>,
 ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
     let client = capturing(fixture, live);
-    async move { client.send_streaming(request).await }
+    let call = call.clone();
+    async move { client.send_streaming(&call, request).await }
 }
 
 /// Serves a queued SSE fixture in tests; otherwise forwards to the Bun-exact client.
@@ -618,10 +624,12 @@ pub(super) struct MessagesTransport {
 impl Transport for MessagesTransport {
     fn send(
         &self,
+        call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<Bytes>>>> + Send + 'static
     {
         let inner = self.live.clone();
+        let call = call.clone();
         let fixture = self.fixture.clone();
         let (parts, body) = req.into_parts();
         async move {
@@ -630,24 +638,28 @@ impl Transport for MessagesTransport {
                 return Ok(HttpResponse::builder().status(200).body(body)?);
             }
             let req = Request::from_parts(parts, body);
-            Transport::send(&inner, req).await
+            Transport::send(&inner, &call, req).await
         }
     }
 
     fn send_multipart(
         &self,
+        call: &ProviderCall,
         req: Request<MultipartForm>,
     ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<Bytes>>>> + Send + 'static
     {
         let inner = self.live.clone();
-        async move { Transport::send_multipart(&inner, req).await }
+        let call = call.clone();
+        async move { Transport::send_multipart(&inner, &call, req).await }
     }
 
     fn send_streaming(
         &self,
+        call: &ProviderCall,
         req: Request<Bytes>,
     ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.live.clone();
+        let call = call.clone();
         let fixture = self.fixture.clone();
         let (parts, body) = req.into_parts();
         async move {
@@ -657,7 +669,7 @@ impl Transport for MessagesTransport {
                 return Ok(HttpResponse::builder().status(200).body(stream)?);
             }
             let req = Request::from_parts(parts, body);
-            Transport::send_streaming(&inner, req).await
+            Transport::send_streaming(&inner, &call, req).await
         }
     }
 }

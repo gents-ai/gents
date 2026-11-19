@@ -61,7 +61,7 @@ async fn call(tools: &[Box<dyn ToolDyn>], args: Value) -> Result<Value, String> 
         .expect("config registered")
         .call(
             args.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -701,4 +701,72 @@ async fn plugin_run_drives_the_rounds_a_tool_call_does() {
             && refused.contains("it admits other"),
         "{refused}"
     );
+}
+
+/// `plugin run` is part of the config tool call it serves: a plugin the
+/// calling agent's Tools select with `tool_calls` composes through that
+/// call's dispatcher, as the same plugin called as a tool would.
+#[tokio::test]
+async fn plugin_run_composes_through_the_dispatcher_of_the_config_call() {
+    use gents_loop::tool_call_lifecycle::ToolOutcome;
+    use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
+    use gents_pack::test_support::{asking_plugin_wat, installed_plugin};
+
+    #[derive(Default)]
+    struct Recording(std::sync::Mutex<Vec<String>>);
+    impl ToolEffectDispatcher for Recording {
+        fn call<'a>(
+            &'a self,
+            _parent: &'a gents_loop::tool::ToolCallEnvelope,
+            _ordinal: u32,
+            name: &'a str,
+            _arguments: &'a str,
+        ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
+            self.0.lock().unwrap().push(name.to_owned());
+            Box::pin(async { Ok(ToolOutcome::Completed(json!({"rows": []}).to_string())) })
+        }
+    }
+
+    let request =
+        json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{}}]}});
+    let (home, record) = installed_plugin(
+        &asking_plugin_wat("tool_calls", "tool_results", &request, false),
+        None,
+    );
+    let coordinate = format!("{}/{}", record.namespace, record.name);
+    let fixture = gents_automation::test_support::self_config_fixture("plugin-run-compose").await;
+    fixture.grant_selected_configuration().await;
+    let mut tool_config = config(&["tools"]);
+    tool_config.agent_did = fixture.agent_did().to_owned();
+    tool_config.preview = true;
+    tool_config.selected_plugins = vec![gents_documents::PluginToolRef {
+        plugin: coordinate.clone(),
+        digest: None,
+        tool_calls: true,
+        input_fields: Vec::new(),
+        job: None,
+    }];
+    let tools = fixture.tools_with_plugins(
+        &tool_config,
+        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+            Some(home.path().to_owned()),
+        )),
+    );
+    let dispatcher = Arc::new(Recording::default());
+    let envelope = gents_loop::tool::ToolCallEnvelope::default()
+        .with_effects(Some(dispatcher.clone() as Arc<dyn ToolEffectDispatcher>));
+    let text = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .expect("config registered")
+        .call(
+            json!({"argv":["plugin","run",coordinate],"options":{"input":{}}}).to_string(),
+            &envelope,
+        )
+        .await
+        .unwrap();
+    let ran: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(*dispatcher.0.lock().unwrap(), ["query"], "{ran}");
+    assert!(ran["output"].get("tool_results").is_some(), "{ran}");
+    assert!(ran.get("unserved").is_none_or(Value::is_null), "{ran}");
 }

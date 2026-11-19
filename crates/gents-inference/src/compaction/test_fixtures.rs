@@ -58,6 +58,12 @@ impl MockSummaryModel {
     }
 }
 
+impl gents_loop::provider_call::ForCall for MockSummaryModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for MockSummaryModel {
     type Response = ();
@@ -115,6 +121,7 @@ pub fn summary_worthy_messages() -> Vec<Message> {
 
 pub fn scheduled_origin_config() -> gents_loop::loop_stream::LoopConfig {
     gents_loop::loop_stream::LoopConfig {
+        provider_call: Default::default(),
         replay: gents_loop::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(
@@ -148,7 +155,7 @@ pub fn scheduled_origin_config() -> gents_loop::loop_stream::LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
+        tool_context: gents_loop::tool::ToolCallEnvelope::default(),
     }
 }
 
@@ -157,11 +164,13 @@ pub struct ScriptedSummaryModel {
     pub calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub script: Arc<Mutex<std::collections::VecDeque<Vec<RawStreamingChoice<()>>>>>,
     pub requests: Arc<Mutex<Vec<CompletionRequest>>>,
+    call: gents_loop::provider_call::ProviderCall,
 }
 
 impl ScriptedSummaryModel {
     pub fn new(script: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
         Self {
+            call: Default::default(),
             calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             script: Arc::new(Mutex::new(script.into_iter().collect())),
             requests: Arc::new(Mutex::new(Vec::new())),
@@ -202,6 +211,15 @@ impl ScriptedSummaryModel {
     }
 }
 
+impl gents_loop::provider_call::ForCall for ScriptedSummaryModel {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for ScriptedSummaryModel {
     type Response = ();
@@ -228,7 +246,7 @@ impl CompletionModel for ScriptedSummaryModel {
         // Stand in for the capturing transport: a real send claims the armed
         // capture, without which the owned loop's fence fires. No-op outside a
         // capture scope.
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
         let turn = self
             .script
             .lock()

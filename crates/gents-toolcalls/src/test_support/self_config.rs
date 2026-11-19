@@ -616,7 +616,7 @@ pub async fn config_call(
         .expect("config registered")
         .call(
             json!({ "argv": argv }).to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
 }
@@ -644,7 +644,7 @@ pub async fn call_config_tool(
         .expect("config registered");
     tool.call(
         json!({"argv": argv}).to_string(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .map_err(|error| format!("{error:#}"))

@@ -13,10 +13,20 @@ use gents_protocol::message::Message;
 
 #[derive(Clone)]
 struct ClaudeCheckpointModel {
+    call: crate::provider_call::ProviderCall,
     reject_guidance: bool,
     canonical: Value,
     fallback: String,
     requests: Arc<Mutex<Vec<(bool, Value)>>>,
+}
+
+impl crate::provider_call::ForCall for ClaudeCheckpointModel {
+    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -72,7 +82,7 @@ impl CompletionModel for ClaudeCheckpointModel {
             self.fallback.clone()
         };
         self.requests.lock().unwrap().push((guided, body));
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
         Ok(StreamingCompletionResponse::stream(Box::pin(
             futures::stream::iter([
                 Ok(RawStreamingChoice::Message(output)),
@@ -134,6 +144,7 @@ async fn exercise(reject_guidance: bool) {
     ] {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = ClaudeCheckpointModel {
+            call: Default::default(),
             reject_guidance,
             canonical: canonical.clone(),
             fallback: fallback.clone(),

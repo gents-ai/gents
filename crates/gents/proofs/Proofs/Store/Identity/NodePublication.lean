@@ -37,4 +37,50 @@ theorem a_vera_home_publishes_no_peer_records :
 theorem a_home_on_the_node_store_publishes_as_before :
     publication .nodeStore = .proceeds := rfl
 
+/-- The runtime's periodic writes of its own peer records once it serves: the
+registry heartbeat upserts the Node's `PeerRegistry` row with its addresses and
+status, the endpoint heartbeat upserts its signed endpoint binding there, and
+the directory projection upserts and sweeps the `NodeDirectoryEntry` rows that
+describe the Node and its Agents. Each is a Node-run peer publication: the
+projector grants the runtime, and for the registry every reader, access to
+the row it writes. -/
+inductive Periodic where
+  | registryHeartbeat
+  | endpointHeartbeat
+  | directory
+  deriving DecidableEq, Repr
+
+/-- What a periodic publication's loop does once the runtime serves. -/
+inductive Loop where
+  /-- It writes its records at start and on every interval. -/
+  | beats
+  /-- It writes nothing for as long as it runs. -/
+  | idle
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3831): a periodic publication is a peer publication, so it
+obeys `publication` and nothing else. On a home that refuses peer publication
+its loop stays idle from its start: it writes no record, so nothing is granted
+to the Node or to every reader, and no later beat has a record to update. -/
+def periodic (provider : Provider) (_ : Periodic) : Loop :=
+  match publication provider with
+  | .proceeds => .beats
+  | .awaitsTransportGrants => .idle
+
+/-- Whether a periodic loop ever writes, by creating or updating, a peer record. -/
+def writesPeerRecord (provider : Provider) (loop : Periodic) : Bool :=
+  periodic provider loop == .beats
+
+theorem periodic_publication_follows_publication (provider : Provider) (loop : Periodic) :
+    (periodic provider loop = .beats) ↔ publication provider = .proceeds := by
+  cases provider <;> simp [periodic, publication]
+
+theorem no_heartbeat_writes_a_peer_record_on_a_vera_home (loop : Periodic) :
+    writesPeerRecord .embeddedVera loop = false := by
+  cases loop <;> rfl
+
+theorem heartbeats_on_the_node_store_beat_as_before (loop : Periodic) :
+    periodic .nodeStore loop = .beats ∧ writesPeerRecord .nodeStore loop = true := by
+  cases loop <;> exact ⟨rfl, rfl⟩
+
 end Identity.NodePublication

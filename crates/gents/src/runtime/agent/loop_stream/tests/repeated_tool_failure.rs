@@ -40,7 +40,7 @@ async fn repeated_tool_failures_follow_the_lean_model() {
                 model: model.clone(),
                 dispatched: Arc::clone(&dispatched),
             }) as Box<dyn ToolDyn>]),
-            owned_config(64),
+            owned_config_for(64, &lifecycle),
         );
         let collected = collect_owned_scripted_stream(
             stream,

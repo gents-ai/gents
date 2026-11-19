@@ -473,6 +473,7 @@ mod pool_client {
         let (cache, _client, model) = pool_model(&["id-a", "id-b"]).await;
         let rotation = model.0.rotation.as_ref().expect("rotation");
         let err = open_rotated(
+            &Default::default(),
             &ClaudeRoute::first_party(&url),
             "claude-sonnet-5",
             &session_request("s"),
@@ -510,6 +511,7 @@ mod pool_client {
             .reject(&"id-b".to_string(), now, 4_102_448_400);
         let rotation = model.0.rotation.as_ref().expect("rotation");
         let err = open_rotated(
+            &Default::default(),
             &ClaudeRoute::first_party("http://127.0.0.1:1"),
             "claude-sonnet-5",
             &ping_request(),

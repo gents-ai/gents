@@ -285,7 +285,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             tool_config: Arc::new(Default::default()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(WakeInputModel {
+            model: Arc::new(WakeInputModel { call: Default::default(),
                 provider_inputs: provider_inputs.clone(),
                 title_calls: Arc::new(AtomicUsize::new(0)),
                 title_shape_mismatches: Arc::new(AtomicUsize::new(0)),
@@ -389,7 +389,7 @@ async fn scripted_daemon(
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(WakeInputModel {
+        model: Arc::new(WakeInputModel { call: Default::default(),
             provider_inputs: provider_inputs.clone(),
             title_calls: Arc::new(AtomicUsize::new(0)),
             title_shape_mismatches: Arc::new(AtomicUsize::new(0)),

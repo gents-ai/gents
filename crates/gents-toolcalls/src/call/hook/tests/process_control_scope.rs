@@ -78,7 +78,7 @@ async fn invoke(hook: &DefraSessionHook, id: &str, name: &str, args: &str) -> se
             None,
             id,
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {
@@ -233,7 +233,7 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
                 None,
                 wait_id,
                 &args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
     });
