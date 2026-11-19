@@ -103,17 +103,49 @@ pub enum WireRecord {
 
 /// The record a client plans a wire from (`Configuration.wirePlanSubject`):
 /// the pack it sent or its own home's record, or a served record only when
-/// it is exactly what a pack in `approved` yields; `None` plans and signs
-/// nothing. A served record contributes only the approved subject, so no
-/// other field the runtime sent reaches the plan.
-pub fn wire_plan_record(approved: &[WireSubject], record: WireRecord) -> Option<InstalledPlugin> {
+/// it is exactly what a pack in `approved` yields, and in every case only a
+/// record of the `requested` plugin; `None` plans and signs nothing. A
+/// served record contributes only the approved subject, so no other field
+/// the runtime sent reaches the plan.
+pub fn wire_plan_record(
+    requested: &str,
+    approved: &[WireSubject],
+    record: WireRecord,
+) -> Option<InstalledPlugin> {
+    let named = |coordinate: String| coordinate == requested;
     match record {
-        WireRecord::SentPack(subject) => Some(subject.installed()),
-        WireRecord::OwnHome(kept) => Some(kept),
+        WireRecord::SentPack(subject) => named(subject.coordinate()).then(|| subject.installed()),
+        WireRecord::OwnHome(kept) => {
+            named(format!("{}/{}", kept.namespace, kept.name)).then_some(kept)
+        }
         WireRecord::Served(served) => WireSubject::of_record(&served)
-            .filter(|subject| approved.contains(subject))
+            .filter(|subject| named(subject.coordinate()) && approved.contains(subject))
             .map(|subject| subject.installed()),
     }
+}
+
+/// The document ids of a pack a client wires over a runtime that serves
+/// another home (`Configuration.wireApprovedIds`): the `served` ids only when
+/// each is one the approved pack yields; `None`, when the approval could not
+/// derive its ids or the runtime reports another, wires none.
+pub fn wire_approved_ids(approved: Option<&[String]>, served: &[String]) -> Option<Vec<String>> {
+    let approved = approved?;
+    served
+        .iter()
+        .all(|target| approved.contains(target))
+        .then(|| served.to_vec())
+}
+
+/// The job block a client signs for a plugin over a runtime that serves
+/// another home (`Configuration.wireReviewedJob`): the job the node's Tools
+/// carry only when it is the one the approved pack yields; `None`, when the
+/// approval could not derive it or the node reports another, plans nothing.
+pub fn wire_reviewed_job<J>(approved: Option<Option<&J>>, served: Option<&J>) -> Option<Option<J>>
+where
+    J: PartialEq + Clone,
+{
+    let approved = approved?;
+    (served == approved).then(|| approved.cloned())
 }
 
 #[cfg(test)]

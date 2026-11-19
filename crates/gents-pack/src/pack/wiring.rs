@@ -19,6 +19,36 @@ use gents_documents::{
 use gents_store::collection::Collection;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
+/// What a wiring plan takes of a node's word about the packs it reads, and
+/// how its caller vouches for it.
+pub trait Vouch: Sync {
+    /// Refuse `ids`, the `collection` documents the node records `pack` as
+    /// having installed, unless the caller can vouch for each.
+    fn documents(&self, pack: &str, collection: Collection, ids: &[String]) -> Result<()>;
+    /// Who installed `pack`.
+    fn provenance(&self, pack: &str) -> Result<InstalledVia>;
+}
+
+/// What a home's own install records say: the node is the home's, so its
+/// records are vouched for.
+struct HomeRecords<'a>(&'a std::path::Path);
+
+impl Vouch for HomeRecords<'_> {
+    fn documents(&self, _pack: &str, _collection: Collection, _ids: &[String]) -> Result<()> {
+        Ok(())
+    }
+
+    fn provenance(&self, pack: &str) -> Result<InstalledVia> {
+        let record = read_home_install(self.0, pack)?;
+        Ok(recorded_provenance(
+            record
+                .as_ref()
+                .map_or(PackKind::Documents, |record| record.kind.clone()),
+            record.map(|record| record.installed_via),
+        ))
+    }
+}
+
 /// One installed plugin's wiring into (or with `remove`, out of) `agent`'s
 /// Tools and Context.
 pub struct PluginWiring {
@@ -43,6 +73,20 @@ pub struct PluginWiring {
     /// The caller's own command that shows why an agent's Tools or Context
     /// cannot be read, named when they cannot.
     pub next_step: String,
+    /// Where the plugin's reviewed job comes from.
+    pub reviewed: ReviewedJob,
+}
+
+/// Where a wiring takes the plugin's reviewed job from.
+#[derive(Debug, Clone, Default)]
+pub enum ReviewedJob {
+    /// Its pack's Tools on the node, a home the caller vouches for.
+    #[default]
+    Read,
+    /// Its pack's Tools on the node, signed only when they carry the job
+    /// the pack the caller approved yields (`Configuration.wireReviewedJob`);
+    /// `None` when the approval could not derive it.
+    Approved(Option<Option<gents_protocol::job::PluginJobSettings>>),
 }
 
 impl PluginWiring {
@@ -56,27 +100,26 @@ impl PluginWiring {
         plugin: InstalledPlugin,
         targets_from: &[String],
     ) -> Result<Self> {
-        Self::read_with(access, owner, agent, plugin, targets_from, &|pack| {
-            let record = read_home_install(home, pack)?;
-            Ok(recorded_provenance(
-                record
-                    .as_ref()
-                    .map_or(PackKind::Documents, |record| record.kind.clone()),
-                record.map(|record| record.installed_via),
-            ))
-        })
+        Self::read_with(
+            access,
+            owner,
+            agent,
+            plugin,
+            targets_from,
+            &HomeRecords(home),
+        )
         .await
     }
 
-    /// [`Self::read`] with each `targets_from` pack's provenance from
-    /// `provenance` instead of a home's install records.
+    /// [`Self::read`] with what the node records of each pack checked by
+    /// `vouch` instead of taken from a home's install records.
     pub async fn read_with(
         access: &ConfigAccess,
         owner: &str,
         agent: &str,
         plugin: InstalledPlugin,
         targets_from: &[String],
-        provenance: &(dyn Fn(&str) -> Result<InstalledVia> + Sync),
+        vouch: &dyn Vouch,
     ) -> Result<Self> {
         let (mut tools_ids, mut skill_ids) = (Vec::new(), Vec::new());
         if let Some(pack) = plugin.owner_pack_coordinate.as_deref() {
@@ -87,6 +130,8 @@ impl PluginWiring {
                     _ => {}
                 }
             }
+            vouch.documents(pack, Collection::Tools, &tools_ids)?;
+            vouch.documents(pack, Collection::Skill, &skill_ids)?;
         }
         let mut targets = Vec::new();
         for pack in targets_from {
@@ -97,7 +142,8 @@ impl PluginWiring {
                 .map(|(_, id)| id)
                 .collect();
             anyhow::ensure!(!target_ids.is_empty(), "{pack} ships no AgentTarget");
-            targets.push((pack.clone(), target_ids, provenance(pack)?));
+            vouch.documents(pack, Collection::AgentTarget, &target_ids)?;
+            targets.push((pack.clone(), target_ids, vouch.provenance(pack)?));
         }
         Ok(Self {
             owner: owner.to_owned(),
@@ -111,6 +157,7 @@ impl PluginWiring {
             dynamic_consent: None,
             tool_calls_consent: false,
             next_step: String::new(),
+            reviewed: ReviewedJob::Read,
         })
     }
 
@@ -153,6 +200,21 @@ impl PluginWiring {
             )?
         } else {
             let job = self.reviewed_job(txn).await?;
+            let job = match &self.reviewed {
+                ReviewedJob::Read => job,
+                ReviewedJob::Approved(approved) => {
+                    crate::pack::wire_subject::wire_reviewed_job(
+                        approved.as_ref().map(Option::as_ref),
+                        job.as_ref(),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "the node's Tools carry a job for {} that the pack this device approved does not yield, so nothing is wired",
+                            self.coordinate()
+                        )
+                    })?
+                }
+            };
             wire_plugin(
                 &tools,
                 &context,

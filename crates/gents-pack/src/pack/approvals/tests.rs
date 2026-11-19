@@ -31,12 +31,13 @@ fn approval(digest: &str, subjects: Vec<WireSubject>) -> PackApproval {
         kind: PackKind::Plugins,
         approved_at: "2026-11-19T00:00:00Z".into(),
         subjects,
+        yields: None,
     }
 }
 
 fn file(approvals: Vec<PackApproval>) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
-        "version": 1,
+        "version": 2,
         "nodes": [{"node_did": "did:key:node", "approvals": approvals}],
     }))
     .unwrap()

@@ -721,6 +721,8 @@ by digest and coordinate, and the rest of its record the plan writes from
 structure WireSubject where
   packDigest : String
   coordinate : String
+  /-- The plugin's own coordinate, `namespace/name`, which the wiring pins. -/
+  plugin : String
   record : String
   deriving DecidableEq, Repr
 
@@ -735,6 +737,9 @@ inductive WireRecord where
   | served (subject : WireSubject)
   deriving DecidableEq, Repr
 
+def WireRecord.subject : WireRecord → WireSubject
+  | .sentPack subject | .ownHome subject | .served subject => subject
+
 /-- Decision (gents#3962): a client wiring a plugin over a runtime plans from
 a record it can tie to a pack it chose itself, never from the runtime's word.
 Inside an install that is the pack it just sent, and over a runtime that
@@ -742,48 +747,150 @@ serves the client's own home it is that home's plugin store. Otherwise the
 runtime serves the record, and the client takes it only when it is exactly
 what a pack the client approved and recorded (`approved`) yields: an unknown
 pack digest, or a known digest with any other record, plans nothing and
-nothing is signed. -/
-def wirePlanSubject (approved : List WireSubject) : WireRecord → Option WireSubject
-  | .sentPack subject => some subject
-  | .ownHome subject => some subject
-  | .served subject => if approved.contains subject then some subject else none
+nothing is signed. Whatever the source, the record must name the plugin the
+client asked to wire (`requested`): the wiring pins the record's coordinate,
+so a record of any other plugin, approved or not, plans nothing. -/
+def wirePlanSubject (requested : String) (approved : List WireSubject) (record : WireRecord) :
+    Option WireSubject :=
+  if record.subject.plugin ≠ requested then none
+  else match record with
+    | .sentPack subject => some subject
+    | .ownHome subject => some subject
+    | .served subject => if approved.contains subject then some subject else none
 
-theorem a_served_record_of_no_approved_pack_plans_nothing (approved : List WireSubject)
+theorem a_record_of_another_plugin_plans_nothing (requested : String)
+    (approved : List WireSubject) (record : WireRecord) (other : record.subject.plugin ≠ requested) :
+    wirePlanSubject requested approved record = none := by
+  simp [wirePlanSubject, other]
+
+theorem a_planned_record_names_the_requested_plugin (requested : String)
+    (approved : List WireSubject) (record : WireRecord) (subject : WireSubject)
+    (planned : wirePlanSubject requested approved record = some subject) :
+    subject.plugin = requested := by
+  unfold wirePlanSubject at planned
+  split at planned
+  · cases planned
+  · rename_i named
+    cases record with
+    | sentPack sent => simp at planned; subst planned; simpa [WireRecord.subject] using named
+    | ownHome kept => simp at planned; subst planned; simpa [WireRecord.subject] using named
+    | served served =>
+      simp only at planned
+      split at planned
+      · simp at planned; subst planned; simpa [WireRecord.subject] using named
+      · cases planned
+
+theorem a_served_record_of_no_approved_pack_plans_nothing (requested : String)
+    (approved : List WireSubject)
     (subject : WireSubject) (unknown : ∀ kept ∈ approved, kept.packDigest ≠ subject.packDigest) :
-    wirePlanSubject approved (.served subject) = none := by
+    wirePlanSubject requested approved (.served subject) = none := by
   have absent : subject ∉ approved := fun mem => unknown subject mem rfl
   simp [wirePlanSubject, absent]
 
-theorem an_altered_served_record_plans_nothing (approved : List WireSubject)
+theorem an_altered_served_record_plans_nothing (requested : String)
+    (approved : List WireSubject)
     (subject : WireSubject)
     (altered : ∀ kept ∈ approved, kept.packDigest = subject.packDigest → kept ≠ subject) :
-    wirePlanSubject approved (.served subject) = none := by
+    wirePlanSubject requested approved (.served subject) = none := by
   have absent : subject ∉ approved := fun mem => altered subject mem rfl rfl
   simp [wirePlanSubject, absent]
 
-theorem a_wire_plans_only_from_its_own_pack_or_an_approved_one (approved : List WireSubject)
-    (record : WireRecord) (subject : WireSubject)
-    (planned : wirePlanSubject approved record = some subject) :
+theorem a_wire_plans_only_from_its_own_pack_or_an_approved_one (requested : String)
+    (approved : List WireSubject) (record : WireRecord) (subject : WireSubject)
+    (planned : wirePlanSubject requested approved record = some subject) :
     record = .sentPack subject ∨ record = .ownHome subject ∨ subject ∈ approved := by
-  cases record with
-  | sentPack sent => simp [wirePlanSubject] at planned; exact .inl (by rw [planned])
-  | ownHome kept => simp [wirePlanSubject] at planned; exact .inr (.inl (by rw [planned]))
-  | served served =>
-    simp only [wirePlanSubject] at planned
-    split at planned
-    · rename_i kept
-      simp at planned
-      subst planned
-      exact .inr (.inr (by simpa using kept))
-    · cases planned
+  unfold wirePlanSubject at planned
+  split at planned
+  · cases planned
+  · cases record with
+    | sentPack sent => simp at planned; exact .inl (by rw [planned])
+    | ownHome kept => simp at planned; exact .inr (.inl (by rw [planned]))
+    | served served =>
+      simp only at planned
+      split at planned
+      · rename_i kept
+        simp at planned
+        subst planned
+        exact .inr (.inr (by simpa using kept))
+      · cases planned
 
 /-- A write the runtime proposes while a client wires is signed only when it
 matches the client's own plan (`hostedPackEffectAllowed`); a wire that plans
 nothing has no plan to match, so it signs nothing. -/
-theorem a_wire_with_no_plan_signs_no_write (approved : List WireSubject) (record : WireRecord)
-    (unplanned : wirePlanSubject approved record = none) (actor graph native : Bool) :
-    hostedPackEffectAllowed actor graph (wirePlanSubject approved record).isSome native = false := by
+theorem a_wire_with_no_plan_signs_no_write (requested : String) (approved : List WireSubject)
+    (record : WireRecord) (unplanned : wirePlanSubject requested approved record = none)
+    (actor graph native : Bool) :
+    hostedPackEffectAllowed actor graph (wirePlanSubject requested approved record).isSome native
+      = false := by
   simp [unplanned, hostedPackEffectAllowed]
+
+/-- Decision (gents#3962): over a runtime that serves another home, a client
+signs only document ids that the pack it approved yields: the Tools and Skill
+ids of the plugin's own pack, which the wiring reads its reviewed job from
+and attaches to the agent's Context, and the AgentTarget ids of each pack it
+wires targets from (`--targets-from`). A pack's ids are its configuration's
+own, fixed by the pack, the node and the install variables the client
+supplied, so the approval records them (`approved`); when the approval could
+not derive them, say because the configuration reads a variable only the
+runtime's environment supplies, it records none and nothing of that pack is
+wired. An id the runtime reports that the pack does not yield plans
+nothing. -/
+def wireApprovedIds (approved : Option (List String)) (served : List String) :
+    Option (List String) :=
+  match approved with
+  | none => none
+  | some ids => if served.all ids.contains then some served else none
+
+theorem an_id_the_approved_pack_does_not_yield_plans_nothing (ids served : List String)
+    (target : String) (reported : target ∈ served) (foreign : target ∉ ids) :
+    wireApprovedIds (some ids) served = none := by
+  have : served.all ids.contains = false := by
+    rw [List.all_eq_false]
+    exact ⟨target, reported, by simpa using foreign⟩
+  simp [wireApprovedIds, this]
+
+theorem an_approval_without_ids_wires_none (served : List String) :
+    wireApprovedIds none served = none := rfl
+
+theorem wired_ids_are_approved_ids (ids served planned : List String)
+    (wired : wireApprovedIds (some ids) served = some planned) : ∀ target ∈ planned, target ∈ ids := by
+  simp only [wireApprovedIds] at wired
+  split at wired
+  · rename_i all
+    simp at wired
+    subst wired
+    intro target mem
+    simpa using (List.all_eq_true.mp all) target mem
+  · cases wired
+
+/-- Decision (gents#3962): over a runtime that serves another home, the job
+block a wire writes for a plugin is the one its own pack's Tools carry for
+it, which the client reads from the node. The client signs it only when it is
+the job the pack it approved yields (`approved`, `none` when the approval
+could not derive it); a job the runtime reports that the pack does not yield,
+including a job where the pack has none or none where it has one, plans
+nothing. -/
+def wireReviewedJob (approved : Option (Option String)) (served : Option String) :
+    Option (Option String) :=
+  match approved with
+  | none => none
+  | some job => if served = job then some job else none
+
+theorem a_job_the_approved_pack_does_not_yield_plans_nothing (job : Option String)
+    (served : Option String) (other : served ≠ job) :
+    wireReviewedJob (some job) served = none := by
+  simp [wireReviewedJob, other]
+
+theorem a_wired_job_is_the_approved_job (approved : Option (Option String))
+    (served job : Option String) (wired : wireReviewedJob approved served = some job) :
+    approved = some job := by
+  cases approved with
+  | none => cases wired
+  | some kept =>
+    simp only [wireReviewedJob] at wired
+    split at wired
+    · simp at wired; rw [wired]
+    · cases wired
 
 /-- One approval a client keeps for a node: the pack it approved, by digest
 and coordinate, and the subjects that pack yields. -/
@@ -791,6 +898,9 @@ structure PackApproval where
   packDigest : String
   coordinate : String
   subjects : List WireSubject
+  /-- The Tools, Skill and AgentTarget ids the pack yields, when the
+  approval could derive them (`wireApprovedIds`). -/
+  yields : Option (List String)
   deriving DecidableEq, Repr
 
 /-- What a client finds where it keeps the packs it approved for a node. -/

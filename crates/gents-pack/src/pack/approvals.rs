@@ -16,7 +16,7 @@ pub const APPROVALS_FILE: &str = "pack-approvals.json";
 /// The largest approvals record a client reads.
 pub const MAX_APPROVALS_BYTES: u64 = 1024 * 1024;
 
-const APPROVALS_VERSION: u8 = 1;
+const APPROVALS_VERSION: u8 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalsError {
@@ -50,15 +50,38 @@ pub struct PackApproval {
     pub kind: PackKind,
     pub approved_at: String,
     pub subjects: Vec<WireSubject>,
+    /// The document ids the pack yields on this node, when the approval could
+    /// derive them (`Configuration.wireApprovedIds`).
+    pub yields: Option<PackYield>,
+}
+
+/// The ids of the documents a pack's configuration yields that a wire reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackYield {
+    pub tools: Vec<String>,
+    pub skills: Vec<String>,
+    pub agent_targets: Vec<String>,
+    /// The job block the pack's own Tools carry for each of its plugins
+    /// that has one, by plugin coordinate: the first in the pack's order.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub jobs: BTreeMap<String, gents_protocol::job::PluginJobSettings>,
 }
 
 impl PackApproval {
-    /// What the client approves of `pack`, which it resolved itself.
-    pub fn of_pack(pack: &ResolvedPack) -> Result<Self, ApprovalsError> {
+    /// What the client approves of `pack`, which it resolved itself, for
+    /// the node `node_did`, given the install `variables` it supplies.
+    pub fn of_pack(
+        pack: &ResolvedPack,
+        node_did: &str,
+        variables: &gents_protocol::operations::pack::PackVariables,
+    ) -> Result<Self, ApprovalsError> {
         let manifest = pack.manifest();
+        let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         Ok(Self {
             digest: pack.digest().to_owned(),
-            coordinate: format!("{}/{}", manifest.metadata.namespace, manifest.name),
+            yields: pack_yield(pack, &coordinate, node_did, variables),
+            coordinate,
             version: manifest.version.clone(),
             kind: manifest.metadata.kind.clone(),
             approved_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -71,6 +94,70 @@ impl PackApproval {
     pub fn provenance(&self) -> InstalledVia {
         recorded_provenance(self.kind.clone(), Some(None))
     }
+}
+
+/// The Tools, Skill and AgentTarget ids and plugin job blocks `pack`'s
+/// configuration yields on
+/// `node_did` with `variables` and nothing else: `None` when the
+/// configuration does not load from them alone, say because it reads a
+/// variable only the runtime's environment supplies.
+fn pack_yield(
+    pack: &ResolvedPack,
+    coordinate: &str,
+    node_did: &str,
+    variables: &gents_protocol::operations::pack::PackVariables,
+) -> Option<PackYield> {
+    if pack.manifest().config.is_none() {
+        return Some(PackYield::default());
+    }
+    let lookup = |name: &str| {
+        variables
+            .scoped
+            .get(coordinate)
+            .and_then(|scoped| scoped.get(name))
+            .or_else(|| variables.shared.get(name))
+            .cloned()
+    };
+    crate::pack::load_pack_authoring_config(
+        pack.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: node_did.to_owned(),
+        },
+        &|path| Ok(pack.asset(path)?.to_vec()),
+        &lookup,
+    )
+    .ok()
+    .map(|authored| PackYield {
+        jobs: authored
+            .documents
+            .tools
+            .iter()
+            .filter_map(|tools| tools.integrations.as_ref()?.plugins.as_ref())
+            .flatten()
+            .filter_map(|entry| Some((entry.plugin.clone(), entry.job.clone()?)))
+            .fold(BTreeMap::new(), |mut jobs, (plugin, job)| {
+                jobs.entry(plugin).or_insert(job);
+                jobs
+            }),
+        tools: authored
+            .documents
+            .tools
+            .into_iter()
+            .map(|tools| tools.tools_id)
+            .collect(),
+        skills: authored
+            .documents
+            .skills
+            .into_iter()
+            .map(|skill| skill.skill_id)
+            .collect(),
+        agent_targets: authored
+            .documents
+            .agent_targets
+            .into_iter()
+            .map(|target| target.target_id)
+            .collect(),
+    })
 }
 
 /// The record, as lists so that a node or digest written twice is seen and

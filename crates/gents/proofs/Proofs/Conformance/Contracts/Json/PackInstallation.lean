@@ -259,32 +259,66 @@ inductive WireSource where
   deriving Lean.ToJson
 
 structure WirePlanInput where
+  requested : String
   approved : List Configuration.WireSubject
   source : WireSource
   subject : Configuration.WireSubject
   deriving Lean.ToJson
 
 /-- A record from the pack the client sent or from its own home; a served
-record it approved;
-one of a pack it never approved; one of an approved pack whose record or
-coordinate differs; and one with no approvals recorded. -/
+record it approved; one of a pack it never approved; one of an approved pack
+whose record or coordinate differs; one with no approvals recorded; and, from
+every source, a record of another plugin than the one asked for, approved or
+not. -/
 @[conformance_family]
 def wirePlan : Conformance.Family WirePlanInput Bool where
   inputs :=
-    let approved : Configuration.WireSubject := ⟨"p1", "acme/demo", "r1"⟩
-    [ ⟨[], .sentPack, approved⟩,
-      ⟨[], .ownHome, approved⟩,
-      ⟨[approved], .served, approved⟩,
-      ⟨[approved], .served, ⟨"p2", "acme/demo", "r1"⟩⟩,
-      ⟨[approved], .served, ⟨"p1", "acme/demo", "r2"⟩⟩,
-      ⟨[approved], .served, ⟨"p1", "acme/other", "r1"⟩⟩,
-      ⟨[], .served, approved⟩ ]
+    let approved : Configuration.WireSubject := ⟨"p1", "acme/demo", "acme/tool", "r1"⟩
+    let other : Configuration.WireSubject := ⟨"p1", "acme/demo", "acme/other", "r1"⟩
+    [ ⟨"acme/tool", [], .sentPack, approved⟩,
+      ⟨"acme/tool", [], .ownHome, approved⟩,
+      ⟨"acme/tool", [approved], .served, approved⟩,
+      ⟨"acme/tool", [approved], .served, ⟨"p2", "acme/demo", "acme/tool", "r1"⟩⟩,
+      ⟨"acme/tool", [approved], .served, ⟨"p1", "acme/demo", "acme/tool", "r2"⟩⟩,
+      ⟨"acme/tool", [approved], .served, ⟨"p1", "acme/other", "acme/tool", "r1"⟩⟩,
+      ⟨"acme/tool", [], .served, approved⟩,
+      ⟨"acme/tool", [approved, other], .served, other⟩,
+      ⟨"acme/tool", [], .sentPack, other⟩,
+      ⟨"acme/tool", [], .ownHome, other⟩ ]
   model := fun i =>
-    (Configuration.wirePlanSubject i.approved
+    (Configuration.wirePlanSubject i.requested i.approved
       (match i.source with
         | .sentPack => .sentPack i.subject
         | .ownHome => .ownHome i.subject
         | .served => .served i.subject)).isSome
+
+structure WireApprovedIdsInput where
+  approved : Option (List String)
+  served : List String
+  deriving Lean.ToJson
+
+/-- Ids the approval yields, a subset of them, an extra one, a different one,
+and an approval that could not derive its ids. -/
+@[conformance_family]
+def wireApprovedIdsCases : Conformance.Family WireApprovedIdsInput (Option (List String)) where
+  inputs :=
+    [ ⟨some ["a", "b"], ["a", "b"]⟩, ⟨some ["a", "b"], ["a"]⟩, ⟨some ["a"], ["a", "rogue"]⟩,
+      ⟨some ["a"], ["rogue"]⟩, ⟨none, ["a"]⟩ ]
+  model := fun i => Configuration.wireApprovedIds i.approved i.served
+
+structure WireReviewedJobInput where
+  approved : Option (Option String)
+  served : Option String
+  deriving Lean.ToJson
+
+/-- The approved job, another one, a job where the pack has none, none where
+it has one, no job either side, and an approval that could not derive it. -/
+@[conformance_family]
+def wireReviewedJobCases : Conformance.Family WireReviewedJobInput (Option (Option String)) where
+  inputs :=
+    [ ⟨some (some "j1"), some "j1"⟩, ⟨some (some "j1"), some "j2"⟩, ⟨some none, some "j1"⟩,
+      ⟨some (some "j1"), none⟩, ⟨some none, none⟩, ⟨none, some "j1"⟩ ]
+  model := fun i => Configuration.wireReviewedJob i.approved i.served
 
 inductive ApprovalsCase where
   | absent
@@ -300,11 +334,13 @@ def ApprovalsCase.file : ApprovalsCase → Configuration.ApprovalsFile
   | .absent => .absent
   | .oversized => .oversized
   | .unparseable => .unparseable
-  | .consistent => .parsed [⟨"p1", "acme/demo", [⟨"p1", "acme/demo", "r1"⟩]⟩]
-  | .otherDigest => .parsed [⟨"p1", "acme/demo", [⟨"p2", "acme/demo", "r1"⟩]⟩]
-  | .otherCoordinate => .parsed [⟨"p1", "acme/demo", [⟨"p1", "acme/other", "r1"⟩]⟩]
+  | .consistent => .parsed [⟨"p1", "acme/demo", [⟨"p1", "acme/demo", "acme/tool", "r1"⟩], none⟩]
+  | .otherDigest => .parsed [⟨"p1", "acme/demo", [⟨"p2", "acme/demo", "acme/tool", "r1"⟩], none⟩]
+  | .otherCoordinate =>
+    .parsed [⟨"p1", "acme/demo", [⟨"p1", "acme/other", "acme/tool", "r1"⟩], none⟩]
   | .duplicateDigest =>
-    .parsed [⟨"p1", "acme/demo", [⟨"p1", "acme/demo", "r1"⟩]⟩, ⟨"p1", "acme/demo", []⟩]
+    .parsed [⟨"p1", "acme/demo", [⟨"p1", "acme/demo", "acme/tool", "r1"⟩], none⟩,
+      ⟨"p1", "acme/demo", [], none⟩]
 
 structure ApprovalsReadInput where
   file : ApprovalsCase

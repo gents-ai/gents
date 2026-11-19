@@ -371,6 +371,145 @@ fn forward_explain(
     }
 }
 
+/// What a runtime serving another home reports for `name` of the approved
+/// pack `acme/demo`.
+fn demo_subject(name: &str) -> gents_pack::pack::wire_subject::WireSubject {
+    gents_pack::pack::wire_subject::WireSubject {
+        owner_pack_digest: format!("sha256:{}", "f".repeat(64)),
+        owner_pack_coordinate: "acme/demo".into(),
+        namespace: "acme".into(),
+        name: name.into(),
+        version: "1.0.0".into(),
+        digest: format!("sha256:{}", "a".repeat(64)),
+        declaration: gents_pack::pack::PackPlugin {
+            name: name.into(),
+            description: "Runs".into(),
+            artifact: format!("plugins/{name}.wasm"),
+            language: "rust".into(),
+            input_schema: json!({"type": "object"}),
+            ..gents_pack::pack::PackPlugin::default()
+        },
+    }
+}
+
+/// A runtime serving another home answers the client's reads as it likes:
+/// another approved plugin's record for the one asked for, or AgentTargets
+/// of an approved pack that the pack does not yield. The client plans
+/// nothing from either, opens no pack session and so signs nothing.
+#[tokio::test]
+async fn a_runtime_answering_with_what_the_client_did_not_approve_gets_nothing_signed() {
+    use gents_pack::pack::plugin_wire::WireRequest;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let user =
+        tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("unvouched"))
+            .await
+            .unwrap();
+    let served = std::sync::Arc::new(std::sync::Mutex::new(json!({})));
+    let sessions = std::sync::Arc::new(AtomicUsize::new(0));
+    let (record, opened) = (served.clone(), sessions.clone());
+    let app = Router::new()
+        .route(
+            gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH,
+            get(move || {
+                let record = record.clone();
+                async move { axum::Json(record.lock().unwrap().clone()) }
+            }),
+        )
+        .route(
+            "/api/v0/graphql",
+            post(|| async {
+                axum::Json(json!({"data": {"PackInstallation": [{
+                    "_docID": "bae-demo",
+                    "documents": [
+                        {"collection": "AgentTarget", "id": "a", "digest": "", "created": true},
+                        {"collection": "AgentTarget", "id": "rogue", "digest": "", "created": true},
+                    ],
+                }]}}))
+            }),
+        )
+        .route(
+            "/packs/install/session",
+            get(move || {
+                opened.fetch_add(1, Ordering::SeqCst);
+                async { StatusCode::BAD_REQUEST }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let endpoint =
+        crate::test_support::user_endpoint(&format!("http://{address}/api/v0/graphql"), &user);
+    let owner = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    let approvals_root = tempfile::tempdir().unwrap();
+    let approvals = gents_pack::pack::approvals::Approvals::under(approvals_root.path());
+    approvals
+        .record(
+            owner,
+            gents_pack::pack::approvals::PackApproval {
+                digest: format!("sha256:{}", "f".repeat(64)),
+                coordinate: "acme/demo".into(),
+                version: "1.0.0".into(),
+                kind: gents_pack::pack::PackKind::Plugins,
+                approved_at: "2026-11-19T00:00:00Z".into(),
+                subjects: vec![demo_subject("tool"), demo_subject("other")],
+                yields: Some(gents_pack::pack::approvals::PackYield {
+                    agent_targets: vec!["a".into()],
+                    ..Default::default()
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let request = WireRequest {
+        plugin: "acme/tool".into(),
+        agent: "did:key:agent".into(),
+        targets_from: Vec::new(),
+        remove: false,
+        preview: false,
+        dynamic_consent: false,
+        tool_calls_consent: false,
+    };
+
+    *served.lock().unwrap() = serde_json::to_value(demo_subject("other").installed()).unwrap();
+    let another =
+        crate::http::pack_wire_client::served_plan(&endpoint, owner, &request, &approvals)
+            .await
+            .expect_err("another approved plugin's record plans nothing for the one asked for");
+    assert!(
+        format!("{another:#}").contains("gents config pack approve"),
+        "{another:#}"
+    );
+
+    *served.lock().unwrap() = serde_json::to_value(demo_subject("tool").installed()).unwrap();
+    let targeting = WireRequest {
+        targets_from: vec!["acme/demo".into()],
+        ..request.clone()
+    };
+    let plan = crate::http::pack_wire_client::served_plan(&endpoint, owner, &targeting, &approvals)
+        .await
+        .unwrap();
+    let unvouched = crate::http::pack_wire_client::wire_as_client(
+        endpoint.clone(),
+        owner.to_owned(),
+        approvals_root.path().to_owned(),
+        targeting,
+        Some(plan),
+    )
+    .await
+    .expect_err("an AgentTarget the approved pack does not yield is not wired");
+    assert!(
+        format!("{unvouched:#}").contains("does not yield"),
+        "{unvouched:#}"
+    );
+    assert_eq!(
+        sessions.load(Ordering::SeqCst),
+        0,
+        "nothing reached a pack session"
+    );
+}
+
 /// A User wires an installed plugin through the runtime of a home whatever
 /// decides its access: the runtime holds the plugin store and runs the
 /// transaction, the client signs each write with its own key, and the
@@ -524,6 +663,7 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
                 kind: gents_pack::pack::PackKind::Plugins,
                 approved_at: "2026-11-19T00:00:00Z".into(),
                 subjects: vec![subject],
+                yields: Some(Default::default()),
             }
         };
         let refused = |error: anyhow::Error| {
@@ -585,12 +725,13 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
                 .unwrap()
         } else {
             gents_pack::pack::wire_subject::wire_plan_record(
+                &request.plugin,
                 &[],
                 gents_pack::pack::wire_subject::WireRecord::SentPack(sent.clone()),
             )
             .map(|record| gents_pack::pack::plugin_wire::ClientPlan {
                 record,
-                targets: Default::default(),
+                packs: None,
             })
             .unwrap()
         };
@@ -634,7 +775,7 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
                     ..sent.clone()
                 }
                 .installed(),
-                targets: Default::default(),
+                packs: None,
             }),
         )
         .await;

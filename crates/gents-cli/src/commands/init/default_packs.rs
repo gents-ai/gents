@@ -633,6 +633,7 @@ async fn apply(
                 &[engineer.to_owned()],
                 wiring.consent_dynamic,
                 wiring.tool_calls,
+                None,
                 gents_host::http::pack_wire_client::SIGNERS,
             )
             .await

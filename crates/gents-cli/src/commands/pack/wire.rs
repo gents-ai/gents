@@ -62,7 +62,7 @@ pub(crate) async fn approve(args: PackApproveArgs) -> Result<()> {
         &home,
     )
     .await?;
-    let approval = record_approvals(&owner, [&pack]).await?;
+    let approval = record_approvals(&owner, [&pack], &args.dependency_variables, &[]).await?;
     crate::print_json(&serde_json::json!({
         "node_did": owner,
         "approved": approval,
@@ -70,15 +70,19 @@ pub(crate) async fn approve(args: PackApproveArgs) -> Result<()> {
 }
 
 /// Record each of `packs`, which this client sent or resolved itself, as
-/// approved for `owner` on this device.
+/// approved for `owner` on this device, with the AgentTargets each yields
+/// from the install `variables` and agent bindings the client supplies.
 pub(crate) async fn record_approvals<'a>(
     owner: &str,
     packs: impl IntoIterator<Item = &'a ResolvedPack>,
+    variables: &[String],
+    bind_agents: &[String],
 ) -> Result<Vec<PackApproval>> {
     let approvals = approvals()?;
+    let supplied = gents_pack::pack::install_flow::supplied_variables(variables, bind_agents)?;
     let mut recorded = Vec::new();
     for pack in packs {
-        let approval = PackApproval::of_pack(pack)?;
+        let approval = PackApproval::of_pack(pack, owner, &supplied)?;
         approvals.record(owner, approval.clone()).await?;
         recorded.push(approval);
     }

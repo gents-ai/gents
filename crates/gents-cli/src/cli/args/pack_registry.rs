@@ -270,6 +270,9 @@ pub(crate) struct PackWireArgs {
 pub(crate) struct PackApproveArgs {
     #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,
+    #[arg(long = "dependency-variable", value_name = "NAMESPACE/PACK:NAME=VALUE", action = clap::ArgAction::Append,
+        help = "An install variable the pack was installed with, from which its AgentTargets are derived; repeat for each variable")]
+    pub(crate) dependency_variables: Vec<String>,
     #[arg(
         long,
         help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"

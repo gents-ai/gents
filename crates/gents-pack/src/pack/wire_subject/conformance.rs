@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 use super::{wire_plan_record, WireRecord, WireSubject};
 use crate::pack::PackPlugin;
 
-/// The subject a case names: its pack digest and coordinate as written, and
-/// a declaration that differs between the case's records.
+/// The subject a case names: its pack digest, pack coordinate and plugin as
+/// written, and a declaration that differs between the case's records.
 fn subject(case: &Case) -> WireSubject {
     let (namespace, name) = case
-        .coordinate
+        .plugin
         .split_once('/')
-        .expect("a case names a coordinate");
+        .expect("a case names a plugin coordinate");
     WireSubject {
         owner_pack_digest: format!("sha256:{}", case.pack_digest),
         owner_pack_coordinate: case.coordinate.clone(),
@@ -47,10 +47,29 @@ fn a_wire_plans_from_a_record_as_the_lean_model_says() {
             Source::OwnHome => WireRecord::OwnHome(named.installed()),
             Source::Served => WireRecord::Served(named.installed()),
         };
-        let planned = wire_plan_record(&approved, record);
+        let planned = wire_plan_record(&input.requested, &approved, record);
         if let Some(planned) = &planned {
             assert_eq!(WireSubject::of_record(planned), Some(named));
         }
         planned.is_some()
     });
+}
+
+#[test]
+fn a_wire_signs_only_the_ids_its_approval_yields_as_the_lean_model_says() {
+    gents_lean_vocab::families::contracts_pack_installation_wire_approved_ids_cases::replay(
+        |input| super::wire_approved_ids(input.approved.as_deref(), &input.served),
+    );
+}
+
+#[test]
+fn a_wire_signs_only_the_job_its_approval_yields_as_the_lean_model_says() {
+    gents_lean_vocab::families::contracts_pack_installation_wire_reviewed_job_cases::replay(
+        |input| {
+            super::wire_reviewed_job(
+                input.approved.as_ref().map(Option::as_ref),
+                input.served.as_ref(),
+            )
+        },
+    );
 }

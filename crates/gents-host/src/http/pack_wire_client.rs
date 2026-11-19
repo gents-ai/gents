@@ -56,8 +56,10 @@ pub fn wire_as_client(
 /// The plan a client makes to wire `request.plugin` over a runtime that
 /// serves another home (`Configuration.wirePlanSubject`): the record the
 /// runtime serves, taken only when it is exactly what a pack in the client's
-/// `approvals` for `owner` yields, and each `targets_from` pack's provenance
-/// from its approval. Anything else plans nothing and nothing is signed.
+/// `approvals` for `owner` yields and names `request.plugin`, and each
+/// `targets_from` pack's provenance and document ids, as the plugin's own
+/// pack's, from its approval.
+/// Anything else plans nothing and nothing is signed.
 pub async fn served_plan(
     endpoint: &GraphqlEndpoint,
     owner: &str,
@@ -97,26 +99,41 @@ pub async fn served_plan(
         })
         .await
         .with_context(|| format!("reading {} as the runtime records it", request.plugin))?;
-    let record = wire_plan_record(&subjects, WireRecord::Served(served)).with_context(|| {
-        format!(
-            "{} on {owner} is not what a pack this device approved yields, so it is not wired. Next: gents config pack approve <pack source>",
-            request.plugin
-        )
-    })?;
-    let targets = request
-        .targets_from
-        .iter()
+    let record = wire_plan_record(&request.plugin, &subjects, WireRecord::Served(served))
+        .with_context(|| {
+            format!(
+                "{} on {owner} is not what a pack this device approved yields, so it is not wired. Next: gents config pack approve <pack source>",
+                request.plugin
+            )
+        })?;
+    let own = record
+        .owner_pack_coordinate
+        .clone()
+        .context("an approved plugin names its pack")?;
+    let packs = std::iter::once(&own)
+        .chain(&request.targets_from)
         .map(|pack| {
             approved
                 .values()
                 .find(|approval| &approval.coordinate == pack)
-                .map(|approval| (pack.clone(), approval.provenance()))
+                .map(|approval| {
+                    (
+                        pack.clone(),
+                        gents_pack::pack::plugin_wire::ApprovedPack {
+                            provenance: approval.provenance(),
+                            yields: approval.yields.clone(),
+                        },
+                    )
+                })
                 .with_context(|| {
-                    format!("{pack} is not a pack this device approved on {owner}, so its targets are not wired. Next: gents config pack approve <pack source>")
+                    format!("{pack} is not a pack this device approved on {owner}, so nothing of it is wired. Next: gents config pack approve <pack source>")
                 })
         })
         .collect::<Result<_>>()?;
-    Ok(gents_pack::pack::plugin_wire::ClientPlan { record, targets })
+    Ok(gents_pack::pack::plugin_wire::ClientPlan {
+        record,
+        packs: Some(packs),
+    })
 }
 
 /// What a client wires with: the User its home holds for a store it opens
