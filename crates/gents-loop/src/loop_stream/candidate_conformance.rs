@@ -1,24 +1,19 @@
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::StreamExt;
 use gents_lean_vocab::families::completion_loop_stream as family;
 use gents_protocol::message::{AssistantContent, Message, ToolResultContent};
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
+use rig::completion::CompletionError;
+use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 
 use super::*;
 use crate::backend_provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
 use crate::session_hook::NoopSessionHook;
+use crate::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
 use crate::tool::{BoxFuture, ToolDefinition, ToolError};
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct Response {
-    usage: Option<rig::completion::Usage>,
-}
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct TypedReply {
@@ -28,25 +23,79 @@ struct TypedReply {
     )]
     answer: String,
 }
-impl rig::completion::GetTokenUsage for Response {
-    fn token_usage(&self) -> Option<rig::completion::Usage> {
-        self.usage
+/// Answers each provider attempt with the next of the family's `calls`.
+fn model(calls: &[family::Call]) -> ScriptedProvider {
+    ScriptedProvider::new(
+        calls
+            .iter()
+            .enumerate()
+            .map(|(index, call)| reply(index + 1, call)),
+    )
+}
+
+fn reply(index: usize, call: &family::Call) -> Reply {
+    let mut steps = Vec::new();
+    steps.extend(
+        call.text
+            .iter()
+            .cloned()
+            .map(|text| Step::Chunk(RawStreamingChoice::Message(text))),
+    );
+    steps.extend(call.reasoning.iter().cloned().map(|reasoning| {
+        Step::Chunk(RawStreamingChoice::ReasoningDelta {
+            id: None,
+            reasoning,
+        })
+    }));
+    if call.tool {
+        steps.push(Step::Chunk(RawStreamingChoice::ToolCall(
+            RawStreamingToolCall::new(
+                format!("call-{index}"),
+                "echo".into(),
+                serde_json::json!({"note":if call.poison { "bad\u{7}value" } else { "clean" }}),
+            ),
+        )));
+    }
+    match &call.failure {
+        Some(kind) if steps.is_empty() && !call.first_poll => Reply::Fail(error(kind)),
+        Some(kind) => {
+            steps.push(Step::Error(error(kind)));
+            Reply::Stream(steps)
+        }
+        None => {
+            steps.push(Step::End(crate::rig_compat::model::StreamEnd {
+                usage: call.usage.as_ref().map(|usage| rig::completion::Usage {
+                    input_tokens: usage.input,
+                    output_tokens: usage.output,
+                    total_tokens: usage.total,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                }),
+                ..Default::default()
+            }));
+            Reply::Stream(steps)
+        }
     }
 }
 
-#[derive(Clone)]
-struct Model {
-    calls: Arc<Mutex<VecDeque<family::Call>>>,
-    observations: Arc<Mutex<Vec<(bool, bool, bool)>>>,
-    requests: Arc<Mutex<Vec<String>>>,
-}
-
-fn model(calls: &[family::Call]) -> Model {
-    Model {
-        calls: Arc::new(Mutex::new(calls.iter().cloned().collect())),
-        observations: Default::default(),
-        requests: Default::default(),
-    }
+/// Whether a request's history carries a control-character tool argument,
+/// its request context, and the echo tool.
+fn observation(request: &rig::completion::CompletionRequest) -> (bool, bool, bool) {
+    let messages = request
+        .chat_history
+        .iter()
+        .map(crate::rig_compat::from_rig_message)
+        .collect::<Vec<_>>();
+    let dirty = messages.iter().any(|message| match message {
+        Message::Assistant { content, .. } => content.iter().any(|content| match content {
+            AssistantContent::ToolCall(call) => has_control(&call.function.arguments),
+            _ => false,
+        }),
+        _ => false,
+    });
+    let context = messages.iter().any(is_request_context_message);
+    let offered = request.tools.iter().any(|tool| tool.name == "echo");
+    (dirty, context, offered)
 }
 
 fn has_control(value: &serde_json::Value) -> bool {
@@ -70,102 +119,6 @@ fn error(kind: &str) -> CompletionError {
         "overflow" => r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"}}"#,
         _ => "status code 503: unavailable",
     }.into())
-}
-
-impl crate::provider_call::ForCall for Model {
-    fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
-        self.clone()
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for Model {
-    type Response = Response;
-    type StreamingResponse = Response;
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        model(&[])
-    }
-
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<Response>, CompletionError> {
-        unreachable!("streaming owner")
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Response>, CompletionError> {
-        self.requests.lock().unwrap().push(format!("{request:?}"));
-        let index = self.requests.lock().unwrap().len();
-        let messages = request
-            .chat_history
-            .iter()
-            .map(crate::rig_compat::from_rig_message)
-            .collect::<Vec<_>>();
-        let dirty = messages.iter().any(|message| match message {
-            Message::Assistant { content, .. } => content.iter().any(|content| match content {
-                AssistantContent::ToolCall(call) => has_control(&call.function.arguments),
-                _ => false,
-            }),
-            _ => false,
-        });
-        let context = messages.iter().any(is_request_context_message);
-        let offered = request.tools.iter().any(|tool| tool.name == "echo");
-        self.observations
-            .lock()
-            .unwrap()
-            .push((dirty, context, offered));
-        let call = self
-            .calls
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("model supplied every provider attempt");
-        let mut chunks = Vec::new();
-        chunks.extend(
-            call.text
-                .iter()
-                .cloned()
-                .map(RawStreamingChoice::Message)
-                .map(Ok),
-        );
-        chunks.extend(call.reasoning.iter().cloned().map(|reasoning| {
-            Ok(RawStreamingChoice::ReasoningDelta {
-                id: None,
-                reasoning,
-            })
-        }));
-        if call.tool {
-            chunks.push(Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-                format!("call-{index}"),
-                "echo".into(),
-                serde_json::json!({"note":if call.poison { "bad\u{7}value" } else { "clean" }}),
-            ))));
-        }
-        if let Some(kind) = &call.failure {
-            if chunks.is_empty() && !call.first_poll {
-                return Err(error(kind));
-            }
-            chunks.push(Err(error(kind)));
-        } else {
-            chunks.push(Ok(RawStreamingChoice::FinalResponse(Response {
-                usage: call.usage.map(|usage| rig::completion::Usage {
-                    input_tokens: usage.input,
-                    output_tokens: usage.output,
-                    total_tokens: usage.total,
-                    cached_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                }),
-            })));
-        }
-        Ok(StreamingCompletionResponse::stream(Box::pin(
-            futures::stream::iter(chunks),
-        )))
-    }
 }
 
 struct Echo;
@@ -543,11 +496,15 @@ async fn observe(
             }
         }
     }
-    let inputs = model.observations.lock().unwrap();
+    let sent = model.requests();
+    let inputs = sent.iter().map(observation).collect::<Vec<_>>();
     observed.dirty_inputs = inputs.iter().map(|i| i.0).collect();
     observed.context_inputs = inputs.iter().map(|i| i.1).collect();
     observed.offered = inputs.iter().map(|i| i.2).collect();
-    let requests = model.requests.lock().unwrap();
+    let requests = sent
+        .iter()
+        .map(|request| format!("{request:?}"))
+        .collect::<Vec<_>>();
     observed.captures = captures
         .lock()
         .unwrap()

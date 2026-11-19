@@ -435,12 +435,12 @@ pub(super) mod tests {
     use crate::runtime::agent::runtime::StartupBarrier;
     use crate::turn::prompt::LayeredPromptBuilder;
     use anyhow::Context;
-    use futures::stream;
     use gents_inference::backends::provider::BackendProviderKind;
     use gents_inference::resolved::MaxTurnsProvenance;
     use gents_inference::resolved::{ResolvedAgent, SamplingConfig};
     use gents_loop::completion_retry::CompletionRetryProfileFields;
     use gents_loop::error::LoopFailureCause;
+    use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
     use gents_loop::tool::ToolDyn;
     use gents_protocol::row::AgentRequest;
     use gents_store::identity::{NodeIdentity, RuntimeNode};
@@ -448,14 +448,8 @@ pub(super) mod tests {
         BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
     };
     use gents_tools::surface::AgentToolSurfaceConfig;
-    use rig::completion::{
-        CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
-    };
-    use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    };
+    use rig::completion::CompletionRequest;
+    use std::sync::{atomic::Ordering, Arc};
     use std::time::Duration;
     /// rig's own turn-exhaustion `Display`. Its `PromptError: MaxTurnError: `
     /// prefix is pinned by `agent/loop_stream/tests/streaming.rs`; the
@@ -482,64 +476,6 @@ pub(super) mod tests {
     }
 
     #[derive(Clone)]
-    struct RoutedReplyModel {
-        call: gents_loop::provider_call::ProviderCall,
-    }
-
-    impl gents_loop::provider_call::ForCall for RoutedReplyModel {
-        fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
-            Self { call: call.clone() }
-        }
-    }
-
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for RoutedReplyModel {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            Self {
-                call: Default::default(),
-            }
-        }
-
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            Err(CompletionError::ProviderError(
-                "completion is unused in daemon lineage test".to_string(),
-            ))
-        }
-
-        async fn stream(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            gents_inference::test_support::capture_scripted_provider_request(
-                &self.call, &request, "scripted",
-            )
-            .await?;
-            let items = vec![
-                Ok(RawStreamingChoice::Message("routed reply".to_string())),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ];
-            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(items));
-            Ok(StreamingCompletionResponse::stream(inner))
-        }
-    }
-
-    #[derive(Clone)]
-    struct WakeInputModel {
-        call: gents_loop::provider_call::ProviderCall,
-        provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
-        title_calls: Arc<AtomicUsize>,
-        title_shape_mismatches: Arc<AtomicUsize>,
-        successor: Option<WakeSuccessor>,
-    }
-
-    #[derive(Clone)]
     struct WakeSuccessor {
         node: Arc<defra_node::Node>,
         request_id: String,
@@ -548,106 +484,82 @@ pub(super) mod tests {
         runtime: Arc<dyn NodeIdentity>,
     }
 
-    impl gents_loop::provider_call::ForCall for WakeInputModel {
-        fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
-            Self {
-                call: call.clone(),
-                ..self.clone()
-            }
-        }
+    /// Whether a wake-fixture request has the title request's shape, and
+    /// whether it carries the title owner's preamble.
+    fn wake_request_shape(request: &CompletionRequest) -> (bool, bool) {
+        let history =
+            serde_json::to_value(&request.chat_history).expect("serialize provider input");
+        let title_preamble = super::super::title::title_generation_preamble();
+        (
+            request.temperature == Some(0.0) && request.tools.is_empty(),
+            json_contains_text(&history, &title_preamble),
+        )
     }
 
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for WakeInputModel {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            unreachable!("the wake test constructs its deterministic model directly")
-        }
-
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            Err(CompletionError::ProviderError(
-                "non-streaming completion is unused".into(),
-            ))
-        }
-
-        async fn stream(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            gents_inference::test_support::capture_scripted_provider_request(
-                &self.call, &request, "scripted",
-            )
-            .await?;
-            let history =
-                serde_json::to_value(&request.chat_history).expect("serialize provider input");
-            let title_preamble = super::super::title::title_generation_preamble();
-            let title_shape = request.temperature == Some(0.0) && request.tools.is_empty();
-            let title_preamble_present = json_contains_text(&history, &title_preamble);
-            let text = match (title_shape, title_preamble_present) {
-                (true, true) => {
-                    self.title_calls.fetch_add(1, Ordering::SeqCst);
-                    "background-completion-review"
-                }
-                (false, false) => {
-                    let first = {
-                        let mut inputs = self
-                            .provider_inputs
-                            .lock()
-                            .expect("wake provider input capture");
-                        inputs.push(
-                            serde_json::to_string(&request.chat_history)
-                                .expect("serialize provider input"),
-                        );
-                        inputs.len() == 1
-                    };
-                    if first {
-                        if let Some(WakeSuccessor {
-                            node,
-                            request_id,
-                            did,
-                            signer,
-                            runtime,
-                        }) = &self.successor
-                        {
-                            gents_toolcalls::call::lifecycle::admission_fixture::complete_child_managed_verified(
+    /// Answers the title owner and the main turn by request shape, failing a
+    /// request whose shape and preamble disagree; the first main turn first
+    /// completes `successor`.
+    fn wake_input_model(successor: Option<WakeSuccessor>) -> ScriptedProvider {
+        let successor = Arc::new(std::sync::Mutex::new(successor));
+        ScriptedProvider::new([])
+            .respond_async(move |dispatch| {
+                let successor = successor.clone();
+                async move {
+                    match wake_request_shape(&dispatch.request) {
+                        (true, true) => Reply::text("background-completion-review"),
+                        (false, false) => {
+                            let first = successor.lock().expect("wake successor").take();
+                            if let Some(WakeSuccessor {
                                 node,
                                 request_id,
-                                "successor native output",
+                                did,
                                 signer,
-                                runtime.clone(),
-                            )
-                            .await;
-                            assert_eq!(
-                                gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
-                                    node, &gents_store::config_client::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), &gents_automation::goal::session_message::SessionGoals, did
+                                runtime,
+                            }) = first
+                            {
+                                gents_toolcalls::call::lifecycle::admission_fixture::complete_child_managed_verified(
+                                    &node,
+                                    &request_id,
+                                    "successor native output",
+                                    &signer,
+                                    runtime.clone(),
                                 )
-                                .await
-                                .unwrap(),
-                                1
-                            );
+                                .await;
+                                assert_eq!(
+                                    gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
+                                        &node, &gents_store::config_client::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), &gents_automation::goal::session_message::SessionGoals, &did
+                                    )
+                                    .await
+                                    .unwrap(),
+                                    1
+                                );
+                            }
+                            Reply::text("wake handled")
                         }
+                        _ => Reply::provider_error(
+                            "wake fixture title shape and owner preamble disagree",
+                        ),
                     }
-                    "wake handled"
                 }
-                _ => {
-                    self.title_shape_mismatches.fetch_add(1, Ordering::SeqCst);
-                    return Err(CompletionError::ProviderError(
-                        "wake fixture title shape and owner preamble disagree".into(),
-                    ));
-                }
-            };
-            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
-                Ok(RawStreamingChoice::Message(text.to_string())),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ]));
-            Ok(StreamingCompletionResponse::stream(inner))
+            })
+            .capturing_openai("scripted")
+    }
+
+    /// The main turns' chat histories, the title calls and the shape
+    /// mismatches the wake fixture received.
+    fn wake_observations(model: &ScriptedProvider) -> (Vec<String>, usize, usize) {
+        let mut main = Vec::new();
+        let (mut titles, mut mismatches) = (0, 0);
+        for request in model.requests() {
+            match wake_request_shape(&request) {
+                (true, true) => titles += 1,
+                (false, false) => main.push(
+                    serde_json::to_string(&request.chat_history).expect("serialize provider input"),
+                ),
+                _ => mismatches += 1,
+            }
         }
+        (main, titles, mismatches)
     }
 
     fn json_contains_text(value: &serde_json::Value, expected: &str) -> bool {
@@ -690,44 +602,10 @@ pub(super) mod tests {
         .unwrap()
     }
 
-    #[derive(Clone)]
-    struct CountingReplyModel(Arc<AtomicUsize>, gents_loop::provider_call::ProviderCall);
-
-    impl gents_loop::provider_call::ForCall for CountingReplyModel {
-        fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
-            Self(self.0.clone(), call.clone())
-        }
-    }
-
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for CountingReplyModel {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            Self(Arc::new(AtomicUsize::new(0)), Default::default())
-        }
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<CompletionResponse<()>, CompletionError> {
-            Err(CompletionError::ProviderError("unused".into()))
-        }
-        async fn stream(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-            gents_inference::test_support::capture_scripted_provider_request(
-                &self.1, &request, "scripted",
-            )
-            .await?;
-            self.0.fetch_add(1, Ordering::SeqCst);
-            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
-                Ok(RawStreamingChoice::Message("admitted reply".to_string())),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ]));
-            Ok(StreamingCompletionResponse::stream(inner))
-        }
+    /// A provider that admits every call with a reply, so a test can count
+    /// them.
+    fn counting_reply_model() -> ScriptedProvider {
+        ScriptedProvider::responding(|_| Reply::text("admitted reply")).capturing_openai("scripted")
     }
 
     fn test_agent_with_binding(
@@ -1155,9 +1033,10 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config,
             provider_family: None,
-            model: Arc::new(RoutedReplyModel {
-                call: Default::default(),
-            }),
+            model: Arc::new(
+                ScriptedProvider::responding(|_| Reply::text("routed reply"))
+                    .capturing_openai("scripted"),
+            ),
             preamble,
             loop_tools,
             prompt_builder,
@@ -1325,27 +1204,20 @@ pub(super) mod tests {
             &[],
         );
         let preamble = prompt_builder.preamble().to_string();
-        let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let title_calls = Arc::new(AtomicUsize::new(0));
-        let title_shape_mismatches = Arc::new(AtomicUsize::new(0));
+        let model = wake_input_model(successor.map(|request_id| WakeSuccessor {
+            node: node.clone(),
+            request_id,
+            did: admission.node_did.clone(),
+            signer: signer.clone(),
+            runtime: admission.runtime.clone(),
+        }));
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(WakeInputModel { call: Default::default(),
-                provider_inputs: provider_inputs.clone(),
-                title_calls: title_calls.clone(),
-                title_shape_mismatches: title_shape_mismatches.clone(),
-                successor: successor.map(|request_id| WakeSuccessor {
-                    node: node.clone(),
-                    request_id,
-                    did: admission.node_did.clone(),
-                    signer: signer.clone(),
-                    runtime: admission.runtime.clone(),
-                }),
-            }),
+            model: Arc::new(model.clone()),
             preamble,
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -1421,18 +1293,17 @@ pub(super) mod tests {
 
         let diagnostic = persisted_request_by_doc_id(&admission.client, &wake.doc_id).await;
         {
-            let captured = provider_inputs.lock().expect("wake provider input capture");
+            let (captured, title_calls, title_shape_mismatches) = wake_observations(&model);
             assert_eq!(
                 captured.len(),
                 1,
                 "one deterministic main provider turn must run; title_calls={}, wake={:?}",
-                title_calls.load(Ordering::SeqCst),
+                title_calls,
                 diagnostic
             );
-            assert_eq!(title_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(title_calls, 0);
             assert_eq!(
-                title_shape_mismatches.load(Ordering::SeqCst),
-                0,
+                title_shape_mismatches, 0,
                 "title errors must not be hidden by the fallback"
             );
             let first_input: serde_json::Value =
@@ -1489,7 +1360,7 @@ pub(super) mod tests {
             "the scenario locates these headers in the provider input"
         );
         {
-            let captured = provider_inputs.lock().unwrap();
+            let (captured, _, _) = wake_observations(&model);
             assert_eq!(captured.len(), 2);
             let input = &captured[1];
             let answer = input
@@ -1591,7 +1462,7 @@ pub(super) mod tests {
             false,
             &[],
         );
-        let calls = Arc::new(AtomicUsize::new(0));
+        let calls = counting_reply_model();
         let runtime_status = crate::runtime::status::RuntimeStatusHandle::new(
             node.clone(),
             agent_config.node_did().to_string(),
@@ -1602,7 +1473,7 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(CountingReplyModel(calls.clone(), Default::default())),
+            model: Arc::new(calls.clone()),
             preamble: prompt_builder.preamble().to_string(),
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -1639,7 +1510,7 @@ pub(super) mod tests {
             .await
             .unwrap();
         assert!(
-            calls.load(Ordering::SeqCst) > 0,
+            calls.calls() > 0,
             "the admitted request must reach the provider before revocation"
         );
         let escaped_first_doc_id = gents_store::graphql::escape_graphql_string(&first_doc_id);
@@ -1660,7 +1531,7 @@ pub(super) mod tests {
             ),
             "the first request must select its published reply"
         );
-        let calls_before_revocation = calls.load(Ordering::SeqCst);
+        let calls_before_revocation = calls.calls();
 
         gents_tools::surface::set_workspace_root(
             &user_access,
@@ -1676,7 +1547,7 @@ pub(super) mod tests {
         let second_doc_id = second.doc_id.clone();
         daemon.process_request(second, shutdown_rx).await.unwrap();
         assert_eq!(
-            calls.load(Ordering::SeqCst),
+            calls.calls(),
             calls_before_revocation,
             "the revoked fresh request must fail before provider exposure"
         );
@@ -1739,7 +1610,7 @@ pub(super) mod tests {
             false,
             &[],
         );
-        let calls = Arc::new(AtomicUsize::new(0));
+        let calls = counting_reply_model();
         let runtime_status = crate::runtime::status::RuntimeStatusHandle::new(
             node.clone(),
             agent_config.node_did().to_string(),
@@ -1750,7 +1621,7 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(CountingReplyModel(calls.clone(), Default::default())),
+            model: Arc::new(calls.clone()),
             preamble: prompt_builder.preamble().to_string(),
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -1797,11 +1668,7 @@ pub(super) mod tests {
             .process_request(revoked.clone(), shutdown_rx.clone())
             .await
             .unwrap();
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            0,
-            "revoked work reached provider"
-        );
+        assert_eq!(calls.calls(), 0, "revoked work reached provider");
         assert_blocked(revoked.doc_id.clone()).await;
 
         let generation_two = fence(2, "enrollment-2");
@@ -1820,7 +1687,7 @@ pub(super) mod tests {
             .await
             .unwrap();
         assert_eq!(
-            calls.load(Ordering::SeqCst),
+            calls.calls(),
             0,
             "cross-actor replacement reached provider without atomic requester authorization"
         );

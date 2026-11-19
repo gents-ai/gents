@@ -53,42 +53,6 @@ pub fn agent_request(request_id: &str) -> gents_protocol::row::AgentRequest {
     }
 }
 
-pub async fn capture_scripted_provider_request(
-    call: &gents_loop::provider_call::ProviderCall,
-    request: &rig::completion::CompletionRequest,
-    model: &str,
-) -> Result<(), rig::completion::CompletionError> {
-    let body = rig::providers::openai::completion::CompletionRequest::try_from((
-        model.to_string(),
-        request.clone(),
-    ))
-    .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    let mut body = serde_json::to_value(body)
-        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    body["stream"] = serde_json::Value::Bool(true);
-    body["stream_options"] = serde_json::json!({ "include_usage": true });
-    let inner = crate::rendered_request::transport::CountingInner::default();
-    let transport =
-        crate::rendered_request::transport::RenderedRequestCapturingHttpClient::new(inner.clone());
-    let outbound = rig::http_client::Request::builder()
-        .method("POST")
-        .uri("https://scripted-provider.invalid/v1/chat/completions")
-        .header("content-type", "application/json")
-        .body(bytes::Bytes::from(serde_json::to_vec(&body).map_err(
-            |error| rig::completion::CompletionError::ProviderError(error.to_string()),
-        )?))
-        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    gents_loop::rig_compat::http::Transport::send_streaming(&transport, call, outbound)
-        .await
-        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    assert_eq!(
-        inner.send_count(),
-        1,
-        "capture must authorize scripted provider send"
-    );
-    Ok(())
-}
-
 pub async fn ensure_test_default_agent(
     node: &std::sync::Arc<defra_node::Node>,
     owner: &str,
