@@ -38,7 +38,9 @@ pub(super) async fn capture(
         .as_ref()
         .and_then(|context| context.runtime_home.clone());
     let node_did = context.and_then(|context| context.node_did);
-    let approval_home = crate::plugin::approval::workspace::command_context_home();
+    let approval_home = crate::plugin::approval::workspace::command_context_home(
+        crate::runtime_context::host(call).approval.as_ref(),
+    );
     let result = tokio::task::spawn_blocking(move || capture_native(runtime_home, approval_home))
         .await
         .context("credential inspection worker failed")

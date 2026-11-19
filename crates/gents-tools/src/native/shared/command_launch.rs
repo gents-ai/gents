@@ -136,9 +136,12 @@ pub(super) async fn prepare_command_launch(
     } else {
         None
     };
-    let workspace_root =
-        crate::plugin::approval::workspace::command_writable_root(source_root, policy)
-            .map_err(command_guard_error)?;
+    let workspace_root = crate::plugin::approval::workspace::command_writable_root(
+        crate::runtime_context::host(call).approval.as_ref(),
+        source_root,
+        policy,
+    )
+    .map_err(command_guard_error)?;
     let writable_root = artifact
         .as_ref()
         .map(|grant| grant.root())
@@ -146,16 +149,18 @@ pub(super) async fn prepare_command_launch(
     if policy.mode == CommandExecutionMode::WorkspaceWrite {
         command_temp::prepare(writable_root, &mut environment).map_err(command_guard_error)?;
     }
-    let protection = crate::plugin::approval::workspace::command_guard_home()
-        .map_err(command_guard_error)?
-        .map(|home| {
-            gents_pack::plugin::allowed::CommandProtection::capture(
-                &home,
-                workspace_write_sandbox_enforced(),
-            )
-        })
-        .transpose()
-        .map_err(command_guard_error)?;
+    let protection = crate::plugin::approval::workspace::command_guard_home(
+        crate::runtime_context::host(call).approval.as_ref(),
+    )
+    .map_err(command_guard_error)?
+    .map(|home| {
+        gents_pack::plugin::allowed::CommandProtection::capture(
+            &home,
+            workspace_write_sandbox_enforced(),
+        )
+    })
+    .transpose()
+    .map_err(command_guard_error)?;
     let (program, argv, sandbox) = match &protection {
         Some(protection) => {
             protected_command_for_policy(writable_root, command, args, policy, protection)
@@ -213,16 +218,18 @@ pub(crate) async fn prepare_declared_cli_command(
                 })
                 .collect(),
         );
-    let protection = crate::plugin::approval::workspace::command_guard_home()
-        .map_err(command_guard_error)?
-        .map(|home| {
-            gents_pack::plugin::allowed::CommandProtection::capture(
-                &home,
-                workspace_write_sandbox_enforced(),
-            )
-        })
-        .transpose()
-        .map_err(command_guard_error)?;
+    let protection = crate::plugin::approval::workspace::command_guard_home(
+        crate::runtime_context::host(call).approval.as_ref(),
+    )
+    .map_err(command_guard_error)?
+    .map(|home| {
+        gents_pack::plugin::allowed::CommandProtection::capture(
+            &home,
+            workspace_write_sandbox_enforced(),
+        )
+    })
+    .transpose()
+    .map_err(command_guard_error)?;
     let argv: Vec<_> = std::iter::once(command.to_owned())
         .chain(args.iter().cloned())
         .collect();

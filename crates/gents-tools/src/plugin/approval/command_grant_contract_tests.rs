@@ -259,7 +259,7 @@ async fn remembered_invocations_until_revocation(launch: bool) {
         ..Default::default()
     }
     .call();
-    workspace::scope(context, async {
+    async {
         let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();
         let policy = crate::native::CommandExecutionPolicy::write_capable();
         let args = vec!["remembered-invocation".to_owned()];
@@ -313,7 +313,7 @@ async fn remembered_invocations_until_revocation(launch: bool) {
         let (once_more, observed) = tokio::join!(run(), operator);
         observed.unwrap();
         assert!(once_more.is_err());
-    })
+    }
     .await;
 }
 
@@ -343,7 +343,7 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
         ..Default::default()
     }
     .call();
-    workspace::scope(context, async {
+    async {
         let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();
         let policy = crate::native::CommandExecutionPolicy::write_capable()
             .with_mode(crate::native::CommandExecutionMode::WorkspaceWrite);
@@ -413,7 +413,7 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
         assert!(result.is_err());
         assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 1);
         assert!(pending_requests(&home).unwrap().is_empty());
-    })
+    }
     .await;
 }
 
@@ -520,20 +520,17 @@ async fn guarded_command_launch_rejects_unsupported_isolation_before_asking() {
         ..Default::default()
     }
     .call();
-    let error = workspace::scope(
-        context,
-        crate::native::run_command_for_test(
-            &call,
-            &tools,
-            "bash_unrestricted",
-            "/bin/sh",
-            &args,
-            None,
-            Duration::from_secs(1),
-            &command_policy,
-            false,
-            1024,
-        ),
+    let error = crate::native::run_command_for_test(
+        &call,
+        &tools,
+        "bash_unrestricted",
+        "/bin/sh",
+        &args,
+        None,
+        Duration::from_secs(1),
+        &command_policy,
+        false,
+        1024,
     )
     .await
     .unwrap_err();
