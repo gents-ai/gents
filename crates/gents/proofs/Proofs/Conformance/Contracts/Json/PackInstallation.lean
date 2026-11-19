@@ -286,21 +286,37 @@ def wirePlan : Conformance.Family WirePlanInput Bool where
         | .ownHome => .ownHome i.subject
         | .served => .served i.subject)).isSome
 
-structure OperatorWireInput where
-  operator : Bool
-  ready : Bool
-  home : Bool
+inductive ApprovalsCase where
+  | absent
+  | oversized
+  | unparseable
+  | consistent
+  | otherDigest
+  | otherCoordinate
+  | duplicateDigest
   deriving Lean.ToJson
 
-structure OperatorWireOutput where
-  allowed : Bool
+def ApprovalsCase.file : ApprovalsCase → Configuration.ApprovalsFile
+  | .absent => .absent
+  | .oversized => .oversized
+  | .unparseable => .unparseable
+  | .consistent => .parsed [⟨"p1", "acme/demo", [⟨"p1", "acme/demo", "r1"⟩]⟩]
+  | .otherDigest => .parsed [⟨"p1", "acme/demo", [⟨"p2", "acme/demo", "r1"⟩]⟩]
+  | .otherCoordinate => .parsed [⟨"p1", "acme/demo", [⟨"p1", "acme/other", "r1"⟩]⟩]
+  | .duplicateDigest =>
+    .parsed [⟨"p1", "acme/demo", [⟨"p1", "acme/demo", "r1"⟩]⟩, ⟨"p1", "acme/demo", []⟩]
+
+structure ApprovalsReadInput where
+  file : ApprovalsCase
   deriving Lean.ToJson
 
+/-- Every kind of approvals record a client can find: the number of subjects
+it reads, or `none` when it refuses the record. -/
 @[conformance_family]
-def operatorWire : Conformance.Family OperatorWireInput OperatorWireOutput where
-  inputs := [false, true].flatMap fun operator => [false, true].flatMap fun ready =>
-    [false, true].map fun home => { operator, ready, home }
-  model := fun i => { allowed := Configuration.operatorWireAvailable i.operator i.ready i.home }
+def approvalsRead : Conformance.Family ApprovalsReadInput (Option Nat) where
+  inputs := [.absent, .oversized, .unparseable, .consistent, .otherDigest, .otherCoordinate,
+    .duplicateDigest].map ApprovalsReadInput.mk
+  model := fun i => (Configuration.approvedSubjects i.file.file).map List.length
 
 structure ReferenceInput where
   witness : String

@@ -258,33 +258,25 @@ async fn install_wiring(
 }
 
 #[tokio::test]
-async fn an_install_that_wires_its_plugins_on_a_vera_home_is_refused_before_anything_is_signed() {
-    let home = tempfile::tempdir().unwrap();
-    let (status, body) = install_wiring(
+async fn a_remote_install_carries_no_wiring_on_any_home() {
+    for document_acp in [
         gents_store::local::document_acp::DocumentAcp::Vera,
-        home.path(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["outcome"], "not_installed");
-    assert_eq!(
-        body["error"],
-        gents_store::local::document_acp::DocumentAcpError::HeldUserKey.to_string()
-    );
-    assert_eq!(
-        std::fs::read_dir(home.path()).unwrap().count(),
-        0,
-        "nothing was read from or written to the runtime's home"
-    );
-
-    let (status, body) = install_wiring(
         gents_store::local::document_acp::DocumentAcp::Local,
-        home.path(),
-    )
-    .await;
-    assert_ne!(
-        status,
-        StatusCode::CONFLICT,
-        "a local home goes on as before: {body}"
-    );
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let (status, body) = install_wiring(document_acp, home.path()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{document_acp:?}: {body}");
+        assert_eq!(body["outcome"], "not_installed");
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("the client wires its plugins after it")),
+            "{body}"
+        );
+        assert_eq!(
+            std::fs::read_dir(home.path()).unwrap().count(),
+            0,
+            "{document_acp:?}: nothing was read from or written to the runtime's home"
+        );
+    }
 }

@@ -379,19 +379,44 @@ pub struct ClientHome {
 
 impl ClientHome {
     pub async fn new() -> Self {
+        let directory = tempfile::Builder::new()
+            .prefix("gents-cli-client-home-")
+            .tempdir()
+            .unwrap();
+        Self::in_directory(directory, false).await
+    }
+
+    /// A home whose User is the init User that owns its node access control,
+    /// as `gents init` provisions it: a native administrator.
+    pub async fn owned_by_user() -> Self {
+        let directory = tempfile::Builder::new()
+            .prefix("gents-cli-client-home-")
+            .tempdir()
+            .unwrap();
+        Self::in_directory(directory, true).await
+    }
+
+    async fn in_directory(directory: tempfile::TempDir, user_owns_nac: bool) -> Self {
         use gents_documents::apply_desired_state_plan;
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents_store::identity::NodeIdentity as _;
 
-        let home = gents::runtime::embedded::EmbeddedHome::create_temp("cli-client-home")
-            .await
-            .unwrap();
         let user_dir = tempfile::tempdir().unwrap();
         let user = gents_store::identity::KeyIdentity::load_or_create(
             user_dir.path().join("user.key"),
             None,
         )
         .unwrap();
+        if user_owns_nac {
+            std::fs::copy(
+                user_dir.path().join("user.key"),
+                directory.path().join("owner.key"),
+            )
+            .unwrap();
+        }
+        let home = gents::runtime::embedded::EmbeddedHome::in_tempdir(directory, None)
+            .await
+            .unwrap();
         gents_store::identity::GrantSet::OperatorUser
             .grant(
                 &gents_store::config_client::ConfigAccess::local_as(

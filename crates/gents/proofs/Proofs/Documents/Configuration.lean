@@ -785,6 +785,67 @@ theorem a_wire_with_no_plan_signs_no_write (approved : List WireSubject) (record
     hostedPackEffectAllowed actor graph (wirePlanSubject approved record).isSome native = false := by
   simp [unplanned, hostedPackEffectAllowed]
 
+/-- One approval a client keeps for a node: the pack it approved, by digest
+and coordinate, and the subjects that pack yields. -/
+structure PackApproval where
+  packDigest : String
+  coordinate : String
+  subjects : List WireSubject
+  deriving DecidableEq, Repr
+
+/-- What a client finds where it keeps the packs it approved for a node. -/
+inductive ApprovalsFile where
+  | absent
+  /-- Larger than the bound a client reads. -/
+  | oversized
+  /-- Not a record of approvals in the encoding the client writes. -/
+  | unparseable
+  | parsed (approvals : List PackApproval)
+  deriving DecidableEq, Repr
+
+/-- An approval holds only what its pack yields: each subject names the
+approval's digest and coordinate, and no digest is approved twice. -/
+def approvalsConsistent (approvals : List PackApproval) : Bool :=
+  approvals.all (fun approval => approval.subjects.all fun subject =>
+      subject.packDigest == approval.packDigest && subject.coordinate == approval.coordinate)
+    && (approvals.map PackApproval.packDigest).Nodup
+
+/-- Decision (gents#3962): the subjects a client's approvals record lets a
+served record match (`wirePlanSubject`). A client that never approved a
+pack has none. A record it cannot read in full, too large, undecodable or
+inconsistent, is refused rather than read as empty: an empty reading is not
+what the client approved, and a partly edited record cannot be told apart
+from one the client wrote. -/
+def approvedSubjects : ApprovalsFile → Option (List WireSubject)
+  | .absent => some []
+  | .oversized => none
+  | .unparseable => none
+  | .parsed approvals =>
+    if approvalsConsistent approvals then some (approvals.flatMap PackApproval.subjects) else none
+
+theorem an_unreadable_approvals_record_is_refused :
+    approvedSubjects .oversized = none ∧ approvedSubjects .unparseable = none := ⟨rfl, rfl⟩
+
+theorem a_client_that_approved_nothing_has_no_subjects : approvedSubjects .absent = some [] := rfl
+
+theorem an_approved_subject_names_its_approval (approvals : List PackApproval)
+    (subjects : List WireSubject) (subject : WireSubject)
+    (read : approvedSubjects (.parsed approvals) = some subjects) (mem : subject ∈ subjects) :
+    ∃ approval ∈ approvals, subject.packDigest = approval.packDigest
+      ∧ subject.coordinate = approval.coordinate := by
+  simp only [approvedSubjects] at read
+  split at read
+  · rename_i consistent
+    simp at read
+    subst read
+    obtain ⟨approval, member, holds⟩ := List.mem_flatMap.mp mem
+    refine ⟨approval, member, ?_⟩
+    simp only [approvalsConsistent, Bool.and_eq_true, List.all_eq_true] at consistent
+    have := consistent.1 approval member subject holds
+    simp at this
+    exact ⟨this.1, this.2⟩
+  · cases read
+
 /-- Plugin-only hosted installation preserves existing pack documents. Its
   installed plugin records are staged by the host from the reviewed archive;
   the client independently replays the same native-authorized pack record. -/
@@ -858,21 +919,6 @@ def wireTargetAllowed (localTarget preview remove : Bool) : Bool :=
   localTarget || preview || remove
 
 theorem graphql_wire_cannot_publish_pin : wireTargetAllowed false false false = false := by decide
-
-/-- A served wire request reaches the embedded writer only after operator authentication,
-and only while the owning runtime and its plugin home are available. -/
-def operatorWireAvailable (operatorAuthenticated runtimeReady homeAvailable : Bool) : Bool :=
-  operatorAuthenticated && runtimeReady && homeAvailable
-
-theorem anonymous_operator_wire_refused (runtimeReady homeAvailable : Bool) :
-    operatorWireAvailable false runtimeReady homeAvailable = false := by
-  simp [operatorWireAvailable]
-
-theorem operator_wire_needs_live_local_owner (operatorAuthenticated runtimeReady homeAvailable : Bool)
-    (h : operatorWireAvailable operatorAuthenticated runtimeReady homeAvailable = true) :
-    operatorAuthenticated = true ∧ runtimeReady = true ∧ homeAvailable = true := by
-  simp [operatorWireAvailable, Bool.and_eq_true] at h
-  exact ⟨h.1.1, h.1.2, h.2⟩
 
 /-- Untagged documents retain the existing adoption behavior. A tagged document
 can be written only by the same full pack coordinate; an old unqualified tag

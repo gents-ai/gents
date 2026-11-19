@@ -7,6 +7,7 @@ pub use agent_bindings::{
     load_pack_install_config_with_provisioner, rewrite_references as bind_agent_references,
     AgentProvisioner,
 };
+pub mod approvals;
 pub mod archive;
 pub use agent_bindings::{
     agent_binding_variable, agent_did_variable, agent_slot_reference, is_agent_binding_variable,

@@ -56,6 +56,28 @@ impl PluginWiring {
         plugin: InstalledPlugin,
         targets_from: &[String],
     ) -> Result<Self> {
+        Self::read_with(access, owner, agent, plugin, targets_from, &|pack| {
+            let record = read_home_install(home, pack)?;
+            Ok(recorded_provenance(
+                record
+                    .as_ref()
+                    .map_or(PackKind::Documents, |record| record.kind.clone()),
+                record.map(|record| record.installed_via),
+            ))
+        })
+        .await
+    }
+
+    /// [`Self::read`] with each `targets_from` pack's provenance from
+    /// `provenance` instead of a home's install records.
+    pub async fn read_with(
+        access: &ConfigAccess,
+        owner: &str,
+        agent: &str,
+        plugin: InstalledPlugin,
+        targets_from: &[String],
+        provenance: &(dyn Fn(&str) -> Result<InstalledVia> + Sync),
+    ) -> Result<Self> {
         let (mut tools_ids, mut skill_ids) = (Vec::new(), Vec::new());
         if let Some(pack) = plugin.owner_pack_coordinate.as_deref() {
             for (collection, id) in installed_pack_documents(access, owner, pack).await? {
@@ -75,14 +97,7 @@ impl PluginWiring {
                 .map(|(_, id)| id)
                 .collect();
             anyhow::ensure!(!target_ids.is_empty(), "{pack} ships no AgentTarget");
-            let record = read_home_install(home, pack)?;
-            let via = recorded_provenance(
-                record
-                    .as_ref()
-                    .map_or(PackKind::Documents, |record| record.kind.clone()),
-                record.map(|record| record.installed_via),
-            );
-            targets.push((pack.clone(), target_ids, via));
+            targets.push((pack.clone(), target_ids, provenance(pack)?));
         }
         Ok(Self {
             owner: owner.to_owned(),

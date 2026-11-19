@@ -35,16 +35,26 @@ pub type LoadHeldUser = fn(
 
 /// Wires a new pin through the runtime serving `endpoint`'s node, the client
 /// signing each of its writes with the User key it holds
-/// (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`). The record is
-/// the plugin's as the client planned it (`Configuration.wirePlanSubject`);
-/// `None` reads it from the client's own home.
+/// (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`), from the plan
+/// it made from a pack it chose (`Configuration.wirePlanSubject`); `None`
+/// plans from the client's own home, which the runtime serves.
 pub type WireAsClient = fn(
     gents_store::config_client::GraphqlEndpoint,
     String,
     std::path::PathBuf,
     WireRequest,
-    Option<crate::plugin::store::InstalledPlugin>,
+    Option<ClientPlan>,
 ) -> futures::future::BoxFuture<'static, Result<Value>>;
+
+/// What a client plans a wire over a runtime from when the runtime serves
+/// another home (`Configuration.wirePlanSubject`): the plugin's record, and
+/// the provenance of each pack whose targets it wires, both from a pack it
+/// sent or approved.
+#[derive(Debug, Clone)]
+pub struct ClientPlan {
+    pub record: crate::plugin::store::InstalledPlugin,
+    pub targets: std::collections::BTreeMap<String, crate::pack::InstalledVia>,
+}
 
 /// Who signs a wire: the held User of a home a local transaction opens, or
 /// the client itself through the runtime serving the node.
@@ -103,15 +113,15 @@ pub async fn wire_in(
     wire_in_planned(access, owner, home, request, None, signers).await
 }
 
-/// [`wire_in`] with the plugin's record as the client planned it from a
-/// pack it holds (`Configuration.wirePlanSubject`), for a new pin written
-/// through a runtime.
+/// [`wire_in`] with the plan a client made from a pack it sent or approved
+/// (`Configuration.wirePlanSubject`), for a new pin written through a
+/// runtime that serves another home.
 pub async fn wire_in_planned(
     access: &ConfigAccess,
     owner: &str,
     home: &Path,
     request: &WireRequest,
-    record: Option<crate::plugin::store::InstalledPlugin>,
+    record: Option<ClientPlan>,
     signers: WireSigners,
 ) -> Result<Value> {
     if let ConfigAccess::Graphql(endpoint) = access {
@@ -263,14 +273,28 @@ impl WirePlan {
     /// holds (`Configuration.wirePlanSubject`), without reading or holding
     /// any plugin store: what a client signs against while the runtime
     /// that serves another home holds its own.
-    pub async fn of_record(
+    pub async fn of_plan(
         access: &ConfigAccess,
         owner: &str,
-        home: &Path,
         request: &WireRequest,
-        plugin: crate::plugin::store::InstalledPlugin,
+        client: ClientPlan,
     ) -> Result<Self> {
-        Self::planned(access, owner, home, request, None, plugin).await
+        let targets = client.targets;
+        let provenance = move |pack: &str| {
+            targets.get(pack).cloned().with_context(|| {
+                format!("{pack} is not a pack this device sent or approved; its targets are not wired. Next: gents config pack approve <pack source>")
+            })
+        };
+        let plan = crate::pack::wiring::PluginWiring::read_with(
+            access,
+            owner,
+            &request.agent,
+            client.record.clone(),
+            &request.targets_from,
+            &provenance,
+        )
+        .await?;
+        Ok(Self::finish(None, client.record, plan, request))
     }
 
     /// [`Self::read`] without holding the plugin store: what a client
@@ -328,7 +352,7 @@ impl WirePlan {
         store_guard: Option<crate::plugin::store::StoreGuard>,
         plugin: crate::plugin::store::InstalledPlugin,
     ) -> Result<Self> {
-        let mut plan = crate::pack::wiring::PluginWiring::read(
+        let plan = crate::pack::wiring::PluginWiring::read(
             access,
             owner,
             home,
@@ -337,6 +361,15 @@ impl WirePlan {
             &request.targets_from,
         )
         .await?;
+        Ok(Self::finish(store_guard, plugin, plan, request))
+    }
+
+    fn finish(
+        store_guard: Option<crate::plugin::store::StoreGuard>,
+        plugin: crate::plugin::store::InstalledPlugin,
+        mut plan: crate::pack::wiring::PluginWiring,
+        request: &WireRequest,
+    ) -> Self {
         plan.remove = request.remove;
         plan.preview = request.preview;
         plan.dynamic_consent = request
@@ -344,11 +377,11 @@ impl WirePlan {
             .then_some(crate::pack::consent_dynamic_run as _);
         plan.tool_calls_consent = request.tool_calls_consent;
         plan.next_step = explain_tools_command(&request.agent);
-        Ok(Self {
+        Self {
             _store_guard: store_guard,
             plugin,
             plan,
-        })
+        }
     }
 }
 
@@ -395,11 +428,15 @@ pub async fn wire_pack_plugins_consenting(
                 dynamic_consent,
                 tool_calls_consent,
             };
-            let record = crate::pack::wire_subject::wire_plan_record(
+            let plan = crate::pack::wire_subject::wire_plan_record(
                 &[],
                 crate::pack::wire_subject::WireRecord::SentPack(subject.clone()),
-            );
-            wired.push(wire_in_planned(access, owner, home, &request, record, signers).await?);
+            )
+            .map(|record| ClientPlan {
+                record,
+                targets: Default::default(),
+            });
+            wired.push(wire_in_planned(access, owner, home, &request, plan, signers).await?);
         }
     }
     Ok(wired)
@@ -575,10 +612,11 @@ impl PackEffectApprover for LocalWireApprover {
     }
 }
 
-/// The runtime route a served wire request is sent to.
-pub const WIRE_PATH: &str = "/packs/wire";
+/// The runtime route that serves an installed plugin's record to a client
+/// wiring it (`Configuration.wirePlanSubject`).
+pub const PLUGIN_RECORD_PATH: &str = "/packs/plugins/record";
 
-/// A wire request as a runtime's operator route receives it.
+/// A wire request as a pack session receives it.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WireCommand {

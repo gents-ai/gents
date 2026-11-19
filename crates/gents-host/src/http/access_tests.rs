@@ -641,6 +641,33 @@ async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work(
 }
 
 #[tokio::test]
+async fn a_plugin_record_is_served_only_to_the_node_or_a_native_admin() {
+    let f = Fixture::start().await;
+    let path = format!(
+        "{}?plugin=acme/tool",
+        gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH
+    );
+    let other = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.other)
+        .runtime_authorization()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        f.get(&path).send().await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.get(&path)
+            .header(header::AUTHORIZATION, &other)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
 async fn foreign_host_is_refused_on_public_private_and_independently_authenticated_routes() {
     let f = Fixture::start().await;
     for path in [
@@ -663,6 +690,7 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
         gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
         gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
         gents_protocol::file_inventory::FILE_INVENTORY_OPERATOR_PATH,
+        gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH,
     ] {
         let response = f
             .get(path)

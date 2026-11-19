@@ -127,6 +127,8 @@ async fn install_documents_pack_inner(
                 wire: Vec::new(),
                 ..request.clone()
             };
+            super::wire::record_approvals(owner, std::iter::once(pack).chain(&dependencies))
+                .await?;
             let mut output = gents_host::http::pack_install_client::install_remote(
                 endpoint,
                 owner,
@@ -452,6 +454,8 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                         .await
                         .into_iter()
                         .collect::<Result<Vec<_>>>()?;
+                super::wire::record_approvals(owner, std::iter::once(&pack).chain(&dependencies))
+                    .await?;
                 let result = gents_host::http::pack_install_client::install_remote(
                     endpoint,
                     owner,

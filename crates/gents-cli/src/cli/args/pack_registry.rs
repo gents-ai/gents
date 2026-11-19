@@ -267,6 +267,19 @@ pub(crate) struct PackWireArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct PackApproveArgs {
+    #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
+    pub(crate) package: String,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct PackStarterArgs {
     #[arg(
         long,

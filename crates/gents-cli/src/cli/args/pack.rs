@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use super::{
-    PackAccountArgs, PackBuildArgs, PackFetchArgs, PackInfoArgs, PackInitArgs, PackInstallArgs,
-    PackLoginArgs, PackOutdatedArgs, PackOwnerArgs, PackPruneArgs, PackPublishArgs, PackRemoveArgs,
-    PackRunArgs, PackSearchArgs, PackSeedArgs, PackStarterArgs, PackUpdateArgs, PackWireArgs,
-    PackYankArgs, PluginCommand, ScopeArgs, UxCommand,
+    PackAccountArgs, PackApproveArgs, PackBuildArgs, PackFetchArgs, PackInfoArgs, PackInitArgs,
+    PackInstallArgs, PackLoginArgs, PackOutdatedArgs, PackOwnerArgs, PackPruneArgs,
+    PackPublishArgs, PackRemoveArgs, PackRunArgs, PackSearchArgs, PackSeedArgs, PackStarterArgs,
+    PackUpdateArgs, PackWireArgs, PackYankArgs, PluginCommand, ScopeArgs, UxCommand,
 };
 
 #[derive(clap::Args)]
@@ -281,6 +281,9 @@ pub(crate) enum PackCommand {
     /// Wire an installed plugin into an agent's Tools and Context, or with
     /// `--remove` take it back out.
     Wire(PackWireArgs),
+    /// Approve a pack on this device for the node, without installing it, so
+    /// that its plugins can be wired over a runtime that serves another home.
+    Approve(PackApproveArgs),
     /// List the Engineer's starter packs and what each requests, or with
     /// `--approve` install the ones you name.
     Starter(PackStarterArgs),

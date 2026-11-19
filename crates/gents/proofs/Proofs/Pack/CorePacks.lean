@@ -180,8 +180,8 @@ home and whether the home has the pack installed.
 
 A runtime holds the home's store while it serves. Enabling a pack the home
 has is a reader grant, a plugin wiring and an agent edit, each of which a
-client of the running runtime makes through it (the wiring through the
-operator route, `Configuration.operatorWireAvailable`), so a running node is
+client of the running runtime makes through it (the wiring signed by the
+client, `Configuration.wirePlanSubject`), so a running node is
 enabled in place and picks the change up on its next reconcile. A pack the
 home lacks is first installed as the Engineer, under the Engineer's key, from
 the home's own store; only a stopped node gives that store, so that one
