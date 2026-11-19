@@ -19,20 +19,6 @@ impl crate::client_runtime::ClientRuntime {
         let endpoint = self
             .operator_observation_graphql(&key.node)
             .context("runtime connection is unavailable")?;
-        let operator = self
-            .operator_observation_endpoint(&key.node)
-            .await
-            .filter(|endpoint| !endpoint.is_anonymous());
-        let endpoint = if let Some(operator) = operator {
-            operator
-        } else if record.is_enrollment() {
-            let Some(graphql) = record.graphql.as_deref() else {
-                return Ok(None);
-            };
-            self.saved_user_endpoint(graphql, record)?
-        } else {
-            return Ok(None);
-        };
         let graphql = endpoint.url();
         let mut url = reqwest::Url::parse(graphql)?;
         anyhow::ensure!(
@@ -71,11 +57,13 @@ impl crate::client_runtime::ClientRuntime {
         ) {
             let status = response.status();
             let body = response.bytes().await.unwrap_or_default();
-            if let Some(update) = crate::error::BridgeError::home_refusal(status, &body) {
+            if let Some(update) =
+                gents_store::client_error::BridgeError::home_refusal(status, &body)
+            {
                 return Err(update.into());
             }
-            return Err(crate::error::BridgeError::new(
-                crate::error::BridgeErrorCode::PermissionDenied,
+            return Err(gents_store::client_error::BridgeError::new(
+                gents_store::client_error::BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
             )
             .into());

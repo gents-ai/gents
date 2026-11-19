@@ -627,8 +627,7 @@ mod tests {
             .mount(&server)
             .await;
         let state = read_inference_setup_state_from(
-            &format!("{}/api/v0/graphql", server.uri()),
-            None,
+            &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
             node,
         )
         .await
@@ -669,8 +668,7 @@ mod tests {
                 .mount(&server)
                 .await;
             assert!(read_inference_setup_state_from(
-                &format!("{}/api/v0/graphql", server.uri()),
-                None,
+                &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
                 "did:runtime",
             )
             .await
@@ -693,8 +691,7 @@ mod tests {
                 .mount(&server)
                 .await;
             let error = read_inference_setup_state_from(
-                &format!("{}/api/v0/graphql", server.uri()),
-                None,
+                &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
                 "did:runtime",
             )
             .await
@@ -717,8 +714,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = read_inference_setup_state_from(
-            &format!("{}/api/v0/graphql", server.uri()),
-            None,
+            &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
             "did:runtime",
         )
         .await
