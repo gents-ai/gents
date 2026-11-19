@@ -489,12 +489,17 @@ See `../README.md` for how this fits the broader formal-verification model.
   `NamedTempFile` held open until persist), `Unwaited` (the copy child not
   reaped). Green copies with a reaped `/bin/cp` child into a file the updater
   never opens for writing.
-- `CommitResponseWait` — a client transaction's commit over the runtime's
-  HTTP endpoint on a loaded host (`txn_commit`, e.g. the pack document
-  install). RED: `ClientWindow`, a total request timeout, reports a live
-  server's commit as unconfirmed (the change-unit CI failure);
-  `Wedged` drops the premise that the server answers every commit it works
-  on. Green waits for the answer or the connection reset.
+- `CommitResponseWait` — a client's wait for a store request's answer over
+  the runtime's HTTP endpoint on a loaded host (`txn_commit`, e.g. the pack
+  document install; auto-commit mutations and reads are the same wait).
+  RED: `ClientWindow`, a total or read-idle timeout, reports a live server's
+  commit as unconfirmed (the change-unit CI failure); `NoKeepalive` waits
+  forever on a connection whose host vanished; `Wedged` drops the premise
+  that the server answers every commit it works on; `DroppedAnswer` reports a
+  live server's outcome unknown after a broken connection. Green waits for
+  the answer, a reset or a failed keepalive. `WedgedProgress` (a published
+  commit step) and `DroppedAnswerQueried` (a transaction outcome query) are
+  green designs DefraDB does not offer yet.
 - `OfflineAccessRouting` — a CLI command against a home another process
   holds: a server claims the store, binds its port and publishes
   `runtime.json` only once ready; the command routes to a published runtime
@@ -504,6 +509,18 @@ See `../README.md` for how this fits the broader formal-verification model.
   or holds the store itself and expects the refusal. RED: `PortWait` and
   `PortWaitAnswered` wait only for the port, where both outcomes are
   reachable (the `cli_session` fork test on CI).
+- `ScheduleDisableFence` — a User disabling a schedule Trigger while the
+  sequential schedule source fires it. Dispatch re-borrows the active
+  snapshot and admits only an enabled Trigger; the router acknowledges only
+  a generation it borrowed from the watch. `AdmissionFence` and `NoDueFire`
+  hold: nothing admits the Trigger once its disabling generation is
+  acknowledged, and a cursor written after that never fires. A fire admitted
+  under the old generation can still commit after the acknowledgement.
+  `OldObserver` is the CI failure: the test disabled while the interval
+  cadence's seeded fire was in flight and counted its commit. Green waits for
+  the seeded fire before disabling and judges once a witness Trigger, due
+  after the disabled one, fires (`Settled`). RED: `NoSeedWait`, `NoWitness`
+  (observer), `NoRecheck`, `AckBeforeWatch` (product).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking

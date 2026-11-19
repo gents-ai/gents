@@ -85,9 +85,8 @@ where
         .ok_or(RemoteAgentProvisionError::MissingGraphqlPath)?;
     let path = format!("{base}{route}");
     url.set_path(&path);
-    let client = reqwest::Client::builder()
+    let client = gents_protocol::graphql::store_http_client_builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let mut response = endpoint
         .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(body)))

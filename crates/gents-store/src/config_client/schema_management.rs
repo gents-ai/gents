@@ -90,7 +90,6 @@ impl ConfigAccess {
                     .send_resolving(|endpoint| {
                         Ok(endpoint
                             .authorize(client.post(&url))?
-                            .timeout(std::time::Duration::from_secs(120))
                             .body(version_id.to_owned()))
                     })
                     .await??
@@ -260,9 +259,7 @@ impl ConfigAccess {
         let client = super::graphql::http_client().await?;
         let response = endpoint
             .send_resolving(|endpoint| {
-                let request = endpoint
-                    .authorize(client.request(method.clone(), &url))?
-                    .timeout(std::time::Duration::from_secs(120));
+                let request = endpoint.authorize(client.request(method.clone(), &url))?;
                 Ok(match &body {
                     Some(body) => request.json(body),
                     None => request,

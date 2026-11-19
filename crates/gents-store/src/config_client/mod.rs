@@ -1092,11 +1092,7 @@ pub async fn post_graphql_with_variables(
         graphql,
         query,
         Some(variables),
-        GraphqlRequestOptions {
-            timeout: std::time::Duration::from_secs(30),
-            max_attempts: 5,
-            retry_backoff: std::time::Duration::from_millis(100),
-        },
+        GraphqlRequestOptions::default(),
     )
     .await
     .map_err(|error| ConfigClientError::HttpQuery {
@@ -1106,16 +1102,7 @@ pub async fn post_graphql_with_variables(
 }
 
 pub async fn post_graphql(graphql: &GraphqlEndpoint, query: &str) -> Result<Value> {
-    query_graphql_with_options(
-        graphql,
-        query,
-        GraphqlRequestOptions {
-            timeout: std::time::Duration::from_secs(30),
-            max_attempts: 5,
-            retry_backoff: std::time::Duration::from_millis(100),
-        },
-    )
-    .await
+    query_graphql_with_options(graphql, query, GraphqlRequestOptions::default()).await
 }
 
 /// Execute one HTTP GraphQL read; mutations are rejected before network I/O.
