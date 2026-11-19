@@ -153,6 +153,36 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(select(path)["contract"]["test_cache_model"])
 
+    def test_the_ios_check_runs_only_when_the_desktop_app_or_a_crate_it_uses_changed(self):
+        for path in ("apps/gents-desktop/src-tauri/src/lib.rs", "crates/gents-store/src/graphql.rs",
+                     "crates/gents-desktop-bridge/src/lib.rs", "Cargo.lock", "rust-toolchain.toml"):
+            with self.subTest(path=path):
+                self.assertTrue(select(path)["ios_check"])
+        for path in ("crates/gents-media-host/src/lib.rs", "packages/gents-desktop-ui/src/index.ts",
+                     "crates/gents/proofs/Proofs/Request/CausalHop.lean", "docs/upgrade-from-rc1.md"):
+            with self.subTest(path=path):
+                self.assertFalse(select(path)["ios_check"])
+
+    def test_an_archive_builds_the_helpers_its_tests_run(self):
+        self.assertEqual(gate.archive_packages(["gents-tools"]), ["gents-tools", "gents-fs-runner"])
+        self.assertEqual(gate.archive_packages(["gents-fs-runner", "gents-tools"]), ["gents-fs-runner", "gents-tools"])
+        self.assertEqual(gate.archive_packages(["gents-store"]), ["gents-store"])
+        members = set(MEMBERS)
+        for package, helpers in gate.TEST_HELPER_PACKAGES.items():
+            self.assertIn(package, members)
+            self.assertTrue(set(helpers) <= members, helpers)
+
+    def test_side_lint_builds_are_incremental_in_their_own_kept_trees(self):
+        with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a"}):
+            self.assertEqual(gate.side_tree_env("ios-check"), {"CARGO_TARGET_DIR": "/cache/runner-a/ios-check",
+                                                               "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
+
+    def test_the_live_suites_are_linted_only_when_they_or_their_crates_changed(self):
+        self.assertEqual(select("crates/gents-store/src/graphql.rs")["live_e2e_lint"], ["gents", "gents-cli"])
+        self.assertEqual(select("crates/gents-cli/src/lib.rs")["live_e2e_lint"], ["gents-cli"])
+        self.assertEqual(select("crates/gents-media-host/src/lib.rs")["live_e2e_lint"], [])
+        self.assertEqual(select("packages/gents-desktop-ui/src/index.ts")["live_e2e_lint"], [])
+
     def test_a_draft_tests_what_it_changes_and_lints_what_depends_on_it(self):
         selection = select("crates/gents-store/src/graphql.rs", tier="draft")
         self.assertEqual(groups(selection), {"store": ["gents-store"]})
@@ -661,6 +691,27 @@ class NativeNextest(unittest.TestCase):
                          "gents-client-host::bin/gents-client-host")
         self.assertEqual(gate.binary_id("gents", ("--lib",)), "gents")
 
+
+    def test_the_core_packs_directory_exists_so_its_build_script_stays_fresh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unset = {key: value for key, value in os.environ.items()
+                     if key not in ("GENTS_CORE_PACKS_DIR", "GITHUB_ACTIONS", "CARGO_TARGET_DIR")}
+            with mock.patch.object(gate, "ROOT", root), \
+                    mock.patch.dict(os.environ, {**unset, "GENTS_CORE_PACKS_DIR": "/elsewhere"}, clear=True):
+                gate.keep_core_packs_fresh()
+                self.assertFalse((root / "target/core-packs").exists())
+            with mock.patch.object(gate, "ROOT", root), mock.patch.dict(os.environ, unset, clear=True):
+                gate.keep_core_packs_fresh()
+                gate.keep_core_packs_fresh()
+                self.assertNotIn("GENTS_CORE_PACKS_DIR", os.environ)
+            self.assertTrue((root / "target/core-packs").is_dir())
+            target = root / "kept-target"
+            ci = {**unset, "GITHUB_ACTIONS": "true", "CARGO_TARGET_DIR": str(target)}
+            with mock.patch.object(gate, "ROOT", root), mock.patch.dict(os.environ, ci, clear=True):
+                gate.keep_core_packs_fresh()
+                self.assertEqual(os.environ["GENTS_CORE_PACKS_DIR"], str(target / "core-packs-none"))
+            self.assertTrue((target / "core-packs-none").is_dir())
 
     def test_a_crate_or_macos_target_that_ran_no_test_fails(self):
         with tempfile.TemporaryDirectory() as directory:

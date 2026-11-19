@@ -62,7 +62,9 @@ pub async fn fetch_doc_patch(
         ),
         AGENT_REQUEST_NAME => read!(RequestRows::new(scope).doc_ids(ids), requests, |row| row),
         MAILBOX_ITEM_NAME => read!(
-            gents_automation::views::MailboxRows::new(node_did).doc_ids(ids),
+            gents_automation::views::MailboxRows::new(node_did)
+                .doc_ids(ids)
+                .for_reader(),
             mailbox_items,
             |row| row
         ),

@@ -1,6 +1,8 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gents::Gents;
+use gents_loop::completion_retry::{CompletionRetryPolicy, CompletionRetryProfileFields};
+use gents_loop::execution_origin::ExecutionOrigin;
 use gents_observe::{
     observe::run_timeline::build_run_timeline, observe::run_timeline::RunTimeline,
     observe::run_timeline::RunTimelineRows, observe::run_timeline::TimelineInferenceCallRow,
@@ -9,6 +11,7 @@ use gents_observe::{
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::{STALL_CEILING, UNREACHED_DEADLINE};
 use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
@@ -16,9 +19,7 @@ use crate::support::agent_requests::RequestActors;
 use crate::support::builder_runtime::{
     builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
 };
-use crate::support::interrupt::{
-    wait_for_request_terminal_state, BootedAgent, REQUEST_TERMINAL_PUBLICATION_MARGIN,
-};
+use crate::support::interrupt::{wait_for_request_terminal_state, BootedAgent};
 use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
@@ -47,7 +48,8 @@ async fn backend_restart_cluster_recovers() {
         .collect::<Vec<_>>();
     let backend = MockStreamingBackend::start_with_plans(RETRY_MODEL, plans).unwrap();
     let db = test_db("completion-retry-cluster").await;
-    let (actors, agent) = boot_retry_agent(&db, backend.endpoint(), 3, 30).await;
+    let (actors, agent) =
+        boot_retry_agent(&db, backend.endpoint(), 3, UNREACHED_DEADLINE.as_secs()).await;
 
     let mut request_doc_ids = Vec::new();
     for index in 0..3 {
@@ -66,8 +68,7 @@ async fn backend_restart_cluster_recovers() {
     }
 
     for (doc_id, request_id, marker) in &request_doc_ids {
-        let terminal_state =
-            wait_for_request_terminal_state(&actors, doc_id, Duration::from_secs(60)).await;
+        let terminal_state = wait_for_request_terminal_state(&actors, doc_id, STALL_CEILING).await;
         if terminal_state != RequestLifecycleState::Completed {
             let snapshot = fetch_request_snapshot(&actors, doc_id).await;
             let calls = fetch_inference_calls(&actors, request_id).await;
@@ -131,12 +132,11 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     )
     .unwrap();
     let db = test_db("completion-retry-backoff-liveness").await;
-    let deadline_duration_secs = 60u64;
     let (actors, runtime) = build_retry_agent_with_liveness(
         &db,
         backend.endpoint(),
         1,
-        deadline_duration_secs,
+        UNREACHED_DEADLINE.as_secs(),
         Some(30),
     )
     .await;
@@ -159,7 +159,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     let mut changes =
         gents_store::subscription_source::subscribe_collections(&actors.node, ["InferenceCall"])
             .expect("subscribe to provider attempt changes");
-    tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(STALL_CEILING, async {
         loop {
             let calls = fetch_inference_calls(&actors, request_id).await;
             if call_states(&calls) == vec!["failed"] {
@@ -214,12 +214,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         "observed execution lease must be expired by the fixture"
     );
 
-    let terminal_state = wait_for_request_terminal_state(
-        &actors,
-        &doc_id,
-        Duration::from_secs(deadline_duration_secs) + REQUEST_TERMINAL_PUBLICATION_MARGIN,
-    )
-    .await;
+    let terminal_state = wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Failed,
@@ -314,12 +309,8 @@ async fn deadline_tight_fails_cleanly() {
     )
     .await;
 
-    let terminal_state = wait_for_request_terminal_state(
-        &actors,
-        &request_doc_id,
-        Duration::from_secs(deadline_duration_secs) + REQUEST_TERMINAL_PUBLICATION_MARGIN,
-    )
-    .await;
+    let terminal_state =
+        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Failed,
@@ -355,27 +346,36 @@ async fn deadline_tight_fails_cleanly() {
     agent.shutdown().await;
 }
 
+/// The interactive budget is the transport ladder `CompletionRetryPolicy::resolve`
+/// gives an interactive request (Lean `RuntimeCompletionConfig.resolve`), not
+/// wall time: the request deadline is unreached (`WallClockBound`), so the
+/// in-loop stop can only be the exhausted ladder, and the scheduled ladder
+/// would instead have recovered on the provider's next answer without parking.
 #[tokio::test]
 async fn interactive_budget_is_quick() {
+    let in_loop_attempts = interactive_in_loop_attempts();
+
     let marker = "interactive-budget";
+    let mut responses = (0..in_loop_attempts)
+        .map(|index| {
+            StreamResponse::service_unavailable(format!(
+                "HTTP status 503 interactive failure {index}"
+            ))
+        })
+        .collect::<Vec<_>>();
+    responses.push(StreamResponse::completes(
+        marker,
+        ["answered after the outage"],
+    ));
     let backend = MockStreamingBackend::start_with_plans(
         RETRY_MODEL,
-        vec![StreamPlan::new(
-            marker,
-            vec![
-                StreamResponse::service_unavailable("HTTP status 503 first interactive failure"),
-                StreamResponse::service_unavailable("HTTP status 503 second interactive failure"),
-                StreamResponse::completes(marker, ["answered after the outage"]),
-            ],
-        )],
+        vec![StreamPlan::new(marker, responses)],
     )
     .unwrap();
     let db = test_db("completion-retry-interactive-budget").await;
-    let deadline_duration_secs = 30u64;
     let (actors, agent) =
-        boot_retry_agent(&db, backend.endpoint(), 1, deadline_duration_secs).await;
+        boot_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
 
-    let started = Instant::now();
     let request_id = "req-interactive-budget";
     let request_doc_id = submit_request(
         &actors,
@@ -386,37 +386,100 @@ async fn interactive_budget_is_quick() {
     )
     .await;
 
-    let terminal_state = wait_for_request_terminal_state(
-        &actors,
-        &request_doc_id,
-        Duration::from_secs(deadline_duration_secs) + REQUEST_TERMINAL_PUBLICATION_MARGIN,
-    )
-    .await;
+    let terminal_state =
+        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Completed,
         "an exhausted interactive retry parks the request for its backend, which then answers"
     );
-    assert!(
-        started.elapsed() < Duration::from_secs(15),
-        "interactive default should spend one short retry before parking, not the scheduled ladder; elapsed={:?}",
-        started.elapsed()
-    );
-    assert_eq!(
-        backend.observed_requests(marker),
-        3,
-        "interactive default allows exactly one retry before parking, then one resumed attempt"
-    );
-
+    assert_eq!(backend.observed_requests(marker), in_loop_attempts + 1);
     let calls = fetch_inference_calls(&actors, request_id).await;
-    let mut states = call_states(&calls);
-    states.sort_unstable();
-    assert_eq!(states, vec!["completed", "failed", "failed"]);
-    let timeline = build_timeline(&actors, request_id).await;
-    assert_eq!(timeline.request.retry_summary.retry_count, 1);
-    assert!(timeline.request.retry_summary.recovered);
+    assert_parked_once_then_answered(&actors, &request_doc_id, &calls, in_loop_attempts).await;
 
     agent.shutdown().await;
+}
+
+/// Provider attempts one interactive execution makes before it parks: the
+/// first call and one retry per step of the ladder `CompletionRetryPolicy::resolve`
+/// gives the interactive origin. The scheduled ladder must be longer, or a
+/// tape could not tell the two apart without a clock.
+fn interactive_in_loop_attempts() -> usize {
+    let fields = CompletionRetryProfileFields::default();
+    let interactive = CompletionRetryPolicy::resolve(&fields, ExecutionOrigin::Interactive);
+    let scheduled = CompletionRetryPolicy::resolve(&fields, ExecutionOrigin::Scheduled);
+    let in_loop_attempts = interactive.transport_backoff.len() + 1;
+    assert!(
+        scheduled.transport_backoff.len() >= in_loop_attempts,
+        "the tape must distinguish the interactive ladder from the scheduled one: \
+         interactive={interactive:?} scheduled={scheduled:?}"
+    );
+    in_loop_attempts
+}
+
+/// The first execution spends `in_loop_attempts` failed provider calls, parks
+/// once for its backend, and the resumed execution's one call completes.
+async fn assert_parked_once_then_answered(
+    actors: &RequestActors,
+    request_doc_id: &str,
+    calls: &[TimelineInferenceCallRow],
+    in_loop_attempts: usize,
+) {
+    let wait = fetch_backend_wait(actors, request_doc_id).await;
+    assert_eq!(wait.attempts, 1, "the request parks once: {wait:?}");
+    let parked_at = rfc3339(Some(&wait.wait_started_at));
+    let (parked, resumed): (Vec<_>, Vec<_>) = calls
+        .iter()
+        .partition(|call| rfc3339(call.started_at.as_deref()) < parked_at);
+    assert_eq!(
+        call_states_of(&parked),
+        vec!["failed"; in_loop_attempts],
+        "the interactive ladder spends its retries and then parks: {calls:?}"
+    );
+    assert!(
+        parked
+            .iter()
+            .all(|call| rfc3339(call.ended_at.as_deref()) <= parked_at),
+        "every in-loop attempt ends before the request parks: {calls:?}; {wait:?}"
+    );
+    assert_eq!(
+        call_states_of(&resumed),
+        vec!["completed"],
+        "the parked request resumes once and the backend answers: {calls:?}"
+    );
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BackendWaitRow {
+    attempts: i64,
+    wait_started_at: String,
+}
+
+async fn fetch_backend_wait(actors: &RequestActors, request_doc_id: &str) -> BackendWaitRow {
+    let request_doc_id = escape_graphql_string(request_doc_id);
+    let response = actors
+        .query(&format!(
+            r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{
+                attempts wait_started_at
+            }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "fetch backend wait failed: {:?}",
+        response.errors
+    );
+    first_row::<BackendWaitRow>(&response, "AgentRequestBackendWait")
+}
+
+fn rfc3339(value: Option<&str>) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(value.expect("recorded timestamp"))
+        .expect("recorded timestamps are RFC 3339")
+        .with_timezone(&chrono::Utc)
+}
+
+fn call_states_of<'a>(calls: &[&'a TimelineInferenceCallRow]) -> Vec<&'a str> {
+    calls.iter().map(|call| call.call_state.as_str()).collect()
 }
 
 async fn start_stall_tape(
@@ -429,7 +492,6 @@ async fn start_stall_tape(
     RequestActors,
     BootedAgent,
     String,
-    Instant,
 ) {
     let backend = MockStreamingBackend::start_with_plans(
         RETRY_MODEL,
@@ -447,14 +509,13 @@ async fn start_stall_tape(
     .backend_id(RETRY_BACKEND_ID)
     .model_name(RETRY_MODEL)
     .stream_batch_ms(0)
-    .deadline_duration_secs(60)
-    .provider_idle_timeout_secs(1)
+    .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
+    .provider_idle_timeout_secs(PROVIDER_IDLE_SECS)
     .done()
     .build()
     .await
     .expect("build stall tape agent");
     let agent = spawn_runtime(&db, runtime).await;
-    let started = Instant::now();
     let doc_id = submit_request(
         &actors,
         &format!("req-{marker}"),
@@ -463,14 +524,13 @@ async fn start_stall_tape(
         &format!("stall the provider {marker}"),
     )
     .await;
-    (backend, db, actors, agent, doc_id, started)
+    (backend, db, actors, agent, doc_id)
 }
 
 async fn assert_stall_recovered(marker: &str, responses: Vec<StreamResponse>) {
-    let (backend, _db, actors, agent, doc_id, started) =
+    let (backend, _db, actors, agent, doc_id) =
         start_stall_tape(marker, responses, "interactive").await;
-    wait_for_request_terminal_state(&actors, &doc_id, Duration::from_secs(60)).await;
-    let elapsed = started.elapsed();
+    wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await;
     let request = fetch_terminal_request(&actors, &doc_id).await;
     let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
     assert_eq!(
@@ -486,16 +546,24 @@ async fn assert_stall_recovered(marker: &str, responses: Vec<StreamResponse>) {
     assert_eq!(backend.observed_requests(marker), 2);
     assert_retry_recovered(&calls, 1);
     assert_stall_reason(&calls[0]);
-    assert!(elapsed < Duration::from_secs(20), "elapsed={elapsed:?}");
     agent.shutdown().await;
 }
 
+/// The stall tapes' provider idle timeout. Every stalled attempt must be cut
+/// by this timer, which its recorded failure reason names, rather than by the
+/// stream liveness timeout or the request deadline.
+const PROVIDER_IDLE_SECS: u64 = 1;
+
 fn assert_stall_reason(call: &TimelineInferenceCallRow) {
+    let idle = format!(
+        "provider stream stalled: no transport activity for {:?}",
+        Duration::from_secs(PROVIDER_IDLE_SECS)
+    );
     assert!(
         call.failure_reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("provider stream stalled")),
-        "stalled call must record the stall, not a generic drop: {call:?}"
+            .is_some_and(|reason| reason.contains(&idle)),
+        "stalled call must record the provider idle timeout ({idle}), not a generic drop: {call:?}"
     );
 }
 
@@ -515,7 +583,7 @@ async fn provider_headers_that_never_arrive_fail_the_attempt_and_retry() {
 #[tokio::test]
 async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     let marker = "stall-releases-permit";
-    let (backend, _db, actors, agent, doc_id, _) = start_stall_tape(
+    let (backend, _db, actors, agent, doc_id) = start_stall_tape(
         marker,
         vec![
             StreamResponse::Stream(StreamScript::paused_before(
@@ -527,71 +595,50 @@ async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
         "scheduled",
     )
     .await;
-    let request_id = format!("req-{marker}");
-    let mut changes =
-        gents_store::subscription_source::subscribe_collections(&actors.node, ["InferenceCall"])
-            .expect("subscribe to provider attempt changes");
-    tokio::time::timeout(Duration::from_secs(15), async {
-        loop {
-            let calls = fetch_inference_calls(&actors, &request_id).await;
-            if calls
-                .first()
-                .is_some_and(|call| call.call_state == "failed")
-            {
-                assert_eq!(
-                    backend.observed_requests(marker),
-                    1,
-                    "the retry must still be backing off: {calls:?}"
-                );
-                assert_stall_reason(&calls[0]);
-                break;
-            }
-            changes
-                .recv()
-                .await
-                .expect("provider attempt subscription closed");
-        }
-    })
-    .await
-    .expect("stalled call must reach a terminal state during backoff");
     assert_eq!(
-        wait_for_request_terminal_state(&actors, &doc_id, Duration::from_secs(60)).await,
+        wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await,
         RequestLifecycleState::Completed
     );
     assert_eq!(backend.observed_requests(marker), 2);
+    let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
+    assert_retry_recovered(&calls, 1);
+    assert_stall_reason(&calls[0]);
+    assert!(
+        rfc3339(calls[0].ended_at.as_deref()) <= rfc3339(calls[1].started_at.as_deref()),
+        "the stalled call must be terminal before its retry starts: {calls:?}"
+    );
     agent.shutdown().await;
 }
 
 #[tokio::test]
 async fn repeated_provider_silence_parks_the_request_until_the_provider_answers() {
     let marker = "stall-exhausts-retry";
-    let (backend, _db, actors, agent, doc_id, started) = start_stall_tape(
+    let in_loop_attempts = interactive_in_loop_attempts();
+    let mut responses = (0..in_loop_attempts)
+        .map(|index| {
+            StreamResponse::Stream(if index == 0 {
+                StreamScript::paused_before(marker, vec![StreamChunk::text("never released")])
+            } else {
+                StreamScript::paused(marker, ["partial before stall"])
+            })
+        })
+        .collect::<Vec<_>>();
+    responses.push(StreamResponse::completes(
         marker,
-        vec![
-            StreamResponse::Stream(StreamScript::paused_before(
-                marker,
-                vec![StreamChunk::text("never released")],
-            )),
-            StreamResponse::Stream(StreamScript::paused(marker, ["partial before stall"])),
-            StreamResponse::completes(marker, ["answered after the stalls"]),
-        ],
-        "interactive",
-    )
-    .await;
-    wait_for_request_terminal_state(&actors, &doc_id, Duration::from_secs(60)).await;
-    let elapsed = started.elapsed();
+        ["answered after the stalls"],
+    ));
+    let (backend, _db, actors, agent, doc_id) =
+        start_stall_tape(marker, responses, "interactive").await;
+    wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await;
     let request = fetch_terminal_request(&actors, &doc_id).await;
     let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Completed);
-    assert_eq!(backend.observed_requests(marker), 3);
-    let mut states = call_states(&calls);
-    states.sort_unstable();
-    assert_eq!(states, vec!["completed", "failed", "failed"]);
+    assert_eq!(backend.observed_requests(marker), in_loop_attempts + 1);
+    assert_parked_once_then_answered(&actors, &doc_id, &calls, in_loop_attempts).await;
     calls
         .iter()
         .filter(|call| call.call_state == "failed")
         .for_each(assert_stall_reason);
-    assert!(elapsed < Duration::from_secs(20), "elapsed={elapsed:?}");
     agent.shutdown().await;
 }
 
@@ -611,7 +658,8 @@ async fn deterministic_400_tape() {
     )
     .unwrap();
     let db = test_db("completion-retry-deterministic-400").await;
-    let (actors, agent) = build_retry_agent(&db, backend.endpoint(), 1, 30).await;
+    let (actors, agent) =
+        build_retry_agent(&db, backend.endpoint(), 1, UNREACHED_DEADLINE.as_secs()).await;
     let request_id = "req-deterministic-400";
     let request_doc_id = submit_request(
         &actors,
@@ -624,7 +672,7 @@ async fn deterministic_400_tape() {
 
     let agent = spawn_runtime(&db, agent).await;
     let terminal_state =
-        wait_for_request_terminal_state(&actors, &request_doc_id, Duration::from_secs(60)).await;
+        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
 
     let calls = fetch_inference_calls(&actors, request_id).await;
     assert_eq!(

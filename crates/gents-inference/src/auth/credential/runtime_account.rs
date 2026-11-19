@@ -12,13 +12,12 @@ pub enum RuntimeAccountMetadataError {
     Access(#[from] ConfigClientError),
     #[error("decoding runtime-visible account metadata")]
     Decode,
-    #[error("runtime account read was not authorized")]
-    ReadNotAuthorized,
 }
 
 /// Resolve only the provider default account reference as the configured
-/// runtime, on this Agent transaction's native snapshot. DefraDB filters
-/// unreadable rows; the resolver uses this same runtime-visible set.
+/// runtime, on this Agent transaction's native snapshot, among the accounts
+/// the runtime may use (`Identity.Household.runtimeMayUse`); the resolver
+/// uses this same set.
 pub(crate) async fn runtime_default_oauth_account_ref(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -33,7 +32,8 @@ pub(crate) async fn runtime_default_oauth_account_ref(
 
 /// Reset scheduling observes only whether the selected enabled account was
 /// connected at the failed call. The held Node is bound to this managed
-/// Agent transaction, and native ACP still authorizes its metadata read.
+/// Agent transaction, and document ACP decides whether the runtime may still
+/// use the account.
 pub async fn runtime_oauth_account_served_before(
     txn: &ConfigApplyTxn<'_>,
     runtime: &dyn NodeIdentity,
@@ -58,8 +58,6 @@ async fn runtime_oauth_account_selection(
     provider: &str,
     pick: AccountPick<'_>,
 ) -> Result<Option<RuntimeAccountSelection>, RuntimeAccountMetadataError> {
-    let runtime =
-        identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
     let response = txn
         .execute_runtime_account_metadata_query(
             node_did,
@@ -74,23 +72,9 @@ async fn runtime_oauth_account_selection(
             error => RuntimeAccountMetadataError::Access(error),
         })?;
     let response = gents_store::graphql::into_data_envelope(response.data);
-    let selected = runtime_account_from_response(&response, node_did, provider, pick)
-        .map_err(|_| RuntimeAccountMetadataError::Decode)?;
-    let Some(selected) = selected else {
-        return Ok(None);
-    };
-    let decisions = txn
-        .observe_document_access(
-            &runtime,
-            "OAuthCredential",
-            std::slice::from_ref(&selected.doc_id),
-            defra_node::DocumentAccessMode::DelegatedRead,
-        )
-        .await?;
-    match decisions.as_slice() {
-        [defra_node::DocumentAccessDecision::Allowed] => Ok(Some(selected)),
-        _ => Err(RuntimeAccountMetadataError::ReadNotAuthorized),
-    }
+
+    runtime_account_from_response(&response, node_did, provider, pick)
+        .map_err(|_| RuntimeAccountMetadataError::Decode)
 }
 
 #[cfg(test)]

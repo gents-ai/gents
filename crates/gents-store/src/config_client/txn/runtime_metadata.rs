@@ -86,22 +86,12 @@ impl ConfigApplyTxn<'_> {
                     .ok_or(ConfigClientError::InvalidOwnerObservation)
             })
             .collect::<Result<Vec<_>>>()?;
-        let decisions = self
-            .observe_document_access(
-                &runtime,
-                collection,
-                &doc_ids,
-                defra_node::DocumentAccessMode::Document {
-                    permission: defra_node::DocumentPermission::Read,
-                    node_permission: acp::NodePermission::DocumentRead,
-                },
-            )
-            .await?;
+        let decisions = self.runtime_may_use(&runtime, collection, &doc_ids).await?;
         if decisions.len() != doc_ids.len() {
             return Err(ConfigClientError::InvalidOwnerObservation);
         }
         let mut decisions = decisions.into_iter();
-        rows.retain(|_| decisions.next() == Some(defra_node::DocumentAccessDecision::Allowed));
+        rows.retain(|_| decisions.next() == Some(true));
         Ok(response)
     }
 }

@@ -209,7 +209,7 @@ TEST_CACHE_MODEL_PATHS = (
 TS_PATHS = (
     "apps/", "packages/", "package.json", "package-lock.json", "scripts/check-desktop-package-boundaries.mjs",
     "scripts/clean-desktop-package-dist.mjs", "scripts/pack-desktop-packages.sh",
-    "scripts/packed-desktop-consumer/",
+    "scripts/packed-desktop-consumer/", ".github/scripts/install-browser-deps.sh",
 )
 CORE_PACK_PATHS = ("core-packs/", "crates/gents-core-packs/", "crates/gents-pack/")
 # Checked by the hosted control jobs, which run on every pull request.
@@ -762,6 +762,13 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             "tla": tla,
         },
         "core_packs": everything or "core-packs" in tags,
+        # The lint job's iOS check of gents-desktop-tauri: only when it or a
+        # workspace crate it depends on changed (the toolchain and lock change
+        # everything).
+        "ios_check": "gents-desktop-tauri" in built,
+        # The live suites (`live-e2e`) run after merge; lint them when they or a
+        # crate they use changed.
+        "live_e2e_lint": [package for package in ("gents", "gents-cli") if package in built],
         "runs_on": {role: runner(role) for role in WORKFLOW_ROLES},
     }
 
@@ -937,10 +944,10 @@ def run_lint(selection):
     # The product build: no test targets, so no dev-dependency features.
     sh(["cargo", "check", *packages, *profile])
     sh(["cargo", "clippy", *packages, "--all-targets", *profile, "--", "-D", "warnings"])
-    # Live suites run after merge; they must still compile.
-    for package in ("gents", "gents-cli"):
-        if package in affected:
-            sh(["cargo", "check", "-p", package, "--tests", "--features", "live-e2e", *profile])
+    # Live suites run after merge; they must still compile and lint clean.
+    for package in selection.get("live_e2e_lint", []):
+        sh(["cargo", "clippy", "-p", package, "--tests", "--features", "live-e2e", *profile, "--", "-D", "warnings"],
+           env={**os.environ, **side_tree_env("live-e2e")})
     if "gents-cli" in affected and os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
         sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile])
     if "gents-loop" in affected:
@@ -949,10 +956,11 @@ def run_lint(selection):
         sh(["cargo", "build", "-p", "gents-lens-fixture-add-label", "--target", "wasm32-unknown-unknown", *profile])
     if "gents-desktop-tauri" in affected:
         sh(["./scripts/check-native-e2e-capabilities.sh"])
-        if sys.platform == "darwin":
-            # iOS shares the desktop crates; desktop-only Tauri APIs break it silently (#890).
-            sh("rustup target add aarch64-apple-ios-sim && cargo check -p gents-desktop-tauri --lib "
-               "--target aarch64-apple-ios-sim " + shlex.join(profile))
+    if selection.get("ios_check") and sys.platform == "darwin":
+        # iOS shares the desktop crates; desktop-only Tauri APIs break it silently (#890).
+        sh(["rustup", "target", "add", "aarch64-apple-ios-sim"])
+        sh(["cargo", "check", "-p", "gents-desktop-tauri", "--lib", "--target", "aarch64-apple-ios-sim", *profile],
+           env={**os.environ, **side_tree_env("ios-check")})
 
 
 def run_contract(selection):
@@ -1122,9 +1130,8 @@ def native_tests(label, packages, flags, filterset, expected):
     """One `cargo nextest run`: one build, one parallel pool across its crates and binaries.
 
     Its JUnit report then fails a crate, or a macOS-only target, that ran no
-    test, as `cargo_test` did. (A separate `nextest list` first would rebuild:
-    the core packs' build script reruns once a build has written beside them.)
-    `expected` holds binary ids, or packages for every binary of one.
+    test, as `cargo_test` did. `expected` holds binary ids, or packages for
+    every binary of one.
     """
     arguments = [*[flag for package in packages for flag in ("-p", package)], *flags]
     features = sorted({feature for package in packages for feature in feature_flags(package)[1:]})
@@ -1438,6 +1445,19 @@ class LeanContract:
         Path(self.log.name).unlink(missing_ok=True)
 
 
+# Packages whose tests run another package's binary from beside the test
+# binary when GENTS_TEST_BINARIES_PREBUILT is set: the archive must build that
+# package too, or a plan that tests only the first (a draft, a partition) finds
+# no helper (#3950).
+TEST_HELPER_PACKAGES = {"gents-tools": ("gents-fs-runner",)}
+
+
+def archive_packages(packages):
+    """The packages an archive builds: the tested ones and the helpers their tests run."""
+    helpers = [helper for package in packages for helper in TEST_HELPER_PACKAGES.get(package, ())]
+    return list(dict.fromkeys([*packages, *helpers]))
+
+
 def build_and_run(entry, name, lean):
     packages = entry["packages"].split()
     if not system_preflight():
@@ -1455,7 +1475,7 @@ def build_and_run(entry, name, lean):
     archive = output / f"{name}.tar.zst"
     features = [PACKAGE_FEATURES[package] for package in packages
                 if package in PACKAGE_FEATURES and package != "gents-desktop-bridge"]
-    arguments = ["archive", *[flag for package in packages for flag in ("-p", package)]]
+    arguments = ["archive", *[flag for package in archive_packages(packages) for flag in ("-p", package)]]
     if features:
         arguments += ["--features", ",".join(features)]
     arguments += ["--cargo-profile", os.environ.get("PROFILE") or ARCHIVE_PROFILE]
@@ -1629,7 +1649,45 @@ def kept_target():
     return [os.environ["CARGO_TARGET_DIR"]] if os.environ.get("CARGO_TARGET_DIR") else []
 
 
+def side_tree_env(name):
+    """A lint build's own target tree inside the kept one, built incrementally.
+
+    The iOS check and the live-e2e lints build every workspace crate under a
+    target or feature set no other build shares (38 and 11 min from scratch on
+    a Studio, #3926), which sccache does not serve. Each gets its own
+    incremental tree: incremental units in the shared tree would replace the
+    non-incremental ones the other builds reuse. Inside the kept tree, it
+    survives the checkout's `git clean` and counts toward the runner's
+    reclamation.
+    """
+    target = os.environ.get("CARGO_TARGET_DIR")
+    if not target:
+        return {"CARGO_INCREMENTAL": "1"}
+    return {"CARGO_TARGET_DIR": str(Path(target) / name), "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""}
+
+
+def keep_core_packs_fresh():
+    """Give gents-core-packs' build script a core packs directory that outlives the checkout.
+
+    The build script creates and watches its directory (default
+    target/core-packs). The checkout's `git clean` deletes that directory
+    before every job, and a directory created during a build reruns the script
+    once more, which recompiles gents-cli and gents-client-host above it. A CI
+    runner therefore keeps an empty directory beside its Cargo target. Empty,
+    it embeds the same no archives a missing directory does.
+    """
+    if os.environ.get("GENTS_CORE_PACKS_DIR"):
+        return
+    if os.environ.get("GITHUB_ACTIONS") and os.environ.get("CARGO_TARGET_DIR"):
+        directory = Path(os.environ["CARGO_TARGET_DIR"]) / "core-packs-none"
+        os.environ["GENTS_CORE_PACKS_DIR"] = str(directory)
+    else:
+        directory = ROOT / "target" / "core-packs"
+    directory.mkdir(parents=True, exist_ok=True)
+
+
 def run(selection, job):
+    keep_core_packs_fresh()
     if job.startswith(("shard:", "build:")) and job.count(":") == 2:
         prefix, name, index = job.split(":")
         if f"{prefix}:{name}" not in selection["jobs"]:

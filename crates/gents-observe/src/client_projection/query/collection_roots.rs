@@ -111,7 +111,7 @@ collection_roots! { 'n;
     NodeReadiness(NODE_READINESS_NAME) => node_readiness: NodeReadinessList<'n> =
         |node| NodeReadinessList::new(node), |row| Ok(row);
     MailboxItems(MAILBOX_ITEM_NAME) => mailbox_items: gents_automation::views::MailboxRows =
-        |node| gents_automation::views::MailboxRows::new(node).open(), |row| Ok(row);
+        |node| gents_automation::views::MailboxRows::new(node).open().for_reader(), |row| Ok(row);
     Goals(GOAL_NAME) => goals: gents_automation::views::GoalRows =
         |node| gents_automation::views::GoalRows::new(node), |row| Ok(row);
     Tasks(TASK_NAME) => tasks: TaskList = |node| TaskList::new(node), |row| Ok(row.task);

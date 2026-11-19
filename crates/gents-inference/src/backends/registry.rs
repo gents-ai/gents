@@ -1,5 +1,4 @@
 mod catalog_freshness;
-mod runtime_read;
 pub use catalog_freshness::decode_backend_observation;
 
 use crate::backends::provider::BackendProviderKind;
@@ -195,30 +194,23 @@ pub async fn list_enabled_backends_for_agent(
     unique_backends(query_backend_records(node, &enabled_backend_filter(node_did), true).await?)
 }
 
-/// Lists the held Node's visible backend configuration for its operational prober.
+/// Lists the held Node's backend configuration its operational prober may use
+/// (`Identity.Household.runtimeMayUse`), not every backend it reads.
 pub(crate) async fn list_enabled_backends_for_runtime(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<Vec<InferenceBackend>> {
     let access = crate::auth::credential::runtime_credential_access(node, node_did)?;
     let filter = enabled_backend_filter(node_did);
-    access
-        .transact_readonly("backend_registry.runtime_configuration", |txn| {
-            let filter = &filter;
-            Box::pin(async move {
-                let response = txn
-                    .execute(&format!(
-                        "query {{ InferenceBackendMetadata({filter}) {{ _docID {BACKEND_CONFIG_FIELDS} }} }}"
-                    ))
-                    .await?;
-                let mut records = decode_backend_records(response.get("data"), true)?;
-                let doc_ids = records.iter().map(|(doc_id, _)| doc_id.clone()).collect::<Vec<_>>();
-                let readable = runtime_read::readable_documents(txn, node_did, &doc_ids).await?;
-                records.retain(|(doc_id, _)| readable.contains(doc_id));
-                unique_backends(records)
-            })
-        })
-        .await
+    let response = access
+        .execute_for_use(
+            &format!(
+                "query {{ InferenceBackendMetadata({filter}) {{ _docID {BACKEND_CONFIG_FIELDS} }} }}"
+            ),
+            "InferenceBackendMetadata",
+        )
+        .await?;
+    unique_backends(decode_backend_records(response.get("data"), true)?)
 }
 
 pub(crate) async fn lookup_backend_observation_for_runtime(
@@ -341,6 +333,30 @@ pub(crate) async fn set_backend_probe_status_for_connection(
     .await
 }
 
+/// The backend record this transaction's reader may use
+/// (`Identity.Household.runtimeMayUse`): one the hosting runtime still reads
+/// but may not use is unavailable to it.
+async fn usable_backend_record_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    backend_id: &str,
+) -> Result<Option<(String, serde_json::Value)>> {
+    let Some((doc, value)) = gents_documents::read_desired_state_record_in_txn(
+        txn,
+        gents_store::collection::Collection::InferenceBackend,
+        node_did,
+        backend_id,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let usable = txn
+        .reader_may_use("InferenceBackendMetadata", std::slice::from_ref(&doc))
+        .await?;
+    Ok((usable == [true]).then_some((doc, value)))
+}
+
 async fn write_probe_observation(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
@@ -352,17 +368,11 @@ async fn write_probe_observation(
         .transact_write("backend_registry.update_probe", |txn| {
             let input = input.clone();
             Box::pin(async move {
-                let (metadata_doc, value) = gents_documents::read_desired_state_record_in_txn(
-                    txn, gents_store::collection::Collection::InferenceBackend, node_did, backend_id,
-                )
-                .await?
-                .context("backend observation target does not exist")?;
+                let (metadata_doc, value) = usable_backend_record_in_txn(txn, node_did, backend_id)
+                    .await?
+                    .context("backend observation target does not exist")?;
                 let current = InferenceBackend::from_value(&value)?;
                 if let Some((expected, expected_doc)) = expected {
-                    anyhow::ensure!(
-                        !runtime_read::readable_documents(txn, node_did, std::slice::from_ref(&metadata_doc)).await?.is_empty(),
-                        "backend is unavailable"
-                    );
                     anyhow::ensure!(metadata_doc == expected_doc, "backend was replaced during probe");
                     anyhow::ensure!(current.enabled &&
                         crate::admission::backend_connection_fingerprint(&backend_fields(&current)) ==
@@ -413,24 +423,10 @@ pub(crate) async fn capture_backend_document(
     crate::auth::credential::runtime_credential_access(node, &backend.node_did)?
         .transact_readonly("backend_registry.capture_probe", |txn| {
             Box::pin(async move {
-                let (doc, value) = gents_documents::read_desired_state_record_in_txn(
-                    txn,
-                    gents_store::collection::Collection::InferenceBackend,
-                    &backend.node_did,
-                    &backend.backend_id,
-                )
-                .await?
-                .context("backend is unavailable")?;
-                anyhow::ensure!(
-                    !runtime_read::readable_documents(
-                        txn,
-                        &backend.node_did,
-                        std::slice::from_ref(&doc)
-                    )
-                    .await?
-                    .is_empty(),
-                    "backend is unavailable"
-                );
+                let (doc, value) =
+                    usable_backend_record_in_txn(txn, &backend.node_did, &backend.backend_id)
+                        .await?
+                        .context("backend is unavailable")?;
                 let current = InferenceBackend::from_value(&value)?;
                 anyhow::ensure!(
                     current.enabled
@@ -514,21 +510,20 @@ async fn record_model_catalog_for_document_in_txn(
     );
     let row = &rows[0];
     if let Some(doc) = expected_doc {
-        let current_doc = row["_docID"]
-            .as_str()
-            .context("backend metadata has no physical ID")?
-            .to_owned();
-        anyhow::ensure!(
-            !runtime_read::readable_documents(txn, &backend.node_did, &[current_doc])
-                .await?
-                .is_empty(),
-            "backend is unavailable"
-        );
         anyhow::ensure!(
             row["_docID"] == doc,
             "backend was replaced during discovery"
         );
     }
+    let metadata_doc = row["_docID"]
+        .as_str()
+        .context("backend metadata has no physical ID")?;
+    anyhow::ensure!(
+        txn.reader_may_use("InferenceBackendMetadata", &[metadata_doc.to_owned()])
+            .await?
+            == [true],
+        "backend is unavailable"
+    );
     let current = InferenceBackend::metadata_from_value(row)?;
     anyhow::ensure!(
         current.endpoint == backend.endpoint
@@ -540,9 +535,6 @@ async fn record_model_catalog_for_document_in_txn(
         &response,
         "InferenceBackendObservation",
     );
-    let metadata_doc = row["_docID"]
-        .as_str()
-        .context("backend metadata has no physical ID")?;
     let observation = gents_documents::inference_backend::observation_binding::bind_rows(
         &backend.node_did,
         &backend.backend_id,

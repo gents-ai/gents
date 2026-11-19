@@ -1,7 +1,5 @@
-use std::fs::{File, OpenOptions, TryLockError};
 use std::io::ErrorKind;
 use std::net::TcpListener;
-use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::{bail, Context, Result};
@@ -14,31 +12,72 @@ const FIRST_TEST_PORT: u16 = 20_000;
 const LAST_TEST_PORT: u16 = 32_767;
 
 static NEXT_TEST_PORT: OnceLock<Mutex<u16>> = OnceLock::new();
-static PORT_RESERVATIONS: OnceLock<Mutex<Vec<(u16, File)>>> = OnceLock::new();
+static PORT_RESERVATIONS: OnceLock<Mutex<Vec<(u16, Reservation)>>> = OnceLock::new();
 
-/// The reservation locks must be shared by every test process that shares
-/// the host's port space. `std::env::temp_dir()` follows TMPDIR, which each
-/// CI runner sets to its own work directory, so two jobs on one machine
-/// would lock in two directories and reserve the same port
-/// (`TestPortReservation.tla`, `PerRunner`).
-#[cfg(unix)]
-fn reservation_directory() -> Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    let directory = PathBuf::from("/tmp/gents-cli-test-port-reservations");
+/// A reservation must be visible to every test process that shares the
+/// port space (`TestPortReservation.tla`: `PerRunner` is any namespace
+/// narrower than that). A filesystem lock is not: TMPDIR differs per CI
+/// runner, and each runner's systemd service runs with `PrivateTmp=yes`,
+/// so even `/tmp` differs per runner. On Linux the reservation is an
+/// abstract Unix socket, whose namespace is the network namespace that
+/// holds the ports; the kernel releases it when the process exits.
+#[cfg(target_os = "linux")]
+type Reservation = std::os::unix::net::UnixDatagram;
+
+#[cfg(target_os = "linux")]
+fn reserve(port: u16) -> Result<Option<Reservation>> {
+    use std::os::linux::net::SocketAddrExt;
+    let name =
+        std::os::unix::net::SocketAddr::from_abstract_name(format!("gents-cli-test-port-{port}"))
+            .context("naming test port reservation")?;
+    match std::os::unix::net::UnixDatagram::bind_addr(&name) {
+        Ok(reservation) => Ok(Some(reservation)),
+        Err(error) if error.kind() == ErrorKind::AddrInUse => Ok(None),
+        Err(error) => Err(error).context("binding test port reservation"),
+    }
+}
+
+/// Elsewhere a lock file. Reservation files must not be unlinked:
+/// replacing an inode defeats their lock.
+#[cfg(not(target_os = "linux"))]
+type Reservation = std::fs::File;
+
+#[cfg(not(target_os = "linux"))]
+fn reserve(port: u16) -> Result<Option<Reservation>> {
+    use std::fs::TryLockError;
+    #[cfg(unix)]
+    let directory = std::path::PathBuf::from("/tmp/gents-cli-test-port-reservations");
+    #[cfg(not(unix))]
+    let directory = std::env::temp_dir().join("gents-cli-test-port-reservations");
     match std::fs::create_dir(&directory) {
-        Ok(()) => std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o1777))
-            .context("opening the test port reservation directory to every user")?,
+        Ok(()) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o1777))
+                    .context("opening the test port reservation directory to every user")?;
+            }
+        }
         Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error).context("creating test port reservation directory"),
     }
-    Ok(directory)
-}
-
-#[cfg(not(unix))]
-fn reservation_directory() -> Result<PathBuf> {
-    let directory = std::env::temp_dir().join("gents-cli-test-port-reservations");
-    std::fs::create_dir_all(&directory).context("creating test port reservation directory")?;
-    Ok(directory)
+    let reservation = match std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(directory.join(port.to_string()))
+    {
+        Ok(reservation) => reservation,
+        // Another user's process created this reservation; it is theirs.
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => return Ok(None),
+        Err(error) => return Err(error).context("opening test port reservation"),
+    };
+    match reservation.try_lock() {
+        Ok(()) => Ok(Some(reservation)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(error)) => Err(error).context("locking test port reservation"),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -66,9 +105,7 @@ fn last_test_port() -> Result<u16> {
 pub fn allocate_port() -> Result<u16> {
     // Allocate monotonically from a fixed range instead of probing port 0:
     // dropping the probe lets an outbound test connection claim the port
-    // before the server child binds it. Reservation files must not be
-    // unlinked: replacing an inode defeats their lock.
-    let reservations = reservation_directory()?;
+    // before the server child binds it.
     let last_port = last_test_port()?;
     let next_port = NEXT_TEST_PORT.get_or_init(|| Mutex::new(FIRST_TEST_PORT));
     for _ in FIRST_TEST_PORT..=last_port {
@@ -82,25 +119,9 @@ pub fn allocate_port() -> Result<u16> {
             };
             port
         };
-        let reservation = match OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(reservations.join(port.to_string()))
-        {
-            Ok(reservation) => reservation,
-            // Another user's process created this reservation; it is theirs.
-            Err(error) if error.kind() == ErrorKind::PermissionDenied => continue,
-            Err(error) => return Err(error).context("opening test port reservation"),
+        let Some(reservation) = reserve(port)? else {
+            continue;
         };
-        match reservation.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => continue,
-            Err(TryLockError::Error(error)) => {
-                return Err(error).context("locking test port reservation");
-            }
-        }
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
             drop(listener);
             PORT_RESERVATIONS
@@ -126,7 +147,7 @@ pub fn is_reserved(port: u16) -> bool {
                 .lock()
                 .expect("test port reservations poisoned")
                 .iter()
-                .any(|(reserved, _file)| *reserved == port)
+                .any(|(reserved, _reservation)| *reserved == port)
         })
         .unwrap_or(false)
 }
@@ -139,7 +160,7 @@ pub fn release(port: u16) {
         reservations
             .lock()
             .expect("test port reservations poisoned")
-            .retain(|(reserved, _file)| *reserved != port);
+            .retain(|(reserved, _reservation)| *reserved != port);
     }
 }
 

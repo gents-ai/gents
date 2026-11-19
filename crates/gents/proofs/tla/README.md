@@ -460,12 +460,13 @@ See `../README.md` for how this fits the broader formal-verification model.
   in its own nextest process, reserving a port with `allocate_port`,
   starting a server on it and waiting with `wait_for_port`, which accepts any
   listener. `NoCrossTalk`: the server answering on a test's port is its own.
-  RED: `PerRunner` locks reservations under TMPDIR, which differs per CI
-  runner, so two jobs on one machine reserve the same port and one test talks
+  RED: `PerRunner` locks reservations where each CI runner has its own
+  view (TMPDIR, or `/tmp` under the runners' `PrivateTmp=yes`), so two jobs on one machine reserve the same port and one test talks
   to the other's server (the subscription EOFs and foreign-node errors on
   the shared Linux runners); `EphemeralOverlap` lets an outbound connection
-  take the reserved port, which fails the server's bind. Green locks in one
-  host-wide directory below every ephemeral range; `PerRunnerSpread` shows
+  take the reserved port, which fails the server's bind. Green reserves with an
+  abstract Unix socket, in the network namespace the ports share, below
+  every ephemeral range; `PerRunnerSpread` shows
   why separate directories rarely collided while one process per binary
   spread its cursor.
 - `Sanity` — toolchain smoke test; not a real model.

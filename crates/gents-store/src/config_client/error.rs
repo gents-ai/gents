@@ -203,6 +203,8 @@ pub enum ConfigClientError {
         "this backend does not support transaction-bound relationship or permission operations"
     )]
     TransactionAuthorizationUnsupported,
+    #[error("a read whose rows the runtime uses must select each row's _docID")]
+    RuntimeUseRowWithoutDocId,
     #[error("invalid resource relationship target")]
     InvalidResourceRelationshipTarget,
     #[error("{collection} {doc_id} is not owned by this runtime or one of its Agents")]

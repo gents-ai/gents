@@ -52,7 +52,7 @@ fn oauth_backend(
 }
 
 #[tokio::test]
-async fn scheduled_probe_requires_the_held_node_and_a_present_backend() {
+async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     use gents_store::identity::NodeIdentity;
     // No default agent: its fixture backend is also enabled on this node and
     // would make the runtime listing non-singular.
@@ -168,6 +168,37 @@ async fn scheduled_probe_requires_the_held_node_and_a_present_backend() {
         )
         .await
         .unwrap();
+    // Document ACP withdraws the runtime's read with `runtime_reader`; the
+    // hosting node key still reads the Node and its backends past document
+    // ACP (gents#3747, `Identity.Household.readObserved`), but may no longer
+    // list, capture or probe them (gents#3935, `Identity.Household.runtimeMayUse`).
+    let runtime = identity::Did::new(did).unwrap();
+    let usable = gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone())
+        .transact_readonly("test.runtime_use.backend_node", |txn| {
+            let (runtime, parent) = (&runtime, parent.to_owned());
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    txn.runtime_may_use(runtime, "Node", std::slice::from_ref(&parent))
+                        .await?,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(usable, vec![false]);
+    let hosting_read = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(did).unwrap(),
+    )
+    .execute("{ InferenceBackendMetadata { _docID } }")
+    .await
+    .unwrap();
+    assert_eq!(
+        hosting_read["data"]["InferenceBackendMetadata"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
     assert!(
         crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
             .await

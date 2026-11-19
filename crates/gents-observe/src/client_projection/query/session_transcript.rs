@@ -104,7 +104,9 @@ async fn read_legacy_question_sources<'a>(
     for (node, ids) in sources {
         let ids = ids.into_iter().collect::<Vec<_>>();
         for batch in ids.chunks(128) {
-            let view = gents_automation::views::MailboxRows::new(&node).doc_ids(batch.to_vec());
+            let view = gents_automation::views::MailboxRows::new(&node)
+                .doc_ids(batch.to_vec())
+                .for_reader();
             count += 1;
             match tokio::time::timeout(std::time::Duration::from_secs(1), access.read_view(&view))
                 .await
