@@ -133,10 +133,11 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
     let agent_did = agent.agent_did.clone();
     let goal_answer = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
         let document = loop {
-            let batch = controls
-                .recv()
-                .await
-                .context("Goal command stream closed")?;
+            let batch =
+                tokio::time::timeout(gents_store::test_support::STALL_CEILING, controls.recv())
+                    .await
+                    .context("no Goal command reached the runtime within the stall ceiling")?
+                    .context("Goal command stream closed")?;
             if let Some(change) = batch
                 .changes
                 .into_iter()
@@ -166,7 +167,7 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
         Ok::<_, anyhow::Error>(())
     }));
     core.start_authored_delivery();
-    let settled = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let settled = async {
         let delivered = async {
             loop {
                 if outbox::pending(
@@ -179,9 +180,9 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
                 {
                     return Ok::<_, anyhow::Error>(());
                 }
-                updates
-                    .recv()
+                tokio::time::timeout(gents_store::test_support::STALL_CEILING, updates.recv())
                     .await
+                    .context("the client journal did not change within the stall ceiling")?
                     .context("client journal stream closed")?;
             }
         };
@@ -191,7 +192,7 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
         };
         tokio::try_join!(delivered, answered)?;
         Ok::<_, anyhow::Error>(())
-    })
+    }
     .await;
     if let Err(error) = settled {
         let pending = outbox::pending(
@@ -211,7 +212,6 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
             )
         });
     }
-    settled??;
     let receipt = core
         .recover_goal_submission(runtime.node_did(), "offline-goal-command")
         .await?
