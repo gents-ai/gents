@@ -135,13 +135,13 @@ async fn seed_live_agent_documents(
         config_actor.private_key_bytes(),
     )?;
     let access = ConfigAccess::Graphql(
-        gents_desktop_core::client::home_endpoint::user_at(
-            home.graphql_endpoint()
-                .context("runtime HTTP endpoint missing")?,
-            &capability,
-            None,
-        )?
-        .with_client_signed_agent_creates(),
+        gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(capability)
+            .endpoint(
+                node_did,
+                home.graphql_endpoint()
+                    .context("runtime HTTP endpoint missing")?,
+            )?
+            .with_client_signed_agent_creates(),
     );
     let node_input =
         json!({"node_did":node_did,"display_name":agent_name,"created_by":config_actor_did});

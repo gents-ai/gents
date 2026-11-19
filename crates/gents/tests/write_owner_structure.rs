@@ -5778,8 +5778,6 @@ fn lean_read_fence_counts_reads_after_a_lease_without_the_await() {
     }
 }
 
-const CLIENT_ENDPOINT_OWNER: &str = "crates/gents-desktop-core/src/client/home_endpoint.rs";
-
 const CLIENT_ENDPOINT_CRATES: &[&str] = &[
     "crates/gents-desktop-",
     "crates/gents-client-host/",
@@ -5923,8 +5921,8 @@ fn endpoint_construction_sites(syntax: &syn::File) -> usize {
     visitor.sites
 }
 
-/// A client builds every endpoint to a home through `home_endpoint`, so the
-/// audience the home reports reaches the one minting point
+/// A client builds every endpoint to a runtime through `RuntimeEndpoints`, so
+/// the audience the runtime reports reaches the one minting point
 /// (`Identity.HeldAudience.recordCredential`).
 #[test]
 fn client_endpoints_are_built_by_their_owner() {
@@ -5935,11 +5933,10 @@ fn client_endpoints_are_built_by_their_owner() {
             CLIENT_ENDPOINT_CRATES
                 .iter()
                 .any(|prefix| relative.starts_with(prefix))
-                && relative != CLIENT_ENDPOINT_OWNER
         })
         .filter(|(_, syntax)| endpoint_construction_sites(syntax) > 0)
         .map(|(relative, _)| {
-            format!("{relative}: builds a GraphqlEndpoint; use gents_desktop_core::client::home_endpoint")
+            format!("{relative}: builds a GraphqlEndpoint; use gents_store::config_client::runtime_endpoints::RuntimeEndpoints")
         })
         .collect::<Vec<_>>();
     assert!(
@@ -5957,7 +5954,7 @@ fn client_endpoint_fence_counts_constructors_outside_tests() {
             "fn f() { gents_store::config_client::GraphqlEndpoint::anonymous(u); }",
             1,
         ),
-        ("fn f() { home_endpoint::user_at(u, c, None); }", 0),
+        ("fn f() { RuntimeEndpoints::new(c).endpoint(n, u); }", 0),
         (
             "#[cfg(test)] mod tests { fn f() { GraphqlEndpoint::anonymous(u); } }",
             0,
