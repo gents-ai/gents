@@ -1,7 +1,7 @@
 ---- MODULE SettlementApproval ----
-\* lean: Identity.EnrollmentGrant.settlementStep, Identity.EnrollmentGrant.afterRemoval
+\* lean: Identity.EnrollmentGrant.settlementStep, Identity.EnrollmentGrant.afterRemoval, Identity.EnrollmentGrant.restorationStep
 \* crates: gents-store
-\* models: Identity.EnrollmentGrant.restorationStep, Identity.EnrollmentGrant.grant, Identity.EnrollmentGrant.settle, Identity.EnrollmentGrant.takeOver, Identity.EnrollmentGrant.restoreBy
+\* models: Identity.EnrollmentGrant.grant, Identity.EnrollmentGrant.settle, Identity.EnrollmentGrant.takeOver, Identity.EnrollmentGrant.restoreBy
 (***************************************************************************)
 (* The owner's owed-settlement pass withdrawing a member's Node            *)
 (* `administrator` relation while an approval of that member runs          *)
@@ -96,14 +96,11 @@ SettlerClose ==
   /\ owed' = FALSE /\ settler' = "done"
   /\ UNCHANGED <<held, live, approver, seen, decision, restore>>
 
-\* Lean `restorationStep`, restated: restore unless held or owed again.
-RestorationStep(isOwed, isHeld) == IF isOwed \/ isHeld THEN "close" ELSE "restore"
-
 \* A later pass of a manager over an owed restoration.
 Restore ==
   /\ restore
   /\ settler = "done"
-  /\ IF RestorationStep(owed, held) = "restore" THEN held' = TRUE ELSE UNCHANGED held
+  /\ IF restorationStep(owed, held) = "restore" THEN held' = TRUE ELSE UNCHANGED held
   /\ restore' = FALSE
   /\ UNCHANGED <<owed, live, approver, seen, settler, decision>>
 

@@ -332,6 +332,9 @@ fn settlement_steps_match_lean() {
     gents_lean_vocab::families::identity_enrollment_grant_settlement_step::replay(|i| {
         settlement_step(i.owed, i.taken_over)
     });
+    gents_lean_vocab::families::identity_enrollment_grant_restoration_step::replay(|i| {
+        restoration_step(i.owed, i.held)
+    });
     gents_lean_vocab::families::identity_enrollment_grant_after_removal::replay(|i| {
         after_removal(i.taken_over)
     });
