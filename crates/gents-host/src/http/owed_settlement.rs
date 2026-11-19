@@ -1,18 +1,23 @@
 use super::{access::failure, router::RuntimeHttpState};
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use defra_http::ExtractIdentity;
 use gents_protocol::owed_settlement::{OwedSettlementReport, OwedSettlementRequest};
+use gents_store::config_client::client_authentication::ClientAuthorization;
 
-/// One settlement pass for the authenticated caller's own entries, under the
-/// delegation its request presented (`Identity.OwedRegistration`).
+/// One settlement pass for the authenticated caller: the administration
+/// withdrawals its home owes that it may issue
+/// (`Identity.EnrollmentGrant.settlementStep`), then, on a Vera home, its own
+/// owed entries under the delegation its request presented
+/// (`Identity.OwedRegistration`).
 pub async fn settle(
     State(state): State<RuntimeHttpState>,
     identity: ExtractIdentity,
+    headers: HeaderMap,
     Json(request): Json<OwedSettlementRequest>,
 ) -> Response {
     let Some(caller) = identity.did().cloned() else {
@@ -24,37 +29,58 @@ pub async fn settle(
             "The requested node does not serve this endpoint.",
         );
     }
-    let Some(runtime) = state.activation_runtime.get() else {
+    let (Some(runtime), Some(owner)) = (
+        state.activation_runtime.get(),
+        super::client_access::owner(&state),
+    ) else {
         return failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "The runtime is still starting.",
         );
     };
-    match gents_store::config_client::owed::settle_pass(
-        runtime.observation_node(),
+    let Ok(authorization) = ClientAuthorization::from_http(&identity, &headers) else {
+        return failure(StatusCode::UNAUTHORIZED, "Connect this client first.");
+    };
+    let node = runtime.observation_node();
+    let vera = gents_store::local::document_acp::node_delegation_audience(node).is_some();
+    let owed = match gents_store::config_client::owed::settle_pass(
+        node,
         &identity.context(),
         caller.as_str(),
     )
     .await
     {
-        Ok(standings) => {
-            let mut response = Json(OwedSettlementReport { standings }).into_response();
-            response.headers_mut().insert(
-                axum::http::header::CACHE_CONTROL,
-                axum::http::HeaderValue::from_static("no-store"),
-            );
-            response
-        }
-        Err(gents_store::config_client::owed::OwedPassError::DelegationRequired) => failure(
-            StatusCode::UNAUTHORIZED,
-            gents_store::config_client::user_write::REFUSED_FOR_A_PERSON,
-        ),
-        Err(error) => {
-            tracing::warn!(%error, "owed settlement pass failed");
-            failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "The runtime cannot answer now.",
+        Ok(standings) => standings,
+        Err(gents_store::config_client::owed::OwedPassError::DelegationRequired) if vera => {
+            return failure(
+                StatusCode::UNAUTHORIZED,
+                gents_store::config_client::user_write::REFUSED_FOR_A_PERSON,
             )
         }
-    }
+        Err(gents_store::config_client::owed::OwedPassError::DelegationRequired) => Vec::new(),
+        Err(error) => {
+            tracing::warn!(%error, "owed settlement pass failed");
+            return failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The runtime cannot answer now.",
+            );
+        }
+    };
+    let mut standings = match owner.settle_withdrawals(authorization).await {
+        Ok(standings) => standings,
+        Err(error) => {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "owed withdrawal settlement failed");
+            return failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The runtime cannot answer now.",
+            );
+        }
+    };
+    standings.extend(owed);
+    let mut response = Json(OwedSettlementReport { standings }).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
 }
