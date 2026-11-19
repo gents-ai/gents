@@ -1,15 +1,12 @@
 use serde_json::Value;
 
 pub mod chat;
-pub mod fake_llm;
 pub mod model;
 pub mod openai;
 
 pub use chat::MockChatEndpoint;
 pub use model::MockModelEndpoint;
 pub use openai::MockOpenAIEndpoint;
-
-pub use fake_llm::{completion_text_sse, tool_call_sse, tool_call_sse_with_id};
 
 pub fn request_has_tool_result_message(request: &Value) -> bool {
     request
@@ -80,28 +77,6 @@ pub fn request_tool_result_text(request: &Value) -> Option<String> {
                         Some(text)
                     }
                     _ => None,
-                }
-            })
-        })
-}
-
-pub fn request_contains_role_text(request: &Value, role: &str, needle: &str) -> bool {
-    request
-        .get("messages")
-        .and_then(Value::as_array)
-        .is_some_and(|messages| {
-            messages.iter().any(|message| {
-                if message.get("role").and_then(Value::as_str) != Some(role) {
-                    return false;
-                }
-                match message.get("content") {
-                    Some(Value::String(content)) => content.contains(needle),
-                    Some(Value::Array(parts)) => parts.iter().any(|part| {
-                        part.get("text")
-                            .and_then(Value::as_str)
-                            .is_some_and(|text| text.contains(needle))
-                    }),
-                    _ => false,
                 }
             })
         })

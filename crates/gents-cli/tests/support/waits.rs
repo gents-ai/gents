@@ -440,6 +440,7 @@ pub async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str
     }
 }
 
+#[cfg(feature = "live-e2e")]
 pub async fn wait_for_completed_tool_calls(
     graphql: &str,
     session_id: &str,
@@ -536,6 +537,7 @@ pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<S
     }
 }
 
+#[cfg(feature = "live-e2e")]
 pub async fn wait_for_completed_inference_agents(
     graphql: &str,
     backend_id: &str,
