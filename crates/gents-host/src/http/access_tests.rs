@@ -437,11 +437,15 @@ struct Case {
 
 #[tokio::test]
 async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
-    let stdout = gents_lean_contract::run_prepared_generator(
-        &gents_lean_contract::proofs_dir().unwrap(),
-        "Proofs.Conformance.HttpAccess:olean",
-        "Proofs/Conformance/HttpAccess.lean",
-    )
+    let stdout = tokio::task::spawn_blocking(|| {
+        gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.HttpAccess:olean",
+            "Proofs/Conformance/HttpAccess.lean",
+        )
+    })
+    .await
+    .unwrap()
     .unwrap();
     let cases: Vec<Case> = serde_json::from_str(&stdout).unwrap();
     assert_eq!(cases.len(), 24);

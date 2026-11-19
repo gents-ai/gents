@@ -5134,9 +5134,7 @@ const LEAN_GENERATOR_RUNS: &[&str] = &[
 /// `gents_lean_vocab::snapshot()`, which loads off the runtime, or runs the
 /// generator inside `spawn_blocking`. This allowlist only shrinks.
 #[rustfmt::skip]
-const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-host/src/http/access_tests.rs", 1),
-];
+const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[];
 
 struct LeanGeneratorVisitor {
     imports_owner: bool,
