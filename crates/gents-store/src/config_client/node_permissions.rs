@@ -180,15 +180,15 @@ impl ConfigAccess {
                 );
                 let client = graphql::http_client().await?;
                 let response = endpoint
-                    .authorize_runtime(client.get(url).query(&[
-                        ("collection", collection),
-                        ("docID", doc_id),
-                        ("relation", relation),
-                        ("targetActor", target.as_str()),
-                    ]))
-                    .await?
-                    .send()
-                    .await?;
+                    .send_resolving(|endpoint| {
+                        endpoint.authorize(client.get(&url).query(&[
+                            ("collection", collection),
+                            ("docID", doc_id),
+                            ("relation", relation),
+                            ("targetActor", target.as_str()),
+                        ]))
+                    })
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::HttpOperationStatus {

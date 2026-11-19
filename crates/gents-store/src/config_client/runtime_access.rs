@@ -85,16 +85,11 @@ impl GraphqlEndpoint {
                 graphql: self.to_string(),
             }
         })?;
+        let client = super::runtime_endpoints::discovery_client().await?;
+        let url = format!("{base}{path}");
         let response = self
-            .authorize_runtime(
-                super::runtime_endpoints::discovery_client()
-                    .await?
-                    .post(format!("{base}{path}")),
-            )
-            .await?
-            .json(input)
-            .send()
-            .await?;
+            .send_resolving(|endpoint| Ok(endpoint.authorize(client.post(&url))?.json(input)))
+            .await??;
         match response.status() {
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
                 Err(RuntimeAccessError::Refused)

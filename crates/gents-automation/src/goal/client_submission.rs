@@ -233,16 +233,16 @@ pub async fn submit_prepared_session_goal_control(
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?;
+            let apply = gents_protocol::goal_control::ApplyGoalControl {
+                node_did: command.node_did.clone(),
+                command_doc_id: document.clone(),
+                agent_did: command.agent_did.clone(),
+            };
             endpoint
-                .authorize_runtime(client.post(url))
-                .await?
-                .json(&gents_protocol::goal_control::ApplyGoalControl {
-                    node_did: command.node_did.clone(),
-                    command_doc_id: document.clone(),
-                    agent_did: command.agent_did.clone(),
+                .send_resolving(|endpoint| {
+                    Ok(endpoint.authorize(client.post(url.clone()))?.json(&apply))
                 })
-                .send()
-                .await?
+                .await??
                 .error_for_status()?;
         }
     }

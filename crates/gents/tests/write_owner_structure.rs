@@ -2056,9 +2056,13 @@ const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-host/src/readiness.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
     ("crates/gents-service/src/runtime_control.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
     ("crates/gents-service/src/service_update/execute.rs", 2, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
+    ("crates/gents-store/src/config_client/client_authentication.rs", 1, "authorize_runtime, an authorizer that reads the runtime's authentication first; its callers are counted"),
     ("crates/gents-store/src/config_client/graphql.rs", 2, "a transaction's commit and discard: its transaction recovers as a unit (resendUnit) and a refused commit is told"),
     ("crates/gents-store/src/config_client/mod.rs", 1, "authorize_in_transaction, the one authorizer of requests inside a transaction"),
 ];
+
+/// What authorizes a request as the endpoint's principal.
+const AUTHORIZERS: &[&str] = &["authorize", "authorize_runtime"];
 
 /// What sends the request a closure builds through `send_resolving`.
 const RESOLVING_SENDERS: &[&str] = &[
@@ -2094,7 +2098,10 @@ impl<'ast> Visit<'ast> for UnrecoveredAuthorizeVisitor {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method == "authorize" && call.args.len() == 1 && self.resolving == 0 {
+        if AUTHORIZERS.contains(&call.method.to_string().as_str())
+            && call.args.len() == 1
+            && self.resolving == 0
+        {
             self.sites += 1;
         }
         if RESOLVING_SENDERS.contains(&call.method.to_string().as_str()) {
@@ -2184,6 +2191,11 @@ fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
             0,
         ),
         ("fn f() { e.authorize_in_transaction(c.get(u), id); }", 0),
+        ("fn f() { e.authorize_runtime(c.get(u)).await?.send(); }", 1),
+        (
+            "fn f() { e.send_resolving(|e| e.authorize_runtime(c.get(u))); }",
+            0,
+        ),
         (
             "fn f() { http_client::endpoint_get_json(&e, |e| e.authorize(c.get(u))); }",
             0,
