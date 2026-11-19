@@ -79,10 +79,12 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use gents_store::config_client::ClientSigningCapability;
+    use gents_store::identity::NodeIdentity;
     fn home(server: &MockServer, node: &str, vera: bool) -> (RuntimeConnection, GraphqlEndpoint) {
         let graphql = format!("{}/api/v0/graphql", server.uri());
-        let capability = ClientSigningCapability::from_ed25519_key(&[1; 32]).unwrap();
+        let capability = gents_store::test_support::test_identity("owed-settlement-user")
+            .client_signing_capability()
+            .unwrap();
         let mut endpoint = GraphqlEndpoint::as_principal(&graphql, capability.did())
             .with_client_signing_capability(capability)
             .unwrap();
