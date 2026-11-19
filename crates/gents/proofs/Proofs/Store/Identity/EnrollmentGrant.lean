@@ -781,7 +781,8 @@ is told nothing, since it is not the caller's to settle, and an absent
 relation needs no removal. After removing the
 relation the pass decides again from the receipts read afresh
 (`afterRemoval`). So the relation ends held exactly when a live receipt
-accounts for it.
+accounts for it; the interleaving with an approval is
+`tla/SettlementApproval.tla`.
 Rust owner: `ClientAccessOwner::settle_withdrawals`. -/
 def settlementStep (owed takenOver : Bool) : SettlementStep :=
   if takenOver then (if owed then .close else .leave) else if owed then .issue else .leave
