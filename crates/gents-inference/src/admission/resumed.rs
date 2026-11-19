@@ -1,4 +1,4 @@
-use gents_protocol::document_query::{fields::inference_call, Direction, Filter, Query, Selection};
+use gents_protocol::document_query::{fields::inference_call, Filter, Query, Selection};
 use gents_protocol::row::AgentRequest;
 
 /// The call sequence a resumed execution continues from
@@ -17,8 +17,6 @@ pub async fn last_recorded_call_seq(
     let query = Query::select(Selection::new().field(inference_call::CALL_SEQ))
         .filter(Filter::eq(inference_call::REQUEST_DOC_ID, &request.doc_id))
         .filter(Filter::not_null(inference_call::CALL_SEQ))
-        .order_by(inference_call::CALL_SEQ, Direction::Desc)
-        .limit(1)
         .render();
     let response = access.read(&query).await?;
     let rows = response
