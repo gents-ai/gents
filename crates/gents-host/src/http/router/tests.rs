@@ -628,19 +628,40 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
         let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         }));
+        let request = WireRequest {
+            plugin: "acme/tool".into(),
+            agent: binding.agent_did.clone(),
+            targets_from: Vec::new(),
+            remove: false,
+            preview: false,
+            dynamic_consent: false,
+            tool_calls_consent: false,
+        };
+        let client_home = tempfile::tempdir().unwrap();
+        let unplanned = crate::http::pack_wire_client::wire_as_client(
+            crate::test_support::user_endpoint(&graphql, &home.user),
+            owner.clone(),
+            client_home.path().to_owned(),
+            request.clone(),
+            None,
+        )
+        .await
+        .expect_err("a client whose own home holds no record has nothing to plan from");
+        assert!(
+            format!("{unplanned:#}").contains("is not installed"),
+            "{unplanned:#}"
+        );
+        let sent = gents_pack::pack::wire_subject::WireSubject::of_record(&installed)
+            .expect("an installed pack plugin names its pack");
         let report = crate::http::pack_wire_client::wire_as_client(
             crate::test_support::user_endpoint(&graphql, &home.user),
             owner.clone(),
-            plugin_home.path().to_owned(),
-            WireRequest {
-                plugin: "acme/tool".into(),
-                agent: binding.agent_did.clone(),
-                targets_from: Vec::new(),
-                remove: false,
-                preview: false,
-                dynamic_consent: false,
-                tool_calls_consent: false,
-            },
+            client_home.path().to_owned(),
+            request,
+            gents_pack::pack::wire_subject::wire_plan_record(
+                &[],
+                gents_pack::pack::wire_subject::WireRecord::SentPack(sent),
+            ),
         )
         .await
         .unwrap();

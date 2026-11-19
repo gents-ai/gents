@@ -10,23 +10,23 @@ use serde_json::{json, Value};
 use super::pack_install_client::{PackInstallSession, PackReplaySession};
 
 /// Wires a new pin in the transaction of the runtime serving `endpoint`'s
-/// node: the client reads the same plan, checks each write the runtime
-/// proposes against its own and signs it with the User key it holds, so
-/// the runtime never signs as the User.
+/// node: the client plans from `record` when it planned one from a pack it
+/// holds, and otherwise from its own home, checks each write the runtime
+/// proposes against its own plan and signs it with the User key it holds,
+/// so the runtime never signs as the User.
 pub fn wire_as_client(
     endpoint: GraphqlEndpoint,
     owner: String,
     home: PathBuf,
     request: WireRequest,
+    record: Option<gents_pack::plugin::store::InstalledPlugin>,
 ) -> BoxFuture<'static, Result<Value>> {
     Box::pin(async move {
-        let wire = WirePlan::read_unheld(
-            &ConfigAccess::Graphql(endpoint.clone()),
-            &owner,
-            &home,
-            &request,
-        )
-        .await?;
+        let access = ConfigAccess::Graphql(endpoint.clone());
+        let wire = match record {
+            Some(record) => WirePlan::of_record(&access, &owner, &home, &request, record).await?,
+            None => WirePlan::read_unheld(&access, &owner, &home, &request).await?,
+        };
         let command = WireCommand {
             node_did: owner.clone(),
             request: request.clone(),

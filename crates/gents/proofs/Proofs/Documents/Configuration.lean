@@ -715,6 +715,76 @@ theorem hosted_effect_requires_approved_plan (actor graph native : Bool) :
     hostedPackEffectAllowed actor graph false native = false := by
   simp [hostedPackEffectAllowed]
 
+/-- What a wiring plan reads of an installed plugin: the pack that owns it,
+by digest and coordinate, and the rest of its record the plan writes from
+(its name, version, artifact digest and declaration), here `record`. -/
+structure WireSubject where
+  packDigest : String
+  coordinate : String
+  record : String
+  deriving DecidableEq, Repr
+
+/-- Where a client's wiring plan takes the plugin's record from. -/
+inductive WireRecord where
+  /-- Inside an install: from the pack the client itself just sent. -/
+  | sentPack (subject : WireSubject)
+  /-- From the plugin store of the client's own home, which the runtime
+  serves: state the client keeps itself. -/
+  | ownHome (subject : WireSubject)
+  /-- A standalone wire over a runtime: from the record the runtime serves. -/
+  | served (subject : WireSubject)
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3962): a client wiring a plugin over a runtime plans from
+a record it can tie to a pack it chose itself, never from the runtime's word.
+Inside an install that is the pack it just sent, and over a runtime that
+serves the client's own home it is that home's plugin store. Otherwise the
+runtime serves the record, and the client takes it only when it is exactly
+what a pack the client approved and recorded (`approved`) yields: an unknown
+pack digest, or a known digest with any other record, plans nothing and
+nothing is signed. -/
+def wirePlanSubject (approved : List WireSubject) : WireRecord → Option WireSubject
+  | .sentPack subject => some subject
+  | .ownHome subject => some subject
+  | .served subject => if approved.contains subject then some subject else none
+
+theorem a_served_record_of_no_approved_pack_plans_nothing (approved : List WireSubject)
+    (subject : WireSubject) (unknown : ∀ kept ∈ approved, kept.packDigest ≠ subject.packDigest) :
+    wirePlanSubject approved (.served subject) = none := by
+  have absent : subject ∉ approved := fun mem => unknown subject mem rfl
+  simp [wirePlanSubject, absent]
+
+theorem an_altered_served_record_plans_nothing (approved : List WireSubject)
+    (subject : WireSubject)
+    (altered : ∀ kept ∈ approved, kept.packDigest = subject.packDigest → kept ≠ subject) :
+    wirePlanSubject approved (.served subject) = none := by
+  have absent : subject ∉ approved := fun mem => altered subject mem rfl rfl
+  simp [wirePlanSubject, absent]
+
+theorem a_wire_plans_only_from_its_own_pack_or_an_approved_one (approved : List WireSubject)
+    (record : WireRecord) (subject : WireSubject)
+    (planned : wirePlanSubject approved record = some subject) :
+    record = .sentPack subject ∨ record = .ownHome subject ∨ subject ∈ approved := by
+  cases record with
+  | sentPack sent => simp [wirePlanSubject] at planned; exact .inl (by rw [planned])
+  | ownHome kept => simp [wirePlanSubject] at planned; exact .inr (.inl (by rw [planned]))
+  | served served =>
+    simp only [wirePlanSubject] at planned
+    split at planned
+    · rename_i kept
+      simp at planned
+      subst planned
+      exact .inr (.inr (by simpa using kept))
+    · cases planned
+
+/-- A write the runtime proposes while a client wires is signed only when it
+matches the client's own plan (`hostedPackEffectAllowed`); a wire that plans
+nothing has no plan to match, so it signs nothing. -/
+theorem a_wire_with_no_plan_signs_no_write (approved : List WireSubject) (record : WireRecord)
+    (unplanned : wirePlanSubject approved record = none) (actor graph native : Bool) :
+    hostedPackEffectAllowed actor graph (wirePlanSubject approved record).isSome native = false := by
+  simp [unplanned, hostedPackEffectAllowed]
+
 /-- Plugin-only hosted installation preserves existing pack documents. Its
   installed plugin records are staged by the host from the reviewed archive;
   the client independently replays the same native-authorized pack record. -/

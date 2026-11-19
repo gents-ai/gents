@@ -35,12 +35,15 @@ pub type LoadHeldUser = fn(
 
 /// Wires a new pin through the runtime serving `endpoint`'s node, the client
 /// signing each of its writes with the User key it holds
-/// (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`).
+/// (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`). The record is
+/// the plugin's as the client planned it (`Configuration.wirePlanSubject`);
+/// `None` reads it from the client's own home.
 pub type WireAsClient = fn(
     gents_store::config_client::GraphqlEndpoint,
     String,
     std::path::PathBuf,
     WireRequest,
+    Option<crate::plugin::store::InstalledPlugin>,
 ) -> futures::future::BoxFuture<'static, Result<Value>>;
 
 /// Who signs a wire: the held User of a home a local transaction opens, or
@@ -97,6 +100,20 @@ pub async fn wire_in(
     request: &WireRequest,
     signers: WireSigners,
 ) -> Result<Value> {
+    wire_in_planned(access, owner, home, request, None, signers).await
+}
+
+/// [`wire_in`] with the plugin's record as the client planned it from a
+/// pack it holds (`Configuration.wirePlanSubject`), for a new pin written
+/// through a runtime.
+pub async fn wire_in_planned(
+    access: &ConfigAccess,
+    owner: &str,
+    home: &Path,
+    request: &WireRequest,
+    record: Option<crate::plugin::store::InstalledPlugin>,
+    signers: WireSigners,
+) -> Result<Value> {
     if let ConfigAccess::Graphql(endpoint) = access {
         if !request.preview && !request.remove {
             return (signers.client)(
@@ -104,6 +121,7 @@ pub async fn wire_in(
                 owner.to_owned(),
                 home.to_owned(),
                 request.clone(),
+                record,
             )
             .await;
         }
@@ -241,6 +259,20 @@ impl WirePlan {
         Self::read_holding(access, owner, home, request, true).await
     }
 
+    /// The plan for `plugin`, a record the client planned from a pack it
+    /// holds (`Configuration.wirePlanSubject`), without reading or holding
+    /// any plugin store: what a client signs against while the runtime
+    /// that serves another home holds its own.
+    pub async fn of_record(
+        access: &ConfigAccess,
+        owner: &str,
+        home: &Path,
+        request: &WireRequest,
+        plugin: crate::plugin::store::InstalledPlugin,
+    ) -> Result<Self> {
+        Self::planned(access, owner, home, request, None, plugin).await
+    }
+
     /// [`Self::read`] without holding the plugin store: what a client
     /// reads beside the runtime that holds it while it writes.
     pub async fn read_unheld(
@@ -285,6 +317,17 @@ impl WirePlan {
                 pause.release.notified().await;
             }
         }
+        Self::planned(access, owner, home, request, store_guard, plugin).await
+    }
+
+    async fn planned(
+        access: &ConfigAccess,
+        owner: &str,
+        home: &Path,
+        request: &WireRequest,
+        store_guard: Option<crate::plugin::store::StoreGuard>,
+        plugin: crate::plugin::store::InstalledPlugin,
+    ) -> Result<Self> {
         let mut plan = crate::pack::wiring::PluginWiring::read(
             access,
             owner,
@@ -339,12 +382,12 @@ pub async fn wire_pack_plugins_consenting(
     tool_calls_consent: bool,
     signers: WireSigners,
 ) -> Result<Vec<Value>> {
-    let namespace = &pack.manifest().metadata.namespace;
+    let sent = crate::pack::wire_subject::WireSubject::of_sent_pack(pack)?;
     let mut wired = Vec::new();
     for agent in agents {
-        for plugin in &pack.manifest().metadata.plugins {
+        for subject in &sent {
             let request = WireRequest {
-                plugin: format!("{namespace}/{}", plugin.name),
+                plugin: subject.coordinate(),
                 agent: agent.clone(),
                 targets_from: Vec::new(),
                 remove: false,
@@ -352,7 +395,11 @@ pub async fn wire_pack_plugins_consenting(
                 dynamic_consent,
                 tool_calls_consent,
             };
-            wired.push(wire_in(access, owner, home, &request, signers).await?);
+            let record = crate::pack::wire_subject::wire_plan_record(
+                &[],
+                crate::pack::wire_subject::WireRecord::SentPack(subject.clone()),
+            );
+            wired.push(wire_in_planned(access, owner, home, &request, record, signers).await?);
         }
     }
     Ok(wired)

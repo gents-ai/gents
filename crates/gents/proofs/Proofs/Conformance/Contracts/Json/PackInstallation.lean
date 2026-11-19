@@ -250,6 +250,42 @@ def wireTarget : Conformance.Family WireTargetInput Bool where
     [false, true].map fun remove => { «local» := localTarget, preview, remove }
   model := fun i => Configuration.wireTargetAllowed i.«local» i.preview i.remove
 
+deriving instance Lean.ToJson for Configuration.WireSubject
+
+inductive WireSource where
+  | sentPack
+  | ownHome
+  | served
+  deriving Lean.ToJson
+
+structure WirePlanInput where
+  approved : List Configuration.WireSubject
+  source : WireSource
+  subject : Configuration.WireSubject
+  deriving Lean.ToJson
+
+/-- A record from the pack the client sent or from its own home; a served
+record it approved;
+one of a pack it never approved; one of an approved pack whose record or
+coordinate differs; and one with no approvals recorded. -/
+@[conformance_family]
+def wirePlan : Conformance.Family WirePlanInput Bool where
+  inputs :=
+    let approved : Configuration.WireSubject := ⟨"p1", "acme/demo", "r1"⟩
+    [ ⟨[], .sentPack, approved⟩,
+      ⟨[], .ownHome, approved⟩,
+      ⟨[approved], .served, approved⟩,
+      ⟨[approved], .served, ⟨"p2", "acme/demo", "r1"⟩⟩,
+      ⟨[approved], .served, ⟨"p1", "acme/demo", "r2"⟩⟩,
+      ⟨[approved], .served, ⟨"p1", "acme/other", "r1"⟩⟩,
+      ⟨[], .served, approved⟩ ]
+  model := fun i =>
+    (Configuration.wirePlanSubject i.approved
+      (match i.source with
+        | .sentPack => .sentPack i.subject
+        | .ownHome => .ownHome i.subject
+        | .served => .served i.subject)).isSome
+
 structure OperatorWireInput where
   operator : Bool
   ready : Bool
