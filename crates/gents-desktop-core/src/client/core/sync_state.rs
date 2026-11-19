@@ -567,11 +567,15 @@ mod tests {
         use super::super::EnrollmentActivationStage;
         use super::*;
         use serde_json::Value;
-        let output = gents_lean_contract::run_prepared_generator(
-            &gents_lean_contract::proofs_dir().unwrap(),
-            "Proofs.Conformance.EnrollmentActivation:olean",
-            "Proofs/Conformance/EnrollmentActivation.lean",
-        )
+        let output = tokio::task::spawn_blocking(|| {
+            gents_lean_contract::run_prepared_generator(
+                &gents_lean_contract::proofs_dir().unwrap(),
+                "Proofs.Conformance.EnrollmentActivation:olean",
+                "Proofs/Conformance/EnrollmentActivation.lean",
+            )
+        })
+        .await
+        .unwrap()
         .unwrap();
         let cases: Vec<Value> = serde_json::from_str(&output).unwrap();
         assert!(!cases.is_empty());
