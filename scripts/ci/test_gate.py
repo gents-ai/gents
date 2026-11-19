@@ -336,7 +336,7 @@ class Shards(unittest.TestCase):
             "unfiltered": {"ignored": False}}}}}
         self.assertEqual(gate.runnable(listing), {"b": ["mine", "unfiltered"]})
         with self.assertRaises(SystemExit):
-            gate.run_build(selection, "portable", 3)
+            gate.run_build(selection, "portable", len(ROLES["portable"]["host_groups"]) + 1)
 
     def test_the_build_waits_for_the_lean_contract_before_its_tests(self):
         events = []
