@@ -11,7 +11,7 @@ use crate::support::builder_runtime::{
     builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
 };
 use crate::support::interrupt::BootedAgent;
-use crate::support::live_inference::{wait_for_request_terminal, STALL_CEILING};
+use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -102,7 +102,7 @@ async fn complete_request(
 ) {
     let submitted = Instant::now();
     submit_request(actors, request_id, session, "interactive", prompt).await;
-    let state = wait_for_request_terminal(&actors.agent_access, request_id, STALL_CEILING).await;
+    let state = wait_for_request_terminal(&actors.agent_access, request_id).await;
     tracing::info!(
         request_id,
         state,

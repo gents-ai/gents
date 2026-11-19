@@ -10,7 +10,7 @@ use super::{
 
 fn one_attempt(timeout: Duration) -> GraphqlRequestOptions {
     GraphqlRequestOptions {
-        timeout,
+        timeout: Some(timeout),
         max_attempts: 1,
         retry_backoff: Duration::ZERO,
     }

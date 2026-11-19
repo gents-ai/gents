@@ -7,40 +7,27 @@ use super::{graphql_api_base, ConfigClientError, GraphqlEndpoint};
 
 type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
-const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
+/// The client of every HTTP request to the store, read or write: it waits
+/// for the server's answer or a connection failure, never a client clock. A
+/// commit abandoned by a total request timeout while a loaded server is still
+/// committing has an unknown outcome that only a dead server justifies, and
+/// a read under one fails a live server that is only slow
+/// (`tla/CommitResponseWait.tla`, `ClientWindow`). Keepalive probes end a
+/// connection whose host is gone (`NoKeepalive`); a live server that stops
+/// answering holds the request until the server bounds it (`Wedged`).
 pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
-        .get_or_try_init(|| build_client(Some(HTTP_TIMEOUT)))
+        .get_or_try_init(|| async {
+            tokio::task::spawn_blocking(|| {
+                gents_protocol::graphql::store_http_client_builder()
+                    .build()
+                    .map_err(ConfigClientError::HttpClientBuild)
+            })
+            .await
+            .map_err(ConfigClientError::HttpClientJoin)?
+        })
         .await
-}
-
-/// The client of an HTTP write (an auto-commit mutation or a transaction):
-/// its requests wait for the server's answer or a connection failure, never a
-/// client clock. A commit abandoned by a total request timeout while a loaded
-/// server is still committing has an unknown outcome that only the server's
-/// death justifies (`tla/CommitResponseWait.tla`, `ClientWindow`); bounding a
-/// wedged commit is the server's (`Wedged`).
-async fn write_http_client() -> Result<&'static reqwest::Client> {
-    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
-    CLIENT.get_or_try_init(|| build_client(None)).await
-}
-
-async fn build_client(total: Option<std::time::Duration>) -> Result<reqwest::Client> {
-    tokio::task::spawn_blocking(move || {
-        let builder = reqwest::Client::builder()
-            .connect_timeout(HTTP_TIMEOUT)
-            .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT);
-        match total {
-            Some(total) => builder.timeout(total),
-            None => builder,
-        }
-        .build()
-        .map_err(ConfigClientError::HttpClientBuild)
-    })
-    .await
-    .map_err(ConfigClientError::HttpClientJoin)?
 }
 
 pub(super) async fn auto_commit(
@@ -84,7 +71,7 @@ async fn auto_commit_once(
     endpoint: &GraphqlEndpoint,
     body: &Value,
 ) -> Result<(Result<Value>, bool)> {
-    let client = write_http_client().await?;
+    let client = http_client().await?;
     let (response, resent) = endpoint
         .send_counting_resends(|endpoint| {
             Ok(endpoint.authorize(client.post(endpoint.url()))?.json(body))
@@ -178,7 +165,7 @@ pub(super) async fn txn_begin(
     endpoint: &GraphqlEndpoint,
     read_only: bool,
 ) -> Result<(reqwest::Client, String)> {
-    let client = write_http_client().await?.clone();
+    let client = http_client().await?.clone();
     let path = format!("{}/tx", graphql_api_base(endpoint.url())?);
     let url = if read_only {
         format!("{path}?read_only=true")
@@ -631,5 +618,48 @@ mod tests {
             &[Some("read_only=true".to_owned()), None]
         );
         server.abort();
+    }
+
+    /// A loaded server may take any time to answer a commit; the client's
+    /// verdict is the server's, not its own clock's
+    /// (`tla/CommitResponseWait.tla`, `ClientWindow`). Once the connection is
+    /// up the clock is paused, and a paused clock jumps to the next timer
+    /// whenever both sides wait, so a client timer of any length would fire
+    /// before the server's hour.
+    #[tokio::test]
+    async fn a_commit_the_server_answers_late_is_confirmed() {
+        use axum::{
+            routing::{get, post},
+            Router,
+        };
+
+        let app = Router::new()
+            .route("/api/v0/version", get(|| async { "" }))
+            .route(
+                "/api/v0/tx/{id}",
+                post(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    ""
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = http_client().await.unwrap().clone();
+        let version = endpoint.replace("/graphql", "/version");
+        client.get(version).send().await.unwrap();
+        tokio::time::pause();
+        let started = tokio::time::Instant::now();
+        let result = txn_commit(&GraphqlEndpoint::anonymous(endpoint), "17", &client).await;
+        server.abort();
+        if let Err(
+            TxnCommitError::CleanupRequired(error)
+            | TxnCommitError::TransactionConsumed(error)
+            | TxnCommitError::ConfirmedConflict(error),
+        ) = result
+        {
+            panic!("the server's commit is confirmed: {error:?}");
+        }
+        assert!(started.elapsed() >= std::time::Duration::from_secs(3600));
     }
 }

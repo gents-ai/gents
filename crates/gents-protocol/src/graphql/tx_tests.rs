@@ -66,7 +66,7 @@ async fn execute_graphql_async_with_tx_sets_header_when_id_provided() {
     });
     let endpoint = format!("http://{addr}/");
     let options = GraphqlRequestOptions {
-        timeout: std::time::Duration::from_secs(2),
+        timeout: Some(std::time::Duration::from_secs(2)),
         max_attempts: 1,
         retry_backoff: std::time::Duration::from_millis(50),
     };
@@ -98,14 +98,14 @@ async fn shared_graphql_client_preserves_per_request_timeouts() {
     );
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let mut options = GraphqlRequestOptions {
-        timeout: Duration::from_millis(10),
+        timeout: Some(Duration::from_millis(10)),
         max_attempts: 1,
         retry_backoff: Duration::ZERO,
     };
     assert!(execute_graphql_async(&endpoint, None, "{ ok }", options)
         .await
         .is_err());
-    options.timeout = Duration::from_secs(2);
+    options.timeout = None;
     assert_eq!(
         execute_graphql_async(&endpoint, None, "{ ok }", options)
             .await
@@ -147,7 +147,7 @@ async fn execute_graphql_async_leaves_conflict_retry_to_the_server() {
     });
     let endpoint = format!("http://{addr}/");
     let options = GraphqlRequestOptions {
-        timeout: std::time::Duration::from_secs(2),
+        timeout: Some(std::time::Duration::from_secs(2)),
         max_attempts: 3,
         retry_backoff: std::time::Duration::from_millis(1),
     };
@@ -279,7 +279,7 @@ async fn a_refused_credential_keeps_the_delegation_audience_edge_code() {
         );
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let options = GraphqlRequestOptions {
-        timeout: Duration::from_secs(2),
+        timeout: None,
         max_attempts: 1,
         retry_backoff: Duration::from_millis(10),
     };

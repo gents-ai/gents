@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_documents::{BashMode, BashTools, HostTools, Tools};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
@@ -73,8 +71,7 @@ impl Fixture {
         )
         .await;
         assert_eq!(
-            wait_for_request_terminal(&self.actors.fixture.access, id, Duration::from_secs(120))
-                .await,
+            wait_for_request_terminal(&self.actors.fixture.access, id).await,
             "completed"
         );
     }
