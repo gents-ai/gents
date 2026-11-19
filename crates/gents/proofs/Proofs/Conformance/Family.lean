@@ -238,6 +238,19 @@ private def explicitFamilyTerm (declaration : Name) : TermElabM (TSyntax `term) 
     | throwError "{declaration} is not a conformance family"
   `(Family.json $(← schemaTerm input) $(← schemaTerm output) $(mkIdent declaration))
 
+/-- The list of `entries` as appended chunks. One list literal nests a
+constructor per entry, and the kernel's recursion limit bounds that depth;
+appended chunks keep it to the chunk size plus the chunk count, whatever the
+number of entries. The list, and so the object built from it, is the same. -/
+private def chunkedEntries (entries : Array (TSyntax `term)) : TermElabM (TSyntax `term) := do
+  let chunkSize := 32
+  let chunkCount := (entries.size + chunkSize - 1) / chunkSize
+  let mut list ← `(([] : List (String × Json)))
+  for index in (List.range chunkCount).reverse do
+    let chunk := entries.extract (index * chunkSize) ((index + 1) * chunkSize)
+    list ← `([$chunk,*] ++ $list)
+  return list
+
 /-- The snapshot entries of every `conformance_function` and
 `conformance_family` in the import closure. A family's key drops a leading
 `Conformance` namespace. -/
@@ -249,7 +262,7 @@ elab "conformance_families%" : term => do
     let key := wireKey (declaration.replacePrefix `Conformance .anonymous)
     `(($(quote key), $(← explicitFamilyTerm declaration)))
   let entries := functions ++ explicit
-  elabTerm (← `(Json.mkObj [$entries,*])) (some (mkConst ``Json))
+  elabTerm (← `(Json.mkObj $(← chunkedEntries entries))) (some (mkConst ``Json))
 
 /-- The wire names of every enum with a `conformance_vocabulary`. The key ends
 in `_vocabulary`: `ManagedExec.StopOutcome` and `ManagedExec.stopOutcome` would
@@ -259,6 +272,6 @@ elab "conformance_vocabularies%" : term => do
   let entries ← vocabularies.mapM fun (type, _) => do
     let (name, constructors) ← enumConstructors (mkConst type)
     `(($(quote (wireKey type ++ "_vocabulary")), Schema.wire $(← enumSchemaTerm name constructors)))
-  elabTerm (← `(Json.mkObj [$entries,*])) (some (mkConst ``Json))
+  elabTerm (← `(Json.mkObj $(← chunkedEntries entries))) (some (mkConst ``Json))
 
 end Conformance
