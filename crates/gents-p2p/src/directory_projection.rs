@@ -201,6 +201,15 @@ pub async fn run_directory_projection(
     source_did: String,
     cancel: CancellationToken,
 ) -> Result<()> {
+    if crate::peer_publication::idles(
+        &node,
+        gents_store::local::document_acp::Periodic::Directory,
+        &cancel,
+    )
+    .await
+    {
+        return Ok(());
+    }
     let store = GraphqlDirectoryStore::new(node.clone());
     let mut subscription = gents_store::subscription_source::subscribe_collections(
         &node,
