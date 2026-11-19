@@ -22,6 +22,7 @@ pub mod goal_control;
 pub mod goal_names;
 pub mod goal_status;
 pub mod graphql;
+pub mod home_attestation;
 pub mod job;
 pub mod job_settings;
 pub mod mailbox_question;
