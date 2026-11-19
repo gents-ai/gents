@@ -1,5 +1,6 @@
 pub mod builtin;
 mod collection_use;
+mod guided_failure;
 pub mod mcp;
 pub mod native;
 pub mod plugin;
