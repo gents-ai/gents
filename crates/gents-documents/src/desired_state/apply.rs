@@ -94,8 +94,11 @@ pub async fn provision_engineer(
 /// agent catalog and, through `parent`, update of every Agent and configuration
 /// document of the Node; it also carries Node delete, every Agent's sessions
 /// and the management of Node relations, the accepted cost recorded on the
-/// Lean definition.
-async fn grant_node_administration(
+/// Lean definition. It is the one grant of the agent catalog
+/// (`Identity.Household.agent_manager_admits_no_actor`). The transaction's
+/// actor must manage `administrator` on the Node (its owner or an
+/// `administrator`).
+pub async fn grant_node_administration(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_did: &str,
@@ -107,32 +110,16 @@ async fn grant_node_administration(
     Ok(())
 }
 
-/// Lean `SelfConfig.categoryGroupings` (`node`): grant `agent_did` the Node's
-/// agent catalog and nothing else (`nodes#agent_manager`, hence
-/// `manage_agents`), which creates and clones Agents and updates the Node's
-/// `DefaultAgentSelection`. The transaction's actor must manage
-/// `agent_manager` on the Node (its owner or an `administrator`).
-pub async fn grant_agent_catalog(
+/// Withdraw the Node administration `grant_node_administration` gave
+/// `agent_did`, and with it the agent catalog.
+pub async fn revoke_node_administration(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_did: &str,
 ) -> Result<()> {
     let target = identity::Did::new(agent_did)?;
     let node_doc = node_doc_id(txn, node_did).await?;
-    txn.add_actor_relationship("Node", &node_doc, "agent_manager", &target)
-        .await?;
-    Ok(())
-}
-
-/// Withdraw the agent catalog `grant_agent_catalog` gave `agent_did`.
-pub async fn revoke_agent_catalog(
-    txn: &ConfigApplyTxn<'_>,
-    node_did: &str,
-    agent_did: &str,
-) -> Result<()> {
-    let target = identity::Did::new(agent_did)?;
-    let node_doc = node_doc_id(txn, node_did).await?;
-    txn.delete_actor_relationship("Node", &node_doc, "agent_manager", &target)
+    txn.delete_actor_relationship("Node", &node_doc, "administrator", &target)
         .await?;
     Ok(())
 }
