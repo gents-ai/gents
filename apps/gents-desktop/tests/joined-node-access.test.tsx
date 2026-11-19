@@ -49,6 +49,7 @@ function snapshot(state: string, connected = false): DesktopClientSnapshot {
           chatSafe: connected,
         },
       ],
+      unkeptChanges: [],
     },
   };
 }
