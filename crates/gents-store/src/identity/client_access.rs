@@ -340,6 +340,24 @@ impl ClientAccessOwner {
     }
 }
 
+impl ClientAccessOwner {
+    /// One owed-settlement pass's withdrawals for `caller`: the runtime acts
+    /// as the caller under the credential its request carried and signs
+    /// nothing (Lean `Identity.EnrollmentGrant.settlementStep`), serialized
+    /// with this runtime's client-access decisions.
+    pub async fn settle_withdrawals(
+        &self,
+        caller: ClientAuthorization,
+    ) -> Result<Vec<gents_protocol::owed_settlement::OwedStanding>, ClientAccessError> {
+        let _decision = self.decisions.lock().await;
+        let runtime = self.runtime()?;
+        let node_doc_id = self.node_document(&runtime).await?;
+        let issuer = ConfigAccess::local_as(self.node.clone(), caller.actor().clone())
+            .with_client_authorization(caller)?;
+        Ok(crate::identity::settle_owed_withdrawals(&issuer, &runtime, &node_doc_id).await?)
+    }
+}
+
 pub async fn list_requests(
     access: &ConfigAccess,
     node_did: &str,

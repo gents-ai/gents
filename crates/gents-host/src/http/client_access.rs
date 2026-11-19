@@ -12,7 +12,7 @@ use gents_store::{
 
 use super::router::RuntimeHttpState;
 
-fn owner(state: &RuntimeHttpState) -> Option<ClientAccessOwner> {
+pub(super) fn owner(state: &RuntimeHttpState) -> Option<ClientAccessOwner> {
     let runtime = state.activation_runtime.get()?;
     Some(ClientAccessOwner::new(
         runtime.observation_node().clone(),

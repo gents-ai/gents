@@ -182,10 +182,8 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
         submit_start.elapsed()
     );
 
-    let owner_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
-        let state =
-            wait_for_request_terminal(&actors.fixture.access, request_id, owner_deadline).await;
+        let state = wait_for_request_terminal(&actors.fixture.access, request_id).await;
         assert_eq!(
             state, "completed",
             "owner wave {request_id} must complete against target {}, got {state}",

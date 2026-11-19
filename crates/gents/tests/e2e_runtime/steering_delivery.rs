@@ -12,6 +12,7 @@ use gents_session::request::lifecycle::{
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::UNREACHED_DEADLINE;
 use tokio::sync::Notify;
 
 use super::queue_management::{enqueue_owned, row_as};
@@ -63,8 +64,7 @@ impl ToolDyn for HeldTool {
 }
 
 async fn wait_for_signed_request_terminal(access: &ConfigAccess, request_id: &str) -> String {
-    crate::support::live_inference::wait_for_request_terminal(access, request_id, STALL_CEILING)
-        .await
+    crate::support::live_inference::wait_for_request_terminal(access, request_id).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -125,7 +125,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(60)
+        .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
         .done()
         .build()
         .await
@@ -334,7 +334,7 @@ fn held_runtime(
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(60)
+        .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
         .custom_tool(HeldTool {
             entered: entered.clone(),
             release: release.clone(),

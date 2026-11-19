@@ -1310,12 +1310,7 @@ pub async fn complete_pending_request_with_canonical_output(
     .await?;
     let prepared = accepted_turn::PreparedAcceptedTurn { backend };
     let runtime = accepted_turn::boot_prepared_accepted_turn(db, prepared, agent).await;
-    live_inference::wait_for_request_terminal(
-        db.node.as_ref(),
-        &row.request_id,
-        live_inference::STALL_CEILING,
-    )
-    .await;
+    live_inference::wait_for_request_terminal(db.node.as_ref(), &row.request_id).await;
     runtime.shutdown().await;
     let request_id = escape_graphql_string(&row.request_id);
     let response = db

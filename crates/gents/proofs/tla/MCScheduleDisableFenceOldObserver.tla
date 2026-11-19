@@ -1,0 +1,4 @@
+---- MODULE MCScheduleDisableFenceOldObserver ----
+EXTENDS ScheduleDisableFence
+
+====

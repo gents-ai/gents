@@ -33,8 +33,69 @@ fn observe(
                     .map(str::to_owned)
                     .collect(),
                 withdrawn: receipt.withdrawn,
+                owed: receipt.owed,
             })
             .collect(),
+    }
+}
+
+/// Apply a withdrawal the runtime runs (Lean `oweRevoke`, `oweRevokeMember`)
+/// as the production planners decide it: every planned tuple but the Node
+/// `administrator` relation is removed, the retired receipts are withdrawn,
+/// and those `plan_owing` names owe that relation's withdrawal.
+fn owe(
+    member: &str,
+    retired: &[String],
+    removed: &[EnrollmentGrantTuple],
+    held: &mut Vec<(String, EnrollmentGrantTuple)>,
+    receipts: &mut [EnrollmentGrantReceipt],
+) {
+    let retiring: Vec<_> = receipts
+        .iter()
+        .filter(|receipt| retired.contains(&receipt.doc_id))
+        .cloned()
+        .collect();
+    let owing = plan_owing(member, &retiring.iter().collect::<Vec<_>>(), removed);
+    held.retain(|(subject, tuple)| {
+        !(subject == member
+            && *tuple != EnrollmentGrantTuple::NodeAdministrator
+            && removed.contains(tuple))
+    });
+    for receipt in receipts {
+        if retired.contains(&receipt.doc_id) {
+            receipt.withdrawn = true;
+            receipt.owed |= owing.contains(&receipt.doc_id);
+        }
+    }
+}
+
+/// An owed-settlement pass by the Node owner, through the production
+/// decisions; native admits the owner's change.
+fn settle(
+    member: &str,
+    held: &mut Vec<(String, EnrollmentGrantTuple)>,
+    receipts: &mut [EnrollmentGrantReceipt],
+) {
+    let owed = administration_owed(member, receipts);
+    let taken_over = receipts
+        .iter()
+        .any(|receipt| receipt.accounts(member, EnrollmentGrantTuple::NodeAdministrator));
+    match settlement_step(owed, taken_over) {
+        SettlementStep::Leave => return,
+        SettlementStep::Close => {}
+        SettlementStep::Issue => {
+            held.retain(|(subject, tuple)| {
+                !(subject == member && *tuple == EnrollmentGrantTuple::NodeAdministrator)
+            });
+            if after_removal(taken_over) == AfterRemoval::Reissue {
+                held.push((member.to_owned(), EnrollmentGrantTuple::NodeAdministrator));
+            }
+        }
+    }
+    for receipt in receipts {
+        if receipt.member_did == member {
+            receipt.owed = false;
+        }
     }
 }
 
@@ -75,12 +136,16 @@ fn grant_and_revocation_planners_replay_lean_traces() {
                                 .map(|(_, tuple)| *tuple)
                                 .collect();
                             let recorded = plan_grant(member, &member_held, &receipts);
+                            for receipt in &mut receipts {
+                                receipt.owed &= receipt.member_did != member;
+                            }
                             receipts.push(EnrollmentGrantReceipt {
                                 doc_id: format!("receipt-{request}"),
                                 request_id: request.to_owned(),
                                 member_did: member.to_owned(),
                                 tuples: recorded.clone(),
                                 withdrawn: false,
+                                owed: false,
                             });
                             recorded
                         }
@@ -144,6 +209,35 @@ fn grant_and_revocation_planners_replay_lean_traces() {
                         }
                     }
                 }
+                "owe_revoke" => {
+                    let live = receipts
+                        .iter()
+                        .find(|receipt| receipt.request_id == step.request && !receipt.withdrawn)
+                        .cloned();
+                    if let Some(revoked) = live {
+                        let removed = plan_withdrawal(&revoked, &receipts);
+                        let member = revoked.member_did.clone();
+                        owe(
+                            &member,
+                            &[revoked.doc_id],
+                            &removed,
+                            &mut held,
+                            &mut receipts,
+                        );
+                    }
+                }
+                "owe_revoke_member" => {
+                    let member = step.member.as_str();
+                    let removed = plan_membership_withdrawal(member, &receipts);
+                    let retired: Vec<_> = receipts
+                        .iter()
+                        .filter(|receipt| receipt.member_did == member)
+                        .map(|receipt| receipt.doc_id.clone())
+                        .collect();
+                    owe(member, &retired, &removed, &mut held, &mut receipts);
+                }
+                "settle" => settle(&step.member, &mut held, &mut receipts),
+                "settle_by_node" => {}
                 other => panic!("{}: unknown action {other}", input.name),
             }
             steps.push(observe(&input.subjects, &held, &receipts));
@@ -163,6 +257,7 @@ fn withdrawal_plan_retires_only_the_live_receipt_for_its_request() {
         member_did: "did:key:z6MkktTX7oEjtsXwBJXEBPnrDCj6J917M1ERALJQriozAes4".to_owned(),
         tuples: EnrollmentGrantTuple::derived(),
         withdrawn,
+        owed: false,
     };
     assert!(EnrollmentGrantWithdrawal::plan("a", &[receipt("a", true)])
         .unwrap()
@@ -175,6 +270,16 @@ fn withdrawal_plan_retires_only_the_live_receipt_for_its_request() {
         planned.tuples.is_empty(),
         "b still accounts for every tuple"
     );
+}
+
+#[test]
+fn settlement_steps_match_lean() {
+    gents_lean_vocab::families::identity_enrollment_grant_settlement_step::replay(|i| {
+        settlement_step(i.owed, i.taken_over)
+    });
+    gents_lean_vocab::families::identity_enrollment_grant_after_removal::replay(|i| {
+        after_removal(i.taken_over)
+    });
 }
 
 #[test]
@@ -249,6 +354,7 @@ async fn a_grant_failing_at_any_tuple_leaves_none_of_its_authority() {
         member_did: member.into(),
         tuples: derived[..2].to_vec(),
         withdrawn: false,
+        owed: false,
     };
     let this = EnrollmentGrantReceipt {
         doc_id: "doc-this".into(),
@@ -256,6 +362,7 @@ async fn a_grant_failing_at_any_tuple_leaves_none_of_its_authority() {
         member_did: member.into(),
         tuples: derived.clone(),
         withdrawn: false,
+        owed: false,
     };
     let receipts = [other.clone(), this.clone()];
     for fail_at in 0..derived.len() {
@@ -285,6 +392,7 @@ async fn a_grant_whose_abandon_fails_is_repaired_by_a_retry_or_a_revocation() {
         member_did: member.into(),
         tuples: derived.clone(),
         withdrawn: false,
+        owed: false,
     };
     let receipts = [this.clone()];
     let tuples = InMemoryTuples::holding(&[], Some(1), true);
