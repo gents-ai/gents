@@ -44,7 +44,6 @@ async fn oneshot_fixture(
 async fn capture_scripted_request(
     request: CompletionRequest,
 ) -> Result<serde_json::Value, CompletionError> {
-    use rig::http_client::HttpClientExt;
     let dto = rig::providers::openai::completion::CompletionRequest::try_from((
         "scripted".to_owned(),
         request,
