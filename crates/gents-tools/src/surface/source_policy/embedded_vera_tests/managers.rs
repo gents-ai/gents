@@ -1,7 +1,7 @@
 use gents_store::config_client::ConfigAccess;
 use gents_store::local::document_acp::DocumentAcp;
 
-use crate::test_support::vera_home::{seen, Household, PROVIDERS};
+use crate::test_support::vera_test_home::{seen, Household, PROVIDERS};
 
 /// A Task the Node creates, as it creates operational configuration, whose
 /// `selection_manager` it publishes to the Node's owner and administrators

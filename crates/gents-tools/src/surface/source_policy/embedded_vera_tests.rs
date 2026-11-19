@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::test_support::vera_home::{as_user, client_key, home, serve, Home};
+use crate::test_support::vera_test_home::{as_user, client_key, home, serve, Home};
 use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;

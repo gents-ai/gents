@@ -1,4 +1,4 @@
-use crate::test_support::vera_home::{describe, seen, Household, PROVIDERS};
+use crate::test_support::vera_test_home::{describe, seen, Household, PROVIDERS};
 
 /// What is left after another Agent, in one transaction, creates a Task of
 /// its own and grants a third Agent `reader` on a Task the Engineer owns:

@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use gents_store::local::document_acp::DocumentAcp;
 
-use crate::test_support::vera_home::{Household, PROVIDERS};
+use crate::test_support::vera_test_home::{Household, PROVIDERS};
 
 const GRANTS: usize = 50;
 

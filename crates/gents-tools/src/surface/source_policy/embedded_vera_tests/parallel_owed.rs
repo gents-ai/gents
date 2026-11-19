@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use gents_store::config_client::ConfigAccess;
 use gents_store::local::document_acp::DocumentAcp;
 
-use crate::test_support::vera_home::{describe, Household};
+use crate::test_support::vera_test_home::{describe, Household};
 
 const GRANTS_PER_ACTOR: usize = 4;
 const AGENTS: usize = 3;
@@ -167,7 +167,7 @@ async fn parallel_client_relationship_changes_on_a_vera_home_all_settle() -> any
             .filter_map(|outcome| {
                 outcome
                     .err()
-                    .map(|error| crate::test_support::vera_home::seen(&error))
+                    .map(|error| crate::test_support::vera_test_home::seen(&error))
             })
             .collect();
         let committed = begun.elapsed();

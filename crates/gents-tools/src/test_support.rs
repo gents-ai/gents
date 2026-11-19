@@ -38,4 +38,4 @@ pub fn test_agent_access(
 }
 
 #[cfg(feature = "vera")]
-pub mod vera_home;
+pub mod vera_test_home;

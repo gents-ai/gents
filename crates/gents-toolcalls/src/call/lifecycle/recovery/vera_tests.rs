@@ -1,7 +1,7 @@
 use gents_documents::{apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
-use gents_tools::test_support::vera_home::{Household, PROVIDERS};
+use gents_tools::test_support::vera_test_home::{Household, PROVIDERS};
 use serde_json::json;
 
 fn document(collection: Collection, value: serde_json::Value) -> DesiredStateApplyDocument {
