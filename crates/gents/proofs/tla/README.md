@@ -450,6 +450,18 @@ See `../README.md` for how this fits the broader formal-verification model.
   every ephemeral range; `PerRunnerSpread` shows
   why separate directories rarely collided while one process per binary
   spread its cursor.
+- `ScheduleDisableFence` — a User disabling a schedule Trigger while the
+  sequential schedule source fires it. Dispatch re-borrows the active
+  snapshot and admits only an enabled Trigger; the router acknowledges only
+  a generation it borrowed from the watch. `AdmissionFence` and `NoDueFire`
+  hold: nothing admits the Trigger once its disabling generation is
+  acknowledged, and a cursor written after that never fires. A fire admitted
+  under the old generation can still commit after the acknowledgement.
+  `OldObserver` is the CI failure: the test disabled while the interval
+  cadence's seeded fire was in flight and counted its commit. Green waits for
+  the seeded fire before disabling and judges once a witness Trigger, due
+  after the disabled one, fires (`Settled`). RED: `NoSeedWait`, `NoWitness`
+  (observer), `NoRecheck`, `AckBeforeWatch` (product).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
