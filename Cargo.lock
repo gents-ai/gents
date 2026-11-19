@@ -6917,6 +6917,7 @@ dependencies = [
  "include_dir",
  "iroh",
  "libc",
+ "notify",
  "p2p",
  "query",
  "rapidhash",
