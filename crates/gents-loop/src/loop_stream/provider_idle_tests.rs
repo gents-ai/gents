@@ -226,12 +226,9 @@ impl CompletionModel for WireModel {
             .uri("https://provider.test/v1/messages")
             .body(Bytes::from(body.to_string()))
             .expect("request");
-        let response = crate::rig_compat::http::Transport::send_streaming(
-            &self.client,
-            &self.call,
-            request,
-        )
-        .await?;
+        let response =
+            crate::rig_compat::http::Transport::send_streaming(&self.client, &self.call, request)
+                .await?;
         let mut body = response.into_body();
         let items = async_stream::stream! {
             let mut buffer = Vec::new();
