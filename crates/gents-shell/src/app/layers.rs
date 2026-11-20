@@ -1,8 +1,9 @@
 use ratatui::layout::Rect;
 
 use super::input::LineInput;
+use super::transcript::wrap;
 use super::work::{in_range, item};
-use super::{first_selectable, step_row, stepped, wrap, App};
+use super::{first_selectable, step_row, stepped, App};
 use crate::commands::COMMANDS;
 use crate::filter::subsequence;
 use crate::jump::{self, Target};
@@ -1230,7 +1231,7 @@ mod tests {
     #[test]
     fn a_layer_hides_what_is_beneath_it() {
         let mut app = App::new(Vim, 132, 36);
-        app.tabs[0].lines = crate::app::sample_chat();
+        app.tabs[0].lines = crate::app::transcript::sample_chat();
         press(&mut app, "esc ?");
         let s = screen(&app);
         assert_eq!(find(&s, "Moving them"), None);

@@ -1,7 +1,8 @@
 use ratatui::layout::Rect;
 
 use super::layers::LayerKind;
-use super::{wrap_lines, App, Mode, Pane, Tab};
+use super::transcript::{wrap_lines, Tab};
+use super::{App, Mode, Pane};
 use crate::keys::{KeyCtx, KeySet};
 use crate::sample::Tone;
 use crate::source::{Answer, Connection, Intent, Prompt};

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
-use crate::app::{sample_chat, ChatLine, NOT_WIRED};
+use crate::app::transcript::{sample_chat, ChatLine};
+use crate::app::NOT_WIRED;
 use crate::keys::KeySet;
 use crate::source::{
     Agent, Answer, BackgroundCall, Change, ChangeKind, Day, Discovered, Doc, FieldKind, Form,

@@ -7,7 +7,8 @@ use ratatui::widgets::{Block, BorderType, Clear, Widget};
 use super::layers::list_start;
 use super::{draw_footer, draw_no_matches, draw_row, logo, pane_box, theme};
 use crate::app::input::TAB;
-use crate::app::{App, Mode, Pane, Tab};
+use crate::app::transcript::Tab;
+use crate::app::{App, Mode, Pane};
 use crate::keys::KeySet;
 use crate::layout::running_area;
 use crate::sample::{Opens, RunState, Running, Tone, SUBAGENT_MARK};
@@ -347,7 +348,7 @@ fn slash_list(app: &App, selected: usize, pane: Rect, buf: &mut Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{sample_chat, ChatLine, Tab};
+    use crate::app::transcript::{sample_chat, ChatLine, Tab};
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::Tone;
     use crate::source::{Agent, Update};

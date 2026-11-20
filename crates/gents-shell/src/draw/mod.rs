@@ -207,7 +207,8 @@ fn draw_no_matches(area: Rect, buf: &mut Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{sample_chat, Mode, Tab};
+    use crate::app::transcript::{sample_chat, Tab};
+    use crate::app::Mode;
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::{approval, note, MenuId, View};
     use crate::source::{Doc, FormRef};
