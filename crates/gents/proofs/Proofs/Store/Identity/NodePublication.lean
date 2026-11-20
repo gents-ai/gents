@@ -83,4 +83,69 @@ theorem heartbeats_on_the_node_store_beat_as_before (loop : Periodic) :
     periodic .nodeStore loop = .beats ∧ writesPeerRecord .nodeStore loop = true := by
   cases loop <;> exact ⟨rfl, rfl⟩
 
+/-- The enrollment root: the signed `Network` row the runtime creates as its
+Node when it starts serving, naming the network an enrollment offer invites a
+device into. Creating it is a Node-run peer publication: the projector grants
+the runtime `reader` of the row and parents it to the Node, so every identity
+that reads the Node reads it. Serving reads nothing else from it; enrollment
+offers, operator decisions and the pending list are its only consumers. -/
+inductive Root where
+  /-- Serving creates or reloads the row and issues offers in its network. -/
+  | created
+  /-- Serving starts without one and writes no `Network` row. -/
+  | absent
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3831): the enrollment root is a peer publication, so it
+obeys `publication`. A home that refuses peer publication serves without it:
+the home keeps no bookkeeping copy, since nothing it serves reads one. -/
+def enrollmentRoot (provider : Provider) : Root :=
+  match publication provider with
+  | .proceeds => .created
+  | .awaitsTransportGrants => .absent
+
+/-- A request that enrolls or pairs a device through the enrollment root. -/
+inductive EnrollmentRequest where
+  /-- Minting an enrollment offer, for the runtime's status or a tool. -/
+  | offer
+  /-- An operator approving, denying or revoking an enrollment request. -/
+  | decision
+  /-- An operator listing the enrollment requests that wait for a decision. -/
+  | pending
+  deriving DecidableEq, Repr
+
+inductive Answer where
+  | served
+  /-- Refused before anything is read or written, saying that peer networking
+  is not available on this home yet. -/
+  | peerNetworkingUnavailable
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3831): without its root a home answers every enrollment
+request with the same refusal, rather than reporting a missing network. -/
+def enrollment (provider : Provider) (_ : EnrollmentRequest) : Answer :=
+  match enrollmentRoot provider with
+  | .created => .served
+  | .absent => .peerNetworkingUnavailable
+
+/-- Whether serving on a home publishes a peer-readable `Network` row. -/
+def publishesNetworkRow (provider : Provider) : Bool :=
+  enrollmentRoot provider == .created
+
+theorem enrollment_root_follows_publication (provider : Provider) :
+    (enrollmentRoot provider = .created) ↔ publication provider = .proceeds := by
+  cases provider <;> simp [enrollmentRoot, publication]
+
+theorem a_vera_home_publishes_no_network_row :
+    publishesNetworkRow .embeddedVera = false := rfl
+
+theorem a_vera_home_refuses_every_enrollment_request (request : EnrollmentRequest) :
+    enrollment .embeddedVera request = .peerNetworkingUnavailable := by
+  cases request <;> rfl
+
+theorem a_home_on_the_node_store_enrolls_as_before (request : EnrollmentRequest) :
+    enrollmentRoot .nodeStore = .created ∧ publishesNetworkRow .nodeStore = true ∧
+      enrollment .nodeStore request = .served := by
+  cases request <;> exact ⟨rfl, rfl, rfl⟩
+
 end Identity.NodePublication
