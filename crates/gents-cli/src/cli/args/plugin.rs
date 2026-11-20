@@ -71,6 +71,12 @@ pub(crate) struct UxPreviewArgs {
         help = "Size of the pane the page draws in"
     )]
     pub(crate) viewport: gents_tools::ux_preview::Viewport,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Built preview page directory, for a build that carries none beside it"
+    )]
+    pub(crate) assets: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

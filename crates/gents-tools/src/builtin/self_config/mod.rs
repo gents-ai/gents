@@ -334,6 +334,7 @@ pub fn build_self_config_tools_with_runtime(
         selected_plugins: config.selected_plugins.clone(),
         ceiling_plugins: config.ceiling_plugins.clone(),
         plugin_builder: config.plugin_builder.clone(),
+        ux_preview_assets: config.ux_preview_assets.clone(),
         envelope: gents_loop::tool::ToolCallEnvelope::default(),
     }));
     tools
