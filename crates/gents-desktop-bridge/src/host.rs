@@ -647,17 +647,20 @@ impl ClientHost {
             ClientCommand::SessionContextDetails { request } => {
                 encode(crate::commands::session_context_details(&self.core, request).await?)
             }
-            ClientCommand::SessionLiveDelta(args) => encode(
-                crate::snapshot::build_session_live_delta(
-                    &self.core,
-                    &args.session_id,
-                    Some(&args.node_did),
-                    &args.request_id,
-                    args.base(),
+            ClientCommand::SessionLiveDelta(args) => {
+                let request = crate::types::SessionLiveDeltaRequest::from(args);
+                encode(
+                    crate::snapshot::build_session_live_delta(
+                        &self.core,
+                        &request.session_id,
+                        request.node_did.as_deref(),
+                        &request.request_id,
+                        request.base(),
+                    )
+                    .await
+                    .map_err(backend_error)?,
                 )
-                .await
-                .map_err(backend_error)?,
-            ),
+            }
             ClientCommand::Send { request } => encode(
                 crate::commands::send_chat_message(&self.core, request)
                     .await
