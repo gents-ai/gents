@@ -59,6 +59,7 @@ impl LiveBearers {
         gents_store::node_extension::attached_or_default::<Self>(node)
     }
 
+    #[cfg(test)]
     pub(super) fn live(&self, credential_id: &str) -> Option<Arc<DbCredentialBearer>> {
         self.0
             .lock()
