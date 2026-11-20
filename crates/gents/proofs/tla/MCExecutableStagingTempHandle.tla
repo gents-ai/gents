@@ -1,0 +1,4 @@
+---- MODULE MCExecutableStagingTempHandle ----
+EXTENDS ExecutableStaging
+
+====

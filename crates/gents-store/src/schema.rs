@@ -1,4 +1,5 @@
-pub mod migration;
+pub mod catalog;
+pub mod journal;
 
 #[cfg(test)]
 mod pushdown_tests;
@@ -78,11 +79,13 @@ pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
         return Ok(access
             .run_local_owned(|node| async move {
-                crate::schema::migration::ensure_migrations_borrowed(node.as_ref()).await
+                catalog::ensure_runtime(node.as_ref())
+                    .await
+                    .map_err(catalog::RuntimeSchemaError::Schema)
             })
             .await?);
     }
-    Ok(crate::schema::migration::ensure_migrations_borrowed(node).await?)
+    Ok(catalog::ensure_runtime(node).await?)
 }
 
 #[cfg(test)]
@@ -185,12 +188,20 @@ mod legacy_backend_tests {
                 },
             )
             .await??;
+            let owner_path = home.join("owner.key");
+            let owner = tokio::task::spawn_blocking(move || -> anyhow::Result<identity::Did> {
+                Ok(identity::Did::new(
+                    crate::identity::KeyIdentity::load_or_create(owner_path, None)?.did(),
+                )?)
+            })
+            .await??;
             let did = runtime.did().to_owned();
             let initialized = match FreshBackendStore::observe(&data, &lock).await {
                 Ok(fresh) => fresh
                     .initialize(
                         &key,
                         &runtime,
+                        &owner,
                         crate::local::document_acp::DocumentAcp::Local,
                     )
                     .await
@@ -198,10 +209,14 @@ mod legacy_backend_tests {
                 Err(_) => false,
             };
             let admitted = if initialized {
-                let node = crate::local::store_key::persistent_builder(&data, &key)?
-                    .with_node_identity_did(did)
-                    .build()
-                    .await?;
+                let node = crate::local::store_key::persistent_builder(
+                    &data,
+                    &key,
+                    crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+                )?
+                .with_node_identity_did(did)
+                .build()
+                .await?;
                 let collection = node
                     .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
                     .expect("fresh legacy schema");

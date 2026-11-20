@@ -66,19 +66,9 @@ pub struct ManagedServerResetRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct EnrollmentStatusRequest {
-    pub server_address: String,
-    #[serde(default)]
-    #[ts(optional)]
-    pub candidate_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EnrollmentInviteRequest {
-    pub invite: String,
-    pub candidate_name: Option<String>,
+pub struct RuntimeAccessConnectRequest {
+    pub server_address: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -390,11 +380,9 @@ pub struct DesktopOperationsSnapshotRequest {
     #[ts(optional = nullable)]
     pub node_did: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     #[ts(optional = nullable)]
     pub root_request_id: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     #[ts(optional = nullable)]
     pub include_terminal: Option<bool>,
 }
@@ -701,10 +689,44 @@ pub struct SessionHistoryPage {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLiveDeltaRequest {
+    pub session_id: String,
+    #[ts(optional = nullable)]
+    pub node_did: Option<String>,
+    pub request_id: String,
+    pub base_live_cursor: String,
+    pub base_content_byte_len: usize,
+    pub base_content_hash: String,
+    pub base_reasoning_byte_len: usize,
+    pub base_reasoning_hash: String,
+}
+
+impl SessionLiveDeltaRequest {
+    pub fn base(&self) -> crate::snapshot::LiveDeltaBase<'_> {
+        crate::snapshot::LiveDeltaBase {
+            cursor: &self.base_live_cursor,
+            content_byte_len: self.base_content_byte_len,
+            content_hash: &self.base_content_hash,
+            reasoning_byte_len: self.base_reasoning_byte_len,
+            reasoning_hash: &self.base_reasoning_hash,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionContextDetailsRequest {
     pub node_did: String,
     pub session_id: String,
     pub request_id: String,
     pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeAccessDecisionRequest {
+    pub node_did: String,
+    pub request_id: String,
+    pub decision: gents_protocol::client_access::ClientAccessDecision,
 }

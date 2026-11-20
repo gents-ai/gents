@@ -166,8 +166,67 @@ impl StoreRelease {
     }
 }
 
+/// How long an opener waits for a previous holder of the store that declared
+/// its release, such as the node an earlier operation in the same process
+/// shut down or a runtime its supervisor is stopping (Lean
+/// `StoreHandoff.decide`); a serving holder is refused at once.
+pub const STORE_RELEASE_WAIT: Duration = Duration::from_secs(60);
+
+/// The store lock file of a data directory, and the directory it covers.
+#[derive(Debug, Clone)]
+struct StoreTarget {
+    lock: PathBuf,
+    data_dir: PathBuf,
+}
+
+impl StoreTarget {
+    /// An existing data directory, resolved through any link.
+    fn of(data_dir: &Path) -> Result<Self> {
+        let canonical = fs::canonicalize(data_dir).map_err(|source| HomeError::ResolveDataDir {
+            path: data_dir.to_path_buf(),
+            source,
+        })?;
+        let (Some(parent), Some(name)) = (canonical.parent(), canonical.file_name()) else {
+            return Err(HomeError::DataDirRoot { path: canonical });
+        };
+        let lock = parent.join(format!("{}.lock", name.to_string_lossy()));
+        Ok(Self {
+            lock,
+            data_dir: canonical,
+        })
+    }
+
+    /// A data directory that may not exist yet: its lock sits beside where it
+    /// would be.
+    fn at(data_dir: &Path) -> Result<Self> {
+        match fs::symlink_metadata(data_dir) {
+            Ok(_) => Self::of(data_dir),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let (Some(parent), Some(name)) = (data_dir.parent(), data_dir.file_name()) else {
+                    return Err(HomeError::DataDirRoot {
+                        path: data_dir.to_path_buf(),
+                    });
+                };
+                let lock_dir =
+                    fs::canonicalize(parent).map_err(|source| HomeError::ResolveParent {
+                        path: parent.to_path_buf(),
+                        source,
+                    })?;
+                Ok(Self {
+                    lock: lock_dir.join(format!("{}.lock", name.to_string_lossy())),
+                    data_dir: lock_dir.join(name),
+                })
+            }
+            Err(source) => Err(HomeError::InspectDataDir {
+                path: data_dir.to_path_buf(),
+                source,
+            }),
+        }
+    }
+}
+
 pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
-    lock_store_with_wait(home_dir, data_dir, false)
+    lock_target(home_dir, StoreTarget::of(data_dir)?, false)
 }
 
 /// What a try of the store lock decides (Lean `StoreHandoff.decide`).
@@ -180,7 +239,11 @@ pub enum StoreAttempt {
 }
 
 pub fn try_store(home_dir: &Path, data_dir: &Path) -> Result<StoreAttempt> {
-    match lock_store(home_dir, data_dir) {
+    try_target(home_dir, StoreTarget::of(data_dir)?)
+}
+
+fn try_target(home_dir: &Path, target: StoreTarget) -> Result<StoreAttempt> {
+    match lock_target(home_dir, target, false) {
         Ok(lock) => Ok(StoreAttempt::Acquired(lock)),
         Err(HomeError::LockHeld(held)) if held.releasing => Ok(StoreAttempt::Wait(held)),
         Err(HomeError::LockHeld(held)) => Ok(StoreAttempt::Refused(held)),
@@ -200,7 +263,31 @@ pub async fn acquire_store(
     data_dir: &Path,
     release_wait: Duration,
 ) -> Result<StoreLock> {
-    match try_store(home_dir, data_dir)? {
+    acquire_target(home_dir, StoreTarget::of(data_dir)?, release_wait).await
+}
+
+/// [`acquire_store`] for a data directory that may not exist yet, as
+/// [`lock_store_at`] takes it.
+pub async fn acquire_store_at(
+    home_dir: &Path,
+    data_dir: &Path,
+    release_wait: Duration,
+) -> Result<StoreLock> {
+    acquire_target(home_dir, StoreTarget::at(data_dir)?, release_wait).await
+}
+
+/// [`acquire_store_at`] on the home's default data directory, as
+/// [`lock_home_store`] takes it.
+pub async fn acquire_home_store(home_dir: &Path, release_wait: Duration) -> Result<StoreLock> {
+    acquire_store_at(home_dir, &default_data_dir(home_dir), release_wait).await
+}
+
+async fn acquire_target(
+    home_dir: &Path,
+    target: StoreTarget,
+    release_wait: Duration,
+) -> Result<StoreLock> {
+    match try_target(home_dir, target.clone())? {
         StoreAttempt::Acquired(lock) => Ok(lock),
         StoreAttempt::Refused(held) => Err(HomeError::LockHeld(held)),
         StoreAttempt::Wait(held) => {
@@ -209,7 +296,7 @@ pub async fn acquire_store(
                 holder_pid = held.holder_pid,
                 "waiting for the store's previous holder to release it"
             );
-            let (receive, worker) = start_store_acquire_waiter(home_dir, data_dir)?;
+            let (receive, worker) = start_store_acquire_waiter(home_dir, target)?;
             drop(worker);
             match tokio::time::timeout(release_wait, receive).await {
                 Ok(acquired) => acquired.map_err(HomeError::ReleaseWaiterStopped)?,
@@ -221,18 +308,17 @@ pub async fn acquire_store(
 
 fn start_store_acquire_waiter(
     home_dir: &Path,
-    data_dir: &Path,
+    target: StoreTarget,
 ) -> Result<(
     tokio::sync::oneshot::Receiver<Result<StoreLock>>,
     std::thread::JoinHandle<()>,
 )> {
     let home_dir = home_dir.to_path_buf();
-    let data_dir = data_dir.to_path_buf();
     let (send, receive) = tokio::sync::oneshot::channel();
     let worker = std::thread::Builder::new()
         .name("gents-store-acquire-wait".into())
         .spawn(move || {
-            let _ = send.send(lock_store_with_wait(&home_dir, &data_dir, true));
+            let _ = send.send(lock_target(&home_dir, target, true));
         })
         .map_err(HomeError::StartReleaseWaiter)?;
     Ok((receive, worker))
@@ -264,27 +350,13 @@ pub(super) fn start_store_release_waiter(
     let worker = std::thread::Builder::new()
         .name("gents-store-release-wait".into())
         .spawn(move || {
-            let result = lock_store_with_wait(&home_dir, &data_dir, true).map(drop);
+            let result = StoreTarget::of(&data_dir)
+                .and_then(|target| lock_target(&home_dir, target, true))
+                .map(drop);
             let _ = send.send(result);
         })
         .map_err(HomeError::StartReleaseWaiter)?;
     Ok((receive, worker))
-}
-
-fn lock_store_with_wait(home_dir: &Path, data_dir: &Path, wait: bool) -> Result<StoreLock> {
-    let canonical = fs::canonicalize(data_dir).map_err(|source| HomeError::ResolveDataDir {
-        path: data_dir.to_path_buf(),
-        source,
-    })?;
-    let (Some(parent), Some(name)) = (canonical.parent(), canonical.file_name()) else {
-        return Err(HomeError::DataDirRoot { path: canonical });
-    };
-    lock_path_with_wait(
-        home_dir,
-        parent.join(format!("{}.lock", name.to_string_lossy())),
-        canonical.clone(),
-        wait,
-    )
 }
 
 pub fn lock_home_store(home_dir: &Path) -> Result<StoreLock> {
@@ -292,29 +364,7 @@ pub fn lock_home_store(home_dir: &Path) -> Result<StoreLock> {
 }
 
 pub fn lock_store_at(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
-    match fs::symlink_metadata(data_dir) {
-        Ok(_) => lock_store(home_dir, data_dir),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let (Some(parent), Some(name)) = (data_dir.parent(), data_dir.file_name()) else {
-                return Err(HomeError::DataDirRoot {
-                    path: data_dir.to_path_buf(),
-                });
-            };
-            let lock_dir = fs::canonicalize(parent).map_err(|source| HomeError::ResolveParent {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-            lock_path(
-                home_dir,
-                lock_dir.join(format!("{}.lock", name.to_string_lossy())),
-                lock_dir.join(name),
-            )
-        }
-        Err(source) => Err(HomeError::InspectDataDir {
-            path: data_dir.to_path_buf(),
-            source,
-        }),
-    }
+    lock_target(home_dir, StoreTarget::at(data_dir)?, false)
 }
 
 #[derive(Debug)]
@@ -348,17 +398,12 @@ impl std::fmt::Display for StoreLockHeld {
 
 impl std::error::Error for StoreLockHeld {}
 
-fn lock_path(home_dir: &Path, path: PathBuf, data_dir: PathBuf) -> Result<StoreLock> {
-    lock_path_with_wait(home_dir, path, data_dir, false)
-}
-
-fn lock_path_with_wait(
-    home_dir: &Path,
-    path: PathBuf,
-    data_dir: PathBuf,
-    wait: bool,
-) -> Result<StoreLock> {
+fn lock_target(home_dir: &Path, target: StoreTarget, wait: bool) -> Result<StoreLock> {
     use std::io::{Read as _, Seek as _, Write as _};
+    let StoreTarget {
+        lock: path,
+        data_dir,
+    } = target;
 
     let mut file = open_runtime_lock(&path)?;
     if wait {

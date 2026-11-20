@@ -1,5 +1,132 @@
 use acp::{DocumentPermission, Identity};
+use gents_store::identity::NodeIdentity;
 use identity::Did;
+
+#[tokio::test]
+async fn live_agent_session_and_delegation_access_match_the_model() -> anyhow::Result<()> {
+    use crate::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
+    use crate::support::{self, ManagedAgentFixture};
+
+    let db = support::test_db("live-agent-access-conformance").await;
+    let fixture = support::managed_agent_fixture(&db).await;
+    let (sibling_agent, sibling_binding) =
+        support::install_managed_agent(&db, &fixture.access, &fixture.user, "Sibling").await;
+    let sibling_fixture = ManagedAgentFixture {
+        user: support::managed_fixture_user(&db).await,
+        access: fixture.access.clone(),
+        agent: sibling_agent,
+        binding: sibling_binding,
+    };
+    let caller = RequestActors::from_fixture(&db, fixture).await;
+    let sibling = RequestActors::from_fixture(&db, sibling_fixture).await;
+    let now = canonical_now();
+    let own_session = caller.session("general-session", &now).await;
+    let sibling_session = sibling.session("sibling-session", &now).await;
+    let request = sibling
+        .create_request(RequestSeed::new("remote-request", "sibling-session", &now))
+        .await;
+    let caller_did = Did::new(caller.agent_did())?;
+    caller
+        .fixture
+        .access
+        .add_actor_relationship("Agent", &sibling.agent_doc, "session_writer", &caller_did)
+        .await?;
+
+    for case in gents_lean_vocab::families::household_live_session_update::cases() {
+        let doc = match case.input.id.as_str() {
+            "general-session" => &own_session,
+            "sibling-session" => &sibling_session,
+            other => anyhow::bail!("unknown modeled session {other}"),
+        };
+        let update = format!(
+            "mutation {{ update_AgentSession(docID: \"{}\", input: {{tags:[\"updated\"]}}) {{_docID}} }}",
+            gents_store::graphql::escape_graphql_string(doc),
+        );
+        let changed = match caller
+            .agent_access
+            .write("test.live_session.update", &update)
+            .await
+        {
+            Ok(response) => {
+                gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentSession")
+                    .is_ok_and(|actual| actual == *doc)
+            }
+            Err(error) if error.is_graphql_rejection() => false,
+            Err(error) => return Err(error.into()),
+        };
+        case.check(Some(changed));
+    }
+
+    caller
+        .fixture
+        .access
+        .delete_actor_relationship("Agent", &sibling.agent_doc, "session_writer", &caller_did)
+        .await?;
+    let invoke = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        Did::new(caller.fixture.user.did())?,
+    )
+    .transact_readonly("test.live_agent.invoke", |txn| {
+        let (target, actor) = (&sibling.agent_doc, &caller_did);
+        Box::pin(async move {
+            txn.observe_document_access(
+                actor,
+                "Agent",
+                std::slice::from_ref(target),
+                gents::defra_node::DocumentAccessMode::Named {
+                    permission: "invoke".into(),
+                    node_permission: gents_store::config_client::NodePermission::DocumentUpdate,
+                },
+            )
+            .await
+            .map_err(anyhow::Error::from)
+        })
+    })
+    .await?;
+    for case in gents_lean_vocab::families::household_agent_manager_invoke_live::cases() {
+        case.check(matches!(
+            invoke.as_slice(),
+            [gents::defra_node::DocumentAccessDecision::Allowed]
+        ));
+    }
+
+    let node = caller
+        .fixture
+        .access
+        .execute(&format!(
+            "{{ Node(filter: {{node_did: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+            gents_store::graphql::escape_graphql_string(db.node_identity.did()),
+        ))
+        .await?;
+    let node_doc = node["data"]["Node"][0]["_docID"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Node not visible"))?;
+    caller
+        .fixture
+        .access
+        .add_actor_relationship("Node", node_doc, "administrator", &caller_did)
+        .await?;
+    for case in gents_lean_vocab::families::household_live_administrator_read::cases() {
+        let (collection, doc) = match case.input.resource.as_str() {
+            "sessions" => ("AgentSession", &sibling_session),
+            "delivered_requests" => ("AgentRequest", &request),
+            other => anyhow::bail!("unknown modeled resource {other}"),
+        };
+        let response = caller
+            .agent_access
+            .execute(&format!(
+                "{{ {collection}(filter: {{_docID: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+                gents_store::graphql::escape_graphql_string(doc),
+            ))
+            .await?;
+        let visible = response["data"][collection]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["_docID"] == doc.as_str()));
+        case.check(Some(visible));
+    }
+    db.node.shutdown().await?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn modeled_configuration_grants_use_authenticated_native_relations() -> anyhow::Result<()> {

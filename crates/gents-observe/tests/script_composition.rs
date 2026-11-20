@@ -4,6 +4,7 @@ use std::sync::Arc;
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_toolcalls::call::hook::fixtures::accept_hook_tool_call;
 use gents_toolcalls::call::hook::*;
 
@@ -35,6 +36,7 @@ async fn a_script_spawned_by_a_script_cannot_call_tools() {
             gents_tools::surface::BackgroundToolConfig {
                 allowlist: vec!["plugin".into()],
                 timeouts: Default::default(),
+                limit: Default::default(),
             },
         )))
         .await;
@@ -233,7 +235,7 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
             None,
             "start-script",
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {
@@ -250,7 +252,7 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
             None,
             "wait-script",
             &wait,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {

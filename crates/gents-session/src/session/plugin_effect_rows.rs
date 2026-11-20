@@ -42,18 +42,29 @@ impl PluginEffectBinding {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The tool call a plugin effect derived, and the execution generation of
+/// the request that wrote its arguments.
+pub struct PluginEffectCall<'a> {
+    pub tool_call_doc_id: &'a str,
+    pub tool_call_id: &'a str,
+    pub tool_name: &'a str,
+    pub execution_generation: &'a str,
+}
+
 pub fn arguments_from_rows(
     rows: &[serde_json::Value],
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     request_doc_id: &str,
-    child: &str,
-    generation: &str,
-    internal_id: &str,
-    name: &str,
+    call: PluginEffectCall<'_>,
 ) -> Result<(PayloadRef, String)> {
+    let PluginEffectCall {
+        tool_call_doc_id: child,
+        tool_call_id: internal_id,
+        tool_name: name,
+        execution_generation: generation,
+    } = call;
     let records =
         decode_scoped_request_output_segments(rows, node_did, Some(session_id), requester_did)?;
     let source = OutputSource::ToolEffectArguments {

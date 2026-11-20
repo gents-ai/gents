@@ -12,7 +12,7 @@ use tokio::sync::OnceCell;
 use super::metrics::P2P_METRICS_FETCH_BUDGET;
 use super::RuntimeHttpState;
 use crate::http::healthz::render_healthz_payload;
-use crate::http::prometheus::{load_metrics_core_data, with_local_native_executors};
+use crate::http::prometheus::store::{load_metrics_core_data, with_local_native_executors};
 use crate::http::self_view::load_self_view;
 use crate::http::version::version_response;
 
@@ -25,6 +25,7 @@ pub(super) const STATUS_PROBE_BUDGET: Duration = Duration::from_secs(2);
 pub(super) async fn status_handler(
     State(state): State<RuntimeHttpState>,
     reader: &GraphqlEndpoint,
+    nonce: Option<&gents_protocol::home_attestation::HomeNonce>,
 ) -> Response {
     let mut p2p = match tokio::time::timeout(
         P2P_METRICS_FETCH_BUDGET,
@@ -153,7 +154,25 @@ pub(super) async fn status_handler(
         }
     }
     append_status_contracts(&state, &mut body).await;
+    attest_status(&state, nonce, &mut body).await;
     (StatusCode::OK, axum::Json(body)).into_response()
+}
+
+async fn attest_status(
+    state: &RuntimeHttpState,
+    nonce: Option<&gents_protocol::home_attestation::HomeNonce>,
+    body: &mut Value,
+) {
+    let Some(nonce) = nonce else {
+        return;
+    };
+    let identity = state.node_identity.clone().or_else(|| {
+        state
+            .activation_runtime
+            .get()
+            .map(|runtime| runtime.runtime_node().identity.clone())
+    });
+    gents_store::identity::home_status::attest(identity.as_deref(), nonce, body).await;
 }
 
 /// This node's measured backend probes; the replicated `InferenceBackend`
@@ -176,15 +195,33 @@ fn backend_probe_reports(
     )
 }
 
+/// The status, signed by the node key over the nonce a client sent in
+/// `home_attestation::HOME_NONCE_QUERY` when it sent one
+/// (`Identity.HeldAudience.authentic`); without one it is for display only.
 pub(super) async fn status_route(
     State(state): State<RuntimeHttpState>,
     identity: defra_http::ExtractIdentity,
     headers: axum::http::HeaderMap,
+    query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>,
 ) -> Response {
+    let nonce = match query
+        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
+        .map(|nonce| gents_protocol::home_attestation::HomeNonce::parse(nonce))
+        .transpose()
+    {
+        Ok(nonce) => nonce,
+        Err(refusal) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({ "error": format!("invalid home nonce: {refusal}") })),
+            )
+                .into_response()
+        }
+    };
     let reader =
         crate::http::private_reader::authorize_private_reader(&state, &identity, &headers).await;
     let mut response = if let Ok(reader) = reader {
-        status_handler(State(state), &reader).await
+        status_handler(State(state), &reader, nonce.as_ref()).await
     } else {
         let mut body = json!({
             "service": "gents",
@@ -194,6 +231,7 @@ pub(super) async fn status_route(
             "graphql": state.graphql,
         });
         append_status_contracts(&state, &mut body).await;
+        attest_status(&state, nonce.as_ref(), &mut body).await;
         axum::Json(body).into_response()
     };
     response.headers_mut().insert(
@@ -204,7 +242,26 @@ pub(super) async fn status_route(
 }
 
 async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
+    let authentication = match state.activation_runtime.get() {
+        Some(runtime) => gents_store::config_client::client_authentication::runtime_authentication(
+            &runtime.operator_config_access(),
+        )
+        .await
+        .unwrap_or(gents_protocol::client_authentication::ClientAuthentication::Unavailable),
+        None => match state.document_acp {
+            gents_store::local::document_acp::DocumentAcp::Local => {
+                gents_protocol::client_authentication::ClientAuthentication::Local
+            }
+            gents_store::local::document_acp::DocumentAcp::Vera => {
+                gents_protocol::client_authentication::ClientAuthentication::Unavailable
+            }
+        },
+    };
     if let Some(map) = body.as_object_mut() {
+        map.insert(
+            gents_protocol::client_authentication::STATUS_FIELD.to_owned(),
+            json!(authentication),
+        );
         let enrollment = match state.enrollment_offer_issuer.read().await.clone() {
             Some(issuer) => match issuer.mint().await {
                 Ok(offer) => crate::http::enrollment::EnrollmentStatus::Available {
@@ -219,7 +276,7 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
                 }
             },
             None => crate::http::enrollment::EnrollmentStatus::Unavailable {
-                reason: "runtime_not_ready",
+                reason: crate::http::enrollment::unavailable_reason(state.document_acp),
             },
         };
         map.insert("enrollment".to_string(), json!(enrollment));
@@ -248,30 +305,30 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
             replicated_schema_status(&state.replicated_schema),
         );
         map.insert(
-            "non_canonical_lineages".to_string(),
-            non_canonical_lineages_status(&state.replicated_schema),
-        );
-        map.insert(
             gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD.to_string(),
             json!(state.serve_lifecycle.current()),
         );
+        let audience = state.activation_runtime.get().and_then(|runtime| {
+            gents_store::local::document_acp::node_delegation_audience(runtime.observation_node())
+        });
+        if let Some(provider_time) = state.activation_runtime.get().and_then(|runtime| {
+            gents_store::local::document_acp::node_provider_time(runtime.observation_node())
+        }) {
+            map.insert(
+                gents_protocol::delegation_audience::STATUS_PROVIDER_TIME_FIELD.to_owned(),
+                json!(provider_time),
+            );
+        }
+        if let Some(reported) =
+            gents_store::local::document_acp::status_reports(state.document_acp, audience)
+                .status_value()
+        {
+            map.insert(
+                gents_protocol::delegation_audience::STATUS_DELEGATION_AUDIENCE_FIELD.to_owned(),
+                reported,
+            );
+        }
     }
-}
-
-/// Replicated collections whose active version differs from the canonical one, so peers
-/// and apps on the canonical lineage cannot sync them with this node.
-fn non_canonical_lineages_status(
-    replicated_schema: &OnceCell<gents_protocol::peer_schema::ReplicatedSchema>,
-) -> Value {
-    let Some(schema) = replicated_schema.get() else {
-        return Value::Null;
-    };
-    gents_store::schema::migration::non_canonical_lineages(
-        schema
-            .iter()
-            .map(|(name, identity)| (name.as_str(), identity.version_id.as_str())),
-    )
-    .map_or(Value::Null, |mismatches| json!(mismatches))
 }
 
 fn replicated_schema_status(

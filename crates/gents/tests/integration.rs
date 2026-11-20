@@ -1,4 +1,4 @@
-mod support;
+use gents::support;
 
 #[path = "client_journal_isolation.rs"]
 mod client_journal_isolation;

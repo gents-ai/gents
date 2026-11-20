@@ -87,12 +87,12 @@ pub async fn verify(
         calls.len() == ACTIVITY_COMMANDS,
         "the profile must retain all twelve command records"
     );
-    let page = gents_desktop_core::client::load_session_transcript_window_on(
+    let page = gents_observe::client_projection::query::load_session_transcript_window_on(
         access,
         session,
         Some(node),
         request.requester_did.as_deref(),
-        gents_desktop_core::client::TranscriptWindow::Tip,
+        gents_observe::client_projection::query::TranscriptWindow::Tip,
         Some(80),
     )
     .await?;

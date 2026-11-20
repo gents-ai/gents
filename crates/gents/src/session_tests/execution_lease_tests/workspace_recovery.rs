@@ -51,13 +51,15 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             Box::pin(async move {
                 gents_session::session::ensure_session_in_txn(
                     txn,
-                    "workspace-recovery-session",
-                    did,
-                    agent_did,
-                    Some(agent_did),
-                    None,
-                    None,
-                    "2026-09-01T00:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: "workspace-recovery-session",
+                        node_did: did,
+                        agent_did,
+                        requester_did: Some(agent_did),
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-09-01T00:00:00Z",
+                    },
                 )
                 .await
                 .map(|_| ())
@@ -192,10 +194,12 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "workspace-recovery-parent",
-        did,
-        agent_did,
-        agent_did,
-        "workspace-recovery-session",
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            agent_did,
+            agent_did,
+            "workspace-recovery-session",
+        ),
         "resume durable work",
         "interactive",
         "2026-09-01T00:00:00Z",
@@ -326,6 +330,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         backend_endpoint: String::new(),
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         claude_platform: None,
+        client_version: None,
         model_name: "fixture".into(),
         profile_id: None,
         service_tier: None,
@@ -338,8 +343,11 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         stream_batch_ms: 0,
         stream_liveness_timeout: Duration::from_secs(60),
+        title_timeout: Duration::from_secs(gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(60),
         deadline_duration: Duration::from_secs(60),
         completion_retry: Default::default(),

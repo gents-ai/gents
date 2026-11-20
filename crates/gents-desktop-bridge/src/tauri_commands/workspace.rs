@@ -1,4 +1,4 @@
-use crate::error::BridgeError;
+use gents_store::client_error::BridgeError;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;

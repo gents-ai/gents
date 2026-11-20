@@ -82,7 +82,7 @@ async fn dispatch(hook: &DefraSessionHook, call_id: usize, provider_id: &str) {
             Some(provider_id.into()),
             &internal,
             ARGS,
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue

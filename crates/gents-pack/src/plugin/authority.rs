@@ -39,8 +39,10 @@ pub fn describe_manifold(manifold: &Manifold) -> Option<String> {
         NetAccess::None => {}
         NetAccess::OutboundHttp(None) => parts.push("HTTP to any host".to_owned()),
         NetAccess::OutboundHttp(Some(hosts)) => parts.push(format!("HTTP to {}", hosts.join(", "))),
-        #[allow(unreachable_patterns)]
-        _ => parts.push("network access".to_owned()),
+        NetAccess::OutboundFull(None) => parts.push("network access to any host".to_owned()),
+        NetAccess::OutboundFull(Some(hosts)) => {
+            parts.push(format!("network access to {}", hosts.join(", ")))
+        }
     }
     match &manifold.env {
         EnvAccess::None => {}
@@ -91,6 +93,9 @@ fn describe_limits(limits: &crate::pack::PluginLimits) -> Option<String> {
     if let Some(max_output_mib) = limits.max_output_mib {
         bits.push(format!("{max_output_mib} MiB output"));
     }
+    if let Some(max_rounds) = limits.max_rounds {
+        bits.push(format!("{max_rounds} request rounds"));
+    }
     (!bits.is_empty()).then(|| format!("up to {}", bits.join(", ")))
 }
 
@@ -139,7 +144,8 @@ pub fn limits_consented(
     consent
         || (requested.memory_mib.unwrap_or(0) <= previous.memory_mib.unwrap_or(0)
             && requested.wall_clock_secs.unwrap_or(0) <= previous.wall_clock_secs.unwrap_or(0)
-            && requested.max_output_mib.unwrap_or(0) <= previous.max_output_mib.unwrap_or(0))
+            && requested.max_output_mib.unwrap_or(0) <= previous.max_output_mib.unwrap_or(0)
+            && requested.max_rounds.unwrap_or(0) <= previous.max_rounds.unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -245,6 +251,7 @@ mod tests {
             memory_mib: Some(512),
             wall_clock_secs: Some(300),
             max_output_mib: Some(4),
+            max_rounds: None,
         });
         let description =
             describe_plugin_authority(&declaration, &Manifold::sealed()).expect("must describe");

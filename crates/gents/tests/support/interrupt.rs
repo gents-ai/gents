@@ -1,19 +1,14 @@
 use std::time::Duration;
 
 use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
-use gents_protocol::output::live::reconstruct_dense_prefix;
-use gents_protocol::output::reconstruction::ObservedSegment;
-use gents_protocol::output::rows::{
-    decode_output_segment_row, OutputSegmentRow, AGENT_OUTPUT_SEGMENT_FIELDS,
-};
-use gents_protocol::output::OutputSource;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::live_inference::STALL_CEILING;
-use super::snapshots::{fetch_request_snapshot, SnapshotReader};
+use super::snapshots::fetch_request_snapshot;
+use gents_store::test_support::{read_when_changed, STALL_CEILING};
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
@@ -288,10 +283,9 @@ async fn create_runtime_request_inner(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        node_did,
-        node_did,
-        agent_did,
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            node_did, node_did, agent_did, session_id,
+        ),
         content,
         execution_origin,
         created_at,
@@ -353,123 +347,53 @@ async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> String 
     first_doc_id(&response, "AgentRequest")
 }
 
-pub async fn fetch_output_segments_for_request<R>(
-    reader: &R,
-    request_doc_id: &str,
-) -> Vec<OutputSegmentRow>
-where
-    R: SnapshotReader + ?Sized,
-{
-    let request_doc_id = escape_graphql_string(request_doc_id);
-    let data = reader
-        .read_data(&format!(
-            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
-        ))
-        .await;
-    data.get("AgentOutputSegment")
-        .and_then(Value::as_array)
-        .expect("canonical output rows")
-        .iter()
-        .map(|row| decode_output_segment_row(row).expect("decode canonical output segment"))
-        .collect()
-}
-
-pub async fn wait_for_provider_output_contains<R>(node: &R, request_doc_id: &str, expected: &str)
-where
-    R: SnapshotReader + ?Sized,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let rows = fetch_output_segments_for_request(node, request_doc_id).await;
-        let records = rows
-            .iter()
-            .map(|row| ObservedSegment {
-                doc_id: &row.doc_id,
-                segment: &row.segment,
-            })
-            .collect::<Vec<_>>();
-        let visible = rows.iter().find_map(|row| {
-            matches!(&row.segment.source, OutputSource::ProviderTurn { .. })
-                .then(|| {
-                    reconstruct_dense_prefix(
-                        &records,
-                        request_doc_id,
-                        &row.segment.source,
-                        &row.segment.writer,
-                        None,
-                    )
-                    .ok()
-                })
-                .flatten()
-                .map(|prefix| {
-                    prefix
-                        .streams
-                        .into_iter()
-                        .map(|stream| stream.text)
-                        .collect::<String>()
-                })
-        });
-        if visible
-            .as_deref()
-            .is_some_and(|text| text.contains(expected))
-        {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for canonical provider output to contain {expected:?}; last={visible:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
 pub async fn wait_for_request_lifecycle_state<R>(node: &R, request_doc_id: &str, expected: &str)
 where
     R: SnapshotReader + ?Sized,
 {
     let expected = RequestLifecycleState::parse(expected)
         .expect("expected request lifecycle state must be canonical");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        let snapshot = fetch_request_snapshot(node, request_doc_id).await;
-        if snapshot.lifecycle_state == expected {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRequest {request_doc_id} lifecycle_state={expected}; last={}; failure_reason={:?}",
-            snapshot.lifecycle_state,
-            snapshot.failure_reason
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    read_when_changed(
+        node,
+        "AgentRequest",
+        &format!("{request_doc_id} reaching lifecycle_state={expected}"),
+        async || {
+            let snapshot = fetch_request_snapshot(node, request_doc_id).await;
+            if snapshot.lifecycle_state == expected {
+                return Ok(());
+            }
+            Err(format!(
+                "lifecycle_state={}; failure_reason={:?}",
+                snapshot.lifecycle_state, snapshot.failure_reason
+            ))
+        },
+    )
+    .await
 }
 
-/// `budget` is a hang ceiling (`STALL_CEILING`), never a latency bound:
-/// terminal publication is scheduler-bound on a loaded host, so a fixed
-/// window fails a correct owner (`WallClockBound` `FixedWindow`).
 pub async fn wait_for_request_terminal_state<R>(
     node: &R,
     request_doc_id: &str,
-    budget: Duration,
 ) -> RequestLifecycleState
 where
     R: SnapshotReader + ?Sized,
 {
-    let deadline = tokio::time::Instant::now() + budget;
-    loop {
-        let snapshot = fetch_request_snapshot(node, request_doc_id).await;
-        if snapshot.lifecycle_state.is_terminal() {
-            return snapshot.lifecycle_state;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRequest {request_doc_id} terminal state; last={}; failure_reason={:?}",
-            snapshot.lifecycle_state,
-            snapshot.failure_reason
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    read_when_changed(
+        node,
+        "AgentRequest",
+        &format!("{request_doc_id} terminalizing"),
+        async || {
+            let snapshot = fetch_request_snapshot(node, request_doc_id).await;
+            if snapshot.lifecycle_state.is_terminal() {
+                return Ok(snapshot.lifecycle_state);
+            }
+            Err(format!(
+                "lifecycle_state={}; failure_reason={:?}",
+                snapshot.lifecycle_state, snapshot.failure_reason
+            ))
+        },
+    )
+    .await
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -489,21 +413,16 @@ pub async fn wait_for_inference_call_state<R>(
 where
     R: SnapshotReader + ?Sized,
 {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        let row = fetch_latest_inference_call(node, request_id).await;
-        if row
-            .as_ref()
-            .is_some_and(|row| row.call_state.as_str() == expected)
-        {
-            return row.expect("checked Some");
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for latest inference call request_id={request_id} call_state={expected}; last={row:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    read_when_changed(
+        node,
+        "InferenceCall",
+        &format!("request_id={request_id} reaching call_state={expected}"),
+        async || match fetch_latest_inference_call(node, request_id).await {
+            Some(row) if row.call_state == expected => Ok(row),
+            last => Err(format!("{last:?}")),
+        },
+    )
+    .await
 }
 
 async fn fetch_latest_inference_call<R>(node: &R, request_id: &str) -> Option<InferenceCallSnapshot>

@@ -1,4 +1,0 @@
----- MODULE MCTestCacheStoreFleet ----
-EXTENDS TestCacheStore
-
-====

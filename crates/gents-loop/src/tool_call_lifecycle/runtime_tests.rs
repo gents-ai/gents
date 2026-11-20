@@ -124,7 +124,7 @@ async fn receipt_shaped_output_does_not_create_native_evidence() {
         },
         "{}".into(),
         Some(writer),
-        &crate::tool::ToolCallEnvelope::ambient(),
+        &crate::tool::ToolCallEnvelope::default(),
     )
     .await
     .unwrap();
@@ -136,21 +136,21 @@ async fn receipt_shaped_output_does_not_create_native_evidence() {
 async fn returned_receipt_survives_outer_deadline_and_conflicting_receipt_is_refused() {
     let registry = crate::live_output::LiveToolOutputRegistry::default();
     let writer = registry.writer_for("physical-call").await;
-    let outcome = scope_request_tool_execution_with_session(
-        None,
-        Some(Utc::now() + chrono::Duration::milliseconds(10)),
-        CancellationToken::new(),
-        None,
-        Some(writer.clone()),
-        None,
-        call_tool_managed(
-            &ReceiptTool {
-                delay: true,
-                forge_text: false,
-            },
-            "{}".into(),
-            &crate::tool::ToolCallEnvelope::ambient(),
-        ),
+    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry {
+        live_output: Some(writer.clone()),
+        ..crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            Some(Utc::now() + chrono::Duration::milliseconds(10)),
+            CancellationToken::new(),
+        )
+    }
+    .call();
+    let outcome = call_tool_managed(
+        &ReceiptTool {
+            delay: true,
+            forge_text: false,
+        },
+        "{}".into(),
+        &scope_call,
     )
     .await;
     assert!(matches!(outcome, ToolOutcome::TimedOut { .. }));
@@ -178,17 +178,13 @@ async fn returned_receipt_survives_outer_deadline_and_conflicting_receipt_is_ref
 #[tokio::test]
 async fn managed_call_times_out_at_request_deadline() {
     let deadline = Utc::now() + chrono::Duration::milliseconds(10);
-
-    let outcome = scope_request_tool_execution(
+    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
         Some(deadline),
         CancellationToken::new(),
-        call_tool_managed(
-            &PendingTool,
-            "{}".to_string(),
-            &crate::tool::ToolCallEnvelope::ambient(),
-        ),
     )
-    .await;
+    .call();
+
+    let outcome = call_tool_managed(&PendingTool, "{}".to_string(), &scope_call).await;
 
     assert!(matches!(outcome, ToolOutcome::TimedOut { .. }));
 }
@@ -197,17 +193,9 @@ async fn managed_call_times_out_at_request_deadline() {
 async fn managed_call_cancels_before_inner_future_completes() {
     let token = CancellationToken::new();
     token.cancel();
+    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, token).call();
 
-    let outcome = scope_request_tool_execution(
-        None,
-        token,
-        call_tool_managed(
-            &PendingTool,
-            "{}".to_string(),
-            &crate::tool::ToolCallEnvelope::ambient(),
-        ),
-    )
-    .await;
+    let outcome = call_tool_managed(&PendingTool, "{}".to_string(), &scope_call).await;
 
     assert_eq!(outcome, ToolOutcome::Cancelled);
 }
@@ -215,17 +203,13 @@ async fn managed_call_cancels_before_inner_future_completes() {
 #[tokio::test]
 async fn managed_call_preserves_fast_success() {
     let deadline = Utc::now() + chrono::Duration::seconds(1);
-
-    let outcome = scope_request_tool_execution(
+    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(
         Some(deadline),
         CancellationToken::new(),
-        call_tool_managed(
-            &FastTool,
-            "{}".to_string(),
-            &crate::tool::ToolCallEnvelope::ambient(),
-        ),
     )
-    .await;
+    .call();
+
+    let outcome = call_tool_managed(&FastTool, "{}".to_string(), &scope_call).await;
 
     assert_eq!(outcome, ToolOutcome::Completed("ok".to_string()));
 }
@@ -234,17 +218,9 @@ async fn managed_call_preserves_fast_success() {
 async fn managed_call_prefers_fired_cancellation_over_ready_output() {
     let token = CancellationToken::new();
     token.cancel();
+    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, token).call();
 
-    let outcome = scope_request_tool_execution(
-        None,
-        token,
-        call_tool_managed(
-            &FastTool,
-            "{}".to_string(),
-            &crate::tool::ToolCallEnvelope::ambient(),
-        ),
-    )
-    .await;
+    let outcome = call_tool_managed(&FastTool, "{}".to_string(), &scope_call).await;
 
     assert_eq!(outcome, ToolOutcome::Cancelled);
 }
@@ -364,64 +340,57 @@ fn dispatch_classification_maps_tool_errors() {
 }
 
 #[tokio::test]
-async fn foreground_and_background_scopes_preserve_trigger_fill_context() {
+async fn foreground_and_background_contexts_preserve_trigger_fill_context() {
     let mut fields = std::collections::BTreeMap::new();
     fields.insert("expected_total".to_string(), "4".to_string());
-    scope_request_tool_execution_with_trigger_context(
-        None,
-        None,
-        CancellationToken::new(),
-        None,
-        None,
-        Some("session-7".to_string()),
-        Some("run-7".to_string()),
-        fields.clone(),
-        false,
-        async move {
-            let foreground = current_tool_runtime_context().expect("foreground context");
-            assert_eq!(foreground.session_id.as_deref(), Some("session-7"));
-            assert_eq!(foreground.correlation.as_deref(), Some("run-7"));
-            assert_eq!(foreground.source_fields, fields);
+    let foreground = ToolScopeEntry {
+        session_id: Some("session-7".to_string()),
+        correlation: Some("run-7".to_string()),
+        source_fields: fields.clone(),
+        ..ToolScopeEntry::new(None, CancellationToken::new())
+    }
+    .call()
+    .runtime()
+    .expect("foreground context");
+    assert_eq!(foreground.session_id.as_deref(), Some("session-7"));
+    assert_eq!(foreground.correlation.as_deref(), Some("run-7"));
+    assert_eq!(foreground.source_fields, fields);
 
-            scope_background_tool_execution(None, CancellationToken::new(), None, None, async {
-                let background = current_tool_runtime_context().expect("background context");
-                assert!(background.background);
-                assert_eq!(background.session_id.as_deref(), Some("session-7"));
-                assert_eq!(background.correlation.as_deref(), Some("run-7"));
-                assert_eq!(
-                    background
-                        .source_fields
-                        .get("expected_total")
-                        .map(String::as_str),
-                    Some("4")
-                );
-            })
-            .await;
+    let background = CurrentToolRuntimeContext::entered(
+        Some(&foreground),
+        ToolScopeEntry {
+            session_id: foreground.session_id.clone(),
+            correlation: foreground.correlation.clone(),
+            source_fields: foreground.source_fields.clone(),
+            background: true,
+            ..ToolScopeEntry::new(None, CancellationToken::new())
         },
-    )
-    .await;
+    );
+    assert!(background.background);
+    assert_eq!(background.session_id.as_deref(), Some("session-7"));
+    assert_eq!(background.correlation.as_deref(), Some("run-7"));
+    assert_eq!(
+        background
+            .source_fields
+            .get("expected_total")
+            .map(String::as_str),
+        Some("4")
+    );
 }
 
 #[tokio::test]
 async fn explicit_session_survives_a_spawned_background_task_boundary() {
-    let observed = tokio::spawn(async {
-        scope_request_tool_execution_with_trigger_context(
-            None,
-            None,
-            CancellationToken::new(),
-            None,
-            None,
-            Some("background-session".into()),
-            None,
-            std::collections::BTreeMap::new(),
-            true,
-            async {
-                current_tool_runtime_context()
-                    .and_then(|scope| scope.session_id)
-                    .expect("background session id")
-            },
-        )
-        .await
+    let envelope = ToolScopeEntry {
+        session_id: Some("background-session".into()),
+        background: true,
+        ..ToolScopeEntry::new(None, CancellationToken::new())
+    }
+    .call();
+    let observed = tokio::spawn(async move {
+        envelope
+            .runtime()
+            .and_then(|scope| scope.session_id)
+            .expect("background session id")
     })
     .await
     .unwrap();
@@ -431,7 +400,7 @@ async fn explicit_session_survives_a_spawned_background_task_boundary() {
 #[tokio::test]
 async fn tool_execution_bounds_without_context_uses_the_command_timeout() {
     let before = Utc::now();
-    let bounds = tool_execution_bounds(Duration::from_secs(30));
+    let bounds = tool_execution_bounds(&ToolCallEnvelope::default(), Duration::from_secs(30));
     let after = Utc::now();
     let deadline = bounds.deadline_at.expect("deadline");
     assert!(deadline >= before + chrono::Duration::seconds(30));
@@ -443,7 +412,7 @@ async fn tool_execution_bounds_without_context_uses_the_command_timeout() {
 #[tokio::test]
 async fn tool_execution_bounds_arms_the_measurement_no_later_than_the_deadline() {
     let timeout = Duration::from_secs(30);
-    let bounds = tool_execution_bounds(timeout);
+    let bounds = tool_execution_bounds(&ToolCallEnvelope::default(), timeout);
     let closing_wall = Utc::now();
     let closing_mono = Instant::now();
     let granularity = Duration::from_micros(100);
@@ -464,10 +433,10 @@ async fn tool_execution_bounds_arms_the_measurement_no_later_than_the_deadline()
 async fn tool_execution_bounds_prefers_the_earlier_request_deadline() {
     let request_deadline = Utc::now() + chrono::Duration::seconds(5);
     let token = CancellationToken::new();
-    let bounds = scope_request_tool_execution(Some(request_deadline), token, async {
-        tool_execution_bounds(Duration::from_secs(3600))
-    })
-    .await;
+    let scope_call =
+        crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(Some(request_deadline), token)
+            .call();
+    let bounds = async { tool_execution_bounds(&scope_call, Duration::from_secs(3600)) }.await;
     assert_eq!(bounds.deadline_at, Some(request_deadline));
     assert!(!bounds.cancellation_token.is_cancelled());
 }

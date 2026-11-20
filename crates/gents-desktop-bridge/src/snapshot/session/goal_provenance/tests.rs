@@ -99,12 +99,13 @@ async fn assert_native_pages(
     expected_items: usize,
     opening_key: Option<&str>,
 ) {
-    use gents_desktop_core::client::{ClientStore, TranscriptWindow};
+    use gents_observe::client_projection::query::TranscriptWindow;
+    use gents_observe::client_projection::store::ClientStore;
     let mut cursor = None;
     let mut keys = BTreeSet::new();
     let mut markers = Vec::new();
     for _ in 0..20 {
-        let page = gents_desktop_core::client::load_session_transcript_window_on(
+        let page = gents_observe::client_projection::query::load_session_transcript_window_on(
             access,
             session_id,
             Some(&source_session.node_did),
@@ -200,9 +201,9 @@ async fn assert_native_pages(
 
 pub(crate) async fn assert_copied_opening(
     access: &gents_store::config_client::ConfigAccess,
-    rows: &gents_desktop_core::client::ClientStoreRows,
+    rows: &gents_observe::client_projection::store::ClientStoreRows,
 ) {
-    use gents_desktop_core::client::{ClientStore, ClientStoreRows};
+    use gents_observe::client_projection::store::{ClientStore, ClientStoreRows};
     let mut child = rows.sessions[0].clone();
     child.session_id = "child".into();
     let mut headers = rows.transcript_messages.clone();
@@ -279,18 +280,20 @@ pub(crate) async fn assert_copied_opening(
         });
         let mut snapshot =
             super::super::projection::build_session_snapshot_from_store_for_node_with_transcript(
-                &store,
-                &store,
-                &store,
-                Some(&dependencies),
-                None,
-                true,
-                true,
-                true,
-                false,
+                super::super::projection::SessionProjection {
+                    store: &store,
+                    transcript_store: &store,
+                    context_store: &store,
+                    canonical_dependencies: Some(&dependencies),
+                    prompt_ownership: None,
+                    request_projection: None,
+                    transcript_is_bounded: true,
+                    context_totals_exact: true,
+                    pending_owner_known: true,
+                    include_live_tail: false,
+                },
                 Some(&child.node_did),
                 "child",
-                None,
                 None,
             )
             .unwrap();

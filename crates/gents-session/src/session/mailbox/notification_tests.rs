@@ -65,7 +65,7 @@ fn notification_identity_is_configuration_and_runtime_owned() {
 #[tokio::test]
 async fn generated_notification_cases_drive_durable_writes() {
     let node = tests::test_node().await;
-    let access = tests::agent_access(&node);
+    let access = gents_store::test_support::fixture_agent_access(&node, tests::AGENT_NONCE);
     let context = tests::context("did:test:owner");
     for (index, case) in gents_lean_vocab::families::mailbox_notification_contracts_stamp::cases::<
         String,
@@ -210,7 +210,7 @@ fn notification_content_cannot_override_identity_or_policy() {
 #[tokio::test]
 async fn notification_updates_reject_route_policy_and_terminal_races() {
     let node = tests::test_node().await;
-    let access = tests::agent_access(&node);
+    let access = gents_store::test_support::fixture_agent_access(&node, tests::AGENT_NONCE);
     let context = tests::context("did:test:owner");
     let identity = NotificationIdentity::Condition {
         key: "monitor".into(),
@@ -271,7 +271,7 @@ async fn content_tool_provenance_follows_lean_model() {
     let cases = gents_lean_vocab::families::mailbox_content_provenance::cases();
     for case in &cases {
         let node = tests::test_node().await;
-        let access = tests::agent_access(&node);
+        let access = gents_store::test_support::fixture_agent_access(&node, tests::AGENT_NONCE);
         let mut context = tests::context("did:test:owner");
         context.session_id = None;
         let tool = MailboxCreateTool::new(
@@ -311,7 +311,7 @@ async fn content_tool_provenance_follows_lean_model() {
             let receipt = tool
                 .call_with_request(
                     args,
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                     &request_context,
                 )
                 .await
@@ -339,7 +339,7 @@ async fn content_tool_provenance_follows_lean_model() {
 #[tokio::test]
 async fn concurrent_notifications_converge_without_cross_requester_collisions() {
     let node = tests::test_node().await;
-    let access = tests::agent_access(&node);
+    let access = gents_store::test_support::fixture_agent_access(&node, tests::AGENT_NONCE);
     let identity = NotificationIdentity::Condition {
         key: "monitor".into(),
     };
@@ -397,7 +397,7 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
         MailboxQuestion, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
     };
     let node = tests::test_node().await;
-    let access = tests::agent_access(&node);
+    let access = gents_store::test_support::fixture_agent_access(&node, tests::AGENT_NONCE);
     let context = tests::context("did:test:owner");
     let tool = MailboxCreateTool::new(node.clone(), MailboxNotificationPolicy::default())
         .with_access(access.clone());
@@ -432,7 +432,7 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
         optional: None,
         recommended_order: None,
     };
-    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+    let envelope = gents_loop::tool::ToolCallEnvelope::default();
     let call = |args: MailboxContentArgs| tool.call_with_request(args, &envelope, &request_context);
     let content = |title: &str, payload: Option<&str>, question: Option<MailboxQuestion>| {
         MailboxContentArgs {

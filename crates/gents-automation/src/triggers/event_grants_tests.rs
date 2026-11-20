@@ -117,21 +117,12 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
     .with_runtime_agent_proof(gents_store::identity::RuntimeAgentProof::new(root.clone()));
     let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
     for did in [owner.did(), first.did(), second.did()] {
-        for permission in [
-            acp::nac::NodePermission::DocumentRead,
-            acp::nac::NodePermission::CollectionGet,
-            acp::nac::NodePermission::DocumentUpdate,
-            acp::nac::NodePermission::DacRelationAdd,
-            acp::nac::NodePermission::DacRelationDelete,
-        ] {
-            runtime
-                .grant_node_permission(&identity::Did::new(did)?, permission)
-                .await?;
-        }
+        gents_store::identity::GrantSet::AgentBaseline
+            .grant(&runtime, &identity::Did::new(did)?)
+            .await?;
     }
     for permission in [
         acp::nac::NodePermission::CollectionPatch,
-        acp::nac::NodePermission::CollectionGet,
         acp::nac::NodePermission::DacPolicyAdd,
     ] {
         runtime
@@ -372,24 +363,26 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
             .await?;
     }
     let spec = gents_session::request::lifecycle::materialize::pending_agent_request_spec(
-        root.did(),
-        first.did(),
-        "hello",
-        gents_loop::execution_origin::ExecutionOrigin::Scheduled,
-        gents_session::request::lifecycle::TriggerLineage {
-            trigger_id: Some("trigger".into()),
-            trigger_kind: Some("event".into()),
-            source_doc_id: Some(fire.identity.source_doc_id.clone()),
-            correlation: None,
-            trigger_context: None,
+        gents_session::request::lifecycle::materialize::PendingAgentRequest {
+            node_did: root.did(),
+            agent_did: first.did(),
+            content: "hello",
+            execution_origin: gents_loop::execution_origin::ExecutionOrigin::Scheduled,
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                trigger_id: Some("trigger".into()),
+                trigger_kind: Some("event".into()),
+                source_doc_id: Some(fire.identity.source_doc_id.clone()),
+                correlation: None,
+                trigger_context: None,
+            },
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did: None,
+            trigger_doc_id: Some(trigger_doc),
         },
-        None,
-        None,
         &fire.request_id,
         &fire.session_id,
         Some(&fire.fire_key),
-        None,
-        Some(trigger_doc),
     )?;
     let create = gents_session::request::lifecycle::build_signed_request(
         spec,

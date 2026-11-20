@@ -122,6 +122,8 @@ pub struct DbCredentialBearer {
     force_refresh: AtomicBool,
     refresh_kind: OAuthRefreshKind,
     product: OAuthProduct,
+    #[cfg(test)]
+    token_url: Option<String>,
 }
 
 impl DbCredentialBearer {
@@ -134,29 +136,6 @@ impl DbCredentialBearer {
         refresh_kind: OAuthRefreshKind,
         product: OAuthProduct,
     ) -> Self {
-        Self::with_cache(
-            node,
-            node_did,
-            provider,
-            credential_id,
-            is_owner,
-            None,
-            refresh_kind,
-            product,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_cache(
-        node: Arc<EmbeddedNode>,
-        node_did: impl Into<String>,
-        provider: impl Into<String>,
-        credential_id: impl Into<String>,
-        is_owner: bool,
-        cache_seed: Option<OAuthCredential>,
-        refresh_kind: OAuthRefreshKind,
-        product: OAuthProduct,
-    ) -> Self {
         Self {
             node,
             node_did: node_did.into(),
@@ -166,13 +145,41 @@ impl DbCredentialBearer {
                 .timeout(REFRESH_REQUEST_TIMEOUT)
                 .build()
                 .expect("reqwest client with a timeout builds like Client::new()"),
-            cache: Mutex::new(cache_seed),
+            cache: Mutex::new(None),
             refresh_lock: Mutex::new(None),
             is_owner,
             force_refresh: AtomicBool::new(false),
             refresh_kind,
             product,
+            #[cfg(test)]
+            token_url: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_cache_seed(mut self, seed: OAuthCredential) -> Self {
+        self.cache = Mutex::new(Some(seed));
+        self
+    }
+
+    /// Refreshes against `url` instead of the provider's token endpoint.
+    #[cfg(test)]
+    pub(crate) fn with_token_url(mut self, url: impl Into<String>) -> Self {
+        self.token_url = Some(url.into());
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn token_url(&self) -> Option<&str> {
+        self.token_url.as_deref()
+    }
+
+    fn refresh_endpoint(&self, provider_endpoint: impl FnOnce() -> String) -> String {
+        #[cfg(test)]
+        if let Some(url) = &self.token_url {
+            return url.clone();
+        }
+        provider_endpoint()
     }
 
     async fn load_credential(&self) -> std::result::Result<OAuthCredential, OAuthCredentialError> {
@@ -305,13 +312,32 @@ impl DbCredentialBearer {
         let refresh_token = credential.refresh_token.as_str();
         match self.refresh_kind {
             OAuthRefreshKind::ChatGpt => {
-                crate::auth::chatgpt_refresh::refresh_chatgpt_token(refresh_token, &self.http).await
+                let endpoint = self.refresh_endpoint(|| {
+                    gents_protocol::chatgpt_oauth::token_endpoint(
+                        gents_protocol::chatgpt_oauth::DEFAULT_ISSUER,
+                    )
+                });
+                crate::auth::chatgpt_refresh::refresh_chatgpt_token(
+                    &endpoint,
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
             OAuthRefreshKind::Claude => {
-                crate::auth::claude_refresh::refresh_claude_token(refresh_token, &self.http).await
+                let endpoint = self.refresh_endpoint(|| gents_claude::oauth::TOKEN_URL.to_string());
+                crate::auth::claude_refresh::refresh_claude_token(
+                    &endpoint,
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
             OAuthRefreshKind::Xai => {
-                crate::auth::xai_refresh::refresh_xai_token(refresh_token, &self.http).await
+                let endpoint =
+                    self.refresh_endpoint(|| crate::auth::xai_refresh::TOKEN_URL.to_string());
+                crate::auth::xai_refresh::refresh_xai_token(&endpoint, refresh_token, &self.http)
+                    .await
             }
             OAuthRefreshKind::Gateway => {
                 crate::claude_gateway_login::refresh_gateway_token(

@@ -271,7 +271,7 @@ fn inference_rows(
             "gents config profile / gents config backend".into(),
         ));
     } else if let Some(backend) = backend {
-        let capacity = backend.max_concurrent.unwrap_or(1);
+        let capacity = backend.effective_max_concurrent();
         if capacity < i64::from(block.max_live) {
             rows.push(row(
                 "backend_concurrency",

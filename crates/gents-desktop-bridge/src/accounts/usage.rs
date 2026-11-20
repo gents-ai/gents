@@ -1,5 +1,5 @@
-use crate::BridgeError;
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
+use gents_store::client_error::BridgeError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
@@ -103,7 +103,7 @@ pub(crate) async fn account_usage_views(
 }
 
 pub async fn read(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: ProviderUsageReadRequest,
 ) -> Result<Vec<AccountUsageView>, BridgeError> {
     let node_did = request.node_did.trim();
@@ -133,7 +133,7 @@ pub async fn read(
         Ok(reads) => Some(reads),
         Err(error) if !request.refresh => {
             tracing::warn!(
-                target: "gents_desktop_bridge::inference_setup",
+                target: "crate::inference_setup",
                 error = %format!("{error:#}"),
                 "usage read on open failed; limits unavailable"
             );

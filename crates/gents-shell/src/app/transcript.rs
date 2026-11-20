@@ -1,0 +1,244 @@
+use std::cell::RefCell;
+use std::fmt;
+
+use ratatui::style::Style;
+use ratatui::text::Span;
+
+use super::input::Lines;
+use crate::sample::{changes, Running, Tone, CHAT};
+use crate::source::{Agent, Change, Prompt};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatLine {
+    pub text: String,
+    pub tone: Tone,
+    /// The transcript item the line shows.
+    pub item: Option<String>,
+    /// The file change the line shows.
+    pub change: Option<Change>,
+}
+
+pub(super) fn blank() -> ChatLine {
+    ChatLine {
+        text: String::new(),
+        tone: Tone::Plain,
+        item: None,
+        change: None,
+    }
+}
+
+/// `scroll` counts lines up from the bottom. No `lines` means no messages yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tab {
+    /// Set by `App::push_tab`; the subagent the sidebar shows keeps its parent's.
+    pub id: u64,
+    /// The id of the session the tab shows.
+    pub session: Option<String>,
+    pub name: String,
+    pub agent: String,
+    pub agent_id: String,
+    pub lines: Vec<ChatLine>,
+    pub scroll: usize,
+    pub input: Lines,
+    pub agent_picked: bool,
+    pub running: Vec<Running>,
+    /// The selected running row, while those rows have the keys.
+    pub running_sel: Option<usize>,
+    /// The session's turn in progress.
+    pub turn: Option<String>,
+    /// A send without a session is waiting for its `Started`.
+    pub starting: bool,
+    /// Whether the right pane is wanted while this tab shows. Not saved across runs.
+    pub sidebar: bool,
+    /// The session's open mailbox questions and approvals, oldest first.
+    pub prompts: Vec<Prompt>,
+    /// The tab sent a turn it has not seen end. The endpoint streams that turn here, and no
+    /// other client's.
+    pub following: bool,
+    pub(super) wrapped: Wrapped,
+}
+
+/// Each line's rows at the width they were wrapped for. Every frame reads the rows, and wrapping
+/// a long transcript costs far more than drawing it, so only a changed line is wrapped again.
+#[derive(Default)]
+pub(super) struct Wrapped(RefCell<(u16, Vec<WrappedLine>)>);
+
+type WrappedLine = (ChatLine, Vec<String>);
+
+/// A copy starts empty, and two tabs never differ by what they have cached.
+impl Clone for Wrapped {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for Wrapped {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Wrapped {}
+
+impl fmt::Debug for Wrapped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Wrapped")
+    }
+}
+
+impl Tab {
+    pub fn new_session() -> Tab {
+        Tab {
+            id: 0,
+            session: None,
+            name: "new session".to_string(),
+            agent: "Engineer".to_string(),
+            agent_id: "Engineer".to_string(),
+            lines: Vec::new(),
+            scroll: 0,
+            input: Lines::default(),
+            agent_picked: false,
+            running: Vec::new(),
+            running_sel: None,
+            turn: None,
+            starting: false,
+            sidebar: false,
+            prompts: Vec::new(),
+            following: false,
+            wrapped: Wrapped::default(),
+        }
+    }
+
+    /// The lines' rows with each ended turn's card in place. Cards are built on each call, from
+    /// the lines, and never cached.
+    pub fn wrapped_rows(&self, width: u16) -> Vec<(String, Tone)> {
+        let mut cards = self.cards(usize::from(width)).into_iter().peekable();
+        let mut wrapped = self.wrapped.0.borrow_mut();
+        let (wrapped_at, seen) = &mut *wrapped;
+        if *wrapped_at != width {
+            *wrapped_at = width;
+            seen.clear();
+        }
+        seen.truncate(self.lines.len());
+        let mut rows = Vec::new();
+        for (at, line) in self.lines.iter().enumerate() {
+            while let Some((_, card)) = cards.next_if(|(before, _)| *before == at) {
+                rows.extend(card);
+            }
+            if !matches!(seen.get(at), Some((was, _)) if was == line) {
+                let fresh = (line.clone(), line_rows(line, usize::from(width)));
+                match seen.get_mut(at) {
+                    Some(slot) => *slot = fresh,
+                    None => seen.push(fresh),
+                }
+            }
+            rows.extend(seen[at].1.iter().map(|row| (row.clone(), line.tone)));
+        }
+        rows.extend(cards.flat_map(|(_, card)| card));
+        rows
+    }
+
+    /// An unseen item appends its line and a blank, and a seen one replaces its line.
+    pub(super) fn put(&mut self, line: ChatLine) {
+        let seen = line.item.as_deref().and_then(|item| self.item_line(item));
+        match seen {
+            Some(index) => self.lines[index] = line,
+            None => self.lines.extend([line, blank()]),
+        }
+    }
+
+    /// The selected row stays selected while it is listed, else its position is kept in range.
+    pub(super) fn set_running(&mut self, rows: Vec<Running>) {
+        let selected = self.running_sel.and_then(|row| self.running.get(row));
+        let kept =
+            selected.and_then(|selected| rows.iter().position(|row| row.opens == selected.opens));
+        let last = rows.len().checked_sub(1);
+        let clamped = self.running_sel.zip(last).map(|(sel, last)| sel.min(last));
+        self.running_sel = kept.or(clamped);
+        self.running = rows;
+    }
+
+    pub(super) fn set_agent(&mut self, agent: &Agent) {
+        self.agent = agent.name.clone();
+        self.agent_id = agent.id.clone();
+    }
+
+    pub(super) fn item_line(&self, item: &str) -> Option<usize> {
+        self.lines
+            .iter()
+            .position(|line| line.item.as_deref() == Some(item))
+    }
+}
+
+pub(super) fn line_rows(line: &ChatLine, width: usize) -> Vec<String> {
+    match line.tone {
+        Tone::You => bubble(&line.text, width),
+        _ => wrap_lines(&line.text, width),
+    }
+}
+
+pub(super) fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+    text.split('\n')
+        .flat_map(|line| wrap(line, width))
+        .collect()
+}
+
+/// Breaks at the last space that fits, dropping the spaces there, and inside a word only when the row holds no
+/// space past its indent. Breaks fall between grapheme clusters, the units `Buffer` draws.
+pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let (mut row, mut used, mut broke) = (String::new(), 0, false);
+    for grapheme in Span::raw(text).styled_graphemes(Style::new()) {
+        let cell = Span::raw(grapheme.symbol).width();
+        if broke && row.is_empty() && grapheme.symbol == " " {
+            continue;
+        }
+        if used + cell > width && used > 0 {
+            broke = true;
+            if grapheme.symbol == " " {
+                rows.push(std::mem::take(&mut row).trim_end().to_string());
+                used = 0;
+                continue;
+            }
+            let space = row.rfind(' ').filter(|&at| !row[..at].trim().is_empty());
+            let rest = space.map_or(String::new(), |at| {
+                row.split_off(at).trim_start().to_string()
+            });
+            rows.push(std::mem::replace(&mut row, rest).trim_end().to_string());
+            used = Span::raw(row.as_str()).width();
+        }
+        row.push_str(grapheme.symbol);
+        used += cell;
+    }
+    rows.push(row);
+    rows
+}
+
+/// Padded on the left so one block of text sits against the right edge, leaving a cell of tint
+/// on each side. Padding in the text keeps search columns right.
+pub(super) fn bubble(text: &str, width: usize) -> Vec<String> {
+    let room = (width * 3 / 4).min(width.saturating_sub(2)).max(1);
+    let rows = wrap_lines(text, room);
+    let widest = rows.iter().map(|row| Span::raw(row.as_str()).width()).max();
+    let left = width.saturating_sub(widest.unwrap_or(0) + 1);
+    rows.iter()
+        .map(|row| format!("{:left$}{row}", ""))
+        .collect()
+}
+
+/// The sample's changes come after its sixth line, the read.
+pub fn sample_chat() -> Vec<ChatLine> {
+    let chat = |lines: &[(&str, Tone)]| -> Vec<ChatLine> {
+        lines
+            .iter()
+            .map(|&(text, tone)| ChatLine {
+                text: text.to_string(),
+                tone,
+                item: None,
+                change: None,
+            })
+            .collect()
+    };
+    let (read, ran) = CHAT.split_at(6);
+    [chat(read), changes(), chat(ran)].concat()
+}

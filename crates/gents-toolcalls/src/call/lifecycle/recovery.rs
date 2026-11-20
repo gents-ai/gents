@@ -9,7 +9,7 @@ use gents_protocol::row::AgentRequestRow;
 use gents_store::graphql::escape_graphql_string;
 
 use super::{AwaitMode, FailureClass, ToolCallLifecycle};
-use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
+use gents_protocol::tool_call::{CancelCause, ToolCallState};
 
 pub type RecoveryIdentities = [std::sync::Arc<dyn gents_store::identity::NodeIdentity>];
 type RecoveryAccesses =
@@ -125,7 +125,7 @@ impl RunningToolCallRow {
     /// it settles the child when it stops, and it may outlive its request.
     fn owned_by_live_execution(
         &self,
-        executions: &crate::call::hook::BackgroundExecutionRegistry,
+        executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     ) -> bool {
         self.plugin_parent_tool_call_doc_id
             .as_ref()
@@ -180,7 +180,7 @@ impl super::ToolCallLifecycle {
             node,
             node_did,
             identities,
-            &crate::call::hook::BackgroundExecutionRegistry::default(),
+            &crate::call::hook::background_executions::BackgroundExecutionRegistry::default(),
         )
         .await
     }
@@ -189,7 +189,7 @@ impl super::ToolCallLifecycle {
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
         identities: &RecoveryIdentities,
-        executions: &crate::call::hook::BackgroundExecutionRegistry,
+        executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     ) -> Result<ToolCallRecoveryReport> {
         let accesses = recovery_accesses(node, node_did, identities)?;
         let tool_calls_recovered =
@@ -217,7 +217,7 @@ impl super::ToolCallLifecycle {
             node,
             node_did,
             identities,
-            &crate::call::hook::BackgroundExecutionRegistry::default(),
+            &crate::call::hook::background_executions::BackgroundExecutionRegistry::default(),
         )
         .await
     }
@@ -226,7 +226,7 @@ impl super::ToolCallLifecycle {
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
         identities: &RecoveryIdentities,
-        executions: &crate::call::hook::BackgroundExecutionRegistry,
+        executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     ) -> Result<TerminalParentToolReport> {
         let accesses = recovery_accesses(node, node_did, identities)?;
         let rows = load_running_tool_call_rows_for_agent(node_did, &accesses).await?;
@@ -298,7 +298,7 @@ impl super::ToolCallLifecycle {
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
         identities: &RecoveryIdentities,
-        executions: &crate::call::hook::BackgroundExecutionRegistry,
+        executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     ) -> Result<OrphanedBackgroundToolReport> {
         let accesses = recovery_accesses(node, node_did, identities)?;
         executions.recover_retained_foreground().await;
@@ -544,7 +544,7 @@ impl super::ToolCallLifecycle {
     pub(crate) async fn cancel_unowned_background_tool(
         node: &std::sync::Arc<EmbeddedNode>,
         lifecycle: &mut ToolCallLifecycle,
-        executions: &crate::call::hook::BackgroundExecutionRegistry,
+        executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
         cause: CancelCause,
         completion_reason: &str,
     ) -> Result<(gents_session::exec::ProcessStopOutcome, bool, bool)> {
@@ -592,14 +592,16 @@ impl super::ToolCallLifecycle {
                 crate::background::completion::append_background_tool_completion(
                     node,
                     &lifecycle.access()?,
-                    lifecycle.session_id(),
-                    &request_id,
-                    &doc_id,
-                    lifecycle.tool_name(),
-                    status,
-                    "",
-                    Some(reason),
-                    gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    &crate::background::completion::BackgroundToolCompletion {
+                        parent_session_id: lifecycle.session_id(),
+                        parent_request_id: &request_id,
+                        tool_call_doc_id: &doc_id,
+                        tool_name: lifecycle.tool_name(),
+                        status,
+                        result: "",
+                        reason: Some(reason),
+                        wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    },
                 )
                 .await
             }
@@ -687,14 +689,16 @@ impl super::ToolCallLifecycle {
                     node,
                     access,
                     request_doc_id,
-                    session_id,
-                    request_id,
-                    &row.doc_id,
-                    &row.tool_name,
-                    status,
-                    &output,
-                    reason,
-                    wake,
+                    &crate::background::completion::BackgroundToolCompletion {
+                        parent_session_id: session_id,
+                        parent_request_id: request_id,
+                        tool_call_doc_id: &row.doc_id,
+                        tool_name: &row.tool_name,
+                        status,
+                        result: &output,
+                        reason,
+                        wake,
+                    },
                 )
                 .await;
             match appended {
@@ -768,7 +772,8 @@ mod tests {
             "plugin_parent_tool_call_doc_id": "parent-doc",
         }))
         .unwrap();
-        let executions = crate::call::hook::BackgroundExecutionRegistry::default();
+        let executions =
+            crate::call::hook::background_executions::BackgroundExecutionRegistry::default();
         assert!(!child.owned_by_live_execution(&executions));
         let reservation = executions
             .reserve(
@@ -907,7 +912,7 @@ async fn recover_stuck_running_tool_calls(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     accesses: &RecoveryAccesses,
-    executions: &crate::call::hook::BackgroundExecutionRegistry,
+    executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
 ) -> Result<usize> {
     let rows = load_running_tool_call_rows_for_agent(node_did, accesses).await?;
 
@@ -995,14 +1000,16 @@ async fn append_recovered_background_tool_completion(
         node,
         access,
         parent_request_doc_id,
-        &row.session_id,
-        parent_request_id,
-        &row.doc_id,
-        &row.tool_name,
-        status,
-        "",
-        Some(reason),
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        &crate::background::completion::BackgroundToolCompletion {
+            parent_session_id: &row.session_id,
+            parent_request_id,
+            tool_call_doc_id: &row.doc_id,
+            tool_name: &row.tool_name,
+            status,
+            result: "",
+            reason: Some(reason),
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        },
     )
     .await
     {
@@ -1699,6 +1706,9 @@ impl RecoveryOutcome {
             })
     }
 }
+
+#[cfg(all(test, feature = "vera"))]
+mod vera_tests;
 
 #[cfg(test)]
 mod actor_read_tests {

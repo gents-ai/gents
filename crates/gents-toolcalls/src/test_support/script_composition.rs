@@ -1,3 +1,4 @@
+use crate::call::hook::background_executions::BackgroundExecutionRegistry;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -108,7 +109,7 @@ pub async fn control(
             None,
             internal_id,
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {
@@ -242,7 +243,7 @@ pub async fn script_with_children(
             None,
             "script",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -253,7 +254,7 @@ pub async fn script_with_children(
             1,
             "probe",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -263,7 +264,7 @@ pub async fn script_with_children(
             None,
             &completed,
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -283,7 +284,7 @@ pub async fn script_with_children(
             2,
             "probe",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -293,7 +294,7 @@ pub async fn script_with_children(
             3,
             "probe",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -303,7 +304,7 @@ pub async fn script_with_children(
             None,
             &running,
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -314,7 +315,7 @@ pub async fn script_with_children(
             4,
             "probe",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -324,7 +325,7 @@ pub async fn script_with_children(
             None,
             &cancelled,
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue

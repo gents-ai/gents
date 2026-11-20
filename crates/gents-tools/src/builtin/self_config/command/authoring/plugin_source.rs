@@ -54,10 +54,7 @@ impl ConfigCommandTool {
         let mut managed = Vec::new();
         let mut absent = Vec::new();
         for collection in &data.collections {
-            if gents_store::schema::migration::DEFAULT_REGISTRY
-                .managed_names()
-                .any(|name| name == collection)
-            {
+            if gents_store::schema::catalog::RUNTIME_CATALOG.manages(collection) {
                 managed.push(collection.as_str());
             } else if access
                 .collection_version(collection)
@@ -145,8 +142,14 @@ impl ConfigCommandTool {
         .context("the plugin source task did not finish")??;
 
         self.execution.enter_mutation();
-        let build = crate::native::run_plugin_build(&prepared.root, &prepared.dir, true)
-            .await
+        let build = crate::native::run_plugin_build(
+            &self.envelope,
+            &prepared.root,
+            &prepared.dir,
+            true,
+            self.plugin_builder.as_deref(),
+        )
+        .await
             .map_err(|error| {
                 anyhow!(
                     "plugin {coordinate} did not build; nothing was installed. Its source document is saved: fix it with [\"plugin\",\"build\",{id:?}] and set.source, or read it with [\"plugin-source\",\"get\",{id:?}].\n{error:#}"
@@ -194,12 +197,18 @@ impl ConfigCommandTool {
             node: self.node.clone(),
             actor: self.identity.clone(),
             home: Some(home),
+            envelope: gents_loop::tool::ToolCallEnvelope::default(),
         };
         // A dropped request (an interrupt cancels the tool call's future)
         // must not stop between a pin move and the install it waits for, so
         // the moves, the install and their compensation run as one owned
-        // task that finishes whether or not this call is still awaited.
-        let owned = self.clone();
+        // task that finishes whether or not this call is still awaited. The
+        // task serves no call: it carries none, so nothing in it observes the
+        // call's cancellation.
+        let owned = Self {
+            envelope: gents_loop::tool::ToolCallEnvelope::default(),
+            ..self.clone()
+        };
         let update = prepared.installed;
         let (owned_coordinate, owned_id) = (coordinate.clone(), id.clone());
         let (receipt, followed) = tokio::spawn(async move {

@@ -28,100 +28,105 @@ async fn one_time_workspace_approval_runs_the_reported_six_browser_cases() {
         None,
     )
     .unwrap();
-    workspace::scope(
-        context,
-        scope_interactive(true, async {
-            let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();
-            let policy = crate::native::CommandExecutionPolicy::write_capable()
-                .with_mode(crate::native::CommandExecutionMode::WorkspaceWrite);
-            let args = vec![
-                "-lc".into(),
-                concat!(
+    let call = crate::runtime_context::ToolHostContext {
+        interactive: true,
+        approval: context.clone(),
+        ..Default::default()
+    }
+    .call();
+    async {
+        let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();
+        let policy = crate::native::CommandExecutionPolicy::write_capable()
+            .with_mode(crate::native::CommandExecutionMode::WorkspaceWrite);
+        let args = vec![
+            "-lc".into(),
+            concat!(
                 "npm run build && PLAYWRIGHT_BROWSERS_PATH=\"$1\" ",
                 "npx playwright test tests/conversation.browser.ts --project=dark ",
                 "--grep 'steers from the pending row|keeps pending-row geometry|",
                 "applied opening attribution|initial goal message attribution' --max-failures=1",
             )
-                .into(),
-                "approved-browser-check".into(),
-                cache.to_str().unwrap().into(),
-            ];
-            let run = || {
-                crate::native::run_command_for_test(
-                    &tools,
-                    "bash",
-                    "/bin/sh",
-                    &args,
-                    None,
-                    Duration::from_secs(120),
-                    &policy,
-                    true,
-                    128 * 1024,
-                )
+            .into(),
+            "approved-browser-check".into(),
+            cache.to_str().unwrap().into(),
+        ];
+        let run = || {
+            crate::native::run_command_for_test(
+                &call,
+                &tools,
+                "bash",
+                crate::native::CommandRequest {
+                    command_name: "/bin/sh",
+                    args: &args,
+                    cwd: None,
+                    timeout: Duration::from_secs(120),
+                    raw_json: true,
+                    max_output_chars: 128 * 1024,
+                },
+                &policy,
+            )
+        };
+        let mut first = Box::pin(run());
+        assert!(futures::poll!(first.as_mut()).is_pending());
+        let questions = pending(&home).unwrap();
+        assert_eq!(questions.len(), 1);
+        let original = questions[0].id.clone();
+        let workspace::BindingAction::Command {
+            argv,
+            cwd,
+            writable_root,
+            policy: bound,
+            ..
+        } = &questions[0].binding().unwrap().action
+        else {
+            panic!("command approval")
+        };
+        assert_eq!(
+            argv,
+            &std::iter::once("/bin/sh".to_owned())
+                .chain(args.iter().cloned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(cwd, &project);
+        assert_eq!(writable_root.as_ref(), Some(&project));
+        assert_eq!(
+            bound.mode,
+            crate::native::CommandExecutionMode::WorkspaceWrite
+        );
+        decide(&home, &original, Answer::Once).unwrap();
+        let outcome = first.await;
+        if let Some(report) = std::env::var_os("GENTS_APPROVED_BROWSER_REPORT") {
+            let output = match &outcome {
+                Ok(output) => output.clone(),
+                Err(error) => format!("{error:#}"),
             };
-            let mut first = Box::pin(run());
-            assert!(futures::poll!(first.as_mut()).is_pending());
-            let questions = pending(&home).unwrap();
-            assert_eq!(questions.len(), 1);
-            let original = questions[0].id.clone();
-            let workspace::BindingAction::Command {
-                argv,
-                cwd,
-                writable_root,
-                policy: bound,
-                ..
-            } = &questions[0].binding().unwrap().action
-            else {
-                panic!("command approval")
-            };
-            assert_eq!(
-                argv,
-                &std::iter::once("/bin/sh".to_owned())
-                    .chain(args.iter().cloned())
-                    .collect::<Vec<_>>()
-            );
-            assert_eq!(cwd, &project);
-            assert_eq!(writable_root.as_ref(), Some(&project));
-            assert_eq!(
-                bound.mode,
-                crate::native::CommandExecutionMode::WorkspaceWrite
-            );
-            decide(&home, &original, Answer::Once).unwrap();
-            let outcome = first.await;
-            if let Some(report) = std::env::var_os("GENTS_APPROVED_BROWSER_REPORT") {
-                let output = match &outcome {
-                    Ok(output) => output.clone(),
-                    Err(error) => format!("{error:#}"),
-                };
-                std::fs::write(report, output).unwrap();
-            }
-            let output =
-                outcome.unwrap_or_else(|error| panic!("approved browser command: {error:#}"));
-            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
-            assert_eq!(value["exit_code"], 0, "{output}");
-            assert_eq!(value["execution_mode"], "workspace_write", "{output}");
-            assert_eq!(value["sandbox"], "macos_seatbelt", "{output}");
-            assert!(!value["timed_out"].as_bool().unwrap(), "{output}");
-            assert!(
-                value["stdout"].as_str().unwrap().contains("6 passed"),
-                "{output}"
-            );
-            assert!(pending_requests(&home).unwrap().is_empty());
-            assert!(workspace::resolve(&home, &key, None)
-                .unwrap()
-                .unwrap()
-                .command_grants
-                .is_empty());
-            mark_listening(&home).unwrap();
-            let mut again = Box::pin(run());
-            assert!(futures::poll!(again.as_mut()).is_pending());
-            let questions = pending(&home).unwrap();
-            assert_eq!(questions.len(), 1);
-            assert_ne!(questions[0].id, original);
-            decide(&home, &questions[0].id, Answer::Deny).unwrap();
-            assert!(again.await.is_err());
-            assert!(pending_requests(&home).unwrap().is_empty());
-        }),
-    )
+            std::fs::write(report, output).unwrap();
+        }
+        let output = outcome.unwrap_or_else(|error| panic!("approved browser command: {error:#}"));
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["exit_code"], 0, "{output}");
+        assert_eq!(value["execution_mode"], "workspace_write", "{output}");
+        assert_eq!(value["sandbox"], "macos_seatbelt", "{output}");
+        assert!(!value["timed_out"].as_bool().unwrap(), "{output}");
+        assert!(
+            value["stdout"].as_str().unwrap().contains("6 passed"),
+            "{output}"
+        );
+        assert!(pending_requests(&home).unwrap().is_empty());
+        assert!(workspace::resolve(&home, &key, None)
+            .unwrap()
+            .unwrap()
+            .command_grants
+            .is_empty());
+        mark_listening(&home).unwrap();
+        let mut again = Box::pin(run());
+        assert!(futures::poll!(again.as_mut()).is_pending());
+        let questions = pending(&home).unwrap();
+        assert_eq!(questions.len(), 1);
+        assert_ne!(questions[0].id, original);
+        decide(&home, &questions[0].id, Answer::Deny).unwrap();
+        assert!(again.await.is_err());
+        assert!(pending_requests(&home).unwrap().is_empty());
+    }
     .await;
 }

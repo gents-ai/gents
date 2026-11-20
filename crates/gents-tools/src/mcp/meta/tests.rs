@@ -184,7 +184,10 @@ async fn service_enablement_at_use_matches_model() {
             current.configuration = gents_inference::resolved::ResolvedConfiguration::Documents(
                 gents_inference::resolved::SelectedConfiguration::new(
                     node.clone(),
-                    identity::Did::new(crate::test_support::test_agent_did()).unwrap(),
+                    identity::Did::new(gents_store::test_support::fixture_agent_did(
+                        gents_store::test_support::FIXTURE_AGENT_NONCE,
+                    ))
+                    .unwrap(),
                     vec![],
                 ),
             );
@@ -241,7 +244,7 @@ async fn endpoint_rebind_during_preflight_does_not_dispatch_to_either_route() {
                 tool_name: "selected".into(),
                 arguments: serde_json::json!({"value": 1}),
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err();
@@ -273,7 +276,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
     let discovered = super::DiscoverToolsTool::new(ctx.clone())
         .call(
             super::discover::DiscoverToolsArgs { query: None },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -290,7 +293,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                     tool_name: "hidden".into(),
                     arguments: serde_json::json!({"value":1}),
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap_err();
@@ -302,6 +305,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                 tool_name: "hidden".into(),
                 arguments: serde_json::json!({"value":1}),
             },
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .unwrap_err();
         assert!(admission.to_string().contains("tool_not_allowed"));
@@ -318,7 +322,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
         let denial = gents_loop::tool::ToolDyn::call(
             &flat,
             "{}".into(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err();
@@ -329,7 +333,12 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                 ..
             }
         ));
-        let admission = gents_loop::tool::ToolDyn::admit(&flat, "{}").unwrap_err();
+        let admission = gents_loop::tool::ToolDyn::admit(
+            &flat,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .unwrap_err();
         assert!(matches!(
             admission,
             gents_loop::tool::ToolError::ReportedFailure {
@@ -337,18 +346,14 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                 ..
             }
         ));
-        let built = super::build_meta_tools(
-            node.clone(),
-            pool.clone(),
-            context.health,
-            "local".into(),
-            None,
-            context.node_did,
-            context.actor,
-            context.allowed_mcp_service_ids,
-            context.remote_tools,
-            gents_inference::resolved::ResolvedConfiguration::Static,
-        )
+        let built = super::build_meta_tools(super::MetaToolContext {
+            node: node.clone(),
+            mcp_pool: pool.clone(),
+            local_hostname: "local".into(),
+            local_subnet: None,
+            configuration: gents_inference::resolved::ResolvedConfiguration::Static,
+            ..context
+        })
         .await
         .unwrap();
         match style {
@@ -362,7 +367,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                                 tool_name: "selected".into(),
                                 arguments: serde_json::json!({"value":1})
                             },
-                            &gents_loop::tool::ToolCallEnvelope::ambient()
+                            &gents_loop::tool::ToolCallEnvelope::default()
                         )
                         .await
                         .unwrap(),
@@ -380,7 +385,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                     built[0]
                         .call(
                             "{\"value\":1}".into(),
-                            &gents_loop::tool::ToolCallEnvelope::ambient()
+                            &gents_loop::tool::ToolCallEnvelope::default()
                         )
                         .await
                         .unwrap(),
@@ -442,7 +447,7 @@ async fn configured_discovery_timeout_cannot_fall_through_to_mutating_dispatch()
                 tool_name: "selected".into(),
                 arguments: serde_json::json!({"value":1}),
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err();
@@ -492,7 +497,7 @@ async fn stale_limit_intersects_normal_call_timeout() {
                     tool_name: "selected".into(),
                     arguments: serde_json::json!({"value":1}),
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
         let elapsed = start.elapsed();

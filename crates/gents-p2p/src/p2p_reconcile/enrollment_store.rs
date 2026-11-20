@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -362,22 +362,6 @@ impl FailClosedLog {
     }
 }
 
-fn enrollment_decision_gate(node: &EmbeddedNode) -> Arc<Mutex<()>> {
-    static GATES: OnceLock<StdMutex<BTreeMap<usize, Weak<Mutex<()>>>>> = OnceLock::new();
-    let key = node as *const EmbeddedNode as usize;
-    let mut gates = GATES
-        .get_or_init(|| StdMutex::new(BTreeMap::new()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
-        return gate;
-    }
-    gates.retain(|_, gate| gate.strong_count() > 0);
-    let gate = Arc::new(Mutex::new(()));
-    gates.insert(key, Arc::downgrade(&gate));
-    gate
-}
-
 impl GraphqlEnrollmentStore {
     pub async fn issue_renewal_offer(
         &self,
@@ -401,7 +385,7 @@ impl GraphqlEnrollmentStore {
             "renewal intent signature is invalid"
         );
         let p2p =
-            gents_store::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+            crate::node_access::operations(&self.node).context("runtime P2P is unavailable")?;
         let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
             .await?
             .map_err(anyhow::Error::msg)?;
@@ -565,7 +549,7 @@ impl GraphqlEnrollmentStore {
     }
 
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
-        let decision_lock = enrollment_decision_gate(node.as_ref());
+        let decision_lock = gents_store::identity::enrollment_decision_gate(&node);
         Self {
             node,
             identity,
@@ -589,6 +573,7 @@ impl GraphqlEnrollmentStore {
             self.node.node_identity_did() == Some(self.identity.did()),
             "enrollment publication requires the local runtime identity"
         );
+        gents_store::local::document_acp::ensure_node_publication(&self.node)?;
         let runtime = identity::Did::new(self.identity.did())?;
         let reader = identity::Did::new(recipient)?;
         let access = ConfigAccess::local_as(self.node.clone(), runtime.clone());
@@ -629,7 +614,7 @@ impl GraphqlEnrollmentStore {
                             .await?;
                     }
                     if let Some(withdrawal) = withdrawal {
-                        withdrawal.stage_in_txn(txn, parent).await?;
+                        withdrawal.retire_owing_in_txn(txn).await?;
                     }
                     Ok::<_, anyhow::Error>(response)
                 })
@@ -709,6 +694,7 @@ impl GraphqlEnrollmentStore {
                 decision_doc_id,
                 revision_doc_id: Some(revision_doc_id),
                 delivery_pending,
+                administration_removal_pending: false,
             });
         }
         if let Some(denied) = projection
@@ -723,12 +709,13 @@ impl GraphqlEnrollmentStore {
             let request = denied.request.clone();
             let decision_doc_id = denied.decision_doc_id.clone();
             drop(_guard);
-            self.finish_grant_withdrawal(
-                request_id,
-                &request.candidate_did,
-                WithdrawalScope::Request,
-            )
-            .await?;
+            let administration_removal_pending = self
+                .finish_grant_withdrawal(
+                    request_id,
+                    &request.candidate_did,
+                    WithdrawalScope::Request,
+                )
+                .await?;
             let delivery_pending = self
                 .deliver_terminal(&request, &decision_doc_id, None, None)
                 .await;
@@ -738,6 +725,7 @@ impl GraphqlEnrollmentStore {
                 decision_doc_id,
                 revision_doc_id: None,
                 delivery_pending,
+                administration_removal_pending,
             });
         }
         let pending = projection.pending_for_decision(request_id)?;
@@ -898,14 +886,17 @@ impl GraphqlEnrollmentStore {
         drop(_guard);
         /* Lean `Identity.EnrollmentGrant.applyDecision .deny`: a grant whose
         approval never committed is withdrawn with the denial */
-        if kind == WireDecisionKind::Denied {
-            self.finish_grant_withdrawal(
-                request_id,
-                &pending.request.candidate_did,
-                WithdrawalScope::Request,
-            )
-            .await?;
-        }
+        let administration_removal_pending = match kind {
+            WireDecisionKind::Denied => {
+                self.finish_grant_withdrawal(
+                    request_id,
+                    &pending.request.candidate_did,
+                    WithdrawalScope::Request,
+                )
+                .await?
+            }
+            WireDecisionKind::Approved => false,
+        };
         let delivery_pending = match &revision_doc_id {
             Some(revision_doc_id) => {
                 self.deliver_terminal(
@@ -930,6 +921,7 @@ impl GraphqlEnrollmentStore {
             decision_doc_id,
             revision_doc_id,
             delivery_pending,
+            administration_removal_pending,
         })
     }
 
@@ -947,12 +939,13 @@ impl GraphqlEnrollmentStore {
             .find(|revoked| revoked.request.request_id == request_id)
         {
             let revoked = revoked.clone();
-            self.finish_grant_withdrawal(
-                request_id,
-                &revoked.request.candidate_did,
-                WithdrawalScope::Membership,
-            )
-            .await?;
+            let administration_removal_pending = self
+                .finish_grant_withdrawal(
+                    request_id,
+                    &revoked.request.candidate_did,
+                    WithdrawalScope::Membership,
+                )
+                .await?;
             drop(guard);
             let delivery_pending = self
                 .deliver_terminal(
@@ -968,6 +961,7 @@ impl GraphqlEnrollmentStore {
                 decision_doc_id: revoked.decision_doc_id,
                 revision_doc_id: Some(revoked.revision_doc_id),
                 delivery_pending,
+                administration_removal_pending,
             });
         }
         let active = projection
@@ -1023,6 +1017,9 @@ impl GraphqlEnrollmentStore {
                 WithdrawalScope::Membership,
             )
             .await?;
+        let administration_removal_pending = withdrawal
+            .as_ref()
+            .is_some_and(|withdrawal| !withdrawal.owing_doc_ids.is_empty());
         let mutation = revision_mutation(&revision);
         let response = self
             .publish_records(
@@ -1067,6 +1064,7 @@ impl GraphqlEnrollmentStore {
             decision_doc_id: active.decision_doc_id,
             revision_doc_id: Some(revision_doc_id),
             delivery_pending,
+            administration_removal_pending,
         })
     }
 
@@ -1077,11 +1075,12 @@ impl GraphqlEnrollmentStore {
         ))
     }
 
-    /// Lean `Identity.EnrollmentGrant.revoke` for a denied request, or
-    /// `revokeMember` for a revoked membership, whose every generation's
+    /// Lean `Identity.EnrollmentGrant.oweRevoke` for a denied request, or
+    /// `oweRevokeMember` for a revoked membership, whose every generation's
     /// receipt is withdrawn: plan the withdrawal and revoke its node
-    /// permissions now, before the revision commits; the receipts and the
-    /// Node `administrator` relation retire in the revision's transaction.
+    /// permissions now, as the NAC owner, before the revision commits; the
+    /// receipts retire in the revision's transaction, owing the Node
+    /// `administrator` relation's withdrawal to the owner's client.
     async fn prepare_grant_withdrawal(
         &self,
         request_id: &str,
@@ -1118,36 +1117,54 @@ impl GraphqlEnrollmentStore {
         request_id: &str,
         member: &str,
         scope: WithdrawalScope,
-    ) -> Result<()> {
-        use gents_store::graphql::escape_graphql_string;
+    ) -> Result<bool> {
         let Some(withdrawal) = self
             .prepare_grant_withdrawal(request_id, member, scope)
             .await?
         else {
-            return Ok(());
+            return Ok(false);
         };
-        let runtime = identity::Did::new(self.identity.did())?;
         self.runtime_access()?
             .transact_write("p2p.withdraw_enrollment_grant", |txn| {
-                let (withdrawal, runtime) = (&withdrawal, &runtime);
+                let withdrawal = &withdrawal;
                 Box::pin(async move {
-                    let query = format!(
-                        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
-                        escape_graphql_string(runtime.as_str())
-                    );
-                    let nodes = txn.execute(&query).await?;
-                    let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
-                    let [node] = nodes.as_slice() else {
-                        anyhow::bail!("grant withdrawal requires exactly one visible local Node");
-                    };
-                    let node = node["_docID"]
-                        .as_str()
-                        .context("grant withdrawal Node has no document ID")?;
-                    withdrawal.stage_in_txn(txn, node).await?;
+                    withdrawal.retire_owing_in_txn(txn).await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
-            .await
+            .await?;
+        Ok(!withdrawal.owing_doc_ids.is_empty())
+    }
+
+    /// Lean `Identity.EnrollmentGrant.membershipLapsed`: withdraw, as a
+    /// revocation does (`Step.expire`), the grant of every member all of
+    /// whose current authorization leases ended on the lapse clock, decided
+    /// on a projection read under the decision lock so a renewal of the same
+    /// member is decided before or after it, never interleaved.
+    pub(super) async fn withdraw_lapsed_memberships(
+        &self,
+        wall_clock: impl FnOnce() -> i64,
+    ) -> Result<()> {
+        let _guard = self.decision_lock.lock().await;
+        let projection = self.load_projection().await?;
+        let provider = gents_store::local::document_acp::node_provider_time(&self.node);
+        let wall = u64::try_from(wall_clock()).unwrap_or(0);
+        let mut members: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
+        for active in &projection.active {
+            let expires = DateTime::parse_from_rfc3339(&active.revision.authorization_expires_at)
+                .context("parsing an enrollment authorization lease")?;
+            members
+                .entry(active.request.candidate_did.as_str())
+                .or_default()
+                .push(u64::try_from(expires.timestamp()).unwrap_or(0));
+        }
+        for (member, leases) in members {
+            if gents_store::identity::membership_lapsed(provider, wall, &leases) {
+                self.finish_grant_withdrawal("", member, WithdrawalScope::Membership)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     async fn verify_live_candidate(
@@ -1155,7 +1172,7 @@ impl GraphqlEnrollmentStore {
         request: &EnrollmentRequestRecord,
     ) -> Result<DateTime<Utc>> {
         let p2p =
-            gents_store::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+            crate::node_access::operations(&self.node).context("runtime P2P is unavailable")?;
         let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
             .await
             .context("timed out reading the enrollment server peer identity")?
@@ -1269,7 +1286,6 @@ impl GraphqlEnrollmentStore {
         };
         receipt.admin_sig = self.identity.sign(&receipt.signing_payload()).await?;
         receipt.validate_against_approval(&active.request, &active.decision)?;
-        let mutation = route_receipt_mutation(&receipt);
         let recipient = if self.identity.did() == active.request.admin_did {
             &active.request.candidate_did
         } else {
@@ -1279,6 +1295,7 @@ impl GraphqlEnrollmentStore {
             );
             &active.request.admin_did
         };
+        let mutation = route_receipt_mutation(&receipt, recipient);
         let committed = self
             .publish_records(
                 "p2p.write_enrollment_route_receipt",
@@ -1336,7 +1353,7 @@ impl GraphqlEnrollmentStore {
                 "suppressed stale enrollment terminal delivery");
             return true;
         }
-        let Some(p2p) = gents_store::identity::node_p2p(&self.node) else {
+        let Some(p2p) = crate::node_access::operations(&self.node) else {
             return true;
         };
         let documents = terminal_documents(decision_doc_id, revision_doc_id, route_receipt_doc_id);
@@ -1362,7 +1379,7 @@ impl GraphqlEnrollmentStore {
     }
 
     pub async fn load_projection(&self) -> Result<EnrollmentProjection> {
-        let response = gents_store::graphql::graphql_with_transaction_retry(
+        let response = gents_store::graphql::graphql_for_decision(
             &self.node,
             ENROLLMENT_DOCUMENT_QUERY,
             "query authenticated enrollment documents",
@@ -1761,6 +1778,10 @@ pub struct EnrollmentDecisionOutcome {
     pub decision_doc_id: String,
     pub revision_doc_id: Option<String>,
     pub delivery_pending: bool,
+    /// The member's Node administration removal waits for a client of the
+    /// Node owner or a Node administrator (Lean
+    /// `Identity.EnrollmentGrant.oweRevoke`).
+    pub administration_removal_pending: bool,
 }
 
 #[derive(Debug)]
@@ -1946,12 +1967,13 @@ fn decision_mutation(
     let decision_sig = bs58::encode(&decision.admin_sig).into_string();
     let decision_input = format!(
         r#"{{
-          protocol_version: {}, decision_id: "{}", request_id: "{}",
+          initial_reader_did: "{}", protocol_version: {}, decision_id: "{}", request_id: "{}",
           request_digest: "{}", network_id: "{}", admin_did: "{}",
           candidate_did: "{}", candidate_peer: "{}", owner_node_did: "{}",
           decision: "{}", authorization_sequence: {}, authorization_expires_at: "{}", decided_at: "{}",
           signer_did: "{}", admin_sig: "{}"
         }}"#,
+        escaped(&decision.candidate_did),
         decision.protocol_version,
         escaped(&decision.decision_id),
         escaped(&decision.request_id),
@@ -1973,12 +1995,13 @@ fn decision_mutation(
         format!(
             r#"
               create_NetworkAuthorizationRevision(input: {{
-                protocol_version: {}, revision_id: "{}", request_id: "{}",
+                initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
                 request_digest: "{}", network_id: "{}", admin_did: "{}",
                 member_did: "{}", member_peer: "{}", owner_node_did: "{}",
                 sequence: {}, authorization_expires_at: "{}", kind: "{}", issued_at: "{}", signer_did: "{}",
                 admin_sig: "{}"
               }}) {{ _docID }}"#,
+            escaped(&revision.member_did),
             revision.protocol_version,
             escaped(&revision.revision_id),
             escaped(&revision.request_id),
@@ -2010,13 +2033,14 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
     format!(
         r#"mutation {{
           create_NetworkAuthorizationRevision(input: {{
-            protocol_version: {}, revision_id: "{}", request_id: "{}",
+            initial_reader_did: "{}", protocol_version: {}, revision_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
             member_did: "{}", member_peer: "{}", owner_node_did: "{}",
             sequence: {}, authorization_expires_at: "{}", kind: "{}",
             issued_at: "{}", signer_did: "{}", admin_sig: "{}"
           }}) {{ _docID }}
         }}"#,
+        escaped(&revision.member_did),
         revision.protocol_version,
         escaped(&revision.revision_id),
         escaped(&revision.request_id),
@@ -2035,19 +2059,20 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
     )
 }
 
-fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord) -> String {
+fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord, recipient: &str) -> String {
     let escaped = |value: &str| gents_store::graphql::escape_graphql_string(value);
     let admin_sig = bs58::encode(&receipt.admin_sig).into_string();
     format!(
         r#"mutation {{
           create_NetworkEnrollmentRouteReceipt(input: {{
-            protocol_version: {}, receipt_id: "{}", request_id: "{}",
+            initial_reader_did: "{}", protocol_version: {}, receipt_id: "{}", request_id: "{}",
             request_digest: "{}", network_id: "{}", admin_did: "{}",
             member_did: "{}", member_peer: "{}", server_peer: "{}",
             owner_node_did: "{}", authorization_sequence: {}, authorization_expires_at: "{}", direction: "{}",
             applied_at: "{}", signer_did: "{}", admin_sig: "{}"
           }}) {{ _docID }}
         }}"#,
+        escaped(recipient),
         receipt.protocol_version,
         escaped(&receipt.receipt_id),
         escaped(&receipt.request_id),

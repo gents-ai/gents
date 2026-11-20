@@ -1,11 +1,13 @@
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_snapshot_for_node_with_transcript,
+    SessionReadInputs,
 };
 use crate::types::{DesktopSessionSnapshot, SessionRowsView, SessionRowsWindow};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 pub async fn session_snapshot(
-    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    core: &std::sync::Arc<crate::client_runtime::ClientRuntime>,
     session_id: String,
     node_did: Option<String>,
     request_id: Option<String>,
@@ -20,7 +22,7 @@ pub async fn session_snapshot(
         operator_access,
         requester_scope,
     } = transcript_read_scope(core, &session_id, node_did.as_deref().unwrap_or_default()).await?;
-    let page_read = gents_desktop_core::client::load_session_transcript_page_on(
+    let page_read = gents_observe::client_projection::query::load_session_transcript_page_on(
         &operator_access,
         &session_id,
         node_did.as_deref(),
@@ -121,13 +123,16 @@ pub async fn session_snapshot(
                 .cloned()
                 .collect::<Vec<_>>()
         };
-        gents_desktop_core::client::load_request_prompt_ownership_on(&operator_access, &requests)
-            .await
+        gents_observe::client_projection::query::load_request_prompt_ownership_on(
+            &operator_access,
+            &requests,
+        )
+        .await
     };
     let context_read = async {
         let request = request_id.as_deref().and_then(|request_id| {
             if let Some(requests) = fresh_requests.as_ref() {
-                gents_desktop_core::client::ClientStore::session_tip_request_from_rows(
+                gents_observe::client_projection::store::ClientStore::session_tip_request_from_rows(
                     requests,
                     &session_id,
                     node_did.as_deref(),
@@ -148,9 +153,12 @@ pub async fn session_snapshot(
         let Some(request) = request else {
             return Ok(None);
         };
-        gents_desktop_core::client::load_session_tip_store_on(&operator_access, &request)
-            .await
-            .map(Some)
+        gents_observe::client_projection::query::load_session_tip_store_on(
+            &operator_access,
+            &request,
+        )
+        .await
+        .map(Some)
     };
     let goal_read = crate::commands::session_goal(
         core.as_ref(),
@@ -196,13 +204,15 @@ pub async fn session_snapshot(
         node_did.as_deref(),
         &session_id,
         request_id.as_deref(),
-        Some(&transcript_page.store),
-        Some(&transcript_page.canonical_dependencies),
-        context_store.as_ref(),
-        prompt_ownership.as_ref(),
-        false,
-        true,
-        fresh_requests.as_deref(),
+        SessionReadInputs {
+            transcript_store: Some(&transcript_page.store),
+            canonical_dependencies: Some(&transcript_page.canonical_dependencies),
+            context_store: context_store.as_ref(),
+            prompt_ownership: prompt_ownership.as_ref(),
+            context_totals_exact: false,
+            include_live_tail: true,
+            request_projection: fresh_requests.as_deref(),
+        },
     )
     .await
     .map_err(BridgeError::classify_transport_error)?;
@@ -267,7 +277,7 @@ struct TranscriptReadScope {
 }
 
 async fn transcript_read_scope(
-    core: &gents_desktop_core::client::ClientCore,
+    core: &crate::client_runtime::ClientRuntime,
     session_id: &str,
     node_did: &str,
 ) -> Result<TranscriptReadScope, BridgeError> {
@@ -309,7 +319,7 @@ async fn transcript_read_scope(
 }
 
 pub async fn message_attachments(
-    core: &gents_desktop_core::client::ClientCore,
+    core: &crate::client_runtime::ClientRuntime,
     session_id: &str,
     node_did: &str,
     message_key: &str,
@@ -364,13 +374,13 @@ pub async fn message_attachments(
 /// open around any message. The rows of the newest stretch match what the
 /// session snapshot shows, less its pending turns and live reply.
 pub async fn session_rows(
-    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    core: &std::sync::Arc<crate::client_runtime::ClientRuntime>,
     session_id: String,
     node_did: Option<String>,
     window: SessionRowsWindow,
     limit: Option<usize>,
 ) -> Result<SessionRowsView, BridgeError> {
-    use gents_desktop_core::client::TranscriptWindow;
+    use gents_observe::client_projection::query::TranscriptWindow;
     let node_did = resolve_session_node(&session_id, node_did)?;
     let empty = |unreadable: Option<String>| SessionRowsView {
         session_id: session_id.clone(),
@@ -397,7 +407,7 @@ pub async fn session_rows(
         let session_id = session_id.clone();
         let node_did = node_did.clone();
         async move {
-            gents_desktop_core::client::load_session_transcript_window_on(
+            gents_observe::client_projection::query::load_session_transcript_window_on(
                 &operator_access,
                 &session_id,
                 Some(&node_did),
@@ -519,7 +529,7 @@ pub async fn session_rows(
 }
 
 pub async fn session_context_details(
-    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    core: &std::sync::Arc<crate::client_runtime::ClientRuntime>,
     request: crate::types::SessionContextDetailsRequest,
 ) -> Result<Option<gents_tools::native::SessionContextDetails>, BridgeError> {
     if core.session_unreadable_reason(&request.node_did).is_some() {

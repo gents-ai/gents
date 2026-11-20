@@ -369,7 +369,7 @@ pub async fn fixture(
 }
 
 use gents_store::config_client::ConfigAccess;
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::KeyIdentity;
 
 pub async fn publish_provider_message(
     writer: &crate::request::streaming::DefraStreamWriter,
@@ -466,13 +466,15 @@ pub async fn stage_agent_owned_session_in_txn(
         .ok_or_else(|| anyhow::anyhow!("session fixture requires its Agent"))?;
     let created = crate::session::ensure_session_in_txn(
         txn,
-        session_id,
-        node_did,
-        agent_did,
-        requester_did,
-        None,
-        None,
-        created_at,
+        crate::session::NewAgentSession {
+            session_id,
+            node_did,
+            agent_did,
+            requester_did,
+            title: None,
+            provenance: None,
+            created_at,
+        },
     )
     .await?;
     let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
@@ -570,21 +572,6 @@ pub async fn serve_client_node(
     (db, runtime)
 }
 
-/// Grants the user the `OperatorUser` set as the runtime admin, as
-/// `signed_test_node` does. Without it, seeding the user's client-signed
-/// Node and Agent ends in an incomplete signing conversation.
-pub async fn grant_operator_user(
-    node: &Arc<defra_node::Node>,
-    runtime: &dyn NodeIdentity,
-    user: &KeyIdentity,
-) {
-    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(&admin, &identity::Did::new(user.did()).unwrap())
-        .await
-        .unwrap();
-}
-
 pub async fn sequenced_history_on(
     access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
@@ -598,10 +585,11 @@ pub async fn sequenced_history_on(
         session_id,
         node_did,
         requester,
-        None,
-        after,
-        excluded_request,
-        None,
+        output::sequenced::SequencedMessageFilter {
+            after_sequence: after,
+            exclude_request_doc_id: excluded_request,
+            ..Default::default()
+        },
     )
     .await
 }

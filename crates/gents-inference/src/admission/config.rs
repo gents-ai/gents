@@ -45,6 +45,7 @@ pub(crate) fn backend_connection_fingerprint(fields: &BackendFields) -> String {
         &fields.backend_endpoint,
         &fields.backend_auth,
         &fields.claude_platform,
+        &fields.client_version,
     ))
     .expect("backend connection fields serialize");
     process_keyed_fingerprint(&encoded)
@@ -93,7 +94,7 @@ impl BackendAdmissionConfig {
             &fields.openai_wire_api,
             &fields.backend_endpoint,
             &fields.backend_auth,
-            backend.connect_timeout_secs.unwrap_or(10),
+            backend.effective_connect_timeout_secs(),
             max_concurrent,
             max_queue_depth,
         );

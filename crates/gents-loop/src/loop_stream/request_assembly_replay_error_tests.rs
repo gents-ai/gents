@@ -356,40 +356,14 @@ async fn a_seeded_lookup_serves_only_rows_for_the_requested_tags() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
-#[derive(Clone, Default)]
-struct AssemblyOnlyModel;
-
-#[allow(refining_impl_trait)]
-impl rig::completion::CompletionModel for AssemblyOnlyModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
-        unreachable!("constructed directly")
-    }
-
-    async fn completion(
-        &self,
-        _request: rig::completion::CompletionRequest,
-    ) -> Result<rig::completion::CompletionResponse<Self::Response>, rig::completion::CompletionError>
-    {
-        unreachable!("assembly tests never dispatch")
-    }
-
-    async fn stream(
-        &self,
-        _request: rig::completion::CompletionRequest,
-    ) -> Result<
-        rig::streaming::StreamingCompletionResponse<Self::StreamingResponse>,
-        rig::completion::CompletionError,
-    > {
-        unreachable!("assembly tests never dispatch")
-    }
+/// A provider for assembly tests, which never dispatch: any call panics.
+fn assembly_only() -> crate::test_support::scripted_provider::ScriptedProvider {
+    crate::test_support::scripted_provider::ScriptedProvider::new([])
 }
 
 fn replay_assembly_config() -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: LoopReplayInput::default(),
         provider_input_counter: Arc::new(crate::provider_input::ProviderInputCounter::new(
             crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
@@ -418,10 +392,12 @@ fn replay_assembly_config() -> LoopConfig {
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 4,
+        max_invalid_tool_calls: crate::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: crate::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: crate::tool::ToolCallEnvelope::ambient(),
+        tool_context: crate::tool::ToolCallEnvelope::default(),
     }
 }
 
@@ -465,7 +441,7 @@ async fn claude_requests_carry_the_previous_request_id_and_raw_tool_text() {
     let params =
         |request: &rig::completion::CompletionRequest| request.additional_params.clone().unwrap();
     let request = super::build_request(
-        &AssemblyOnlyModel,
+        &assembly_only(),
         Message::user("three"),
         &history,
         &[],
@@ -484,7 +460,7 @@ async fn claude_requests_carry_the_previous_request_id_and_raw_tool_text() {
     // A prior in-loop assistant row is the latest in the history being sent.
     let prior = vec![assistant_with(Some("req_3"), None)];
     let request = super::build_request(
-        &AssemblyOnlyModel,
+        &assembly_only(),
         Message::user("three"),
         &history,
         &prior,
@@ -497,7 +473,7 @@ async fn claude_requests_carry_the_previous_request_id_and_raw_tool_text() {
 
     // A compacted history keeps no assistant row: neither key is sent.
     let request = super::build_request(
-        &AssemblyOnlyModel,
+        &assembly_only(),
         Message::user("three"),
         &[Message::user("summary")],
         &[],
@@ -512,7 +488,7 @@ async fn claude_requests_carry_the_previous_request_id_and_raw_tool_text() {
 
     // The rebuilt request after compaction replaces stale values in place.
     let mut rebuilt = super::build_request(
-        &AssemblyOnlyModel,
+        &assembly_only(),
         Message::user("three"),
         &history,
         &[],
@@ -541,7 +517,7 @@ async fn other_providers_never_receive_the_reserved_parameters() {
     for params in [None, Some(serde_json::json!({"prompt_cache_key": "k"}))] {
         config.additional_params = params.clone();
         let request = super::build_request(
-            &AssemblyOnlyModel,
+            &assembly_only(),
             Message::user("two"),
             &history,
             &[],
@@ -582,16 +558,10 @@ async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
             let mut config = replay_assembly_config();
             config.provider_input_counter = Arc::new(counter(provider));
             config.preamble = Some("System instructions".into());
-            let mut request = super::build_request(
-                &AssemblyOnlyModel,
-                prompt.clone(),
-                history,
-                &[],
-                &[],
-                &config,
-            )
-            .await
-            .unwrap();
+            let mut request =
+                super::build_request(&assembly_only(), prompt.clone(), history, &[], &[], &config)
+                    .await
+                    .unwrap();
             let dispatch_body = |request: &rig::completion::CompletionRequest| {
                 let dto = rig::providers::openai::responses_api::CompletionRequest::try_from((
                     "test-model".into(),
@@ -658,7 +628,7 @@ async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
 }
 
 async fn producing_capture(
-    model: &AssemblyOnlyModel,
+    model: &crate::test_support::scripted_provider::ScriptedProvider,
     config: &LoopConfig,
     content: &[AssistantContent],
 ) -> ResolvedReplayEvidence {
@@ -717,7 +687,7 @@ async fn a_seeded_dispatch_assembles_the_same_request_as_a_fresh_resolution() {
         family: "claude".into(),
         endpoint: "https://provider.test".into(),
     };
-    let evidence = producing_capture(&AssemblyOnlyModel, &config, &replay_assembly_content()).await;
+    let evidence = producing_capture(&assembly_only(), &config, &replay_assembly_content()).await;
     let rows = vec![ReplayEvidenceRow {
         tag: tag.clone(),
         evidence,
@@ -749,7 +719,7 @@ async fn a_seeded_dispatch_assembles_the_same_request_as_a_fresh_resolution() {
     let mut fresh_history = replay_assembly_history(&tag);
     let mut fresh_new = vec![TaggedMessage::unassociated(Message::user("next"))];
     let fresh_request = assemble_provider_request(
-        &AssemblyOnlyModel,
+        &assembly_only(),
         &mut fresh_history,
         &mut fresh_new,
         &[],
@@ -761,7 +731,7 @@ async fn a_seeded_dispatch_assembles_the_same_request_as_a_fresh_resolution() {
     let mut seeded_history = replay_assembly_history(&tag);
     let mut seeded_new = vec![TaggedMessage::unassociated(Message::user("next"))];
     let seeded_request = assemble_provider_request(
-        &AssemblyOnlyModel,
+        &assembly_only(),
         &mut seeded_history,
         &mut seeded_new,
         &[],
@@ -812,7 +782,7 @@ async fn reasoning_identity_matches_the_lean_model() {
         let tag = provider_tag(0);
         let config = replay_assembly_config();
         let mut evidence =
-            producing_capture(&AssemblyOnlyModel, &config, &replay_assembly_content()).await;
+            producing_capture(&assembly_only(), &config, &replay_assembly_content()).await;
         evidence.origin = match case.input.origin.as_str() {
             "accepted_provider" => ReplayOrigin::AcceptedProvider,
             "recovered_provider" => ReplayOrigin::RecoveredProvider,
@@ -853,7 +823,7 @@ async fn reasoning_identity_matches_the_lean_model() {
         }
         let mut next = vec![TaggedMessage::unassociated(Message::user("next"))];
         let request = assemble_provider_request(
-            &AssemblyOnlyModel,
+            &assembly_only(),
             &mut history,
             &mut next,
             &[],
@@ -960,7 +930,7 @@ async fn sized_user_text(config: &LoopConfig, raw: usize, fill: char, prompt: &s
         let mut history = vec![TaggedMessage::unassociated(Message::user(text))];
         let mut new_messages = vec![TaggedMessage::unassociated(Message::user(prompt))];
         let request = assemble_provider_request(
-            &AssemblyOnlyModel,
+            &assembly_only(),
             &mut history,
             &mut new_messages,
             &[],
@@ -1029,15 +999,19 @@ async fn turn_rebuild_matches_the_lean_model() {
                 estimated_input_tokens: 1,
             });
         let result = build_budgeted_request(
-            &AssemblyOnlyModel,
-            &mut history,
-            &mut new_messages,
-            &[],
-            &config,
-            &mut replay,
-            3,
-            &mut chain_keys,
-            &mut active_keys,
+            &TurnInputs {
+                model: &assembly_only(),
+                tools: &[],
+                config: &config,
+                turn_index: 3,
+            },
+            &mut TurnState {
+                history: &mut history,
+                new_messages: &mut new_messages,
+                replay: &mut replay,
+                reduction_chain_keys: &mut chain_keys,
+                active_reduction_keys: &mut active_keys,
+            },
         )
         .await;
         let rebuild = match result {
@@ -1118,7 +1092,7 @@ async fn every_provider_assembly_rechecks_configuration_before_reading_input() {
     let mut history = Vec::new();
     let mut new_messages = vec![TaggedMessage::unassociated(Message::user("first"))];
     assemble_provider_request(
-        &AssemblyOnlyModel,
+        &assembly_only(),
         &mut history,
         &mut new_messages,
         &[],
@@ -1129,7 +1103,7 @@ async fn every_provider_assembly_rechecks_configuration_before_reading_input() {
     .unwrap();
     let before = new_messages.clone();
     let result = assemble_provider_request(
-        &AssemblyOnlyModel,
+        &assembly_only(),
         &mut history,
         &mut new_messages,
         &[],

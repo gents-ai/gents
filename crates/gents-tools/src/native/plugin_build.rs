@@ -5,14 +5,14 @@ use anyhow::{anyhow, Context as _, Result};
 use rapidhash::RapidHashMap;
 use serde_json::Value;
 
-use super::native_runner::self_runner_binary;
 use super::shared::{
     prepare_managed_command, CommandConstraints, CommandExecutionMode, CommandNetworkMode,
 };
 use crate::runtime_context::tool_execution_bounds;
 use gents_session::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
-/// Path to a binary that takes [`PLUGIN_BUILD_COMMAND`]; unset means this one.
+/// Path to a binary that takes [`PLUGIN_BUILD_COMMAND`]; unset means the
+/// runtime's host executable.
 const BUILDER_ENV: &str = "GENTS_PLUGIN_BUILDER";
 /// The hidden entry point of the `gents` and desktop binaries.
 pub const PLUGIN_BUILD_COMMAND: &str = "__plugin-build";
@@ -33,11 +33,13 @@ pub struct PluginBuildOutcome {
 /// to `root`, no network. The whole build runs inside it, source mirroring
 /// included, because a source tree can hold links this process must not follow.
 pub async fn run_plugin_build(
+    call: &gents_loop::tool::ToolCallEnvelope,
     root: &Path,
     pack_dir: &Path,
     run_cases: bool,
+    host: Option<&Path>,
 ) -> Result<PluginBuildOutcome> {
-    let program = builder_program()?;
+    let program = builder_program(host)?;
     let mut args = vec![
         PLUGIN_BUILD_COMMAND.to_owned(),
         pack_dir
@@ -49,6 +51,7 @@ pub async fn run_plugin_build(
         args.push("--test".to_owned());
     }
     let mut command = prepare_managed_command(
+        call,
         root,
         &program,
         &args,
@@ -65,7 +68,7 @@ pub async fn run_plugin_build(
     .await
     .map_err(|error| anyhow!("{error}"))?;
     keep_toolchain_state_in_root(&mut command.environment);
-    let bounds = tool_execution_bounds(BUILD_TIMEOUT);
+    let bounds = tool_execution_bounds(call, BUILD_TIMEOUT);
     let argv = std::iter::once(command.program.to_string_lossy().into_owned())
         .chain(command.args)
         .collect();
@@ -79,7 +82,7 @@ pub async fn run_plugin_build(
         environment: Some(command.environment),
         tool_name: Some("config".to_owned()),
         live_output: None,
-        process_recorder: None,
+        process_recorder: gents_session::exec::ownership::process_recorder(call),
     })
     .await;
     match outcome {
@@ -108,15 +111,14 @@ pub async fn run_plugin_build(
     }
 }
 
-fn builder_program() -> Result<String> {
+fn builder_program(host: Option<&Path>) -> Result<String> {
     if let Some(path) = std::env::var(BUILDER_ENV)
         .ok()
         .filter(|path| !path.trim().is_empty())
     {
         return Ok(path);
     }
-    self_runner_binary()
-        .map(|path: PathBuf| path.to_string_lossy().into_owned())
+    host.map(|path| path.to_string_lossy().into_owned())
         .context(
             "this runtime has no plugin builder; have the operator run `gents config pack build`",
         )

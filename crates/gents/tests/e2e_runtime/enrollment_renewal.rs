@@ -17,10 +17,11 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::live_inference::{rows_when, STALL_CEILING};
-use crate::support::snapshots::SnapshotReader;
+use crate::support::live_inference::rows_when;
 use crate::support::{self, TestDb};
 use gents_p2p::test_support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::STALL_CEILING;
 
 struct Stop(CancellationToken);
 impl Drop for Stop {
@@ -190,12 +191,14 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         server.node.clone(),
         server.node_identity.clone(),
         server_owner,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let pairing_task = tokio::spawn(run_pairing_reconciler(
         server.node.clone(),
         server.node_identity.clone(),
         server_authority,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let mut changes = gents_store::subscription_source::subscribe_collections(
@@ -235,6 +238,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         member.node.clone(),
         member.node_identity.clone(),
         member_owner,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let deadline = Instant::now() + Duration::from_secs(110);
@@ -305,6 +309,7 @@ async fn re_enrolling_an_active_member_renews_its_lease_in_place() {
         server.node.clone(),
         server.node_identity.clone(),
         owner,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
 

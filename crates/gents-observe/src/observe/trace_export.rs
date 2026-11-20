@@ -5,7 +5,7 @@ use gents_protocol::transcript::{present_message, PersistedMessagePresentation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_session::session::SequencedMessage;
 
 pub use gents_loop::tool_call_lifecycle::FailureClass as ToolFailureClass;
@@ -186,7 +186,6 @@ pub fn raw_message_json(message: &Message) -> Result<Value> {
 
 /// Callers passing a physical request identity exclude its in-flight input row,
 /// which is owned by the request itself.
-#[allow(clippy::too_many_arguments)]
 pub async fn load_trace_transcript(
     access: &gents_store::config_client::ConfigAccess,
     session_id: &str,

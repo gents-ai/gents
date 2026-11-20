@@ -11,7 +11,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
             let (db, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
             let node = db.node.clone();
             let calls = Arc::new(AtomicUsize::new(0));
-            let model = ScriptedModel::new_turns(vec![
+            let model = scripted(vec![
                 vec![
                     RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                         "dispatch-call".into(),
@@ -36,7 +36,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                 TaggedMessage::unassociated(Message::user("run echo")),
                 Vec::new(),
                 Arc::new(tools),
-                owned_config(4),
+                owned_config_for(4, &lifecycle),
             );
             let collect = collect_owned_scripted_stream(
                 stream,
@@ -99,7 +99,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                 let node = db.node.clone();
                 let root = tempfile::tempdir().unwrap();
                 let denied = owner.denied_call(&node, root.path());
-                let model = ScriptedModel::new_turns(vec![
+                let model = scripted(vec![
                     vec![
                         RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                             "policy-call".into(),
@@ -119,7 +119,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                     TaggedMessage::unassociated(Message::user("run the denied call")),
                     Vec::new(),
                     Arc::new(denied.tools),
-                    owned_config(4),
+                    owned_config_for(4, &lifecycle),
                 );
                 let collect = collect_owned_scripted_stream(
                     stream,
@@ -249,25 +249,23 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
                 ),
             );
         allow_general_agent_target(&node, lifecycle.request()).await;
+        let mut config = owned_config(4);
+        config.tool_context = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(Some(gents_store::test_support::unreached_deadline_at()), tokio_util::sync::CancellationToken::new()).call();
         let stream = run_loop_stream(
-            ScriptedModel::new_turns(plugin_call_then_text_turns()),
+            scripted(plugin_call_then_text_turns()),
             Some(hook.clone()),
             TaggedMessage::unassociated(Message::user("compose")),
             Vec::new(),
             Arc::new(tools),
-            owned_config(4),
+            config,
         );
-        let collected = gents_tools::runtime_context::scope_request_tool_execution(
-            Some(gents_store::test_support::unreached_deadline_at()),
-            tokio_util::sync::CancellationToken::new(),
-            Box::pin(collect_owned_scripted_stream(
+        let collected = Box::pin(collect_owned_scripted_stream(
                 stream,
                 &hook,
                 &writer,
                 &mut lifecycle,
                 gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-            )),
-        )
+            ))
         .await;
         assert!(collected.error.is_none(), "{:?}", collected.error);
         let completed = completed.lock().unwrap().clone();

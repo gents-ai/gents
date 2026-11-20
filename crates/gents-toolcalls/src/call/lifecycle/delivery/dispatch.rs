@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use gents_store::graphql::escape_graphql_string;
 
@@ -40,6 +40,7 @@ impl ToolCallLifecycle {
             name: self.tool_name.clone(),
             selected_tool_fields: self.selected_tool_fields_fragment(),
             await_mode: self.await_mode.as_str(),
+            background_limit: self.background_limit(),
             effect: self.plugin_effect_terminal()?,
             deadline: self.deadline_at,
         })
@@ -93,6 +94,7 @@ pub struct DispatchStart {
     name: String,
     selected_tool_fields: String,
     await_mode: &'static str,
+    background_limit: gents_protocol::job::BackgroundLimit,
     effect: Option<super::super::plugin_effect::PluginEffectTerminal>,
     deadline: DateTime<Utc>,
 }
@@ -235,6 +237,7 @@ pub(crate) async fn start_running_in_txn(
             txn,
             &start.request,
             crate::call::hook::persistence::BackgroundSlot::Requested,
+            start.background_limit,
             "",
         )
         .await?;

@@ -142,9 +142,12 @@ impl FileChangeCapture {
     /// The native mutator has authorized and resolved this path and holds its
     /// existing mutation lock. A pending image survives cancellation after a
     /// partial write; it cannot be mistaken for a verified postimage.
-    pub async fn start(root: &Path, path: &Path) -> Option<Self> {
-        let writer =
-            gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()?.live_output?;
+    pub async fn start(
+        call: &gents_loop::tool::ToolCallEnvelope,
+        root: &Path,
+        path: &Path,
+    ) -> Option<Self> {
+        let writer = call.runtime()?.live_output?;
         let relative = path
             .strip_prefix(root)
             .ok()?

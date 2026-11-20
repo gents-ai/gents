@@ -54,31 +54,15 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_set_selected_node", { nodeDid }),
     reconnectNode: (nodeDid) =>
       invokeDesktop("desktop_node_reconnect", { nodeDid }),
-    removePeer: (peerId) => invokeDesktop("desktop_peer_remove", { peerId }),
-    renamePeer: (peerId, label) =>
-      invokeDesktop("desktop_peer_rename", {
-        peerId,
-        label,
-      }),
-    dismissEndedAccess: (nodeDid) =>
-      invokeDesktop("desktop_ended_access_dismiss", { nodeDid }),
-    requestStatusEnrollment: (serverAddress, candidateName) => {
-      const value = serverAddress.trim();
-      if (
-        value.startsWith("gents://invite/") ||
-        /^[1-9A-HJ-NP-Za-km-z]{100,}$/.test(value)
-      ) {
-        return invokeDesktop("desktop_peer_enroll_invite", {
-          request: { invite: value, candidateName: candidateName ?? null },
-        });
-      }
-      return invokeDesktop("desktop_peer_enroll_status", {
-        request: {
-          serverAddress: value,
-          ...(candidateName ? { candidateName } : {}),
-        },
-      });
-    },
+    removeRuntime: (nodeDid) => invokeDesktop("desktop_runtime_remove", { nodeDid }),
+    renameRuntime: (nodeDid, label) =>
+      invokeDesktop("desktop_runtime_rename", { nodeDid, label }),
+    requestRuntimeAccess: (serverAddress) =>
+      invokeDesktop("desktop_runtime_access_request", { request: { serverAddress: serverAddress.trim() } }),
+    listRuntimeAccess: (nodeDid) =>
+      invokeDesktop("desktop_runtime_access_list", { nodeDid }),
+    decideRuntimeAccess: (request) =>
+      invokeDesktop("desktop_runtime_access_decide", { request }),
     listWorkspace: (subpath) =>
       invokeDesktop("desktop_workspace_list", {
         subpath: subpath ?? null,
@@ -117,16 +101,7 @@ export function createDesktopApiAdapter(
         toolCallDocId: request.toolCallDocId,
       }),
     fetchSessionLiveDelta: (request) =>
-      invokeDesktop("desktop_session_live_delta", {
-        sessionId: request.sessionId,
-        nodeDid: request.nodeDid ?? null,
-        requestId: request.requestId,
-        baseLiveCursor: request.baseLiveCursor,
-        baseContentByteLen: request.baseContentByteLen,
-        baseContentHash: request.baseContentHash,
-        baseReasoningByteLen: request.baseReasoningByteLen,
-        baseReasoningHash: request.baseReasoningHash,
-      }),
+      invokeDesktop("desktop_session_live_delta", { request }),
     sendChatMessage: (request) =>
       invokeDesktop("desktop_chat_send", { request }),
     steerPendingMessage: (request) =>

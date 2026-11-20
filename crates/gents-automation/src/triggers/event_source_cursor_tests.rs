@@ -50,24 +50,26 @@ async fn trigger_cursor_traces_match_the_durable_model() -> Result<()> {
             .as_str()
             .unwrap();
         let spec = gents_session::request::lifecycle::materialize::pending_agent_request_spec(
-            PIN_FIXED_DID,
-            agent_did,
-            "work",
-            gents_loop::execution_origin::ExecutionOrigin::Scheduled,
-            gents_session::request::lifecycle::TriggerLineage {
-                trigger_id: Some("trigger".into()),
-                trigger_kind: Some("event".into()),
-                source_doc_id: Some(doc_id.clone()),
-                correlation: None,
-                trigger_context: None,
+            gents_session::request::lifecycle::materialize::PendingAgentRequest {
+                node_did: PIN_FIXED_DID,
+                agent_did,
+                content: "work",
+                execution_origin: gents_loop::execution_origin::ExecutionOrigin::Scheduled,
+                trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                    trigger_id: Some("trigger".into()),
+                    trigger_kind: Some("event".into()),
+                    source_doc_id: Some(doc_id.clone()),
+                    correlation: None,
+                    trigger_context: None,
+                },
+                conversation_title: None,
+                workspace_lineage: None,
+                requester_did: None,
+                trigger_doc_id: Some(trigger_doc_id),
             },
-            None,
-            None,
             &fire.request_id,
             &fire.session_id,
             Some(&key),
-            None,
-            Some(trigger_doc_id),
         )?;
         let create = gents_session::request::lifecycle::build_signed_request(
             spec,

@@ -8,12 +8,13 @@ use tokio_util::sync::CancellationToken;
 
 use super::permit::{dropped_terminal, recorded_failure_reason, DroppedTerminal};
 use super::{
-    scope_call, scope_call_with_join, scope_call_with_token_and_failure_reason, scope_request,
-    set_terminal_failure_reason,
     slot_accounting::{reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow},
-    terminal_failure_reason_observer, AdmissionCallContext, AdmissionRegistry,
-    BackendAdmissionConfig, CallKind,
+    AdmissionRegistry, BackendAdmissionConfig,
 };
+use gents_loop::provider_call::admission::{
+    set_terminal_failure_reason, terminal_failure_reason_observer, AdmissionCallContext, CallKind,
+};
+use gents_loop::provider_call::ForCall;
 use gents_protocol::row::AgentRequest;
 use gents_store::identity::NodeIdentity as _;
 
@@ -78,11 +79,13 @@ impl TestRegistry {
 }
 
 impl TestRegistry {
-    async fn acquire_current_call_for_test(
+    async fn acquire_call_for_test(
         &self,
+        context: &AdmissionCallContext,
     ) -> Result<super::permit::AdmissionPermit, super::AdmissionError> {
         self.registry
-            .acquire_current_call_with_signer(
+            .acquire_call_with_signer(
+                Some(context),
                 super::registry::TEST_SLOT_CONNECTION,
                 None,
                 None,
@@ -106,7 +109,7 @@ pub(super) async fn seeded_request(
     request_id: &str,
 ) -> AgentRequest {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
 
     let actor: identity::Did = signer.did().parse().unwrap();
@@ -120,10 +123,7 @@ pub(super) async fn seeded_request(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        signer.node_did(),
-        signer.did(),
-        signer.did(),
-        &session_id,
+        RequestScope::new(signer.node_did(), signer.did(), signer.did(), &session_id),
         "hello",
         "interactive",
         "2026-04-15T00:00:00Z",
@@ -197,117 +197,65 @@ fn config(
     }
 }
 
-pub(super) fn request(request_id: &str) -> AgentRequest {
-    AgentRequest {
-        retry_parent_request_doc_id: None,
-        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
-        doc_id: format!("doc-{request_id}"),
-        request_id: request_id.to_string(),
-        node_did: "did:test:test".to_string(),
-        requester_did: None,
-        agent_did: "default".to_string(),
-        session_id: format!("session-{request_id}"),
-        content: "hello".to_string(),
-        max_total_tokens: None,
-        input: Default::default(),
-        execution_origin: None,
-        created_at: "2026-04-15T00:00:00Z".to_string(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_lease_secs: None,
-        request_hop: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_node_did: None,
-        workspace_seal_hash: None,
-        executed_model_name: None,
-        executed_reasoning_effort: None,
-        executed_service_tier: None,
-        executed_inference_profile_id: None,
-        executed_runtime_generation: None,
-    }
-}
-
 #[tokio::test]
-async fn current_session_id_reflects_request_scope() {
-    assert_eq!(super::current_session_id(), None);
-
-    let context = AdmissionCallContext::for_request(&request("req-x"), "default", "backend-1");
-    let pending = context.next_call("runtime-test", None, None, None);
+async fn a_minted_call_carries_its_requests_identity() {
+    let context = AdmissionCallContext::for_request(
+        &crate::test_support::agent_request("req-x"),
+        "default",
+        "backend-1",
+    );
+    let pending = super::client::next_call(&context, "runtime-test", None, None, None);
     assert_eq!(pending.request_id, "req-x");
     assert_eq!(pending.request_doc_id, "doc-req-x");
-    scope_request(context, async {
-        assert_eq!(
-            super::current_session_id().as_deref(),
-            Some("session-req-x"),
-            "the in-flight request's session id must be visible for x-session-id tagging"
-        );
-    })
-    .await;
-
-    assert_eq!(super::current_session_id(), None);
+    assert_eq!(
+        context.session_id(),
+        "session-req-x",
+        "the in-flight request's session id must be visible for x-session-id tagging"
+    );
 }
 
 #[tokio::test]
 async fn current_call_join_reflects_the_minted_call() {
-    assert!(super::current_call_join().is_none());
+    let context = AdmissionCallContext::for_request(
+        &crate::test_support::agent_request("req-j"),
+        "default",
+        "backend-1",
+    );
+    assert!(context.current_join().is_none());
 
-    let context = AdmissionCallContext::for_request(&request("req-j"), "default", "backend-1");
-    let minting_handle = context.clone();
-    scope_request(context, async move {
-        assert!(super::current_call_join().is_none());
+    let first = super::client::next_call(&context, "runtime-test", None, None, None);
+    let join = context.current_join().expect("join after mint");
+    assert_eq!(join.call_id, first.call_id);
+    assert_eq!(join.call_seq, 1);
 
-        let first = minting_handle.next_call("runtime-test", None, None, None);
-        let join = super::current_call_join().expect("join after mint");
-        assert_eq!(join.call_id, first.call_id);
-        assert_eq!(join.call_seq, 1);
-
-        let second = minting_handle.next_call("runtime-test", None, None, None);
-        let join = super::current_call_join().expect("join after second mint");
-        assert_eq!(join.call_id, second.call_id);
-        assert_eq!(join.call_seq, 2);
-        assert_ne!(first.call_id, second.call_id);
-    })
-    .await;
-
-    assert!(super::current_call_join().is_none());
+    let second = super::client::next_call(&context, "runtime-test", None, None, None);
+    let join = context.current_join().expect("join after second mint");
+    assert_eq!(join.call_id, second.call_id);
+    assert_eq!(join.call_seq, 2);
+    assert_ne!(first.call_id, second.call_id);
 }
 
 #[tokio::test]
-async fn concurrent_call_scopes_return_their_own_exact_join() {
-    let context = AdmissionCallContext::for_request(&request("req-scopes"), "default", "backend-1");
-    scope_request(context, async {
-        let compaction = scope_call_with_join(CallKind::Compaction, 1, async {
-            super::client::current_context()
-                .unwrap()
-                .next_call("runtime-test", None, None, None)
-        });
-        let title = scope_call_with_join(CallKind::OneOff, 1, async {
-            super::client::current_context()
-                .unwrap()
-                .next_call("runtime-test", None, None, None)
-        });
-        let ((compaction_call, compaction_join), (title_call, title_join)) =
-            tokio::join!(compaction, title);
-        let compaction_join = compaction_join.expect("compaction join");
-        let title_join = title_join.expect("title join");
-        assert_eq!(compaction_join.call_id, compaction_call.call_id);
-        assert_eq!(compaction_join.call_kind, CallKind::Compaction);
-        assert_eq!(title_join.call_id, title_call.call_id);
-        assert_eq!(title_join.call_kind, CallKind::OneOff);
-        assert_ne!(compaction_join.call_id, title_join.call_id);
-    })
-    .await;
+async fn concurrent_call_contexts_return_their_own_exact_join() {
+    let context = AdmissionCallContext::for_request(
+        &crate::test_support::agent_request("req-scopes"),
+        "default",
+        "backend-1",
+    );
+    let compaction_context = context.for_call(CallKind::Compaction, 1);
+    let title_context = context.for_call(CallKind::OneOff, 1);
+    let compaction =
+        async { super::client::next_call(&compaction_context, "runtime-test", None, None, None) };
+    let title =
+        async { super::client::next_call(&title_context, "runtime-test", None, None, None) };
+    let (compaction_call, title_call) = tokio::join!(compaction, title);
+    let compaction_join = compaction_context.current_join().expect("compaction join");
+    let title_join = title_context.current_join().expect("title join");
+    assert_eq!(compaction_join.call_id, compaction_call.call_id);
+    assert_eq!(compaction_join.call_kind, CallKind::Compaction);
+    assert_eq!(title_join.call_id, title_call.call_id);
+    assert_eq!(title_join.call_kind, CallKind::OneOff);
+    assert_ne!(compaction_join.call_id, title_join.call_id);
 }
 
 const ADMISSION_TERMINAL_REASON_SOURCES: &[&str] = &[
@@ -472,17 +420,14 @@ async fn await_call_rows(
     awaited: &str,
     ready: impl Fn(&[Value]) -> bool,
 ) -> Vec<Value> {
-    let mut changes =
-        gents_store::subscription_source::subscribe_collections(node, ["InferenceCall"]).unwrap();
-    loop {
+    gents_store::test_support::read_when_changed(node, "InferenceCall", awaited, async || {
         let rows = call_rows(node, signer).await;
         if ready(&rows) {
-            return rows;
+            return Ok(rows);
         }
-        if changes.recv().await.is_none() {
-            panic!("InferenceCall changes closed while awaiting {awaited}, last rows={rows:?}");
-        }
-    }
+        Err(Value::Array(rows))
+    })
+    .await
 }
 
 async fn wait_for_call_row_count(
@@ -597,21 +542,23 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     let running_context = test_context(&registry, "req-fleet-running", &backend_id).await;
     let queued_context = test_context(&registry, "req-fleet-waiting", &backend_id).await;
 
-    let (running_row, queued_row) = scope_request(running_context, async {
-        let mut running_permit = registry.acquire_current_call_for_test().await.unwrap();
+    let (running_row, queued_row) = async {
+        let context = running_context;
+        let mut running_permit = registry.acquire_call_for_test(&context).await.unwrap();
         let running_row =
             wait_for_request_call_state(&node, &registry.signer, "req-fleet-running", "running")
                 .await;
 
         let queued_registry = registry.clone();
         let queued = tokio::spawn(async move {
-            scope_request(queued_context, async move {
+            async move {
+                let context = queued_context;
                 let mut queued_permit = queued_registry
-                    .acquire_current_call_for_test()
+                    .acquire_call_for_test(&context)
                     .await
                     .unwrap();
                 queued_permit.finish_success(None).await.unwrap();
-            })
+            }
             .await;
         });
         let queued_row =
@@ -622,7 +569,7 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
         drop(running_permit);
         queued.await.unwrap();
         (running_row, queued_row)
-    })
+    }
     .await;
 
     let completed_row =
@@ -654,14 +601,15 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
 
         let completed_context =
             test_context(&bounded_registry, "req-fleet-bound-completed", &backend_id).await;
-        scope_request(completed_context, async {
+        async {
+            let context = completed_context;
             let mut permit = bounded_registry
-                .acquire_current_call_for_test()
+                .acquire_call_for_test(&context)
                 .await
                 .unwrap();
             permit.finish_success(None).await.unwrap();
             drop(permit);
-        })
+        }
         .await;
 
         let first_context =
@@ -671,29 +619,32 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
         let queued_context =
             test_context(&bounded_registry, "req-fleet-bound-queued", &backend_id).await;
 
-        let mut first = scope_request(first_context, async {
+        let mut first = async {
+            let context = first_context;
             bounded_registry
-                .acquire_current_call_for_test()
+                .acquire_call_for_test(&context)
                 .await
                 .unwrap()
-        })
+        }
         .await;
-        let mut second = scope_request(second_context, async {
+        let mut second = async {
+            let context = second_context;
             bounded_registry
-                .acquire_current_call_for_test()
+                .acquire_call_for_test(&context)
                 .await
                 .unwrap()
-        })
+        }
         .await;
         let queued_registry = bounded_registry.clone();
         let queued = tokio::spawn(async move {
-            scope_request(queued_context, async move {
+            async move {
+                let context = queued_context;
                 let mut permit = queued_registry
-                    .acquire_current_call_for_test()
+                    .acquire_call_for_test(&context)
                     .await
                     .unwrap();
                 permit.finish_success(None).await.unwrap();
-            })
+            }
             .await;
         });
 
@@ -739,15 +690,16 @@ async fn missing_backend_persists_backend_gone_cancelled_terminal() {
     let node = db.node.clone();
     let registry = TestRegistry::new(node.clone(), signer);
     let context = test_context(&registry, "req-backend-gone", "missing").await;
-    let request_doc_id = context.request_doc_id.clone();
+    let request_doc_id = context.request_doc_id().to_owned();
 
-    scope_request(context, async {
-        let error = match registry.acquire_current_call_for_test().await {
+    async {
+        let context = context;
+        let error = match registry.acquire_call_for_test(&context).await {
             Ok(_) => panic!("missing backend should reject without a permit"),
             Err(error) => error,
         };
         assert!(error.to_string().contains("BackendGone"));
-    })
+    }
     .await;
 
     let rows = call_rows(&node, &registry.signer).await;
@@ -771,9 +723,10 @@ async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_back
     );
     let context = test_context(&registry, "req-zero", "backend-a").await;
 
-    scope_request(context, async {
-        let mut first = registry.acquire_current_call_for_test().await.unwrap();
-        let error = match registry.acquire_current_call_for_test().await {
+    async {
+        let context = context;
+        let mut first = registry.acquire_call_for_test(&context).await.unwrap();
+        let error = match registry.acquire_call_for_test(&context).await {
             Ok(_) => panic!("saturated backend should reject without queue capacity"),
             Err(error) => error,
         };
@@ -785,7 +738,7 @@ async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_back
         assert_eq!(rows[1]["failure_reason"], "QueueFull");
         assert_reconstructed_slot_count(&rows, "backend-a", 1);
         first.finish_success(None).await.unwrap();
-    })
+    }
     .await;
 
     let rows = call_rows(&node, &registry.signer).await;
@@ -808,14 +761,14 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
     let first_context = test_context(&registry, "req-ordered", "backend-a").await;
     let second_context = first_context.clone();
 
-    scope_request(first_context, async {
-        let mut first = registry.acquire_current_call_for_test().await.unwrap();
+    async { let context = first_context;
+        let mut first = registry.acquire_call_for_test(&context).await.unwrap();
         let second_registry = registry.clone();
         let second = tokio::spawn(async move {
-            scope_request(second_context, async move {
-                let mut permit = second_registry.acquire_current_call_for_test().await.unwrap();
+            async move { let context = second_context;
+                let mut permit = second_registry.acquire_call_for_test(&context).await.unwrap();
                 permit.finish_success(None).await.unwrap();
-            })
+            }
             .await;
         });
 
@@ -832,7 +785,7 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
         first.finish_success(None).await.unwrap();
         drop(first);
         second.await.unwrap();
-    })
+    }
     .await;
 
     let rows = call_rows(&node, &registry.signer).await;
@@ -859,16 +812,18 @@ async fn cancelling_queued_call_terminalizes_without_holding_slot() {
     let running_context = test_context(&registry, "req-running-holder", "backend-a").await;
     let queued_context = test_context(&registry, "req-queued-cancel", "backend-a").await;
 
-    scope_request(running_context, async {
-        let mut first = registry.acquire_current_call_for_test().await.unwrap();
+    async {
+        let context = running_context;
+        let mut first = registry.acquire_call_for_test(&context).await.unwrap();
         let queued_registry = registry.clone();
         let queued = tokio::spawn(async move {
-            scope_request(queued_context, async move {
+            async move {
+                let context = queued_context;
                 let _permit = queued_registry
-                    .acquire_current_call_for_test()
+                    .acquire_call_for_test(&context)
                     .await
                     .unwrap();
-            })
+            }
             .await;
         });
 
@@ -886,7 +841,7 @@ async fn cancelling_queued_call_terminalizes_without_holding_slot() {
         assert_eq!(state_count_for_backend(&rows, "backend-a", "cancelled"), 1);
 
         first.finish_success(None).await.unwrap();
-    })
+    }
     .await;
 
     registry.drop_cleanup_idle().await;
@@ -907,12 +862,13 @@ async fn explicit_failure_releases_reconstructed_slot() {
     );
     let context = test_context(&registry, "req-explicit-failure", "backend-a").await;
 
-    scope_request(context, async {
-        let mut permit = registry.acquire_current_call_for_test().await.unwrap();
+    async {
+        let context = context;
+        let mut permit = registry.acquire_call_for_test(&context).await.unwrap();
         let rows = call_rows(&node, &registry.signer).await;
         assert_reconstructed_slot_count(&rows, "backend-a", 1);
         permit.finish_failure("provider failed").await.unwrap();
-    })
+    }
     .await;
 
     let rows = call_rows(&node, &registry.signer).await;
@@ -933,23 +889,27 @@ async fn repeated_inference_scope_calls_persist_per_attempt_rows() {
     );
     let context = test_context(&registry, "req-retry-rows", "backend-a").await;
 
-    scope_request(context, async {
-        scope_call(CallKind::Inference, 1, async {
-            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
+    async {
+        let context = context;
+        async {
+            let context = context.for_call(CallKind::Inference, 1);
+            let mut permit = registry.acquire_call_for_test(&context).await.unwrap();
             permit.finish_failure("transient one").await.unwrap();
-        })
+        }
         .await;
-        scope_call(CallKind::Inference, 1, async {
-            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
+        async {
+            let context = context.for_call(CallKind::Inference, 1);
+            let mut permit = registry.acquire_call_for_test(&context).await.unwrap();
             permit.finish_failure("transient two").await.unwrap();
-        })
+        }
         .await;
-        scope_call(CallKind::Inference, 1, async {
-            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
+        async {
+            let context = context.for_call(CallKind::Inference, 1);
+            let mut permit = registry.acquire_call_for_test(&context).await.unwrap();
             permit.finish_success(None).await.unwrap();
-        })
+        }
         .await;
-    })
+    }
     .await;
 
     let rows = call_rows(&node, &registry.signer).await;
@@ -1042,15 +1002,17 @@ async fn call_kinds_share_backend_capacity_and_persist_their_kind() {
             let call_registry = registry.clone();
             let call_context = context.clone();
             calls.push(tokio::spawn(async move {
-                scope_request(call_context, async move {
-                    scope_call(kind, 1, async move {
+                async move {
+                    let context = call_context;
+                    async move {
+                        let context = context.for_call(kind, 1);
                         let mut permit =
-                            call_registry.acquire_current_call_for_test().await.unwrap();
+                            call_registry.acquire_call_for_test(&context).await.unwrap();
                         finish.await.unwrap();
                         permit.finish_success(None).await.unwrap();
-                    })
+                    }
                     .await;
-                })
+                }
                 .await;
             }));
             backend_call_rows(&node, &registry.signer, &backend_id, position + 1).await;
@@ -1116,27 +1078,25 @@ async fn dropped_permit_outcomes_match_lean_model() {
         }
         let observer = terminal_failure_reason_observer();
         let observer_for_drop = observer.clone();
-        let slots_while_held = scope_request(context, async {
-            scope_call_with_token_and_failure_reason(
-                CallKind::Inference,
-                1,
-                token,
-                observer,
-                async {
-                    let permit = registry.acquire_current_call_for_test().await.unwrap();
-                    let held = running_slot_count_for_backend(
-                        &call_rows(&node, &registry.signer).await,
-                        "backend-a",
-                    );
-                    if let Some(reason) = &case.input.observed {
-                        set_terminal_failure_reason(&observer_for_drop, reason.clone());
-                    }
-                    drop(permit);
-                    held
-                },
-            )
+        let slots_while_held = async {
+            let context = context;
+            async {
+                let context = context
+                    .for_call(CallKind::Inference, 1)
+                    .with_cancellation(token, observer);
+                let permit = registry.acquire_call_for_test(&context).await.unwrap();
+                let held = running_slot_count_for_backend(
+                    &call_rows(&node, &registry.signer).await,
+                    "backend-a",
+                );
+                if let Some(reason) = &case.input.observed {
+                    set_terminal_failure_reason(&observer_for_drop, reason.clone());
+                }
+                drop(permit);
+                held
+            }
             .await
-        })
+        }
         .await;
         registry.drop_cleanup_idle().await;
         let rows = call_rows(&node, &registry.signer).await;
@@ -1306,10 +1266,10 @@ async fn acquire_on(
     request_id: &str,
     backend_id: &str,
 ) -> Result<super::permit::AdmissionPermit, super::AdmissionError> {
-    scope_request(
-        test_context(registry, request_id, backend_id).await,
-        registry.acquire_current_call_for_test(),
-    )
+    async {
+        let context = test_context(registry, request_id, backend_id).await;
+        registry.acquire_call_for_test(&context).await
+    }
     .await
 }
 
@@ -1515,43 +1475,11 @@ async fn backend_removal_fails_queued_and_new_calls_clearly() {
     );
 }
 
-#[derive(Clone)]
-struct CountingProvider {
-    calls: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-#[allow(refining_impl_trait)]
-impl rig::completion::CompletionModel for CountingProvider {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self {
-            calls: Arc::default(),
-        }
-    }
-
-    async fn completion(
-        &self,
-        _request: rig::completion::CompletionRequest,
-    ) -> Result<rig::completion::CompletionResponse<()>, rig::completion::CompletionError> {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(rig::completion::CompletionError::ProviderError(
-            "provider reached".into(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        _request: rig::completion::CompletionRequest,
-    ) -> Result<rig::streaming::StreamingCompletionResponse<()>, rig::completion::CompletionError>
-    {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(rig::completion::CompletionError::ProviderError(
-            "provider reached".into(),
-        ))
-    }
+/// A provider every call reaches and fails.
+fn counting_provider() -> gents_loop::test_support::scripted_provider::ScriptedProvider {
+    gents_loop::test_support::scripted_provider::ScriptedProvider::responding(|_| {
+        gents_loop::test_support::scripted_provider::Reply::provider_error("provider reached")
+    })
 }
 
 fn ping() -> rig::completion::CompletionRequest {
@@ -1615,38 +1543,36 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
         .await
         .unwrap();
 
-    let old_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let old_calls = counting_provider();
     let mut old_model = super::client::AdmittedCompletionModel::new(
-        CountingProvider {
-            calls: old_calls.clone(),
-        },
+        old_calls.clone(),
         registry.registry.clone(),
         old_connection.as_str(),
     );
     old_model.agent_signer = Some(registry.signer.clone());
-    let old_call = tokio::spawn(scope_request(
-        test_context(&registry, "req-connection-old", backend).await,
-        async move { old_model.completion(ping()).await.map(|_| ()) },
-    ));
+    let old_model = old_model.for_call(&gents_loop::provider_call::ProviderCall {
+        admission: Some(test_context(&registry, "req-connection-old", backend).await),
+        ..Default::default()
+    });
+    let old_call = tokio::spawn(async move { old_model.completion(ping()).await.map(|_| ()) });
     wait_for_request_call_state(&node, &registry.signer, "req-connection-old", "queued").await;
 
     registry.reconcile(
         2,
         &RapidHashMap::from_iter([(backend.to_string(), rewritten_connection(backend, 1, 2))]),
     );
-    let new_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let new_calls = counting_provider();
     let mut new_model = super::client::AdmittedCompletionModel::new(
-        CountingProvider {
-            calls: new_calls.clone(),
-        },
+        new_calls.clone(),
         registry.registry.clone(),
         new_connection.as_str(),
     );
     new_model.agent_signer = Some(registry.signer.clone());
-    let new_call = tokio::spawn(scope_request(
-        test_context(&registry, "req-connection-new", backend).await,
-        async move { new_model.completion(ping()).await.map(|_| ()) },
-    ));
+    let new_model = new_model.for_call(&gents_loop::provider_call::ProviderCall {
+        admission: Some(test_context(&registry, "req-connection-new", backend).await),
+        ..Default::default()
+    });
+    let new_call = tokio::spawn(async move { new_model.completion(ping()).await.map(|_| ()) });
     wait_for_request_call_state(&node, &registry.signer, "req-connection-new", "queued").await;
 
     holder.finish_success(None).await.unwrap();
@@ -1658,8 +1584,8 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
             .unwrap();
         assert!(result.unwrap_err().to_string().contains("provider reached"));
     }
-    assert_eq!(old_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert_eq!(new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(old_calls.calls(), 1);
+    assert_eq!(new_calls.calls(), 1);
     assert_eq!(
         attribution_of(&node, &registry.signer, "req-connection-old").await,
         Some(old_connection)
@@ -1932,13 +1858,14 @@ async fn invalid_provider_usage_still_publishes_the_modeled_terminal_observation
         let context = test_context(&registry, &request_id, "usage-backend").await;
         let usage: gents_protocol::usage::TokenUsage =
             gents_lean_vocab::family::recode(&case.input.observation);
-        scope_request(context, async {
-            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
+        async {
+            let context = context;
+            let mut permit = registry.acquire_call_for_test(&context).await.unwrap();
             permit
                 .finish_success(Some(super::ProviderCallUsage(usage)))
                 .await
                 .unwrap();
-        })
+        }
         .await;
         let response = access.execute(&format!(
             r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ call_state ended_at prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness }} }}"#,
@@ -2005,9 +1932,12 @@ async fn a_graceful_stop_records_the_usage_of_a_cancelled_finalization() {
         final_response: true,
         ..Default::default()
     };
-    let mut permit = scope_request(context, registry.acquire_current_call_for_test())
-        .await
-        .unwrap();
+    let mut permit = async {
+        let context = context;
+        registry.acquire_call_for_test(&context).await
+    }
+    .await
+    .unwrap();
     permit.mark_stream_success(
         Some(super::ProviderCallUsage(usage)),
         CachedInputTokensObservation::NotAvailable,

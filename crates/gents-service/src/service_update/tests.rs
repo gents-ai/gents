@@ -31,8 +31,6 @@ async fn durable_receipts_enforce_acknowledgement_and_backup_order() {
     let mut receipt = Receipt {
         operation_id: uuid::Uuid::new_v4(),
         node_did: "node".into(),
-        session_id: Some("session".into()),
-        request_id: Some("request".into()),
         phase: Phase::Staged,
         message: String::new(),
         updated_at: String::new(),
@@ -65,7 +63,6 @@ async fn durable_receipts_enforce_acknowledgement_and_backup_order() {
         .is_err());
     let saved: Receipt = files::read_json(&dir.path().join("receipt.json")).unwrap();
     assert_eq!(saved.phase, Phase::Retired);
-    assert_eq!(saved.session_id.as_deref(), Some("session"));
 }
 
 #[tokio::test]
@@ -74,8 +71,6 @@ async fn stale_acknowledgement_cannot_resurrect_a_failed_operation() {
     let mut receipt = Receipt {
         operation_id: uuid::Uuid::new_v4(),
         node_did: "node".into(),
-        session_id: Some("session".into()),
-        request_id: Some("request".into()),
         phase: Phase::Registered,
         message: String::new(),
         updated_at: String::new(),
@@ -149,8 +144,6 @@ async fn broken_acknowledgement_cannot_release_the_updater() {
     let mut receipt = Receipt {
         operation_id: uuid::Uuid::new_v4(),
         node_did: "node".into(),
-        session_id: Some("session".into()),
-        request_id: Some("request".into()),
         phase: Phase::Registered,
         message: "registered".into(),
         updated_at: String::new(),
@@ -203,8 +196,6 @@ fn fixture_plan(home: &Path) -> Plan {
         id,
         home: home.into(),
         node_did: "fixture-node".into(),
-        session_id: Some("original-session".into()),
-        request_id: Some("original-request".into()),
         endpoint: "http://127.0.0.1:9191/api/v0/graphql".into(),
         prior_build: "0".repeat(64),
         intent: Intent {
@@ -245,6 +236,7 @@ fn initialize_fixture_identity(plan: &mut Plan) {
             tool_root: Some(plan.home.to_string_lossy().into_owned()),
             store_encryption: None,
             document_acp: Default::default(),
+            client_identity: None,
         },
     )
     .unwrap();
@@ -254,8 +246,6 @@ fn fixture_receipt(plan: &Plan, phase: Phase) -> Receipt {
     Receipt {
         operation_id: plan.id,
         node_did: plan.node_did.clone(),
-        session_id: plan.session_id.clone(),
-        request_id: plan.request_id.clone(),
         phase,
         message: String::new(),
         updated_at: String::new(),
@@ -297,7 +287,6 @@ async fn startup_failure_retains_cold_backup_and_session_outcome_without_resetti
     run(home.clone(), plan.id).await.unwrap();
     let outcome: Receipt = files::read_json(&directory.join("receipt.json")).unwrap();
     assert_eq!(outcome.phase, Phase::Failed);
-    assert_eq!(outcome.session_id.as_deref(), Some("original-session"));
     assert!(outcome.message.contains("No data reset"));
     assert!(!outcome.message.contains("initialized home missing"));
     assert!(

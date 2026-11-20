@@ -36,9 +36,8 @@ pub async fn fetch_local_operator_status(
         .build()
         .context("building local runtime status client")?;
     let mut response = graphql
-        .authorize(client.get(&status_url))?
-        .send()
-        .await
+        .send_resolving(|graphql| graphql.authorize(client.get(&status_url)))
+        .await?
         .context("reading local runtime status")?;
     anyhow::ensure!(
         response.status().is_success(),

@@ -23,12 +23,14 @@ const nameOf = (path: string) =>
 
 let discovered = false;
 
-export function discoverBundledUxPlugins(): void {
+/** `only`: the one plugin a plugin's own window runs; the others stay with
+    the main window */
+export function discoverBundledUxPlugins(only?: string): void {
   if (discovered) return;
   discovered = true;
   for (const [path, source] of Object.entries(sources)) {
     const name = nameOf(path);
-    if (!name) continue;
+    if (!name || (only !== undefined && name !== only)) continue;
     const css = styles[path.replace(/plugin\.js$/, "plugin.css")] ?? null;
     void loadRuntimeUxPlugin(
       { source, css },

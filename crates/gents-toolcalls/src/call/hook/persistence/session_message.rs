@@ -118,13 +118,15 @@ impl DefraSessionHook {
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
             .adopt_accepted_tool_dispatch(
-                internal_call_id,
-                tool_call_id.as_deref(),
-                &request_id,
-                &session_id,
-                tool_name,
-                args,
-                deadline_at,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id,
+                    provider_call_id: tool_call_id.as_deref(),
+                    request_id: &request_id,
+                    session_id: &session_id,
+                    tool_name,
+                    args,
+                    deadline_at,
+                },
                 AwaitMode::Background,
             )
             .await?;
@@ -541,12 +543,12 @@ impl DefraSessionHook {
             }
             Err(error) => {
                 if let gents_session::session::message::CommitError::Other(ref error) = error {
-                    if let Some(capacity) = BackgroundSlotRefusal::in_failure(error)
-                        .and_then(BackgroundSlotRefusal::capacity)
+                    if let Some(BackgroundSlotRefusal::CapacityExceeded { admitted, limit }) =
+                        BackgroundSlotRefusal::in_failure(error)
                     {
                         refuse!(
                             FailureClass::ServiceUnavailable,
-                            background_budget_exceeded_payload(tool_name, capacity)
+                            background_budget_exceeded_payload(tool_name, *admitted, *limit)
                         );
                     }
                 }
@@ -595,13 +597,15 @@ impl DefraSessionHook {
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
             .adopt_accepted_tool_dispatch(
-                internal_call_id,
-                tool_call_id.as_deref(),
-                &request_id,
-                &session_id,
-                tool_name,
-                args,
-                deadline_at,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id,
+                    provider_call_id: tool_call_id.as_deref(),
+                    request_id: &request_id,
+                    session_id: &session_id,
+                    tool_name,
+                    args,
+                    deadline_at,
+                },
                 AwaitMode::Foreground,
             )
             .await?;
@@ -842,10 +846,12 @@ impl DefraSessionHook {
                     &self.node,
                     &self.actor_access()?,
                     &session_ref(&target),
-                    std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
-                        background_executions: self.background_executions.clone(),
-                        job_driver,
-                    }),
+                    std::sync::Arc::new(
+                        crate::call::hook::background_executions::RuntimeExecutionWitness {
+                            background_executions: self.background_executions.clone(),
+                            job_driver,
+                        },
+                    ),
                 )
                 .await?;
                 Ok(json_string(

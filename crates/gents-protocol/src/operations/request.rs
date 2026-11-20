@@ -45,7 +45,8 @@ impl From<Option<QueueDelivery>> for DeliveryChoice {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MessageSendInput {
     pub node_did: String,
     pub session_id: Option<String>,

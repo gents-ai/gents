@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::error::BridgeError;
+use gents_store::client_error::BridgeError;
 
 #[cfg(feature = "native-e2e")]
 const E2E_STATUS_FILENAME: &str = "native-e2e-status.json";
@@ -52,7 +52,7 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeErro
     {
         let enabled = std::env::var("GENTS_NATIVE_E2E").ok().as_deref() == Some("1");
         tracing::info!(
-            target: "gents_desktop_bridge::mobile_performance",
+            target: "crate::mobile_performance",
             enabled,
             "native E2E configuration requested"
         );
@@ -194,7 +194,7 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
             BridgeError::untyped(format!("terminating native E2E event artifact: {error}"))
         })?;
         tracing::info!(
-            target: "gents_desktop_bridge::mobile_performance",
+            target: "crate::mobile_performance",
             stage = %status.stage,
             correlation_id = status.correlation_id.as_deref().unwrap_or("none"),
             monotonic_ms = status.monotonic_ms.unwrap_or_default(),

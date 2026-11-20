@@ -5,15 +5,20 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { preferences, useTheme } from "@/preferences";
+import { Hint } from "../Hint";
 import { InfoTip } from "../InfoTip";
 
 export function Frame({
   children,
   embedded = false,
+  paired = false,
+  aside = false,
   onBack,
 }: {
   children: React.ReactNode;
   embedded?: boolean;
+  paired?: boolean;
+  aside?: boolean;
   onBack?: () => void;
 }) {
   const theme = useTheme();
@@ -39,7 +44,13 @@ export function Frame({
       data-testid="setup-screen"
     >
       <div className="px-8">
-        <div className="mx-auto min-w-0 w-full max-w-xl pt-[10vh] pb-8">
+        <div
+          className={cn(
+            "mx-auto w-full max-w-xl min-w-0 pt-[10vh] pb-8 transition-transform duration-300 ease-out motion-reduce:transition-none",
+            paired && "min-[900px]:max-w-[min(36rem,calc((100vw-5rem)/2))]",
+            aside && "min-[900px]:-translate-x-[calc(50%+0.5rem)]",
+          )}
+        >
           {children}
           <div className="mt-6 flex justify-end">
             <Button
@@ -90,7 +101,7 @@ export function Option({
   return (
     <div
       className={cn(
-        "min-w-0 rounded-2xl border bg-raised",
+        "min-w-0 rounded-2xl border bg-raised transition-[border-color,box-shadow] duration-200 motion-reduce:transition-none",
         selected ? "border-brand ring-1 ring-brand" : "border-border/60",
       )}
     >
@@ -202,5 +213,32 @@ export function Field({
       <span className="text-xs text-muted-foreground">{label}</span>
       {children}
     </label>
+  );
+}
+
+export function IconAction({
+  label,
+  icon: Icon,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  icon: typeof Server;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Hint label={label}>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        <Icon />
+      </Button>
+    </Hint>
   );
 }

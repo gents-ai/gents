@@ -36,10 +36,7 @@ async fn a_goal_task_with_a_lost_receipt_is_decided_by_the_durable_row_and_inher
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "goal-commit-parent",
-        &did,
-        &did,
-        "general",
-        &session,
+        gents_protocol::request_admission::RequestScope::new(&did, &did, "general", &session),
         "start agents",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -83,7 +80,7 @@ async fn a_goal_task_with_a_lost_receipt_is_decided_by_the_durable_row_and_inher
             None,
             "goal-call",
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         ),
     )
     .await;

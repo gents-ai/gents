@@ -23,11 +23,11 @@ const loaded: SessionLoadState = {
 function deployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
   return {
     nodeDid: "did:test:agent",
-    dialSucceeded: true,
+
     runtimeConnection: "connected",
     chatSafe: true,
     source: "enrolled",
-    lastError: null,
+
     runtime: null,
     node: {
       nodeDid: "did:test:agent",
@@ -160,7 +160,7 @@ describe("session loading projection", () => {
     expect(
       project({
         operationalState: projectDeploymentOperationalState(
-          deployment({ source: "local-standard", chatSafe: false }),
+          deployment({ local: true, chatSafe: false }),
         ),
       }),
     ).toBeNull();
@@ -189,10 +189,10 @@ describe("session loading projection", () => {
           null,
           {
             state: "waiting",
-            lastError: null,
+
             runtimeCount: 1,
             connectedRuntimeCount: 1,
-            activationErrorCount: 0,
+
             cause: "discovery_degraded",
             nextAction: "wait",
           },
@@ -202,10 +202,10 @@ describe("session loading projection", () => {
   });
 
   it("offers inference configuration only for an explicit local backend failure", () => {
-    const unavailable = (source: string) =>
+    const unavailable = (local: boolean) =>
       projectDeploymentOperationalState(
         deployment({
-          source,
+          local,
           nodeReadiness: {
             ...deployment().nodeReadiness,
             agents: [
@@ -220,10 +220,10 @@ describe("session loading projection", () => {
       );
     expect(
       project({
-        operationalState: unavailable("local-standard"),
+        operationalState: unavailable(true),
       }),
     ).toMatchObject({ layer: "inference", action: "configureInference" });
-    expect(project({ operationalState: unavailable("enrollment") })).toMatchObject({
+    expect(project({ operationalState: unavailable(false) })).toMatchObject({
       layer: "inference",
       action: null,
     });

@@ -1,85 +1,42 @@
-#![allow(dead_code, unused_imports)]
-
 pub mod fs;
-pub(crate) use gents_pack::pack::authoring::export::document_handle;
 pub mod graphql;
 pub mod mocks;
 pub mod pack_preview;
-pub mod ports;
 pub mod process;
 pub mod waits;
 
 pub use fs::{
     assert_json_schema_valid, assert_manifest_node_dids, assert_runtime_init_state, copy_dir_all,
-    manifest_contains, parse_jsonl, project_object_fields, read_captured_log, read_json_file,
-    read_runtime_state_json, read_workspace_json, rewrite_manifest_node_dids, workspace_root,
-    write_json_file, write_manifest_root_from_export,
+    manifest_contains, parse_jsonl, read_json_file, read_runtime_state_json, read_workspace_json,
+    rewrite_manifest_node_dids, write_json_file, ExpectedBackend, ExpectedModes,
 };
+pub use gents::support::ports::{allocate_port, graphql_url};
 pub use graphql::{
-    doc_id_for_tools, doc_id_from_create, escape_graphql_string, exec, first_graphql_row,
-    graphql_query,
+    doc_id_for_tools, doc_id_from_create, escape_graphql_string, first_graphql_row, graphql_query,
 };
 pub use mocks::{
-    completion_text_sse, request_contains_role_text, request_has_tool_result_message,
-    request_system_message, request_tool_names, request_tool_result_text, tool_call_sse,
-    tool_call_sse_with_id, MockChatEndpoint, MockModelEndpoint, MockOpenAIEndpoint,
+    request_has_tool_result_message, request_system_message, request_tool_names,
+    request_tool_result_text, MockChatEndpoint, MockModelEndpoint, MockOpenAIEndpoint,
 };
 pub use pack_preview::{assert_preview_hides_the_secret, documents_fixture_with_secret_variable};
-pub use ports::{allocate_port, graphql_url};
 pub use process::{
-    cli_bin, desktop_bin, run_cli_failure_stderr, run_cli_failure_stderr_with_env,
-    run_cli_failure_stdout_json, run_cli_json, run_cli_json_with_env, run_cli_text,
-    run_desktop_init_json, run_init_json, spawn_cli, spawn_server, spawn_server_with_env,
-    spawn_server_with_ready_json, spawn_server_with_ready_json_recovering, wait_for_port,
-    ServeProcess,
+    cli_bin, run_cli_failure_stderr, run_cli_failure_stderr_with_env, run_cli_failure_stdout_json,
+    run_cli_json, run_cli_json_with_env, run_cli_text, run_init_json, spawn_server,
+    spawn_server_with_env, spawn_server_with_ready_json, spawn_server_with_ready_json_recovering,
+    wait_for_port, ServeProcess,
 };
 pub use waits::{
-    canonical_tool_result_text, wait_for_completed_inference_agents, wait_for_completed_tool_calls,
-    wait_for_request, wait_for_request_lifecycle_state, wait_for_runtime_quiescence,
-    wait_for_runtime_ready, wait_for_runtime_state_graphql, wait_for_tool_call,
+    canonical_tool_result_text, wait_for_request, wait_for_request_lifecycle_state,
+    wait_for_runtime_quiescence, wait_for_runtime_ready, wait_for_runtime_state_graphql,
+    wait_for_tool_call,
 };
+#[cfg(feature = "live-e2e")]
+pub use waits::{wait_for_completed_inference_agents, wait_for_completed_tool_calls};
 
 pub fn fixture_pack_dir(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs")
         .join(name)
-}
-
-pub const DEFAULT_MODEL_ENDPOINT: &str = "http://workstation-1:8000/v1";
-pub const DEFAULT_MODEL_NAME: &str = "GLM-5.2";
-
-pub async fn initialized_node(
-    cwd: &std::path::Path,
-    node_home: &std::path::Path,
-    node_name: &str,
-) -> anyhow::Result<gents::defra_node::Node> {
-    use anyhow::Context as _;
-
-    let home = node_home.to_str().context("node home utf8")?;
-    let init = run_init_json(
-        cwd,
-        &["--identity-only", "--node-name", node_name, "--home", home],
-    )?;
-    let node_did = node_did_from_init(&init)?;
-    let key_path = init
-        .get("key_path")
-        .and_then(serde_json::Value::as_str)
-        .context("identity-only init output missing key_path")?;
-    let _identity = gents_store::identity::KeyIdentity::load_or_create(key_path, None)
-        .context("loading initialized node identity")?;
-
-    let data = node_home.join("data");
-    gents_store::local::store_key::open_home_store_key(node_home, &data)
-        .await?
-        .encrypt(
-            gents::defra_node::Node::builder()
-                .data_path(&data)
-                .with_storage_backend(gents::defra_node::StorageBackend::Regolith),
-        )
-        .with_node_identity_did(&node_did)
-        .build()
-        .await
-        .context("opening initialized embedded node")
 }
 
 pub fn node_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
@@ -195,29 +152,34 @@ impl UserSeededHome {
             (Some("readwrite"), Some(root)) => gents_tools::surface::ToolCeiling::readwrite(root),
             other => anyhow::bail!("identity-only init output has no tool ceiling: {other:?}"),
         };
-        let client = gents_desktop_core::client::PrincipalIdentity::load_existing(
-            &graphql::cli_client_paths(cwd, &[]),
-        )
-        .context("loading the CLI User key")?;
+        let client =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+                &graphql::cli_client_paths(cwd, &[]),
+            )
+            .context("loading the CLI User key")?;
         let data = gents_store::local::home::default_data_dir(node_home);
         let claim = gents_store::local::home::lock_store(node_home, &data)?;
         let key = gents_store::local::store_key::open_home_store_key(node_home, &data).await?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
         let node = std::sync::Arc::new(
-            gents_store::local::store_key::persistent_builder(&data, &key)?
-                // The home's own projector, as its runtime and CLI open it,
-                // projects published documents' native source edges.
-                .with_document_projector(gents_store::local::document_projector(
-                    runtime.clone(),
-                    std::sync::Arc::new(ceiling),
-                )?)
-                .with_node_identity_did(node_did)
-                .with_node_acp_enabled()
-                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
-                .build()
-                .await
-                .context("opening the identity-only home")?,
+            gents_store::local::store_key::persistent_builder(
+                &data,
+                &key,
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )?
+            // The home's own projector, as its runtime and CLI open it,
+            // projects published documents' native source edges.
+            .with_document_projector(gents_store::local::document_projector(
+                runtime.clone(),
+                std::sync::Arc::new(ceiling),
+            )?)
+            .with_node_identity_did(node_did)
+            .with_node_acp_enabled()
+            .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await
+            .context("opening the identity-only home")?,
         );
         let access = gents_store::config_client::ConfigAccess::Graphql(
             gents_store::config_client::GraphqlEndpoint::as_principal(&url, client.did())
@@ -279,7 +241,6 @@ impl UserSeededHome {
         use gents_documents::apply_desired_state_plan;
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents_store::collection::Collection;
-        use gents_store::identity::NodeIdentity as _;
         let node_did = self.node_did().to_owned();
         let user = identity::Did::new(
             self.access

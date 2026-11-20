@@ -344,4 +344,14 @@ theorem parked_request_is_superseded_and_cannot_resume {Generation : Type} [Deci
   · simp [step?, h_lease, h_request, h_fresh, h_continuation, h_charge]
   · simp [step?, recoveryTerminal, terminalize, commitTerminalEffects]
 
+theorem retry_wake_is_dispatch_authorization
+    (pre : World Generation) (owner generation : Generation) (duration deadline : Time)
+    (hlease : pre.lease = .active owner duration deadline) :
+    (step? pre (.authorizeProducerDecision .mutationWriteGate generation .dispatch)).isSome =
+      retryWakeDispatches (decide (owner = generation)) (decide (pre.request = .processing))
+        (decide (pre.now < deadline)) := by
+  by_cases ho : owner = generation <;> by_cases hp : pre.request = .processing <;>
+    by_cases hd : pre.now < deadline <;>
+    simp [step?, hlease, admitted, retryWakeDispatches, ho, hp, hd]
+
 end RequestExecutionLease

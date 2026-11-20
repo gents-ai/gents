@@ -73,10 +73,9 @@ pub async fn setup_private_hook_for_agent(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        node_did,
-        agent_did,
-        agent_did,
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            node_did, agent_did, agent_did, session_id,
+        ),
         "R4C accepted control fixture",
         "interactive",
         now,
@@ -173,7 +172,7 @@ pub async fn accepted_call(
         provider_call_id,
         internal_call_id,
         args,
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
 }

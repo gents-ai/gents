@@ -25,7 +25,9 @@ function cardFor(
         initToolRoot: "/Users/me/work",
         initToolCeiling: "readwrite",
       },
-      client: { deployments: [node({ nodeDid, source: "enrollment", ...more })] },
+      client: {
+        deployments: [node({ nodeDid, local: nodeDid === "did:key:home", ...more })],
+      },
     },
   });
   const [shown] = fleetNodes(app.stores.fleet.getState());

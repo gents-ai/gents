@@ -1,11 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::stream;
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
 use serde_json::json;
 
 use super::inference::tests::InterruptionCapture;
@@ -18,59 +15,23 @@ use gents_loop::tool::ToolDyn;
 use gents_protocol::row::AgentRequest;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
-use gents_toolcalls::call::hook::{
-    BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::{BackgroundToolRegistry, FailurePolicy};
 use tracing::instrument::WithSubscriber;
 
 const TASK_ID: &str = "hook-task";
 const TRIGGER_ID: &str = "hook-trigger";
 const WORKSPACE_ID: &str = "task-hook-workspace";
 
-#[derive(Clone)]
-struct ScriptedModel {
-    calls: Arc<AtomicUsize>,
-    fail: bool,
-    hang: bool,
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for ScriptedModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        unreachable!("task hook daemon tests construct their model directly")
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError> {
-        Err(CompletionError::ProviderError("unused".into()))
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-            .await?;
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        if self.fail {
-            return Err(CompletionError::ProviderError("agent refused".into()));
-        }
-        if self.hang {
-            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::pending());
-            return Ok(StreamingCompletionResponse::stream(inner));
-        }
-        let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
-            Ok(RawStreamingChoice::Message("hooked reply".to_string())),
-            Ok(RawStreamingChoice::FinalResponse(())),
-        ]));
-        Ok(StreamingCompletionResponse::stream(inner))
-    }
+/// The agent's provider: it refuses every call when `fail`, never answers
+/// when `hang`, and otherwise replies.
+fn hook_model(fail: bool, hang: bool) -> ScriptedProvider {
+    ScriptedProvider::responding(move |_| match (fail, hang) {
+        (true, _) => Reply::provider_error("agent refused"),
+        (false, true) => Reply::Stream(vec![Step::Pending]),
+        (false, false) => Reply::text("hooked reply"),
+    })
+    .capturing_openai("scripted")
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,7 +44,7 @@ struct Harness {
     node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
     tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
-    calls: Arc<AtomicUsize>,
+    models: std::sync::Mutex<Vec<ScriptedProvider>>,
     marks: tempfile::TempDir,
     _db: crate::support::TestDb,
     _user: gents_store::identity::KeyIdentity,
@@ -132,7 +93,7 @@ impl Harness {
             node,
             agent_config,
             tool_config,
-            calls: Arc::new(AtomicUsize::new(0)),
+            models: std::sync::Mutex::default(),
             marks: tempfile::tempdir().expect("hook marker directory"),
             _db: db,
             _user: user,
@@ -276,10 +237,12 @@ impl Harness {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
-            &owner,
-            &self.agent_config.agent_did,
-            &self.agent_config.agent_did,
-            session_id,
+            gents_protocol::request_admission::RequestScope::new(
+                &owner,
+                &self.agent_config.agent_did,
+                &self.agent_config.agent_did,
+                session_id,
+            ),
             "run the gate",
             origin,
             created_at,
@@ -341,7 +304,7 @@ impl Harness {
         .unwrap()
     }
 
-    fn daemon(&self, fail: bool) -> AgentDaemon<ScriptedModel> {
+    fn daemon(&self, fail: bool) -> AgentDaemon<ScriptedProvider> {
         self.daemon_with(fail, BackgroundExecutionRegistry::default())
     }
 
@@ -349,7 +312,7 @@ impl Harness {
         &self,
         fail: bool,
         executions: BackgroundExecutionRegistry,
-    ) -> AgentDaemon<ScriptedModel> {
+    ) -> AgentDaemon<ScriptedProvider> {
         self.daemon_model(fail, false, executions)
     }
 
@@ -358,7 +321,7 @@ impl Harness {
         fail: bool,
         hang: bool,
         executions: BackgroundExecutionRegistry,
-    ) -> AgentDaemon<ScriptedModel> {
+    ) -> AgentDaemon<ScriptedProvider> {
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &self.agent_config.system_prompt,
             &self.agent_config.agent_did,
@@ -366,16 +329,14 @@ impl Harness {
             false,
             &[],
         );
+        let model = hook_model(fail, hang);
+        self.models.lock().unwrap().push(model.clone());
         AgentDaemon::new(AgentDaemonInit {
             node: self.node.clone(),
             tool_config: self.tool_config.clone(),
             agent_config: self.agent_config.clone(),
             provider_family: None,
-            model: Arc::new(ScriptedModel {
-                calls: self.calls.clone(),
-                fail,
-                hang,
-            }),
+            model: Arc::new(model),
             preamble: prompt_builder.preamble().to_string(),
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -466,8 +427,14 @@ impl Harness {
         self.request_row(&doc_id).await
     }
 
+    /// Provider calls across every daemon this harness built.
     fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
+        self.models
+            .lock()
+            .unwrap()
+            .iter()
+            .map(ScriptedProvider::calls)
+            .sum()
     }
 }
 

@@ -1,5 +1,5 @@
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::RequestInput;
 use gents_store::config_client::ConfigAccess;
@@ -101,13 +101,15 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
             Box::pin(async {
                 crate::session::ensure_session_in_txn(
                     txn,
-                    "capture-session",
-                    identity.did(),
-                    &binding.agent_did,
-                    Some(user.did()),
-                    None,
-                    None,
-                    "2026-10-20T00:00:00Z",
+                    crate::session::NewAgentSession {
+                        session_id: "capture-session",
+                        node_did: identity.did(),
+                        agent_did: &binding.agent_did,
+                        requester_did: Some(user.did()),
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-10-20T00:00:00Z",
+                    },
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(())
@@ -148,10 +150,12 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("capture-{index}"),
-            identity.did(),
-            &binding.agent_did,
-            &binding.agent_did,
-            "capture-session",
+            RequestScope::new(
+                identity.did(),
+                &binding.agent_did,
+                &binding.agent_did,
+                "capture-session",
+            ),
             "Captured source",
             "interactive",
             "2026-10-20T00:00:00Z",
@@ -196,9 +200,14 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         let request = super::load_request_for_admission_test(&node, &doc)
             .await
             .unwrap();
-        let result =
-            super::verify_fresh_local_self_request(&node, &identity, &request, &binding.agent_did)
-                .await;
+        let result = super::verify_fresh_local_self_request(
+            &node,
+            &identity,
+            &request,
+            &binding.agent_did,
+            None,
+        )
+        .await;
         let accepted = result.is_ok();
         let stored = access
             .execute(&format!(

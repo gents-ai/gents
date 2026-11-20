@@ -77,8 +77,8 @@ mod recovery;
 pub mod requested_create;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use recovery::{
-    recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
-    RecoverySelectionRejected,
+    recover_expired_generation_with_access_for_test, RecoveryFacts, RecoveryResult,
+    RecoverySelectionChoice, RecoverySelectionRejected,
 };
 mod task_title;
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -92,14 +92,14 @@ pub use manual::{
 pub use materialize::build_session_message_request;
 pub(crate) use materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title;
 pub use materialize::{
-    build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
+    build_signed_request, ExecutionBinding, ParentLink, RequestIdentity, RequestSigner,
+    RequestSpec, RetryLink, SessionMessageRequest,
 };
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
 pub use queue::{
     pending_steer_edit, publish_edit_command, submit_pending_user_edit, submit_pending_user_steer,
-    PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
+    PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt, SteeredMessage,
 };
 pub use queue::{
     pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,
@@ -937,9 +937,12 @@ mod tests {
             root.clone(),
             agent.clone(),
             "hello",
-            60,
-            ExecutionOrigin::Interactive,
-            "backend",
+            crate::request::lifecycle::ExecutionBinding {
+                deadline_duration_secs: 60,
+                execution_origin: ExecutionOrigin::Interactive,
+                backend_id: "backend".into(),
+                operator_tool_root: None,
+            },
             TriggerLineage::default(),
         )
         .await

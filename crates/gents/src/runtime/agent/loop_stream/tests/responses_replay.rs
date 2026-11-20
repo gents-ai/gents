@@ -56,7 +56,7 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let client = gents_inference::clients::inference_http::build_openai_responses_client(
+    let client = gents_inference::llm::rig_compat::providers::build_openai_responses_client(
         "test-key",
         &format!("http://{address}/v1"),
         gents_inference::clients::inference_http::SessionTaggingHttpClient::new(
@@ -81,9 +81,9 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     let node = db.node.clone();
     let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.on_rendered_request =
-        Some(gents_inference::rendered_request::scope::ambient_arming_sink(scope_kind));
+        Some(gents_inference::rendered_request::scope::arming_sink(scope_kind));
     config.provider_input_counter =
         Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
             gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
@@ -121,6 +121,7 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         Some(&capture_factory),
     )
     .expect("DefraDB rendered-request capture scope");
+    config.provider_call.capture = Some(capture_scope);
     let stream = run_loop_stream(
         model,
         Some(hook.clone()),
@@ -129,14 +130,7 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         tools,
         config,
     );
-    let collected = collect_owned_scripted_stream_with_capture_scope(
-        stream,
-        &hook,
-        &writer,
-        &mut lifecycle,
-        profile,
-        Some(capture_scope),
-    )
+    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle, profile)
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);

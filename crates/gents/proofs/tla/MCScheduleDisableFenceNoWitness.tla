@@ -1,0 +1,4 @@
+---- MODULE MCScheduleDisableFenceNoWitness ----
+EXTENDS ScheduleDisableFence
+
+====

@@ -134,30 +134,6 @@ pub fn read_captured_log(log: Option<&tempfile::NamedTempFile>) -> Result<String
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<()> {
-    let mut config = exported.clone();
-    let object = config
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("exported configuration is not an object"))?;
-    for metadata in ["format", "node_did", "exported_at", "access_mode"] {
-        object.remove(metadata);
-    }
-    write_json_file(&root.join("pack_config.json"), &config)
-}
-
-pub fn project_object_fields(value: &Value, fields: &[&str]) -> Result<Value> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow!("expected object while projecting manifest fields: {value}"))?;
-    let mut projected = serde_json::Map::new();
-    for field in fields {
-        if let Some(value) = object.get(*field) {
-            projected.insert((*field).to_string(), value.clone());
-        }
-    }
-    Ok(Value::Object(projected))
-}
-
 pub fn read_runtime_state_json(home_dir: &Path) -> Result<Value> {
     let path = if home_dir.join("runtime.json").exists() {
         home_dir.join("runtime.json")
@@ -168,21 +144,42 @@ pub fn read_runtime_state_json(home_dir: &Path) -> Result<Value> {
     serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[derive(Clone, Copy)]
+pub struct ExpectedBackend<'a> {
+    pub provider_kind: &'a str,
+    pub endpoint: &'a str,
+    pub api_key: Option<&'a str>,
+    pub api_key_env_var: Option<&'a str>,
+    pub model_name: &'a str,
+}
+
+#[derive(Clone, Copy)]
+pub struct ExpectedModes<'a> {
+    pub file_tools_mode: &'a str,
+    pub bash_mode: &'a str,
+    pub prompt_snippet: &'a str,
+}
+
 pub async fn assert_runtime_init_state(
     graphql: &str,
     node_did: &str,
     backend_id: &str,
-    endpoint: &str,
-    expected_provider_kind: &str,
-    expected_api_key: Option<&str>,
-    expected_api_key_env_var: Option<&str>,
-    model_name: &str,
     tools_id: &str,
-    expected_file_tools_mode: &str,
-    expected_bash_mode: &str,
-    expected_prompt_snippet: &str,
+    backend: ExpectedBackend<'_>,
+    modes: ExpectedModes<'_>,
 ) -> Result<()> {
+    let ExpectedBackend {
+        provider_kind: expected_provider_kind,
+        endpoint,
+        api_key: expected_api_key,
+        api_key_env_var: expected_api_key_env_var,
+        model_name,
+    } = backend;
+    let ExpectedModes {
+        file_tools_mode: expected_file_tools_mode,
+        bash_mode: expected_bash_mode,
+        prompt_snippet: expected_prompt_snippet,
+    } = modes;
     use super::graphql::{first_graphql_row, graphql_query};
 
     let selected = graphql_query(graphql, &format!("{{ DefaultAgentSelection(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", escape_graphql_string(node_did))).await?;

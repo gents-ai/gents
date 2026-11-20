@@ -96,14 +96,12 @@ function snapshot(configured: boolean): DesktopClientSnapshot {
       ...bootstrap,
       initConfigStatus: configured ? "configured" : "absent",
       clientStateExists: configured,
-      savedPeers: configured
+      savedRuntimes: configured
         ? [
             {
-              peerId: deployment.peerId,
               label: deployment.label,
               nodeDid: deployment.nodeDid,
-              addr: deployment.addr,
-              source: deployment.source,
+
               graphql: deployment.graphql,
               local: false,
             },
@@ -269,7 +267,13 @@ describe("a home this version cannot open", () => {
       const outcome = setAside ? ("ready" as const) : ("needsSetup" as const);
       const repaired = setAside ? [] : [note];
       setAside = true;
-      return { repaired, outcome, blocker: null, savedPeers: [], localNodeLost: false };
+      return {
+        repaired,
+        outcome,
+        blocker: null,
+        savedRuntimes: [],
+        localNodeLost: false,
+      };
     });
     const resetManagedServer = vi.fn();
     const app = testApp({
@@ -296,7 +300,7 @@ describe("a home this version cannot open", () => {
         repaired: [],
         outcome: "ready" as const,
         blocker: null,
-        savedPeers: [],
+        savedRuntimes: [],
         localNodeLost: false,
       })),
       managedServerStatus: vi.fn(async () =>

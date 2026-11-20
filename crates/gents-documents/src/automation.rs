@@ -15,7 +15,6 @@ pub struct ResolvedTask {
     pub prompt_template: String,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
-    #[allow(dead_code)]
     pub output_schema_ref: Option<String>,
     pub hooks: Vec<TaskHook>,
 }
@@ -38,12 +37,8 @@ pub struct ResolvedSchedule {
     pub trigger_doc_id: String,
     pub schedule_doc_id: String,
     pub schedule_id: String,
-    #[allow(dead_code)]
-    pub task_id: String,
     pub task: ResolvedTask,
     pub cadence: ScheduleCadence,
-    #[allow(dead_code)]
-    pub enabled: bool,
     pub concurrency: ConcurrencyMode,
 }
 
@@ -66,14 +61,10 @@ pub struct ResolvedEventTrigger {
     pub max_fires_per_hour: u32,
     pub trigger_doc_id: String,
     pub trigger_id: String,
-    #[allow(dead_code)]
-    pub task_id: String,
     pub task: ResolvedTask,
     pub source_collection: String,
     pub event_kind: String,
     pub filter: Option<String>,
-    #[allow(dead_code)]
-    pub enabled: bool,
     pub concurrency: ConcurrencyMode,
     pub fire_mode: EventTriggerFireMode,
     pub correlation_field: Option<String>,

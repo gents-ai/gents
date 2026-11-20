@@ -177,22 +177,41 @@ async fn live_agents_read_collections_whatever_their_datastore_tools() -> anyhow
         agent_signer.as_ref(),
     )?;
     let mut granted = std::collections::BTreeMap::new();
-    granted.insert(
+    let mut baseline = std::collections::BTreeMap::new();
+    baseline.insert(
         "agent-query",
         node.nac_manager()
             .check_permission(&agent, NodePermission::CollectionGet)
+            .await?,
+    );
+    baseline.insert(
+        "sibling",
+        node.nac_manager()
+            .check_permission(&sibling, NodePermission::CollectionGet)
+            .await?,
+    );
+    granted.insert(
+        "agent-query",
+        node.nac_manager()
+            .check_permission(&agent, NodePermission::CollectionPatch)
             .await?,
     );
     assert!(access.collection_version("Node").await?.is_some());
     granted.insert(
         "sibling",
         node.nac_manager()
-            .check_permission(&sibling, NodePermission::CollectionGet)
+            .check_permission(&sibling, NodePermission::CollectionPatch)
             .await?,
     );
     owner.write("test.tool_projection.schema_enable", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:true}}}}) {{_docID}} }}"#)).await?;
     owner.write("test.tool_projection.surface_disable", &format!(r#"mutation {{ update_DatastoreToolSurface(filter: {{node_did:{{_eq:"{node_value}"}},surface_id:{{_eq:"surface"}}}},input:{{enabled:false}}) {{_docID}} }}"#)).await?;
     granted.insert(
+        "agent-schema",
+        node.nac_manager()
+            .check_permission(&agent, NodePermission::CollectionPatch)
+            .await?,
+    );
+    baseline.insert(
         "agent-schema",
         node.nac_manager()
             .check_permission(&agent, NodePermission::CollectionGet)
@@ -202,16 +221,21 @@ async fn live_agents_read_collections_whatever_their_datastore_tools() -> anyhow
     granted.insert(
         "agent-disabled",
         node.nac_manager()
+            .check_permission(&agent, NodePermission::CollectionPatch)
+            .await?,
+    );
+    baseline.insert(
+        "agent-disabled",
+        node.nac_manager()
             .check_permission(&agent, NodePermission::CollectionGet)
             .await?,
     );
-    let disabled_reads = access.collection_version("Node").await.is_ok();
+    assert!(access.collection_version("Node").await?.is_some());
+    for case in gents_lean_vocab::families::household_tool_operation_collection_patch::cases() {
+        case.check(granted[case.input.step.as_str()]);
+    }
     for case in gents_lean_vocab::families::household_tool_operation_collection_get::cases() {
-        let observed = granted[case.input.step.as_str()];
-        case.check(observed);
-        if case.input.step == "agent-disabled" {
-            case.check(disabled_reads);
-        }
+        case.check(baseline[case.input.step.as_str()]);
     }
     node.shutdown().await?;
     Ok(())
@@ -2195,6 +2219,20 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
         }
         let mut grants = Vec::new();
         let granted = tool_source_grants(&node, &agent).await?;
+        let baseline = gents_store::local::tool_permission_projection::tool_source(
+            runtime.did(),
+            &agent_doc,
+            "",
+            agent.as_str(),
+            gents_store::identity::GrantSet::AgentBaseline.name(),
+        );
+        anyhow::ensure!(
+            granted
+                .iter()
+                .any(|(source, permission)| source == &baseline
+                    && *permission == NodePermission::CollectionGet),
+            "live Agent is missing its baseline collection grant"
+        );
         for source in &input.sources {
             let permission = schema_permission(&source.permission)?;
             for (projected, held) in &granted {

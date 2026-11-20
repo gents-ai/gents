@@ -86,8 +86,8 @@ pub use desired_state::validate::{
     event_trigger_document_field_names, validate_event_trigger_document_fields,
 };
 pub use desired_state::{
-    apply_desired_state_plan, grant_agent_catalog, grant_selected_self_configuration,
-    provision_engineer, revoke_agent_catalog,
+    apply_desired_state_plan, grant_node_administration, grant_selected_self_configuration,
+    provision_engineer, revoke_node_administration,
 };
 pub use desired_state::{
     apply_desired_state_plan_with_node_binding, configuration_node_doc, ConfigurationNodeBinding,
@@ -113,9 +113,6 @@ pub(crate) use references::RequiredReference;
 pub use references::{ConfigReferences, MissingReference};
 pub use unattended_admission::observe_unattended_agent_in_txn;
 
-#[allow(unused_imports)]
-pub(crate) use behavior::list_agent_records;
-#[allow(unused_imports)]
 pub use behavior::load_agent_record;
 pub use behavior::{list_agents, load_agent, write_agent_document, Agent};
 
@@ -128,12 +125,10 @@ pub use inference_backend::{
     InferenceBackendObservation, InvalidBackendAuthSelection,
 };
 pub use inference_execution::{
-    InferenceExecution, InferenceRetryPolicy, MAX_DEADLINE_DURATION_SECS,
+    configured_loop_limit, InferenceExecution, InferenceRetryPolicy, MAX_DEADLINE_DURATION_SECS,
 };
 pub use inference_sampling::InferenceSampling;
 
-#[allow(unused_imports)]
-pub(crate) use inference_profile::load_inference_profile_record;
 pub use inference_profile::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
     list_inference_profile_records, list_inference_profiles_in_txn, load_inference_profile,
@@ -143,14 +138,10 @@ pub use inference_profile::{
 pub use serde_helpers::deserialize_dual_shape;
 pub(crate) use serde_helpers::string_list_schema;
 pub use serde_helpers::{accepts_null, deserialize_default_on_null, noted, widen_schema};
-#[allow(unused_imports)]
+pub(crate) use surface_tool::deserialize_optional_surface_tools;
 pub use surface_tool::validate_surface_tool_names;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use surface_tool::{confirm_visible_datastore_tool, revalidate_datastore_tool_in_txn};
-#[allow(unused_imports)]
-pub(crate) use surface_tool::{
-    deserialize_optional_surface_tools, validate_query_tool_declarations,
-};
 pub use surface_tool::{
     merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
 };
@@ -184,14 +175,12 @@ pub use skill::{SkillDocument, SKILL_FIELDS};
 
 #[cfg(test)]
 pub use event_trigger::count_trigger_cursor_batch_queries;
-#[allow(unused_imports)]
 pub use event_trigger::{
     load_trigger_next_run_at_batch, stop_trigger_for_budget, update_trigger_runtime_fields,
     TriggerRuntimeUpdate, TRIGGER_CURSOR_BATCH_SIZE,
 };
 pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
-#[allow(unused_imports)]
 pub use task::{Task, TaskHook, TaskHookPhase};
 pub use trigger::{
     ConcurrencyMode, Trigger, TriggerObservation, TriggerSource, BUDGET_EXHAUSTED_STATUS,

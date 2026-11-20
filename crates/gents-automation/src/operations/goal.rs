@@ -13,6 +13,7 @@ use gents_protocol::operations::goal::{
 };
 use gents_protocol::operations::inference::InferenceActor;
 use gents_protocol::request_admission::AgentRequestCreate;
+use gents_protocol::session::AgentSession;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 use crate::goal::{
@@ -238,20 +239,32 @@ pub async fn observe_revision(
         .await
 }
 
+/// The Goal a start opens: the owner and session it belongs to, its
+/// objective and its token budget.
+#[derive(Clone, Copy)]
+pub struct GoalStart<'a> {
+    pub node_did: &'a str,
+    pub session_id: &'a str,
+    pub objective: &'a str,
+    pub token_budget: Option<i64>,
+}
+
 /// Decides whether `actor` may start a Goal on the session now. `claim_key`
 /// names the creation claim the start would converge on, when it is not the
 /// session's deterministic one.
-#[allow(clippy::too_many_arguments)]
 pub async fn admit_start_in_txn(
     txn: &ConfigApplyTxn<'_>,
     actor: GoalActor,
-    node_did: &str,
-    session_id: &str,
-    objective: &str,
-    token_budget: Option<i64>,
+    goal: GoalStart<'_>,
     expected: Option<&GoalRevision>,
     claim_key: Option<&str>,
 ) -> anyhow::Result<Refusal<GoalStartAdmission>> {
+    let GoalStart {
+        node_did,
+        session_id,
+        objective,
+        token_budget,
+    } = goal;
     if let Err(refusal) = validate_objective_and_budget(Some(objective), token_budget) {
         return Ok(Err(refusal));
     }
@@ -328,13 +341,9 @@ pub async fn admit_start_in_txn(
 /// start that carries a first request is held to it. `retry_key` is the key
 /// the caller's command binds; without one the request must still carry a
 /// key, which makes its replay idempotent.
-#[allow(clippy::too_many_arguments)]
 pub fn check_first_request(
     request: &AgentRequestCreate,
-    node_did: &str,
-    session_id: &str,
-    session_agent: &str,
-    session_requester: Option<&str>,
+    session: &AgentSession,
     signer_did: &str,
     goal_id: &str,
     retry_key: Option<&str>,
@@ -361,10 +370,10 @@ pub fn check_first_request(
             && queue.interrupted_request_id.is_none()
             && queue.background_completion_wake_version.is_none()
     });
-    let shaped = request.node_did == node_did
-        && request.session_id == session_id
-        && request.agent_did == session_agent
-        && request.requester_did == session_requester.unwrap_or(signer_did)
+    let shaped = request.node_did == session.node_did
+        && request.session_id == session.session_id
+        && request.agent_did == session.agent_did
+        && request.requester_did == session.requester_did.as_deref().unwrap_or(signer_did)
         && request.admission.signer_did == signer_did
         && request.purpose == RequestPurpose::Normal
         && request.execution_origin == "interactive"

@@ -1,0 +1,182 @@
+use anyhow::Result;
+use gents_desktop_bridge::client_runtime::ClientRuntime;
+use gents_documents::{
+    Agent, InferenceBackend, InferenceProfile, Node, Schedule, SkillDocument, Task, Tools, Trigger,
+};
+use gents_store::client_journal::paths::DesktopPaths;
+use serde_json::json;
+use std::sync::Arc;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientRuntime::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        gents_desktop_bridge::client_test_support::file_journal_options(),
+    )
+    .await?;
+    // The desktop's client key is the runtime's User: it creates the Node,
+    // provisions the Agent and saves every document over its signed endpoint.
+    let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(Arc::new(
+        core.node_identity().clone(),
+    ))
+    .await;
+    runtime.publish_node(serde_json::json!({})).await;
+    runtime.publish_node(serde_json::json!({})).await;
+    gents_desktop_bridge::client_test_support::connect_runtime(&runtime, &core).await;
+    let node_did = runtime.node_did();
+
+    let node: Node = serde_json::from_value(json!({
+        "node_did": node_did,
+        "display_name": "Amy",
+        "tags": ["managed"]
+    }))?;
+    core.save_node(&node).await?;
+
+    let backend: InferenceBackend = serde_json::from_value(json!({
+        "node_did": node_did,
+        "backend_id": "backend-amy",
+        "name": "OpenRouter",
+        "provider_kind": "OpenRouter",
+        "endpoint": "https://openrouter.ai/api/v1",
+        "auth": {"kind": "environment", "variable": "OPENROUTER_API_KEY"},
+        "max_concurrent": 2,
+        "max_queue_depth": 100,
+        "tags": ["managed"]
+    }))?;
+    core.save_backend(&backend).await?;
+
+    let profile: InferenceProfile = serde_json::from_value(json!({
+        "node_did": node_did,
+        "profile_id": "profile-amy",
+        "display_name": "Amy Profile",
+        "backend_id": "backend-amy",
+        "model_name": "openai/gpt-5.4",
+        "context_window": 128000,
+        "max_output_tokens": 4096,
+        "tags": ["managed"]
+    }))?;
+    core.save_inference_profile(&profile).await?;
+
+    let tools: Tools = serde_json::from_value(json!({
+        "node_did": node_did,
+        "tools_id": "tools-amy",
+        "display_name": "Amy Tools",
+        "host": {
+            "files": {"mode": "ReadWrite"},
+            "bash": {"mode": "Unrestricted"},
+            "cli": [{"name": "rg"}, {"name": "cargo"}]
+        },
+        "tags": ["managed"]
+    }))?;
+    core.save_tools(&tools).await?;
+
+    let skill: SkillDocument = serde_json::from_value(json!({
+        "node_did": node_did,
+        "skill_id": "amy-skill",
+        "name": "Amy Skill",
+        "instructions": "Inspect the queue.",
+        "tool_refs": ["read_file"],
+        "tags": ["managed"]
+    }))?;
+    core.save_skill(&skill).await?;
+
+    let amy = core.provision_agent_identity(node_did).await?;
+    let amy_default = amy.agent_did.as_str();
+    let mut agent = runtime.agent_value_for_create(&amy, "profile-amy").await;
+    agent["display_name"] = json!("Amy Default");
+    agent["tags"] = json!(["managed"]);
+    let agent: Agent = serde_json::from_value(agent)?;
+    core.save_agent(&agent, None).await?;
+    core.set_default_agent(node_did, amy_default).await?;
+
+    let task: Task = serde_json::from_value(json!({
+        "node_did": node_did,
+        "task_id": "task-amy-daily",
+        "display_name": "Daily Amy",
+        "agent_did": amy_default,
+        "prompt_template": "Check the daily queue.",
+        "tags": ["managed"]
+    }))?;
+    core.save_task(&task).await?;
+
+    let schedule: Schedule = serde_json::from_value(json!({
+        "node_did": node_did,
+        "schedule_id": "schedule-amy-daily",
+        "display_name": "Daily cadence",
+        "cadence": {"kind": "interval", "interval_secs": 300},
+        "tags": ["managed"]
+    }))?;
+    core.save_schedule(&schedule).await?;
+
+    let mut publications = core.stores().subscribe();
+    let trigger: Trigger = serde_json::from_value(json!({
+        "node_did": node_did,
+        "trigger_id": "trigger-amy-daily",
+        "task_id": "task-amy-daily",
+        "source": {"kind": "schedule", "schedule_id": "schedule-amy-daily"},
+        "tags": ["managed"]
+    }))?;
+    core.save_trigger(&trigger).await?;
+
+    loop {
+        let snapshot = core.stores().snapshot(node_did);
+        if snapshot
+            .triggers
+            .iter()
+            .any(|row| row.node_did == node_did && row.trigger_id == "trigger-amy-daily")
+        {
+            break;
+        }
+        publications.changed().await?;
+    }
+    let snapshot = core.stores().snapshot(node_did);
+    assert!(snapshot
+        .nodes
+        .iter()
+        .any(|row| { row.node_did == node_did && row.tags == ["managed"] }));
+    assert!(snapshot
+        .inference_backends
+        .iter()
+        .any(|row| { row.node_did == node_did && row.backend_id == "backend-amy" }));
+    assert!(snapshot.inference_profiles.iter().any(|row| {
+        row.node_did == node_did
+            && row.profile_id == "profile-amy"
+            && row.backend_id == "backend-amy"
+    }));
+    assert!(snapshot
+        .tools
+        .iter()
+        .any(|row| { row.node_did == node_did && row.tools_id == "tools-amy" }));
+    assert!(snapshot.skills.iter().any(|row| {
+        row.node_did == node_did && row.skill_id == "amy-skill" && row.tool_refs == ["read_file"]
+    }));
+    assert!(snapshot.agents.iter().any(|row| {
+        row.node_did == node_did
+            && row.agent_did == amy_default
+            && row.inference_profile_id == "profile-amy"
+    }));
+    assert!(snapshot.tasks.iter().any(|row| {
+        row.node_did == node_did && row.task_id == "task-amy-daily" && row.agent_did == amy_default
+    }));
+    assert!(snapshot
+        .schedules
+        .iter()
+        .any(|row| { row.node_did == node_did && row.schedule_id == "schedule-amy-daily" }));
+    assert!(snapshot.triggers.iter().any(|row| {
+        row.node_did == node_did
+            && row.trigger_id == "trigger-amy-daily"
+            && row.task_id == "task-amy-daily"
+    }));
+
+    core.delete_skill("amy-skill", node_did).await?;
+    assert!(!core
+        .stores()
+        .snapshot(node_did)
+        .skills
+        .iter()
+        .any(|row| row.node_did == node_did && row.skill_id == "amy-skill"));
+    Arc::new(core).shutdown().await?;
+    runtime.shutdown().await;
+    Ok(())
+}

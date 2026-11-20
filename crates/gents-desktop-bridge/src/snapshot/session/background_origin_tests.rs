@@ -1,6 +1,7 @@
 use super::*;
 use crate::snapshot::tests::push_canonical_text_message;
-use gents_desktop_core::client::{ClientStoreRows, TranscriptWindow};
+use gents_observe::client_projection::query::TranscriptWindow;
+use gents_observe::client_projection::store::ClientStoreRows;
 use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -110,7 +111,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
         .unwrap();
     }
     for window in [TranscriptWindow::Tip, TranscriptWindow::Before(5)] {
-        let page = gents_desktop_core::client::load_session_transcript_window_on(
+        let page = gents_observe::client_projection::query::load_session_transcript_window_on(
             &access,
             "origin",
             Some(&amy),

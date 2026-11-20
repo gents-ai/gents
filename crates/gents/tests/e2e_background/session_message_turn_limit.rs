@@ -18,10 +18,10 @@ use serde_json::json;
 use crate::support::accepted_turn::AcceptedTurnRuntime;
 use crate::support::fixtures::{agent_target, test_identity};
 use crate::support::interrupt::BootedAgent;
-use crate::support::live_inference::STALL_CEILING;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
 };
+use gents_store::test_support::STALL_CEILING;
 
 use crate::support::{test_db, TestDb};
 
@@ -541,8 +541,7 @@ async fn agent_new_is_refused_once_its_configured_target_is_withdrawn() {
         true,
     )
     .await;
-    crate::support::live_inference::wait_for_request_terminal(&access, REQUEST_ID, STALL_CEILING)
-        .await;
+    crate::support::live_inference::wait_for_request_terminal(&access, REQUEST_ID).await;
     let child = ConfigAccess::local_as(db.node.clone(), child_did.parse().unwrap());
     for (viewer, view) in [("user", &access), ("child agent", &child)] {
         let opened = child_of(view, REQUEST_ID, &child_did).await;

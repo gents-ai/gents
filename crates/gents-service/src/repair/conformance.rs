@@ -141,7 +141,7 @@ impl HeldManager {
             .unwrap_or_default();
         let home = record.home.as_ref().unwrap().display();
         Some(format!(
-            "gui/501/{SERVICE_LABEL} = {{\n\tactive count = 1\n{path}\ttype = LaunchAgent\n\tstate = running\n\n\tprogram = /opt/gents/gents\n\targuments = {{\n\t\t/opt/gents/gents\n\t\tserver\n\t\t--home\n\t\t{home}\n\t}}\n\n\tstdout path = /dev/null\n\tpid = 4242\n}}"
+            "gui/501/{SERVICE_LABEL} = {{\n\tactive count = 1\n{path}\ttype = LaunchAgent\n\tstate = running\n\n\tprogram = /opt/gents/gents\n\targuments = {{\n\t\t/opt/gents/gents\n\t\tserver\n\t\t--home\n\t\t{home}\n\t\t--system-log\n\t}}\n\n\tstdout path = /dev/null\n\tpid = 4242\n}}"
         ))
     }
 
@@ -149,7 +149,7 @@ impl HeldManager {
         match &self.record {
             None => "LoadState=not-found\nFragmentPath=\nExecStart=".to_owned(),
             Some(record) => format!(
-                "ExecStart={{ path=/usr/bin/env ; argv[]=/usr/bin/env -- GENTS_SYSTEM_LOG=1 /opt/gents/gents server --home {} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nFragmentPath={}\nLoadState=loaded",
+                "ExecStart={{ path=/usr/bin/env ; argv[]=/usr/bin/env -- /opt/gents/gents server --home {} --system-log ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nFragmentPath={}\nLoadState=loaded",
                 record.home.as_ref().unwrap().display(),
                 record.definition.as_ref().unwrap().display()
             ),
@@ -469,12 +469,14 @@ async fn settle_case(input: &serde_json::Value) -> Vec<service::ServiceAction> {
     let settled = super::settle(
         &choice,
         &facts,
-        repair.busy,
-        asked,
-        None,
-        None,
-        None,
         &program,
+        super::Settling {
+            busy: repair.busy,
+            asked,
+            refusal: None,
+            manager: None,
+            serving_home: None,
+        },
         &mut steps,
     )
     .await;

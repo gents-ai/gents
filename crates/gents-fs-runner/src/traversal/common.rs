@@ -4,12 +4,38 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::context::RunnerContext;
-use crate::model::{WalkStats, DEFAULT_IGNORED_NAMES};
+use crate::model::{Collected, WalkStats, DEFAULT_IGNORED_NAMES};
 
 pub(crate) struct WalkLimits {
     pub(crate) max_entries_visited: usize,
     pub(crate) max_bytes_read: u64,
     pub(crate) max_wall: Duration,
+}
+
+pub(crate) struct Sweep<T> {
+    pub(crate) items: Vec<T>,
+    pub(crate) truncated: bool,
+    pub(crate) walk: WalkState,
+    pub(crate) ignores: GitignoreStack,
+}
+
+impl<T> Sweep<T> {
+    pub(crate) fn new(walk: WalkState) -> Self {
+        Self {
+            items: Vec::new(),
+            truncated: false,
+            walk,
+            ignores: GitignoreStack::new(),
+        }
+    }
+
+    pub(crate) fn finish(self) -> Collected<T> {
+        Collected {
+            items: self.items,
+            truncated: self.truncated,
+            walk: self.walk.into_stats(),
+        }
+    }
 }
 
 pub(crate) struct WalkState {
@@ -107,7 +133,10 @@ pub(super) fn sorted_children(
     dir: &Path,
     walk: &mut WalkState,
 ) -> Result<Vec<std::fs::DirEntry>> {
-    block_for_test(dir);
+    #[cfg(feature = "test-fixtures")]
+    if let Some(blocker) = context.blocker() {
+        blocker.block(dir);
+    }
     let read_dir = match std::fs::read_dir(dir) {
         Ok(read_dir) => read_dir,
         Err(error) if should_skip_io_error(&error) => return Ok(Vec::new()),
@@ -209,51 +238,6 @@ pub(super) fn should_ignore_path(traversal_root: &Path, path: &Path) -> bool {
         .and_then(|name| name.to_str())
         .map(|name| DEFAULT_IGNORED_NAMES.contains(&name))
         .unwrap_or(false)
-}
-
-/// Test hook that blocks the scan of `GENTS_FS_RUNNER_BLOCK_DIR`.
-///
-/// `GENTS_FS_RUNNER_BLOCK_ENTERED` receives the wall-clock entry time in
-/// nanoseconds since the Unix epoch, published by rename so a reader never
-/// sees a partial write from a process killed mid-write. The blocker waits
-/// until `GENTS_FS_RUNNER_BLOCK_GATE` exists or the directory is removed,
-/// else sleeps `GENTS_FS_RUNNER_BLOCK_MS`; `GENTS_FS_RUNNER_BLOCK_RELEASED`
-/// is written only when the blocker returns on its own. Marker writes abort
-/// the runner on failure: an unwritten marker must never read as preemption.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "test hook in the synchronous fs-runner process; the cross-process gate is a file"
-)]
-fn block_for_test(dir: &Path) {
-    let Ok(target) = std::env::var("GENTS_FS_RUNNER_BLOCK_DIR") else {
-        return;
-    };
-    if Path::new(&target) != dir {
-        return;
-    }
-    if let Ok(marker) = std::env::var("GENTS_FS_RUNNER_BLOCK_ENTERED") {
-        let entered_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock is after the Unix epoch")
-            .as_nanos();
-        let staged = format!("{marker}.staged");
-        std::fs::write(&staged, entered_at.to_string()).expect("writing blocker entry marker");
-        std::fs::rename(&staged, &marker).expect("publishing blocker entry marker");
-    }
-    if let Ok(gate) = std::env::var("GENTS_FS_RUNNER_BLOCK_GATE") {
-        while !Path::new(&gate).exists() && dir.exists() {
-            std::thread::sleep(Duration::from_millis(2));
-        }
-    } else {
-        let millis = std::env::var("GENTS_FS_RUNNER_BLOCK_MS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(0);
-        std::thread::sleep(Duration::from_millis(millis));
-    }
-    if let Ok(marker) = std::env::var("GENTS_FS_RUNNER_BLOCK_RELEASED") {
-        std::fs::write(marker, b"released").expect("writing blocker release marker");
-    }
 }
 
 fn should_skip_io_error(error: &std::io::Error) -> bool {

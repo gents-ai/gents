@@ -1,16 +1,12 @@
 use chrono::Utc;
 use serde::Deserialize;
 
-use crate::auth::credential::token_endpoint::{
-    endpoint_url, BadRequest, TokenEndpoint, TransportDetail,
-};
+use crate::auth::credential::token_endpoint::{BadRequest, TokenEndpoint, TransportDetail};
 use crate::auth::credential::{OAuthAuthProblem, RefreshedTokens};
 
-const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
+pub(crate) const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 
 pub const XAI_OAUTH_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
-
-pub const XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV: &str = "GENTS_XAI_OAUTH_TOKEN_URL";
 
 #[derive(Deserialize)]
 struct RefreshResponse {
@@ -32,15 +28,7 @@ const TOKEN_ENDPOINT: TokenEndpoint = TokenEndpoint {
     transport_detail: TransportDetail::Display,
 };
 
-pub async fn refresh_xai_token(
-    refresh_token: &str,
-    http: &reqwest::Client,
-) -> Result<RefreshedTokens, OAuthAuthProblem> {
-    let endpoint = endpoint_url(XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV, || TOKEN_URL.to_string());
-    refresh_xai_token_at(&endpoint, refresh_token, http).await
-}
-
-async fn refresh_xai_token_at(
+pub(crate) async fn refresh_xai_token(
     endpoint: &str,
     refresh_token: &str,
     http: &reqwest::Client,
@@ -91,7 +79,7 @@ mod tests {
         body: &'static str,
     ) -> (Result<RefreshedTokens, OAuthAuthProblem>, String) {
         let (url, handle) = one_shot_token_server(status, body).await;
-        let result = refresh_xai_token_at(&url, "refresh-OLD", &reqwest::Client::new()).await;
+        let result = refresh_xai_token(&url, "refresh-OLD", &reqwest::Client::new()).await;
         (result, handle.await.expect("server"))
     }
 
