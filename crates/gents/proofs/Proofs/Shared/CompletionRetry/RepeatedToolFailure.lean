@@ -13,9 +13,10 @@ namespace CompletionRetry.RepeatedToolFailure
 open CompletionRetry
 
 /-- Identical failing dispatches the loop performs before it stops running
-that call. Three lets a model observe a deterministic failure more than once
-before the loop intervenes. -/
-def failureLimit : Nat := 3
+that call, when `InferenceExecution.repeated_tool_failure_limit` is unset
+(resolved by `InvalidToolProgress.configuredLimit`). Three lets a model observe
+a deterministic failure more than once before the loop intervenes. -/
+def defaultFailureLimit : Nat := 3
 
 /-- Undispatched identical repeats before the execution fails. The first
 repeat returns a notice as the call's result so the model can change course;
@@ -42,11 +43,17 @@ theorem charged_outcomes_do_not_count (e : Event)
   | mk call outcome error =>
       cases outcome <;> simp_all [countedError, InvalidToolProgress.invalid]
 
+/-- `failureLimit` is the execution's resolved limit, fixed for the
+execution; restarting the streak keeps it. -/
 structure State where
   streak : Option (Nat × Nat) := none
   failures : Nat := 0
   suppressed : Nat := 0
+  failureLimit : Nat := defaultFailureLimit
   deriving DecidableEq, Repr
+
+/-- The guard with no streak, keeping its limit. -/
+def State.restart (s : State) : State := { failureLimit := s.failureLimit }
 
 inductive Decision
   | dispatch
@@ -56,7 +63,7 @@ inductive Decision
 
 def repeatsStreak (s : State) (call : Nat) : Bool :=
   match s.streak with
-  | some (streakCall, _) => streakCall == call && failureLimit ≤ s.failures
+  | some (streakCall, _) => streakCall == call && s.failureLimit ≤ s.failures
   | none => false
 
 def decide (s : State) (call : Nat) : Decision :=
@@ -67,21 +74,33 @@ def decide (s : State) (call : Nat) : Decision :=
 def recordDispatched (s : State) (call : Nat) : Option Nat → State
   | some error =>
       if s.streak == some (call, error) then { s with failures := s.failures + 1 }
-      else { streak := some (call, error), failures := 1, suppressed := 0 }
-  | none => {}
+      else { s.restart with streak := some (call, error), failures := 1 }
+  | none => s.restart
 
 def recordSuppressed (s : State) : State := { s with suppressed := s.suppressed + 1 }
 
+/-- A resolved limit is positive (`InvalidToolProgress.configuredLimit`). -/
 def Bounded (s : State) : Prop :=
-  s.failures ≤ failureLimit ∧ s.suppressed < suppressionLimit
+  0 < s.failureLimit ∧ s.failures ≤ s.failureLimit ∧ s.suppressed < suppressionLimit
 
 theorem initial_bounded : Bounded {} := by
-  simp [Bounded, failureLimit, suppressionLimit]
+  simp [Bounded, defaultFailureLimit, suppressionLimit]
+
+theorem configured_initial_bounded (n : Nat) (h : 0 < n) : Bounded { failureLimit := n } := by
+  simp [Bounded, suppressionLimit, h]
+
+theorem zero_failure_limit_unbounded (s : State) (h : s.failureLimit = 0) : ¬ Bounded s := by
+  intro ⟨hp, _⟩
+  omega
+
+theorem restart_bounded (s : State) (h : Bounded s) : Bounded s.restart := by
+  obtain ⟨hp, -, -⟩ := h
+  simp [Bounded, State.restart, hp, suppressionLimit]
 
 theorem dispatched_bounded (s : State) (call : Nat) (error : Option Nat)
     (h : Bounded s) (hd : decide s call = .dispatch) :
     Bounded (recordDispatched s call error) := by
-  obtain ⟨hf, hs⟩ := h
+  obtain ⟨hp, hf, hs⟩ := h
   have hr : repeatsStreak s call = false := by
     unfold decide at hd
     by_cases hr : repeatsStreak s call = true
@@ -89,31 +108,32 @@ theorem dispatched_bounded (s : State) (call : Nat) (error : Option Nat)
       split at hd <;> simp at hd
     · simpa using hr
   cases error with
-  | none => simp [recordDispatched, Bounded, failureLimit, suppressionLimit]
+  | none => exact restart_bounded s ⟨hp, hf, hs⟩
   | some error =>
       by_cases heq : (s.streak == some (call, error)) = true
       · have hstreak : s.streak = some (call, error) := by simpa using heq
-        have hlow : s.failures < failureLimit := by
+        have hlow : s.failures < s.failureLimit := by
           simp [repeatsStreak, hstreak] at hr
           exact hr
         simp only [recordDispatched, heq, if_true]
-        exact ⟨hlow, hs⟩
+        exact ⟨hp, hlow, hs⟩
       · simp only [recordDispatched, heq, Bool.false_eq_true, if_false]
-        simp [Bounded, failureLimit, suppressionLimit]
+        simp [Bounded, State.restart, suppressionLimit]
+        omega
 
 theorem suppressed_bounded (s : State) (call : Nat)
     (h : Bounded s) (hd : decide s call = .suppress) :
     Bounded (recordSuppressed s) := by
-  obtain ⟨hf, _⟩ := h
+  obtain ⟨hp, hf, _⟩ := h
   unfold decide at hd
   by_cases hr : repeatsStreak s call = true
   · by_cases hlt : s.suppressed + 1 < suppressionLimit
-    · exact ⟨hf, hlt⟩
+    · exact ⟨hp, hf, hlt⟩
     · simp [hr, hlt] at hd
   · simp [hr] at hd
 
 theorem limit_blocks_identical (s : State) (call error : Nat)
-    (hstreak : s.streak = some (call, error)) (hlimit : failureLimit ≤ s.failures) :
+    (hstreak : s.streak = some (call, error)) (hlimit : s.failureLimit ≤ s.failures) :
     decide s call ≠ .dispatch := by
   unfold decide
   simp [repeatsStreak, hstreak, hlimit]
@@ -147,7 +167,7 @@ inductive Step
   deriving DecidableEq, Repr
 
 def admit (s : Composed) (e : Event) (suppressed : Bool) : Step :=
-  if e.outcome = .skipped then .continue .skip { s with repeats := {} }
+  if e.outcome = .skipped then .continue .skip { s with repeats := s.repeats.restart }
   else
     let observed := if suppressed then .policyDenied else e.outcome
     let invalid := InvalidToolProgress.recordDurable s.invalid observed
@@ -201,7 +221,7 @@ theorem step_bounded (s : Composed) (e : Event) (h : Bounded s.repeats) :
       by_cases hs : e.outcome = .skipped
       · simp [hs] at hstep
         rcases hstep with ⟨-, rfl⟩
-        exact initial_bounded
+        exact restart_bounded _ h
       · by_cases hx : InvalidToolProgress.exhausted
             (InvalidToolProgress.recordDurable s.invalid e.outcome) = true
         · simp [hs, hx] at hstep
@@ -213,7 +233,7 @@ theorem step_bounded (s : Composed) (e : Event) (h : Bounded s.repeats) :
       by_cases hs : e.outcome = .skipped
       · simp [hs] at hstep
         rcases hstep with ⟨-, rfl⟩
-        exact initial_bounded
+        exact restart_bounded _ h
       · by_cases hx : InvalidToolProgress.exhausted
             (InvalidToolProgress.recordDurable s.invalid .policyDenied) = true
         · simp [hs, hx] at hstep
@@ -223,7 +243,7 @@ theorem step_bounded (s : Composed) (e : Event) (h : Bounded s.repeats) :
 
 theorem skipped_resets (s : Composed) (e : Event) (hskip : e.outcome = .skipped)
     (hd : decide s.repeats e.call ≠ .stop) :
-    step s e = .continue .skip { s with repeats := {} } := by
+    step s e = .continue .skip { s with repeats := s.repeats.restart } := by
   unfold step
   cases h : decide s.repeats e.call with
   | stop => exact absurd h hd
@@ -251,8 +271,13 @@ theorem identical_failures_stop_on_fifth (rest : List Event) :
   rfl
 
 theorem suppression_can_exhaust_invalid_allowance :
-    run { invalid := ⟨7⟩ } (List.replicate 4 (fail 0 0)) =
+    run { invalid := { invalidUsed := 7 } } (List.replicate 4 (fail 0 0)) =
       ([.dispatch, .dispatch, .dispatch, .suppress], some .invalidExhausted) := by
+  rfl
+
+theorem failure_limit_one_stops_on_third (rest : List Event) :
+    run { repeats := { failureLimit := 1 } } (List.replicate 3 (fail 0 0) ++ rest) =
+      ([.dispatch, .suppress, .stop], some .repeatedFailure) := by
   rfl
 
 end CompletionRetry.RepeatedToolFailure
