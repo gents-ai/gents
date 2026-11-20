@@ -264,3 +264,63 @@ async fn another_agents_automation_is_rebound_directly_and_refused_on_a_local_ho
     home.node.shutdown().await?;
     Ok(())
 }
+
+/// Lean `Identity.Household.mayManage`: an Agent that neither created a
+/// Trigger nor manages its readers is refused changing them, on either kind of
+/// home, with a refusal that says who may make the change.
+#[tokio::test]
+async fn a_reader_change_on_another_agents_trigger_is_refused_naming_its_creator(
+) -> anyhow::Result<()> {
+    for provider in [DocumentAcp::Local, DocumentAcp::Vera] {
+        let home = Automated::open(provider).await?;
+        let (creator, engineer, first) = (
+            home.agent(true).await?,
+            home.agent(true).await?,
+            home.agent(false).await?,
+        );
+        let node_did = home.node_did.to_string();
+        apply(
+            &home.agent_access(&creator)?,
+            automation(&node_did, &first.agent_did),
+        )
+        .await?;
+        let trigger = home
+            .agent_access(&creator)?
+            .execute("{ Trigger { _docID } }")
+            .await?["data"]["Trigger"][0]["_docID"]
+            .as_str()
+            .expect("the creator reads its Trigger")
+            .to_owned();
+        let first_did = identity::Did::new(&first.agent_did)?;
+        let refused = home
+            .agent_access(&engineer)?
+            .transact_write("test.configuration_readers.unmanaged", |txn| {
+                let (trigger, first_did) = (&trigger, &first_did);
+                Box::pin(async move {
+                    txn.delete_actor_relationship("Trigger", trigger, "reader", first_did)
+                        .await
+                })
+            })
+            .await
+            .expect_err("an Agent that did not create the Trigger cannot revoke its reader");
+        assert!(
+            matches!(
+                refused,
+                gents_store::config_client::ConfigClientError::RelationshipNotManaged(_)
+            ),
+            "{provider}: {refused:?}"
+        );
+        assert!(
+            refused
+                .to_string()
+                .contains("make this change as that identity"),
+            "{provider}: {refused}"
+        );
+        assert!(
+            home.reads(&first, "Trigger", "trigger_id", "trigger")
+                .await?
+        );
+        home.node.shutdown().await?;
+    }
+    Ok(())
+}

@@ -213,6 +213,13 @@ pub enum ConfigClientError {
     InvalidResourceRelationshipTarget,
     #[error("{collection} {doc_id} is not owned by this runtime or one of its Agents")]
     OwnerStagedRelationshipUnmanaged { collection: String, doc_id: String },
+    /// A relationship change by an actor that neither owns the document nor
+    /// holds a relation managing the changed one (`Identity.Household.mayManage`).
+    #[error(
+        "only the identity that created this document can change who it is shared with; make \
+         this change as that identity"
+    )]
+    RelationshipNotManaged(#[source] Box<defra_node::Error>),
     #[error("the requesting actor may not change relationships of {collection} {doc_id}")]
     OwnerStagedRelationshipDenied { collection: String, doc_id: String },
     /// The grant names a target its operation does not admit
@@ -528,6 +535,7 @@ impl ConfigClientError {
             // A local relationship change the actor may not manage is the
             // native counterpart of the HTTP relationship endpoint's 401/403.
             Self::Node(error) => native_permission_denied(error),
+            Self::RelationshipNotManaged(_) => true,
             Self::EmbeddedGraphqlErrors { errors } => errors.iter().any(|error| {
                 error.code() == Some(gents_protocol::database_error::PERMISSION_DENIED_CODE)
             }),
