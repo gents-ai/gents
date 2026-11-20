@@ -3,6 +3,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
+
+const invoke = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 import { buildUxHost } from "../../src/ui/hooks/useUxHost";
 import { node, testApp } from "../app-fixture";
 import {
@@ -27,10 +30,12 @@ type Cases = {
     expected: boolean;
   }[];
   openExternal: { gesture: boolean; expected: boolean }[];
+  pageWindowNavigate: { withinPage: boolean; gesture: boolean; expected: boolean }[];
 };
 
 afterEach(() => {
   vi.restoreAllMocks();
+  invoke.mockClear();
   delete (navigator as { userActivation?: unknown }).userActivation;
   resetRuntimeDoor();
   resetUxPluginStore();
@@ -117,5 +122,24 @@ it("binds plugin loading and message consent to the executable shell model", asy
     );
     expect(opened, JSON.stringify(row)).toBe(row.expected);
     expect(open.mock.calls.length, JSON.stringify(row)).toBe(row.expected ? 1 : 0);
+  }
+  expect(cases.pageWindowNavigate).toHaveLength(4);
+  for (const row of cases.pageWindowNavigate) {
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: row.gesture },
+    });
+    invoke.mockClear();
+    const page = { name: "plugin", pluginId: "board" } as const;
+    const to = row.withinPage
+      ? { ...page, path: "items/42" }
+      : { name: "sessions" as const };
+    const go = () => buildUxHost(testApp(), () => page, "board").shell.navigate(to);
+    if (row.expected) expect(go, JSON.stringify(row)).not.toThrow();
+    else expect(go, JSON.stringify(row)).toThrow("ctx.shell.navigate:");
+    await Promise.resolve();
+    expect(invoke.mock.calls.length, JSON.stringify(row)).toBe(
+      row.expected && !row.withinPage ? 1 : 0,
+    );
   }
 }, 240_000);

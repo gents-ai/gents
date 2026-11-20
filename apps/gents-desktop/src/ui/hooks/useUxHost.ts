@@ -54,10 +54,16 @@ let pluginNotifier: ReturnType<typeof createPluginNotifier> | null = null;
 
 /* A plugin's own window shows its page and nothing else: a place within
    that page is gone to there, and any other opens in the main window, which
-   comes forward. */
+   comes forward over whatever the person is using, so only from their own
+   gesture (ClientShell.Security.pageWindowNavigate). */
 function navigateFromPage(page: string): (to: Route) => void {
   return (to) => {
     if (to.name === "plugin" && to.pluginId === page) return navigate(to);
+    if (!withinUserGesture()) {
+      throw new Error(
+        "ctx.shell.navigate: a place outside this page opens in the main window, only from a user gesture (a click or a key press)",
+      );
+    }
     void Promise.resolve()
       .then(() => navigateMainWindow(href(to)))
       .catch((error) =>

@@ -88,6 +88,7 @@ const disposers: Array<() => void> = [];
 afterEach(() => {
   disposers.splice(0).forEach((dispose) => dispose());
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  delete (navigator as { userActivation?: unknown }).userActivation;
   resetUxPluginStore();
   resetRuntimeDoor();
   resetUxDoors();
@@ -323,6 +324,10 @@ describe("a place a windowed page asks to go to", () => {
     await act(async () => {});
     expect(invoke).not.toHaveBeenCalled();
 
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true },
+    });
     host.shell.navigate({ name: "session", nodeDid: "did:key:z6Mk", sessionId: "s1" });
     host.shell.navigate({ name: "plugin", pluginId: "other" });
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
