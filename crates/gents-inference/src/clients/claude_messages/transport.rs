@@ -9,7 +9,7 @@
 use std::fmt;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crate::llm::rig_compat::http::Response as HttpResponse;
 use crate::llm::rig_compat::http::StreamingResponse;
@@ -87,7 +87,6 @@ struct Shared {
 }
 
 static SHARED: OnceCell<Shared> = OnceCell::const_new();
-static GZIP_LATCHED_OFF: LazyLock<Arc<AtomicBool>> = LazyLock::new(Arc::default);
 
 fn env_pair(upper: &str, lower: &str) -> Option<String> {
     std::env::var(upper).or_else(|_| std::env::var(lower)).ok()
@@ -309,23 +308,18 @@ impl fmt::Debug for ClaudeHttpClient {
 }
 
 impl ClaudeHttpClient {
-    pub(crate) fn new(usage: Option<Arc<UsageReporter>>) -> Self {
+    /// A client reporting to `usage` whose gzip decision reads and sets `gzip_off`.
+    pub(crate) fn new(usage: Option<Arc<UsageReporter>>, gzip_off: Arc<AtomicBool>) -> Self {
         Self {
             usage,
-            gzip_off: GZIP_LATCHED_OFF.clone(),
+            gzip_off,
             #[cfg(test)]
             route: None,
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn with_test_route(
-        mut self,
-        gzip_off: Arc<AtomicBool>,
-        host: &str,
-        port: u16,
-    ) -> Self {
-        self.gzip_off = gzip_off;
+    pub(crate) fn with_test_route(mut self, host: &str, port: u16) -> Self {
         self.route = Some((host.to_owned(), port));
         self
     }
