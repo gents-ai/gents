@@ -1854,11 +1854,21 @@ pub async fn installed_pack_documents(
     owner: &str,
     coordinate: &str,
 ) -> Result<Vec<(Collection, String)>> {
+    Ok(installed_pack_record(access, owner, coordinate).await?.1)
+}
+
+/// [`installed_pack_documents`] with the pack digest the record names.
+pub async fn installed_pack_record(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<(Option<String>, Vec<(Collection, String)>)> {
     use gents_protocol::document_query::{
         fields::pack_installation as fields, Filter, Query, Selection,
     };
     let query = Query::select(
         Selection::doc_id()
+            .field(fields::DIGEST)
             .field(fields::DOCUMENTS)
             .field(fields::PLUGIN_STORE),
     )
@@ -1875,14 +1885,15 @@ pub async fn installed_pack_documents(
         "{coordinate} has more than one installation record for {owner}"
     );
     let Some(row) = rows.first().filter(|row| !is_plugin_store_row(row)) else {
-        return Ok(Vec::new());
+        return Ok((None, Vec::new()));
     };
-    Ok(
+    Ok((
+        row["digest"].as_str().map(str::to_owned),
         decode_record_field::<Vec<RecordedDocument>>(row, "documents", owner, coordinate)?
             .into_iter()
             .filter_map(|document| Some((managed_collection(&document.collection)?, document.id)))
             .collect(),
-    )
+    ))
 }
 
 pub async fn installed_packs(

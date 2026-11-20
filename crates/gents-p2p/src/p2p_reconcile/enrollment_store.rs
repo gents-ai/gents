@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -362,22 +362,6 @@ impl FailClosedLog {
     }
 }
 
-fn enrollment_decision_gate(node: &EmbeddedNode) -> Arc<Mutex<()>> {
-    static GATES: OnceLock<StdMutex<BTreeMap<usize, Weak<Mutex<()>>>>> = OnceLock::new();
-    let key = node as *const EmbeddedNode as usize;
-    let mut gates = GATES
-        .get_or_init(|| StdMutex::new(BTreeMap::new()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
-        return gate;
-    }
-    gates.retain(|_, gate| gate.strong_count() > 0);
-    let gate = Arc::new(Mutex::new(()));
-    gates.insert(key, Arc::downgrade(&gate));
-    gate
-}
-
 impl GraphqlEnrollmentStore {
     pub async fn issue_renewal_offer(
         &self,
@@ -565,7 +549,7 @@ impl GraphqlEnrollmentStore {
     }
 
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
-        let decision_lock = enrollment_decision_gate(node.as_ref());
+        let decision_lock = gents_store::identity::enrollment_decision_gate(node.as_ref());
         Self {
             node,
             identity,
@@ -1157,11 +1141,14 @@ impl GraphqlEnrollmentStore {
     /// whose current authorization leases ended on the lapse clock, decided
     /// on a projection read under the decision lock so a renewal of the same
     /// member is decided before or after it, never interleaved.
-    pub(super) async fn withdraw_lapsed_memberships(&self) -> Result<()> {
+    pub(super) async fn withdraw_lapsed_memberships(
+        &self,
+        wall_clock: impl FnOnce() -> i64,
+    ) -> Result<()> {
         let _guard = self.decision_lock.lock().await;
         let projection = self.load_projection().await?;
         let provider = gents_store::local::document_acp::node_provider_time(&self.node);
-        let wall = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+        let wall = u64::try_from(wall_clock()).unwrap_or(0);
         let mut members: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
         for active in &projection.active {
             let expires = DateTime::parse_from_rfc3339(&active.revision.authorization_expires_at)
