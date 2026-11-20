@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use gents_store::identity::NodeIdentity;
 
 use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
+use super::super::intervals::P2pIntervals;
 use super::super::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use super::reconcile::{prepare_pairing_peer, reconcile_prepared_peer};
 use super::{GraphqlPairingStateStore, PairingStateStore, MAX_CONCURRENT_PEER_PREPARATIONS};
