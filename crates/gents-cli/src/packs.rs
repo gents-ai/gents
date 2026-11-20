@@ -69,23 +69,36 @@ pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
     capture_report(command::account::info(PackInfoArgs { package, registry })).await
 }
 
-/// Installs `package`, or with `preview` reports what the install would
+/// One pack install: `package` from `registry`, its `inference_slots` bound as
+/// given, and how `edited` documents are treated.
+#[derive(Debug, Default)]
+pub struct PackInstall {
+    pub package: String,
+    pub registry: Option<String>,
+    pub inference_slots: Vec<String>,
+    pub edited: EditedDocuments,
+    pub grant_authority: bool,
+    pub preview: bool,
+    pub expect_digest: Option<String>,
+    pub root_agents: Option<Vec<String>>,
+}
+
+/// Installs `change.package`, or with `change.preview` reports what the install would
 /// write. With `expect_digest`, a pack whose content digest differs (the one
 /// a preview reported, or a link named) is refused before any write. With
 /// `root_agents`, the `PACK=AGENT` rows a preview listed, an approved install
 /// grants its tool root to those agents only.
-#[allow(clippy::too_many_arguments)]
-pub async fn install(
-    home: PathBuf,
-    package: String,
-    registry: Option<String>,
-    inference_slots: Vec<String>,
-    edited: EditedDocuments,
-    grant_authority: bool,
-    preview: bool,
-    expect_digest: Option<String>,
-    root_agents: Option<Vec<String>>,
-) -> Result<Value, PackChangeError> {
+pub async fn install(home: PathBuf, change: PackInstall) -> Result<Value, PackChangeError> {
+    let PackInstall {
+        package,
+        registry,
+        inference_slots,
+        edited,
+        grant_authority,
+        preview,
+        expect_digest,
+        root_agents,
+    } = change;
     capture_report(command::install(PackInstallArgs {
         package,
         inference_slots,
