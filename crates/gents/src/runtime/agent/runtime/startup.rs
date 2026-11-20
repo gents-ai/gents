@@ -429,11 +429,6 @@ async fn run_agent_owned(
         };
     }
     let (active_snapshot_tx, active_snapshot_rx) = watch::channel(initial_active_snapshot.clone());
-    *agent
-        .active_snapshot
-        .write()
-        .map_err(|_| anyhow::anyhow!("runtime snapshot binding unavailable"))? =
-        Some(active_snapshot_rx.clone());
     runtime.job_driver.runtime().bind_snapshot(
         gents_automation::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
             active_snapshot_rx.clone(),

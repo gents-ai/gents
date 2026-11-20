@@ -210,15 +210,6 @@ pub struct Gents {
     runtime_node: Arc<RuntimeNode>,
     agents: Vec<AgentWithTools>,
     unavailable_agents: RapidHashMap<String, UnavailableAgent>,
-    active_snapshot: Arc<
-        std::sync::RwLock<
-            Option<
-                watch::Receiver<
-                    Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
-                >,
-            >,
-        >,
-    >,
     document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
     local_hostname: String,
@@ -318,7 +309,6 @@ impl Gents {
             runtime_node,
             agents,
             unavailable_agents: resolved_snapshot.unavailable_agents,
-            active_snapshot: Default::default(),
             document_runtime_context: Some(document_runtime_context),
             mcp_pool: options.mcp_pool,
             local_hostname: options
@@ -404,50 +394,6 @@ impl Gents {
 
     pub fn node_did(&self) -> &str {
         &self.runtime_node.node_did
-    }
-
-    /// Local runtime notices reuse mailbox ownership and canonical session
-    /// scope. The admission guard prevents publication racing retirement.
-    pub async fn publish_runtime_notice(
-        &self,
-        notice: gents_session::session::mailbox::RuntimeNotice,
-    ) -> Result<
-        gents_session::session::mailbox::MailboxItem,
-        gents_session::session::mailbox::RuntimeNoticeError,
-    > {
-        let _work = self
-            .service_admission()
-            .admit()
-            .map_err(anyhow::Error::new)?;
-        let identities = {
-            let snapshot = self
-                .active_snapshot
-                .read()
-                .map_err(|_| anyhow::anyhow!("runtime snapshot binding unavailable"))?;
-            if let Some(snapshot) = snapshot.as_ref() {
-                snapshot.borrow().watcher_identities()?
-            } else {
-                let mut identities: Vec<Arc<dyn NodeIdentity>> = self
-                    .agents
-                    .iter()
-                    .map(|agent| agent.agent.agent_identity.clone())
-                    .collect();
-                identities.extend(self.unavailable_agents.values().filter_map(|agent| {
-                    agent
-                        .watcher_identity
-                        .as_ref()
-                        .map(|identity| identity.0.clone())
-                }));
-                identities
-            }
-        };
-        gents_session::session::mailbox::publish_runtime_notice(
-            &self.node,
-            self.node_did(),
-            &identities,
-            notice,
-        )
-        .await
     }
 
     pub fn usage_cache(&self) -> &Arc<gents_inference::usage_observation::UsageCache> {

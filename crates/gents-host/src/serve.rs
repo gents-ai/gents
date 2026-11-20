@@ -1190,12 +1190,7 @@ async fn serve_foreground(
                 tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");
             }
 
-            let notices = gents_service::service_update::watch_notices(runtime_configuration_probe.clone(), home_dir.clone());
-            tokio::select! {
-                result = runtime.join() => result,
-                _ = notices => unreachable!("the notice observer remains scoped to the serving runtime"),
-            }
-
+            runtime.join().await
         }
         .await;
         outcome

@@ -269,7 +269,6 @@ impl GentsBuilder {
             runtime_node: principal,
             agents,
             unavailable_agents: Default::default(),
-            active_snapshot: Default::default(),
             document_runtime_context: None,
             mcp_pool: self.mcp_pool,
             local_hostname: self

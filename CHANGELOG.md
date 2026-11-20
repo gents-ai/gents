@@ -25,6 +25,18 @@ source consistency checks, not a separate runtime compatibility version.
   node home; without it commands use the folder chosen at setup, then `~/.gents`
   (Lean `HomeResolution`). The macOS uninstall script takes `--home DIR` and
   otherwise removes the folder chosen at setup (#1764).
+- Breaking: `gents runtime service install`, `stop`, `restart` and
+  `uninstall`, and a managed update's helper, refuse to run when the service's
+  running job is an ancestor of the calling process, which they observe from
+  the service manager and the operating system instead of
+  `GENTS_CALLER_RUNTIME_HOME`. Where that ancestry cannot be read (a sandboxed
+  command, a platform other than macOS or Linux) they refuse while the job
+  runs. Agent commands no longer receive `GENTS_CALLER_RUNTIME_HOME`,
+  `GENTS_CALLER_SESSION_ID` or `GENTS_CALLER_REQUEST_ID`, and a managed update
+  submitted from an Agent's shell no longer posts "Runtime update complete" or
+  "Runtime update failed" to the submitting session; read
+  `gents runtime service update-status` instead. Update plans and receipts no
+  longer carry `session_id` or `request_id` (#3922).
 - Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
   background calls one request holds at once: Bash runs, remote service calls
   and plugin jobs together. The refusal reports the configured limit.
