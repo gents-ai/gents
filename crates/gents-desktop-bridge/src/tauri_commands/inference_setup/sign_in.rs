@@ -89,10 +89,12 @@ where
     let signed = crate::accounts::login::sign_in(
         &state.pending_oauth_credentials,
         || core.operator_access(node_did),
-        node_did,
-        method,
-        provider,
-        label,
+        crate::accounts::login::SignInRequest {
+            node_did,
+            method,
+            credential_provider: provider,
+            label,
+        },
         &wait.cancel,
         async |url| {
             if wait.cancel.is_cancelled() || app.get_webview_window(window).is_none() {

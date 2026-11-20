@@ -1,8 +1,8 @@
 use anyhow::Result;
 use gents_automation::goal::SessionGoalObservationState;
+use gents_protocol::authored_submission::AuthoredGoal;
 use gents_protocol::goal_control::{
-    GoalOperation, GoalRevision, SessionGoalControl, SessionGoalControlReceipt,
-    SESSION_GOAL_CONTROL_VERSION,
+    GoalOperation, SessionGoalControl, SESSION_GOAL_CONTROL_VERSION,
 };
 use gents_protocol::request_input::{GoalAssignmentInput, QueueDelivery, RequestInput};
 
@@ -48,46 +48,26 @@ impl ClientRuntime {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn control_session_goal(
+    async fn prepare_session_goal_command(
         &self,
-        node_did: &str,
-        session_id: &str,
-        session_doc_id: Option<String>,
-        expected: Option<GoalRevision>,
-        operation: GoalOperation,
-        agent_did: Option<&str>,
-        input: RequestInput,
-    ) -> Result<SessionGoalControlReceipt> {
-        self.control_session_goal_correlated(
-            &uuid::Uuid::new_v4().to_string(),
+        goal: AuthoredGoal,
+    ) -> Result<(
+        std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+        SessionGoalControl,
+    )> {
+        let AuthoredGoal {
             node_did,
+            command_id,
             session_id,
             session_doc_id,
             expected,
             operation,
             agent_did,
-            input,
-            None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn prepare_session_goal_command(
-        &self,
-        node_did: &str,
-        session_id: &str,
-        session_doc_id: Option<String>,
-        expected: Option<GoalRevision>,
-        operation: GoalOperation,
-        agent_did: Option<&str>,
-        mut input: RequestInput,
-        command_id: String,
-    ) -> Result<(
-        std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
-        SessionGoalControl,
-    )> {
+            mut input,
+        } = goal;
+        let node_did = node_did.as_str();
+        let session_id = session_id.as_str();
+        let agent_did = agent_did.as_deref();
         let peer = self.connection_for_write(node_did)?;
         ensure_runtime_connection(node_did, peer.as_ref())?;
         let (signer, admission, requester_did) =

@@ -177,18 +177,29 @@ pub fn reply(request: &Value, options: Options) -> Option<fake_llm::ChatAction> 
     Some(fake_llm::ChatAction::Sse(response))
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct EditorRun<'a> {
+    pub client: &'a mut Attachment,
+    pub id: &'a mut u32,
+    pub access: &'a ConfigAccess,
+    pub node: &'a str,
+    pub session: &'a str,
+    pub author: &'a str,
+}
+
 pub async fn populate(
-    client: &mut Attachment,
-    id: &mut u32,
-    access: &ConfigAccess,
-    node: &str,
-    session: &str,
+    run: EditorRun<'_>,
     agent: &str,
-    author: &str,
     options: Options,
     root: &Path,
 ) -> Result<Value> {
+    let EditorRun {
+        client,
+        id,
+        access,
+        node,
+        session,
+        author,
+    } = run;
     let started = std::time::Instant::now();
     let progress = |completed| -> Result<()> {
         std::fs::write(
@@ -465,17 +476,19 @@ pub(super) async fn verified_requests(
     Ok(rows)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn verify_profile(
-    client: &mut Attachment,
-    id: &mut u32,
-    access: &ConfigAccess,
-    node: &str,
-    session: &str,
-    author: &str,
+    run: EditorRun<'_>,
     options: Options,
     command_output: bool,
 ) -> Result<Value> {
+    let EditorRun {
+        client,
+        id,
+        access,
+        node,
+        session,
+        author,
+    } = run;
     let rows = verified_requests(
         access,
         node,
