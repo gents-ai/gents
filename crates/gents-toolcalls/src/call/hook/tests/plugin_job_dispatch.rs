@@ -401,7 +401,7 @@ async fn job_chain(
         publish_accepted_on_claimed_request, AcceptedFixtureCall,
     };
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_session::request::lifecycle::ClaimOutcome;
     let request_id = format!("step0-{}", uuid::Uuid::new_v4());
@@ -409,10 +409,7 @@ async fn job_chain(
     let create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         &request_id,
-        db.node_identity.did(),
-        user.did(),
-        agent.did(),
-        &session_id,
+        RequestScope::new(db.node_identity.did(), user.did(), agent.did(), &session_id),
         "run",
         "interactive",
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

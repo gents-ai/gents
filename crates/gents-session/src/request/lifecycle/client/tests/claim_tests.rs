@@ -57,10 +57,12 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("model-{name}"),
-            runtime.did(),
-            user.did(),
-            &binding.agent_did,
-            format!("session-{name}"),
+            RequestScope::new(
+                runtime.did(),
+                user.did(),
+                &binding.agent_did,
+                format!("session-{name}"),
+            ),
             "signed text",
             if scheduled {
                 "scheduled"
@@ -389,10 +391,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     let mut head = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "steer-head",
-        runtime.did(),
-        user.did(),
-        agent.did(),
-        "steer-session",
+        RequestScope::new(runtime.did(), user.did(), agent.did(), "steer-session"),
         "head",
         "interactive",
         "2026-11-04T00:00:00Z",
@@ -460,10 +459,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     let mut steer = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "steer-input",
-        runtime.did(),
-        user.did(),
-        agent.did(),
-        "steer-session",
+        RequestScope::new(runtime.did(), user.did(), agent.did(), "steer-session"),
         "new signed input",
         "interactive",
         "2026-11-04T00:00:01Z",

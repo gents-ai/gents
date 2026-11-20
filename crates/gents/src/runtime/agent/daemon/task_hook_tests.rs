@@ -238,10 +238,12 @@ impl Harness {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
-            &owner,
-            &self.agent_config.agent_did,
-            &self.agent_config.agent_did,
-            session_id,
+            gents_protocol::request_admission::RequestScope::new(
+                &owner,
+                &self.agent_config.agent_did,
+                &self.agent_config.agent_did,
+                session_id,
+            ),
             "run the gate",
             origin,
             created_at,

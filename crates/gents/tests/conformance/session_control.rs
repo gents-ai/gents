@@ -70,7 +70,7 @@ pub(super) async fn seed_agent_request(
     created_at: &str,
 ) -> String {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     let SeededSession {
         access,
@@ -80,10 +80,12 @@ pub(super) async fn seed_agent_request(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        db.node_identity.did(),
-        fixture.agent.did(),
-        fixture.agent.did(),
-        session_id,
+        RequestScope::new(
+            db.node_identity.did(),
+            fixture.agent.did(),
+            fixture.agent.did(),
+            session_id,
+        ),
         "session control witness",
         "interactive",
         created_at,

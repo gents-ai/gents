@@ -1,7 +1,7 @@
 use super::*;
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_store::config_client::{count_statements, ConfigAccess, StatementCounts};
 use gents_store::graphql::escape_graphql_string;
@@ -169,10 +169,12 @@ impl GoalLatencySession {
         let mut request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             &request_id,
-            self.identity.did(),
-            &self.agent_did,
-            &self.agent_did,
-            &self.session,
+            RequestScope::new(
+                self.identity.did(),
+                &self.agent_did,
+                &self.agent_did,
+                &self.session,
+            ),
             "long session prompt body. ".repeat(80),
             "interactive",
             "2026-10-21T00:00:00Z",

@@ -189,10 +189,12 @@ async fn seeded_node() -> gents_inference::test_support::TestDb {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
-            signer.did(),
-            signer.did(),
-            agent,
-            session,
+            gents_protocol::request_admission::RequestScope::new(
+                signer.did(),
+                signer.did(),
+                agent,
+                session,
+            ),
             "session history fixture",
             "interactive",
             created_at,

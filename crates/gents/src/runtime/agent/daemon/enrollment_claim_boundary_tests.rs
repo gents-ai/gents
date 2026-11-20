@@ -7,7 +7,9 @@ use gents_p2p::p2p_reconcile::enrollment_reconcile::test_support::{
     ScriptedProjection,
 };
 use gents_p2p::p2p_reconcile::enrollment_store::ActiveEnrollment;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_session::request::admission::AgentRequestAdmissionVerifier;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
@@ -26,10 +28,12 @@ async fn create_enrollment_request(
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         format!("agent-request-{label}"),
-        target.did(),
-        member.did(),
-        agent_did,
-        format!("session-{label}"),
+        RequestScope::new(
+            target.did(),
+            member.did(),
+            agent_did,
+            format!("session-{label}"),
+        ),
         format!("content-{label}"),
         "interactive",
         "2030-01-01T00:00:02Z",

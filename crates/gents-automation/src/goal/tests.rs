@@ -4,7 +4,7 @@ use gents_protocol::session_token_usage::SessionTokenUsage;
 #[tokio::test]
 async fn session_token_usage_breakdown_sums_to_the_total() {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_store::identity::NodeIdentity;
     use serde_json::json;
@@ -17,10 +17,7 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
     let create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "usage-request",
-        owner,
-        user.did(),
-        agent.did(),
-        "usage-session",
+        RequestScope::new(owner, user.did(), agent.did(), "usage-session"),
         "test",
         "interactive",
         "2026-07-15T00:00:00Z",
@@ -197,7 +194,7 @@ async fn auto_resume_field_round_trips_through_the_live_schema() {
 #[tokio::test]
 async fn session_goal_delete_uses_selected_agent_native_owner() {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_store::identity::NodeIdentity;
 
@@ -219,10 +216,12 @@ async fn session_goal_delete_uses_selected_agent_native_owner() {
     let create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "delete-request",
-        db.node_identity.did(),
-        user.did(),
-        agent.did(),
-        "delete-session",
+        RequestScope::new(
+            db.node_identity.did(),
+            user.did(),
+            agent.did(),
+            "delete-session",
+        ),
         "test",
         "interactive",
         "2026-07-15T00:00:00Z",
@@ -287,7 +286,7 @@ async fn session_goal_delete_uses_selected_agent_native_owner() {
 #[tokio::test]
 async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_store::identity::NodeIdentity;
 
@@ -309,10 +308,12 @@ async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
     let create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "user-delete-request",
-        db.node_identity.did(),
-        user.did(),
-        agent.did(),
-        "user-delete-session",
+        RequestScope::new(
+            db.node_identity.did(),
+            user.did(),
+            agent.did(),
+            "user-delete-session",
+        ),
         "test",
         "interactive",
         "2026-07-15T00:00:00Z",
@@ -333,10 +334,12 @@ async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
     let other_create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "other-delete-request",
-        db.node_identity.did(),
-        user.did(),
-        agent.did(),
-        "other-delete-session",
+        RequestScope::new(
+            db.node_identity.did(),
+            user.did(),
+            agent.did(),
+            "other-delete-session",
+        ),
         "test",
         "interactive",
         "2026-07-15T00:00:00Z",

@@ -1480,10 +1480,12 @@ async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved
     let mut pending = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "late-input",
-        identity.did(),
-        &agent.agent_did,
-        &agent.agent_did,
-        &lifecycle.request.session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            &agent.agent_did,
+            &agent.agent_did,
+            &lifecycle.request.session_id,
+        ),
         "late input",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

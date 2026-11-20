@@ -27,7 +27,7 @@ struct TitleFixture {
 /// A claimed title request whose owned execution has begun.
 async fn claimed_title_fixture() -> TitleFixture {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_store::identity::NodeIdentity;
 
@@ -55,10 +55,12 @@ async fn claimed_title_fixture() -> TitleFixture {
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         uuid::Uuid::new_v4().to_string(),
-        identity.did(),
-        identity.did(),
-        agent.did(),
-        uuid::Uuid::new_v4().to_string(),
+        RequestScope::new(
+            identity.did(),
+            identity.did(),
+            agent.did(),
+            uuid::Uuid::new_v4().to_string(),
+        ),
         "Name this conversation",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

@@ -999,15 +999,19 @@ async fn turn_rebuild_matches_the_lean_model() {
                 estimated_input_tokens: 1,
             });
         let result = build_budgeted_request(
-            &assembly_only(),
-            &mut history,
-            &mut new_messages,
-            &[],
-            &config,
-            &mut replay,
-            3,
-            &mut chain_keys,
-            &mut active_keys,
+            &TurnInputs {
+                model: &assembly_only(),
+                tools: &[],
+                config: &config,
+                turn_index: 3,
+            },
+            &mut TurnState {
+                history: &mut history,
+                new_messages: &mut new_messages,
+                replay: &mut replay,
+                reduction_chain_keys: &mut chain_keys,
+                active_reduction_keys: &mut active_keys,
+            },
         )
         .await;
         let rebuild = match result {

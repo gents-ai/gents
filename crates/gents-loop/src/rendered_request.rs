@@ -119,19 +119,38 @@ pub struct RenderedCompletionRequest {
     pub provenance_payload_json: Value,
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct ProviderRoute {
+    pub endpoint: Option<String>,
+    pub route_path_sha256: Option<String>,
+}
+
+pub struct RenderedAttempt {
+    pub capture_scope: String,
+    pub turn_index: usize,
+    pub attempt: u32,
+    pub assembly_trace: AssemblyTrace,
+    pub admission_join: Option<AdmissionJoin>,
+}
+
 pub fn build_rendered_completion_request(
     context: &RenderedRequestContext,
-    capture_scope: &str,
     source: RenderedRequestSource,
-    provider_endpoint: Option<String>,
-    provider_route_path_sha256: Option<String>,
-    turn_index: usize,
-    attempt: u32,
-    assembly_trace: AssemblyTrace,
+    route: ProviderRoute,
+    attempt: RenderedAttempt,
     components: RenderedRequestComponents,
-    admission_join: Option<AdmissionJoin>,
 ) -> Result<RenderedCompletionRequest> {
+    let ProviderRoute {
+        endpoint: provider_endpoint,
+        route_path_sha256: provider_route_path_sha256,
+    } = route;
+    let RenderedAttempt {
+        capture_scope,
+        turn_index,
+        attempt,
+        assembly_trace,
+        admission_join,
+    } = attempt;
+    let capture_scope = capture_scope.as_str();
     let RenderedRequestComponents {
         request_json,
         messages_json,

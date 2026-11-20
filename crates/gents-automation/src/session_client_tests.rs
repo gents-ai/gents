@@ -1,5 +1,5 @@
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_session::request::lifecycle::client::*;
 use gents_session::test_support::{assert_block_signer, seed_owned_agent};
@@ -32,10 +32,12 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
         let mut request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "task-opening",
-            db.node_identity.did(),
-            agent.did(),
-            agent.did(),
-            "task-session",
+            RequestScope::new(
+                db.node_identity.did(),
+                agent.did(),
+                agent.did(),
+                "task-session",
+            ),
             "work",
             "scheduled",
             "2026-11-04T00:00:00Z",
@@ -305,10 +307,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "http-request",
-        runtime.did(),
-        user.did(),
-        &agent.agent_did,
-        "http-session",
+        RequestScope::new(runtime.did(), user.did(), &agent.agent_did, "http-session"),
         "hello",
         "interactive",
         "2026-11-04T00:00:00Z",

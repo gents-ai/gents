@@ -45,15 +45,12 @@ fn local_self_request(
     agent_did: &str,
 ) -> gents_protocol::request_admission::AgentRequestCreate {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        node_did,
-        agent_did,
-        agent_did,
-        session_id,
+        RequestScope::new(node_did, agent_did, agent_did, session_id),
         "work",
         "interactive",
         CONVERGENCE_CREATED_AT,
@@ -645,15 +642,12 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         ),
     ] {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             request_id,
-            node_did,
-            identity.did(),
-            identity.did(),
-            session_id,
+            RequestScope::new(node_did, identity.did(), identity.did(), session_id),
             "wake up",
             "scheduled",
             created_at,

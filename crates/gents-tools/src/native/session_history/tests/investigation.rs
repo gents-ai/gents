@@ -148,10 +148,12 @@ async fn sessions_get_does_not_join_duplicate_logical_request_ids() {
     let mut duplicate = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "request-a-new",
-        PIN_FIXED_DID,
-        PIN_FIXED_DID,
-        "agent-b",
-        "session-b",
+        gents_protocol::request_admission::RequestScope::new(
+            PIN_FIXED_DID,
+            PIN_FIXED_DID,
+            "agent-b",
+            "session-b",
+        ),
         "duplicate-label request fixture",
         "interactive",
         "2026-06-03T11:05:00Z",

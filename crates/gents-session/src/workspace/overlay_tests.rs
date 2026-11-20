@@ -636,10 +636,7 @@ pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixtur
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "artifact-reader",
-        &did,
-        &did,
-        &did,
-        "artifact-session",
+        gents_protocol::request_admission::RequestScope::new(&did, &did, &did, "artifact-session"),
         "Review sealed source",
         "interactive",
         &now,
@@ -945,10 +942,12 @@ pub async fn artifact_alternate_owner(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         name,
-        did,
-        did,
-        did,
-        format!("artifact-session-{name}"),
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            did,
+            did,
+            format!("artifact-session-{name}"),
+        ),
         "Review source",
         "interactive",
         &now,

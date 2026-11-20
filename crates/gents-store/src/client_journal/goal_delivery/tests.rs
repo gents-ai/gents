@@ -5,7 +5,7 @@ use gents_protocol::goal_control::{
     GoalControlOutcome, GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION,
 };
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -104,10 +104,7 @@ impl Facts {
             let mut request = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 format!("request-{id}"),
-                &did,
-                &did,
-                &did,
-                &session,
+                RequestScope::new(&did, &did, &did, &session),
                 "goal objective",
                 "interactive",
                 &created,

@@ -2,7 +2,7 @@ use super::contract_tests::paused_goal_state;
 use super::support::{request_rows, Fixture, PARENT, SESSION};
 use super::*;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_session::request::admission::AgentRequestAdmissionVerifier;
@@ -228,10 +228,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
             let mut opening = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 "new-goal-opening",
-                f.identity.did(),
-                f.user.did(),
-                opening_agent,
-                SESSION,
+                RequestScope::new(f.identity.did(), f.user.did(), opening_agent, SESSION),
                 "new assignment",
                 "interactive",
                 "2030-01-01T00:00:00Z",

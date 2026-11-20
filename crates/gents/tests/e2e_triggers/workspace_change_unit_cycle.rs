@@ -551,10 +551,12 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
         &gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "workspace-cycle-lead-opening",
-            &owner,
-            cycle.user.did(),
-            &supervisor,
-            supervisor_session,
+            gents_protocol::request_admission::RequestScope::new(
+                &owner,
+                cycle.user.did(),
+                &supervisor,
+                supervisor_session,
+            ),
             "Supervise the change unit",
             "interactive",
             &created_at,
