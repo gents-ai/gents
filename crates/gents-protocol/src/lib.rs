@@ -39,6 +39,7 @@ pub mod peer_schema;
 pub mod plugin;
 pub mod plugin_tool_call_limits;
 pub mod process_control;
+pub mod provider_limit;
 pub mod question_reply_source;
 pub mod rendered_request;
 pub mod request_admission;

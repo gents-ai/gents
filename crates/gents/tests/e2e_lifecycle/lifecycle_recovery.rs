@@ -102,7 +102,7 @@ async fn create_recovery_request(
         "execution_origin": "interactive",
         "created_at": created_at,
         "retry_count": 0,
-        "max_retries": gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        "max_retries": gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         "request_hop": 0,
     }))
     .unwrap();
@@ -189,7 +189,6 @@ async fn seed_failed_wake(
     let mut create = actors.request_create(&seed);
     create.input = input.clone();
     create.retry_count = 1;
-    create.max_retries = 3;
     let failed_doc = actors.create_signed(create).await;
     actors
         .update_request(
@@ -198,6 +197,7 @@ async fn seed_failed_wake(
                 "lifecycle_state": "failed",
                 "backend_id": BACKEND_ID,
                 "max_total_tokens": 4096,
+                "max_retries": 3,
                 "failure_reason": "backend admission failed",
                 "terminalized_at": "2026-08-12T00:00:00Z",
                 "terminal_redrive_attempts": 0,
@@ -323,7 +323,8 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         Some(gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
     );
     assert_eq!(successor.retry_count, Some(2));
-    assert_eq!(successor.max_retries, Some(3));
+    // The successor's own first claim pins the inherited budget.
+    assert_eq!(successor.max_retries, None);
     assert_eq!(successor.input.as_ref(), Some(&input));
     assert_eq!(successor.deadline, None);
     assert_eq!(successor.valid_until, None);
@@ -366,13 +367,13 @@ async fn failed_background_wake_sweep_follows_the_lean_redrive_model() {
         let mut create = actors.request_create(&seed);
         create.input = input;
         create.retry_count = case.input.retry_count.try_into().unwrap();
-        create.max_retries = case.input.max_retries.try_into().unwrap();
         let failed_doc = actors.create_signed(create).await;
         actors
             .update_request(
                 &failed_doc,
                 serde_json::json!({
                     "lifecycle_state": "failed",
+                    "max_retries": case.input.max_retries,
                     "failure_reason": "provider failed",
                     "terminalized_at": terminalized_at,
                 }),
@@ -523,8 +524,9 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         AgentRequestAdmissionRecord::runtime_local_control(agent_did, source_request_id);
     wake.caused_by_parent_request_id = Some(source_request_id.into());
     wake.caused_by_parent_request_doc_id = Some(source_doc_id);
-    wake.retry_count = 4;
-    wake.max_retries = 6;
+    // Its claim pins the default budget of 3; two prior attempts keep it
+    // within budget and inside its backoff window.
+    wake.retry_count = 2;
     actors.create_signed(wake).await;
     let prepared = PreparedAcceptedTurn { backend };
     const WAKE_INPUT_MARKER: &str = "Review the background execution results above.";

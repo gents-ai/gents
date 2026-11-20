@@ -136,7 +136,6 @@ async fn retry_frontier_matches_lean_admission() {
                 parent_request_doc_id: Some(parent_doc.clone()),
                 root_request_id: parent_request_id.clone(),
                 retry_count: 1,
-                max_retries: 3,
             };
             let mut second = signed_claimed_authored_request_with_retry(
                 &db,

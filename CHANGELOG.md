@@ -6,6 +6,26 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: the successor budget of a request lineage (operator reissues and
+  background wake redrives) is InferenceExecution `max_request_retries`
+  (non-negative, default 3, zero allows none) instead of a value clients sign.
+  `AgentRequest.max_retries` is no longer signed or written by clients: a
+  request's first claim pins it from the claiming Agent's configuration, a
+  retry successor inherits its parent's pin, title and access-review requests
+  take zero, and a reclaim never rewrites it, so a configuration change reaches
+  only lineages claimed after it. A request that never reached a claim may
+  still be reissued by an operator but is not redriven automatically.
+  `ReissueReceipt.max_retries` is absent until the lineage has been claimed.
+- InferenceRetryPolicy `max_rate_limit_wait_ms` (default 300,000 ms) is the
+  longest provider rate-limit wait the owned loop holds; a longer wait fails
+  the request as the provider's usage limit, and `backoff_ms` steps may not
+  exceed it. Title, access-review and compaction calls hold the Agent's cap.
+- A failed InferenceCall records the provider-limit verdict in
+  `provider_limit` (`throttled` or `usage_limited`) and, for a usage limit with
+  a reported reset, `provider_limit_resets_at`, in the same write as its
+  `failure_reason`, under the Agent's `max_rate_limit_wait_ms`. Blocked turns,
+  a Goal's usage-limit stop and its resume at the reset read these fields
+  instead of reclassifying the failure text (#3923).
 - An application pairing no longer reinstalls its collections on authority
   read before its author lost the P2P mutation grant: each install re-reads
   the author's authority after the operations before it, and a change to the

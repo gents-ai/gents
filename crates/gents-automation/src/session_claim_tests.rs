@@ -1,10 +1,10 @@
 use defra_node::Node as EmbeddedNode;
+use gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequest;
 use gents_session::request::lifecycle::claim::*;
 use gents_session::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, LocalLifecycleState, RequestLifecycle,
-    DEFAULT_REQUEST_MAX_RETRIES,
 };
 use gents_store::graphql::escape_graphql_string;
 use std::sync::Arc;

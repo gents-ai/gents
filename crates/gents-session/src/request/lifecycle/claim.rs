@@ -967,6 +967,39 @@ impl RequestLifecycle {
         Ok(ClaimOutcome::Claimed)
     }
 
+    /// A retry parent is terminal before its successor exists and only its
+    /// own first claim writes its pin, so the pin read here cannot change
+    /// before this claim commits.
+    async fn first_claim_retry_budget(&self) -> Result<u64> {
+        let parent_doc_id = self
+            .request
+            .retry_parent_request_doc_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|doc_id| !doc_id.is_empty());
+        let parent_pin = match parent_doc_id {
+            Some(parent_doc_id) => {
+                let query = format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _docID max_retries }} }}"#,
+                    escape_graphql_string(parent_doc_id)
+                );
+                let response = self.access()?.execute(&query).await?;
+                let parent = response
+                    .pointer("/data/AgentRequest/0")
+                    .with_context(|| format!("retry parent {parent_doc_id} is not readable"))?;
+                parent["max_retries"].as_i64()
+            }
+            None => None,
+        };
+        crate::request::retry_budget::claim_pin(
+            self.request.purpose == gents_protocol::request_admission::RequestPurpose::Normal,
+            self.configured_max_request_retries,
+            parent_doc_id.is_some(),
+            parent_pin,
+        )
+        .map_err(anyhow::Error::from)
+    }
+
     async fn persist_pending_claim_at(
         &self,
         now: chrono::DateTime<chrono::Utc>,
@@ -1023,8 +1056,9 @@ impl RequestLifecycle {
                     i64::try_from(limit).map_err(anyhow::Error::from)
                 })
                 .transpose()?;
+            let max_retries = self.first_claim_retry_budget().await?;
             format!(
-                "max_total_tokens: {},",
+                "max_total_tokens: {}, max_retries: {max_retries},",
                 gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(limit)?)?
             )
         } else {

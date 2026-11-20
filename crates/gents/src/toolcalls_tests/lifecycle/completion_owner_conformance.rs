@@ -509,7 +509,18 @@ async fn drive_redrive(
         );
         assert_eq!(successor["retry_parent_request"], failed_wake);
         assert_eq!(successor["retry_parent_request_doc_id"], source["_docID"]);
-        assert_eq!(successor["max_retries"], max_retries);
+        // The successor's first claim pins the budget it inherits from its source.
+        assert!(successor["max_retries"].is_null(), "{name}");
+        assert_eq!(
+            gents_session::request::retry_budget::claim_pin(
+                true,
+                0,
+                true,
+                source["max_retries"].as_i64()
+            )
+            .unwrap(),
+            max_retries
+        );
         assert!(successor["backend_id"].is_null(), "{name}");
     }
     let after = canonical_goal(&access, did, session).await;

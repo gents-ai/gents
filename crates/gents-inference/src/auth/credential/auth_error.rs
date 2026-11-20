@@ -83,7 +83,8 @@ pub(super) const MOVE_OFF_ACCOUNT: &str =
 
 pub fn account_failure(product: &OAuthProduct, label: &str, state: &str) -> String {
     let lower = label.to_ascii_lowercase();
-    let label = if gents_loop::provider_limit::classify_provider_limit(label, Utc::now()).is_some()
+    let label = if gents_loop::provider_limit::classify_attempt_provider_limit(label, Utc::now())
+        .is_some()
         || lower.contains("context_length_exceeded")
         || lower.contains("maximum context length")
     {

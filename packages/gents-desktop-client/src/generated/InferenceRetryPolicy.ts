@@ -6,6 +6,15 @@
  */
 export type InferenceRetryPolicy = { node_did: string, retry_policy_id: string, display_name?: string | null, max_transport_retries?: number | null, backoff_ms?: Array<number> | null, max_resample_retries?: number | null, allow_repair?: boolean | null,
 /**
- * Default interactive successor ceiling; not a human approval gate.
+ * Provider transport retries for interactive requests, in place of
+ * `max_transport_retries`; not a successor-request ceiling (that is
+ * `InferenceExecution.max_request_retries`).
  */
-interactive_max_retries?: number | null, tags?: Array<string> | null, };
+interactive_max_retries?: number | null,
+/**
+ * Longest provider rate-limit wait the owned loop holds; a longer wait
+ * fails the request as the provider's usage limit, and a failed call
+ * records that verdict. Default 300,000ms; `backoff_ms` steps may not
+ * exceed it.
+ */
+max_rate_limit_wait_ms?: number | null, tags?: Array<string> | null, };

@@ -82,7 +82,14 @@ async fn acquire_with_signer(
     let request = super::super::tests::seeded_request(node, signer, request_id).await;
     let context = AdmissionCallContext::for_request(&request, signer.did(), backend_id);
     registry
-        .acquire_call_with_signer(Some(&context), connection, None, None, Some(signer.clone()))
+        .acquire_call_with_signer(
+            Some(&context),
+            connection,
+            None,
+            None,
+            gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+            Some(signer.clone()),
+        )
         .await
 }
 

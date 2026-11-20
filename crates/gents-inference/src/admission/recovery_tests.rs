@@ -186,6 +186,7 @@ fn pending_call(
         request_purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         model_name: None,
         profile_id: None,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
         call_id: call_id.into(),
         runtime_instance_id: "recovery-cas-runtime".into(),
         request_id: "recovery-cas-request".into(),
@@ -268,6 +269,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
         "cancelled",
         None,
         None,
+        None,
         CachedInputTokensObservation::NotAvailable,
     )
     .await
@@ -283,6 +285,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
         "completed",
         None,
         None,
+        None,
         CachedInputTokensObservation::NotAvailable,
     )
     .await
@@ -292,6 +295,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
         &call,
         &snapshot.doc_id,
         "completed",
+        None,
         None,
         None,
         CachedInputTokensObservation::NotAvailable,

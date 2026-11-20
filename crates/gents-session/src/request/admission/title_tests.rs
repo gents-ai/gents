@@ -275,7 +275,6 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
         &case.request.created_at,
         admission,
     );
-    create.max_retries = 0;
     create.input = native_input(case);
     create.request_hop = u32::try_from(case.request.hop).unwrap();
     create.caused_by_parent_request_id = Some(parent_fields[1].clone());

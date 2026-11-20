@@ -185,8 +185,10 @@ where
                 Some(crate::rendered_request::scope::arming_sink(
                     crate::rendered_request::CaptureScopeKind::CompactionFallback,
                 ));
-            fallback_config.retry_policy =
-                crate::completion_retry::CompletionRetryPolicy::no_retry();
+            fallback_config.retry_policy = crate::completion_retry::CompletionRetryPolicy {
+                max_rate_limit_wait: fallback_config.retry_policy.max_rate_limit_wait,
+                ..crate::completion_retry::CompletionRetryPolicy::no_retry()
+            };
             // The system prefix stays byte-identical to the guided attempts so
             // the provider's prompt cache still covers the chunk; the strict
             // JSON instruction rides in the final user message instead.

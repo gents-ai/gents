@@ -235,7 +235,6 @@ async fn wake(
                 .unwrap_or_else(|| parent.request_id.clone()),
         );
         create.retry_count = parent.retry_count.unwrap_or_default() + 1;
-        create.max_retries = parent.max_retries.unwrap_or(3);
     }
     create.session_doc_id = parent.session_doc_id.clone();
     create.agent_doc_id = parent.agent_doc_id.clone();

@@ -19,7 +19,11 @@ pub(super) fn project_retry_eligibility(request: Option<&AgentRequestRow>) -> Re
             denial_reason: Some("nonInteractiveOrigin".to_string()),
         };
     }
-    if request.retry_count.unwrap_or_default() >= request.max_retries.unwrap_or(3) {
+    if !gents_session::request::retry_budget::successor_budget_remains(
+        false,
+        request.retry_count.unwrap_or_default(),
+        request.max_retries,
+    ) {
         return RetryEligibilityView {
             eligible: false,
             denial_reason: Some("retryBudgetExhausted".to_string()),

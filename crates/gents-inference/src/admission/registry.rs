@@ -141,8 +141,15 @@ impl AdmissionRegistry {
         let context =
             AdmissionCallContext::for_request(&request, agent.agent_did.clone(), backend_id)
                 .for_call(call_kind, 1);
-        self.acquire_call_with_signer(Some(&context), connection, None, None, signer)
-            .await
+        self.acquire_call_with_signer(
+            Some(&context),
+            connection,
+            None,
+            None,
+            agent.completion_retry.max_rate_limit_wait(),
+            signer,
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -168,6 +175,7 @@ impl AdmissionRegistry {
         connection: &str,
         model_name: Option<&str>,
         profile_id: Option<&str>,
+        max_rate_limit_wait: std::time::Duration,
         agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> Result<AdmissionPermit, AdmissionError> {
         let context =
@@ -190,6 +198,7 @@ impl AdmissionRegistry {
             &self.inner.runtime_instance_id,
             model_name,
             profile_id,
+            max_rate_limit_wait,
             agent_signer,
         );
         if pending.backend_id.trim().is_empty() {

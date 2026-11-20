@@ -15,6 +15,8 @@ type InferenceCall @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f1
 
     call_state: String @index
     failure_reason: String
+    provider_limit: String
+    provider_limit_resets_at: String
 
     queued_at: String
     started_at: String

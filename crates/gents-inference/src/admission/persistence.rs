@@ -177,17 +177,20 @@ pub(super) async fn persist_terminal_call(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn persist_existing_call_terminal(
     node: Arc<EmbeddedNode>,
     call: &InferenceCallRecord,
     doc_id: &str,
     call_state: &str,
     failure_reason: Option<&str>,
+    provider_limit: Option<gents_protocol::provider_limit::RecordedProviderLimit>,
     usage: Option<ProviderCallUsage>,
     cache_observation: CachedInputTokensObservation,
 ) -> Result<()> {
     // Proofs/Inference/InferenceCall/Persistence.lean: only an existing legal source
-    // may install the first terminal outcome; later observations are usage only.
+    // may install the first terminal outcome, and its provider-limit verdict lands
+    // in the same write; later observations are usage only.
     let live_source = match call_state {
         "completed" | "failed" => r#"{ _eq: "running" }"#,
         "cancelled" => r#"{ _in: ["queued", "running"] }"#,
@@ -197,13 +200,14 @@ pub async fn persist_existing_call_terminal(
     let doc_id = escape_graphql_string(doc_id);
     let ended_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let failure_reason = optional_graphql_string("failure_reason", failure_reason);
+    let provider_limit = provider_limit_fields(provider_limit);
     let (prompt_tokens, completion_tokens, cached_input_tokens) =
         usage_fields(usage, cache_observation)?;
     let mutation = format!(
         r#"mutation {{ update_InferenceCall(
             docID: "{doc_id}",
             filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {live_source} }},
-            input: {{ call_state: "{call_state}", {failure_reason} ended_at: "{ended_at}",
+            input: {{ call_state: "{call_state}", {failure_reason} {provider_limit} ended_at: "{ended_at}",
                 {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
         ) {{ _docID }} }}"#
     );
@@ -330,6 +334,20 @@ fn add_call_mutation(
         completion_tokens = completion_tokens,
         cached_input_tokens = cached_input_tokens,
     ))
+}
+
+fn provider_limit_fields(
+    limit: Option<gents_protocol::provider_limit::RecordedProviderLimit>,
+) -> String {
+    let Some(limit) = limit else {
+        return String::new();
+    };
+    let resets_at = limit.resets_at.map(|at| at.to_rfc3339());
+    format!(
+        r#"provider_limit: "{}", {}"#,
+        limit.verdict.as_str(),
+        optional_graphql_string("provider_limit_resets_at", resets_at.as_deref())
+    )
 }
 
 fn optional_graphql_string(field: &str, value: Option<&str>) -> String {

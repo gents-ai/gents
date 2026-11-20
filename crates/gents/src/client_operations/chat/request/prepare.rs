@@ -3,7 +3,7 @@ use chrono::Utc;
 use gents_documents::skills::prompt_slash_skill_selection;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
-use gents_session::request::lifecycle::{ExecutionOrigin, DEFAULT_REQUEST_MAX_RETRIES};
+use gents_session::request::lifecycle::ExecutionOrigin;
 use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec, RetryLink};
 use gents_store::config_client::ConfigAccess;
 use uuid::Uuid;
@@ -65,7 +65,6 @@ pub async fn prepare_request_submission(
                 parent_request_doc_id: None,
                 root_request_id: request_id.clone(),
                 retry_count: 0,
-                max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
             }),
             input: options.input,
             trigger_lineage: options.trigger_lineage,

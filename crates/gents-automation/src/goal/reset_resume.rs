@@ -1,6 +1,5 @@
 use super::*;
 use crate::goal::blocked_turn::{goal_stopped_in_txn, served_profile};
-use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::identity::NodeIdentity;
 
@@ -21,9 +20,7 @@ pub async fn resume_at_reset(
     if goal.parsed_status() != Some(GoalStatus::UsageLimited) {
         return Ok(ResetResume::NotUsageLimited);
     }
-    if goal.auto_resume_at_reset != Some(true)
-        || reported_reset(goal.last_failure.as_deref(), now).is_none_or(|reset| reset > now)
-    {
+    if goal.auto_resume_at_reset != Some(true) {
         return Ok(ResetResume::Deferred);
     }
     let (node_did, session_id) = (goal.node_did.as_str(), goal.session_id.as_str());
@@ -32,6 +29,22 @@ pub async fn resume_at_reset(
         identity::Did::new(identity.did())?,
         identity.managed_agent_signer(),
     )?;
+    let reset_passed = access
+        .transact_readonly("goal.reset_due", move |txn| {
+            Box::pin(async move {
+                let stopped = goal_stopped_in_txn(txn, node_did, session_id).await?;
+                Ok::<_, anyhow::Error>(
+                    stopped
+                        .and_then(|(_, _, _, call)| call)
+                        .and_then(|call| call.usage_limit().and_then(|limit| limit.resets_at))
+                        .is_some_and(|reset| reset <= now),
+                )
+            })
+        })
+        .await?;
+    if !reset_passed {
+        return Ok(ResetResume::Deferred);
+    }
     access
         .transact_write("goal.resume_at_reset", move |txn| {
             Box::pin(stage_reset_resume(
@@ -97,9 +110,10 @@ async fn stage_reset_resume(
         .or(call.queued_at.as_deref())
         .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
         .map(|at| at.with_timezone(&Utc));
-    let (Some(reset), Some(started)) =
-        (reported_reset(call.failure_reason.as_deref(), now), started)
-    else {
+    let (Some(reset), Some(started)) = (
+        call.usage_limit().and_then(|limit| limit.resets_at),
+        started,
+    ) else {
         return Ok(ResetResume::Deferred);
     };
     if !(started < reset && reset <= now) {
@@ -132,13 +146,6 @@ async fn stage_reset_resume(
     super::operator_resume::stage_resume(txn, identity, node_did, session_id, &request.request_id)
         .await
         .map(ResetResume::Resumed)
-}
-
-fn reported_reset(text: Option<&str>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    match classify_provider_limit(text?, now)? {
-        ProviderLimit::UsageExhausted(limit) => limit.resets_at,
-        _ => None,
-    }
 }
 
 #[cfg(test)]
