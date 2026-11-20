@@ -842,7 +842,9 @@ mod tests {
     #[tokio::test]
     async fn diagnostics_reads_actual_scoped_head_across_requesters_without_session_cache(
     ) -> Result<()> {
-        let node = std::sync::Arc::new(gents_store::test_support::node_builder().build().await?);
+        use gents_store::identity::NodeIdentity as _;
+        let (builder, runtime) = gents_store::test_support::keyed_node_builder();
+        let node = std::sync::Arc::new(builder.build().await?);
         gents_store::test_support::acp_policies::install_identity_acp_policies(&node).await?;
         node.add_collection(gents_protocol::schemas::AGENT_REQUEST)
             .await?;
@@ -851,7 +853,7 @@ mod tests {
         node.add_collection(gents_protocol::schemas::AGENT_REQUEST_RETRY_BUDGET)
             .await?;
         let access = ConfigAccess::local(node.clone());
-        let owner = "did:test:diagnostics\"owner";
+        let owner = runtime.did();
         let mut failed = serde_json::json!({
             "node_did":owner, "requester_did":"requester-a", "request_id":"wake", "session_id":"shared-session",
             "purpose":"normal",
@@ -885,9 +887,18 @@ mod tests {
                 )?);
             }
         }
+        let wake_doc_id = wake_doc_id.context("wake not created")?;
+        gents_session::request::retry_budget::write_pin(
+            node.clone(),
+            runtime.clone(),
+            owner,
+            &wake_doc_id,
+            3,
+        )
+        .await?;
         access.write("test.diagnostic.notification", &format!("mutation {{ create_AgentMessage(input:{}){{_docID}} }}", gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "node_did":owner,"session_id":"shared-session","message_key":"background-completion-notification:child:agent",
-            "request_doc_id":wake_doc_id.context("wake not created")?,"role":"user","sequence":1,"created_at":"2026-08-12T00:00:01Z"
+            "request_doc_id":wake_doc_id,"role":"user","sequence":1,"created_at":"2026-08-12T00:00:01Z"
         }))?)).await?;
         let diagnostics = load_background_completion_diagnostics(&access, owner).await?;
         assert_eq!(diagnostics.epochs.len(), 1);
