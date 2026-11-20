@@ -270,6 +270,7 @@ fn write_identity_config(home: &Path, custom_key: &Path) {
             tool_ceiling: "readwrite".into(),
             tool_root: None,
             store_encryption: None,
+            document_acp: Default::default(),
         },
     )
     .unwrap();
@@ -277,40 +278,32 @@ fn write_identity_config(home: &Path, custom_key: &Path) {
 
 #[tokio::test]
 async fn changed_identity_configuration_invalidates_waiting_command_exclusions() {
-    use crate::runtime_context::{
-        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
-    };
+    use crate::runtime_context::ToolWorkspaceScope;
     let folder = tempfile::tempdir().unwrap();
     let home = folder.path().canonicalize().unwrap();
     let original = home.join("original-key");
     let replacement = home.join("replacement-key");
     write_identity_config(&home, &original);
-    scope_request_tool_execution_with_workspace_overlay(
-        None,
-        None,
-        Default::default(),
+    let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+        &gents_loop::tool::ToolCallEnvelope::default(),
         ToolWorkspaceScope {
             runtime_home: Some(home.clone()),
             ..Default::default()
         },
-        None,
-        None,
-        None,
-        Default::default(),
-        false,
-        async {
-            let waiting = capture().await.unwrap();
-            write_identity_config(&home, &replacement);
-            let error = waiting.revalidate().await.unwrap_err();
-            assert!(
-                error.to_string().contains("exclusions changed"),
-                "{error:#}"
-            );
-            let current = capture().await.unwrap();
-            assert!(current.paths.contains(&replacement));
-            assert!(!current.paths.contains(&original));
-        },
-    )
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, Default::default()),
+    );
+    async {
+        let waiting = capture(&scope_call).await.unwrap();
+        write_identity_config(&home, &replacement);
+        let error = waiting.revalidate(&scope_call).await.unwrap_err();
+        assert!(
+            error.to_string().contains("exclusions changed"),
+            "{error:#}"
+        );
+        let current = capture(&scope_call).await.unwrap();
+        assert!(current.paths.contains(&replacement));
+        assert!(!current.paths.contains(&original));
+    }
     .await;
 }
 

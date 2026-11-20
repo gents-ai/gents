@@ -5,7 +5,7 @@ namespace Identity.OwedDeliveryAccess
 open Identity.Household
 
 /-- A Node owned by `user` with an administrator `admin`, an Engineer the user
-made a Node administrator, a `runtime_reader`, an `agent_manager`, and one
+made a Node administrator, a `runtime_reader`, and one
 Agent `a` with a session `s` it works in. The node key `runtime-key` has
 published one owed delivery `owed` of a halt `a` performed on `s`, linked to
 the Node by `parent`. `a` owns `s`, so it is both that delivery's recorded
@@ -19,7 +19,6 @@ def fixture : State :=
     , relations := [⟨"nodes", "node", "administrator", .actor "admin"⟩,
         ⟨"nodes", "node", "administrator", .actor "engineer"⟩,
         ⟨"nodes", "node", "runtime_reader", .actor "reader"⟩,
-        ⟨"nodes", "node", "agent_manager", .actor "manager"⟩,
         ⟨"sessions", "s", "parent", .object "agents" "a"⟩,
         ⟨"sessions", "s", "working_agent", .actor "a"⟩,
         ⟨"owed_deliveries", "owed", "parent", .object "nodes" "node"⟩]
@@ -48,12 +47,11 @@ theorem node_administration_reads_owed_delivery :
   native_decide
 
 /-- An Agent, including the delivery's own recorded actor and runner,
-neither reads nor writes the record; nor do the narrow Node readers
-(`runtime_reader`, `agent_manager`) or an unrelated actor. -/
+neither reads nor writes the record; nor does the narrow Node reader
+(`runtime_reader`) or an unrelated actor. -/
 theorem agents_and_non_administrators_cannot_access_owed_delivery :
-    ["a", "reader", "manager", "stranger"].map access =
-      [(false, false, false), (false, false, false), (false, false, false),
-       (false, false, false)] := by
+    ["a", "reader", "stranger"].map access =
+      [(false, false, false), (false, false, false), (false, false, false)] := by
   native_decide
 
 /-- Only the node key manages the record's relations: `parent` has no manager

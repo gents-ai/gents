@@ -175,7 +175,8 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         .header(
             reqwest::header::AUTHORIZATION,
             crate::support::graphql::node_principal_endpoint(&graphql)
-                .authorization()?
+                .runtime_authorization()
+                .await?
                 .context("missing fixture operator")?,
         )
         .send()
@@ -317,7 +318,8 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
         .header(
             reqwest::header::AUTHORIZATION,
             crate::support::graphql::node_principal_endpoint(&graphql)
-                .authorization()?
+                .runtime_authorization()
+                .await?
                 .context("missing fixture operator")?,
         )
         .send()

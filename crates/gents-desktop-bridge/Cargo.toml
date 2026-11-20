@@ -9,6 +9,8 @@ links = "tauri-plugin-gents-desktop-bridge"
 build = "build.rs"
 
 [features]
+typegen = ["tauri-host", "dep:syn", "dep:heck", "dep:tempfile"]
+test-fixtures = ["gents-store/test-fixtures", "gents-observe/test-fixtures", "gents-desktop-core/test-fixtures"]
 default = ["tauri-host"]
 tauri-host = ["dep:tauri", "dep:tauri-plugin", "dep:tauri-plugin-fs"]
 # Compiles real native-E2E command bodies (still double-gated by debug_assertions
@@ -24,6 +26,12 @@ name = "connect_this_desktop"
 required-features = ["tauri-host"]
 
 [dependencies]
+syn = { version = "2", features = ["full"], optional = true }
+heck = { version = "0.5", optional = true }
+tempfile = { version = "3", optional = true }
+defra-node.workspace = true
+thiserror.workspace = true
+gents-observe = { workspace = true, features = ["typescript"] }
 anyhow.workspace = true
 async-trait = "0.1"
 bytes.workspace = true
@@ -56,7 +64,6 @@ serde_json.workspace = true
 rapidhash = { workspace = true }
 tauri = { version = "2", features = [], optional = true }
 tauri-plugin-fs = { version = "2", optional = true }
-thiserror.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["codec", "rt"] }
 tracing.workspace = true
@@ -91,6 +98,8 @@ libc = "0.2"
 tauri-plugin = { version = "2", features = ["build"], optional = true }
 
 [dev-dependencies]
+gents-desktop-bridge = { path = ".", default-features = false, features = ["test-fixtures"] }
+gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-eval = { workspace = true, features = ["test-fixtures"] }
 gents-host = { workspace = true, features = ["test-fixtures"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
@@ -111,3 +120,12 @@ gents-lean-vocab.workspace = true
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 toml.workspace = true
+
+[[test]]
+name = "client_runtime"
+path = "tests/client_runtime/integration.rs"
+
+[[bin]]
+name = "gents-desktop-typegen"
+path = "src/bin/typegen.rs"
+required-features = ["typegen"]

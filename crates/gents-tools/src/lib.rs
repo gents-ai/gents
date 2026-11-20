@@ -1,5 +1,6 @@
 pub mod builtin;
 mod collection_use;
+mod guided_failure;
 pub mod mcp;
 pub mod native;
 pub mod plugin;
@@ -18,3 +19,6 @@ mod documents_skill_tests;
 
 #[cfg(test)]
 mod documents_selection_tests;
+
+#[cfg(test)]
+mod access_classification_tests;

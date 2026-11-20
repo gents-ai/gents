@@ -51,17 +51,13 @@ impl DropCleanup {
     }
 
     /// Counts work that still owns a guard of this tracker on a task nobody
-    /// joins, until the returned value is dropped. Drop it after the guard, so
-    /// the cleanup the guard's `Drop` spawns is counted before this count ends.
-    pub fn hold(&self) -> CleanupInFlight {
-        CleanupInFlight(self.tracker.as_ref().map(CleanupTracker::enter))
+    /// joins, until the returned value is dropped; `None` for an untracked
+    /// guard. Drop it after the guard, so the cleanup the guard's `Drop`
+    /// spawns is counted before this count ends.
+    pub fn hold(&self) -> Option<CleanupInFlight> {
+        self.tracker.as_ref().map(CleanupTracker::enter)
     }
 }
-
-/// One unit of a [`CleanupTracker`]'s count; uncounted for an untracked
-/// [`DropCleanup`].
-#[derive(Debug)]
-pub struct CleanupInFlight(#[allow(dead_code, reason = "held for its Drop")] Option<InFlight>);
 
 #[allow(
     clippy::disallowed_methods,
@@ -107,18 +103,19 @@ impl CleanupTracker {
         }
     }
 
-    fn enter(&self) -> InFlight {
+    fn enter(&self) -> CleanupInFlight {
         self.0.in_flight.fetch_add(1, Ordering::SeqCst);
-        InFlight(self.0.clone())
+        CleanupInFlight(self.0.clone())
     }
 }
 
-/// Counts one cleanup down on completion, and equally when the runtime drops it
-/// unrun, so `idle` cannot outlive the runtime it waits on.
+/// One unit of a [`CleanupTracker`]'s count. Counts one cleanup down on
+/// completion, and equally when the runtime drops it unrun, so `idle` cannot
+/// outlive the runtime it waits on.
 #[derive(Debug)]
-struct InFlight(Arc<TrackerState>);
+pub struct CleanupInFlight(Arc<TrackerState>);
 
-impl Drop for InFlight {
+impl Drop for CleanupInFlight {
     fn drop(&mut self) {
         if self.0.in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
             self.0.idle.notify_waiters();

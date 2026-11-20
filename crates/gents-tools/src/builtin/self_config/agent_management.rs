@@ -62,7 +62,7 @@ impl From<AgentApplyError> for AgentOperationError {
         match error {
             AgentApplyError::Operation(error) => error,
             AgentApplyError::Other(error) => {
-                Self::Passthrough(error.reallocate_into_boxed_dyn_error_without_backtrace())
+                Self::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
             }
         }
     }

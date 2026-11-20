@@ -18,7 +18,22 @@ struct NetworkRow {
     admin_sig: String,
 }
 
+/// The runtime's enrollment root, created on first serve, or `None` on a home
+/// that serves without one and writes no `Network` row
+/// (`Identity.NodePublication.enrollmentRoot`).
 pub async fn ensure_enrollment_network(
+    node: &Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
+    display_name: &str,
+) -> Result<Option<NetworkRecord>> {
+    use gents_store::local::document_acp::{enrollment_root, provider_of, EnrollmentRoot};
+    if enrollment_root(provider_of(node)) == EnrollmentRoot::Absent {
+        return Ok(None);
+    }
+    load_or_create(node, identity, display_name).await.map(Some)
+}
+
+async fn load_or_create(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     display_name: &str,

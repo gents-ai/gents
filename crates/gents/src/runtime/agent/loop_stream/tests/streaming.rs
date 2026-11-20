@@ -12,7 +12,7 @@ async fn loop_terminal_follows_the_lean_model() {
         .await;
         let node = db.node.clone();
         let actor = identity::Did::new(&binding.agent_did).unwrap();
-        let model = ScriptedModel::new_turns(vec![
+        let model = scripted(vec![
             vec![
                 RawStreamingChoice::Message("premature answer".to_string()),
                 RawStreamingChoice::FinalResponse(()),
@@ -67,7 +67,7 @@ async fn loop_terminal_follows_the_lean_model() {
                 _ => {}
             }
         }
-        let histories = model.seen_histories().await;
+        let histories = model.histories();
         let next_turn = histories.get(1).map(|history| format!("{history:?}"));
         let handling = match (&reminder, saw_final, histories.len()) {
             (None, true, 1) => "release",
@@ -104,10 +104,10 @@ async fn loop_terminal_follows_the_lean_model() {
 #[tokio::test]
 async fn retry_entry_does_not_publish_recorded_prompt_again() {
     for case in gents_lean_vocab::families::contracts_retry_entry_publish::cases() {
-        let model = ScriptedModel::new(vec![
+        let model = scripted([vec![
             RawStreamingChoice::Message("continued".into()),
             RawStreamingChoice::FinalResponse(()),
-        ]);
+        ]]);
         let mut loop_config = config(1);
         loop_config.resume_from_history = case.input.resume;
         let context = gents_inference::rendered_request::RenderedRequestContext {
@@ -126,11 +126,11 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             Arc::new(|_| Box::pin(async { Ok(()) })),
         );
         loop_config.on_rendered_request = Some(
-            gents_inference::rendered_request::scope::ambient_arming_sink(
+            gents_inference::rendered_request::scope::arming_sink(
                 gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
             ),
         );
-        let authored = gents_inference::rendered_request::scope::scope_request(scope, async {
+        let authored = { loop_config.provider_call.capture = Some(scope); async {
             let stream = run_loop_stream(
                 model,
                 Some(gents_loop::session_hook::NoopSessionHook),
@@ -157,7 +157,7 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
                 }
             }
             authored
-        })
+        } }
         .await;
         case.check(
             gents_lean_vocab::families::contracts_retry_entry_publish::RetryEntryPublication {

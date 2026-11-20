@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::{ensure, Context, Result};
 use serde_json::Value;
 
@@ -117,7 +115,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
             "--node-did", &live.node, "--content", &prompt, "--no-wait"]).await?;
         let request = submitted["request_id"].as_str().context("request id")?;
         let query = format!(r#"{{AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash_unrestricted"}}}}) {{lifecycle_state}}}}"#, crate::support::escape_graphql_string(request));
-        gents::support::live_inference::wait_for_rows(&live.access, "AgentToolCall", &query, Duration::from_secs(30), |data| {
+        gents::support::live_inference::rows_when(&live.access, "AgentToolCall", &query,|data| {
             data["AgentToolCall"].as_array().is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
         }).await;
         let interrupted = live.json(&["utils", "debug", "request", "interrupt", "--graphql", &live.graphql,

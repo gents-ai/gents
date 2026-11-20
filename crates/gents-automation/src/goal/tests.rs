@@ -158,13 +158,15 @@ async fn auto_resume_access() -> (
             .transact_write("test.auto_resume_session", |txn| {
                 Box::pin(gents_session::session::ensure_session_in_txn(
                     txn,
-                    session,
-                    root.did(),
-                    agent.did(),
-                    Some(agent.did()),
-                    None,
-                    None,
-                    "2026-11-04T00:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: session,
+                        node_did: root.did(),
+                        agent_did: agent.did(),
+                        requester_did: Some(agent.did()),
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-11-04T00:00:00Z",
+                    },
                 ))
             })
             .await
@@ -476,13 +478,15 @@ async fn goal_and_claim_publication_links_match_lean() {
                 Box::pin(async move {
                     gents_session::session::ensure_session_in_txn(
                         txn,
-                        "links-session",
-                        runtime.did(),
-                        agent.did(),
-                        Some(user.did()),
-                        None,
-                        None,
-                        "2026-11-04T00:00:00Z",
+                        gents_session::session::NewAgentSession {
+                            session_id: "links-session",
+                            node_did: runtime.did(),
+                            agent_did: agent.did(),
+                            requester_did: Some(user.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-11-04T00:00:00Z",
+                        },
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -553,10 +557,24 @@ async fn goal_and_claim_publication_links_match_lean() {
             Box::pin(async move {
                 let doc = if mode == "fresh" {
                     let staged = stage_goal_and_claim(
-                        txn, runtime.did(), "links-session", "Finish work", None,
-                        GoalState { status: GoalStatus::Active, blocked_audits: 0,
-                            wrapup_requested: false, wrapup_completed: false },
-                        "2026-11-04T00:00:00Z", None, None,
+                        txn,
+                        GoalStaging {
+                            start: crate::operations::goal::GoalStart {
+                                node_did: runtime.did(),
+                                session_id: "links-session",
+                                objective: "Finish work",
+                                token_budget: None,
+                            },
+                            initial_state: GoalState {
+                                status: GoalStatus::Active,
+                                blocked_audits: 0,
+                                wrapup_requested: false,
+                                wrapup_completed: false,
+                            },
+                            now: "2026-11-04T00:00:00Z",
+                            identity: None,
+                            first_request_doc_id: None,
+                        },
                     ).await?;
                     if collection == "Goal" {
                         staged.goal.doc_id
@@ -875,13 +893,15 @@ async fn signed_relationship_repair_rebuilds_after_a_concurrent_goal_write() {
             Box::pin(async move {
                 gents_session::session::ensure_session_in_txn(
                     txn,
-                    "repair-session",
-                    runtime.did(),
-                    agent.did(),
-                    Some(user.did()),
-                    None,
-                    None,
-                    "2026-11-04T00:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: "repair-session",
+                        node_did: runtime.did(),
+                        agent_did: agent.did(),
+                        requester_did: Some(user.did()),
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-11-04T00:00:00Z",
+                    },
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(())

@@ -6,7 +6,6 @@ use serde_json::json;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 
-use chrono::Utc;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 
 struct PanickingTool;
@@ -101,7 +100,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         &["panicking_tool".into()],
     ))
     .with_background_execution_registry(executions.clone());
-    bind_claimed_hook_request(&hook, lifecycle, Utc::now() + chrono::Duration::minutes(5)).await;
+    bind_claimed_hook_request(&hook, lifecycle).await;
     hook.on_completion_call(&user_text_message("run tool"), &[])
         .await;
     let args = r#"{"tool_name":"panicking_tool","args":{}}"#;
@@ -112,7 +111,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
             None,
             "meta-background-panic",
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     let ToolCallHookAction::Skip { reason } = action else {

@@ -18,7 +18,8 @@ pub use response::{
 #[cfg(feature = "native")]
 pub use transport::{
     execute_graphql_async, execute_graphql_with_variables_async, graphql_endpoint_available,
-    graphql_error_is_retryable, graphql_transport_error_in_chain,
+    graphql_error_is_retryable, graphql_transport_error_in_chain, graphql_transport_source,
+    store_http_client_builder,
 };
 pub use transport::{GraphqlRequestOptions, POOLED_CONNECTION_IDLE_LIMIT};
 pub use turn_state::{
@@ -35,5 +36,7 @@ type Result<T, E = GraphqlError> = std::result::Result<T, E>;
 #[cfg(test)]
 mod tests;
 
+#[cfg(all(test, feature = "native"))]
+mod retry_classification_tests;
 #[cfg(all(test, feature = "native"))]
 mod tx_tests;

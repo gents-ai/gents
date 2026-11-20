@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use chrono::Utc;
 use gents_inference::llm::{HookAction, ToolCallHookAction};
 use gents_store::identity::NodeIdentity;
 use gents_toolcalls::call::hook::fixtures::*;
@@ -29,13 +28,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.unwrap();
-    bind_managed_hook_request(
-        &mut hook,
-        "goal-request",
-        &identity,
-        Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_managed_hook_request(&mut hook, "goal-request", &identity).await;
     let access = hook.actor_access().unwrap();
 
     accept_hook_tool_call(
@@ -52,7 +45,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-create-forged",
             r#"{"objective":"ship","node_did":"did:test:other","session_id":"other"}"#,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(
@@ -85,7 +78,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-create-valid",
             r#"{"objective":"ship","token_budget":1000}"#,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(matches!(created, ToolCallHookAction::Skip { .. }));
@@ -119,7 +112,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-update-forged",
             r#"{"status":"complete","session_id":"other"}"#,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(matches!(forged_update, ToolCallHookAction::Skip { .. }));
@@ -172,7 +165,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
                 None,
                 id,
                 args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await,
             ToolCallHookAction::Skip { .. }
@@ -212,7 +205,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-get-valid",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await,
         ToolCallHookAction::Skip { .. }
@@ -231,7 +224,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-update-valid",
             r#"{"status":"complete","reason":"done"}"#,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await,
         ToolCallHookAction::Skip { .. }
@@ -257,14 +250,23 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
 
 #[tokio::test]
 async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
+    let replays =
+        gents_lean_vocab::families::dispatch_observation_contracts_control_replay::cases();
+    for replay in &replays {
+        assert!(
+            replay
+                .input
+                .inputs
+                .iter()
+                .all(|step| step.acknowledged && step.policy_allows),
+            "{}: the control scenario elects acknowledged, allowed attempts",
+            replay.input.name
+        );
+    }
     for case in gents_lean_vocab::families::contracts_goal_create_committed::cases::<
         crate::goal::GoalCreateDisposition,
     >() {
         let goal_case = &case.input;
-        let replay = gents_lean_vocab::lean_canonical_dispatch_observation_cases()
-            .iter()
-            .find(|case| case.name == "won_dispatch_then_replay")
-            .unwrap();
         let args = json!({"objective": goal_case.objective}).to_string();
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
             let mut completion_mutation = None;
@@ -287,19 +289,13 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     HookAction::Continue
                 ));
                 let session = hook.session_id().await.unwrap();
-                bind_managed_hook_request(
-                    &mut hook,
-                    "control-receipt",
-                    &identity,
-                    Utc::now() + chrono::Duration::minutes(5),
-                )
-                .await;
+                bind_managed_hook_request(&mut hook, "control-receipt", &identity).await;
                 let access = hook.actor_access().unwrap();
                 accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
                 let (action, trace) =
                     gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_and_trace(
                         completion_mutation,
-                        hook.on_tool_call("create_goal", None, "control-call", &args, &gents_loop::tool::ToolCallEnvelope::ambient()),
+                        hook.on_tool_call("create_goal", None, "control-call", &args, &gents_loop::tool::ToolCallEnvelope::default()),
                     )
                     .await;
                 let mutations = trace.len();
@@ -326,24 +322,21 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                         "{action:?}"
                     );
                     let row = fetch_tool_call_row(&hook, &session, "control-call").await;
-                    assert_eq!(
-                        row["lifecycle_state"].as_str() == Some("running"),
-                        replay.expected[0].running,
-                        "{row}"
-                    );
                     let again = hook
                         .on_tool_call(
                             "create_goal",
                             None,
                             "control-call",
                             &args,
-                            &gents_loop::tool::ToolCallEnvelope::ambient(),
+                            &gents_loop::tool::ToolCallEnvelope::default(),
                         )
                         .await;
-                    assert_eq!(
-                        matches!(again, ToolCallHookAction::Continue),
-                        replay.expected[1].may_invoke
-                    );
+                    for replay in &replays {
+                        replay.check(Some(gents_lean_vocab::families::dispatch_observation_contracts_control_replay::ControlReplayOutput {
+                            elected_running: row["lifecycle_state"].as_str() == Some("running"),
+                            replay_may_invoke: matches!(again, ToolCallHookAction::Continue),
+                        }));
+                    }
                     let after = access
                         .transact_readonly("test.hook_control_goal", |txn| {
                             Box::pin(crate::goal::load_canonical_goal_in_txn(

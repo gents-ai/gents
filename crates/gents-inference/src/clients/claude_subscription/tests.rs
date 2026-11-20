@@ -1,4 +1,8 @@
-use rig::completion::ToolDefinition;
+use rig::client::CompletionClient;
+use rig::completion::{CompletionModel, ToolDefinition};
+use rig::OneOrMany;
+
+use crate::llm::rig_compat::model::LiftedModel;
 
 use super::*;
 use crate::auth::credential::test_support::{seed_credential, test_node};
@@ -55,7 +59,7 @@ async fn fixture_stream_maps_tool_use_without_touching_the_bearer() {
         ),
     ]);
     let client = test_client();
-    let model = client.completion_model("claude-sonnet-5");
+    let model = client.clone().lifted().completion_model("claude-sonnet-5");
     let mut stream = model.stream(echo_tool_request()).await.expect("stream");
     use rig::streaming::StreamedAssistantContent;
     let mut calls = Vec::new();
@@ -70,7 +74,7 @@ async fn fixture_stream_maps_tool_use_without_touching_the_bearer() {
                 ));
             }
             StreamedAssistantContent::Final(final_response) => {
-                usage = final_response.token_usage();
+                usage = final_response.usage;
                 break;
             }
             other => panic!("unexpected chunk: {other:?}"),
@@ -99,7 +103,7 @@ async fn messages_http_fixture_streams_text_turn_on_empty_surface() {
     crate::clients::claude_messages::install_messages_sse_fixtures(vec![
         crate::clients::claude_messages::sse_fixture_final_text("pong"),
     ]);
-    let model = test_client().completion_model("claude-sonnet-5");
+    let model = test_client().lifted().completion_model("claude-sonnet-5");
     let response = model.completion(ping_request()).await.expect("text turn");
     let text = response
         .choice
@@ -117,7 +121,7 @@ async fn live_path_without_fixture_asks_the_bearer_and_fails_closed_on_bearer_er
     let _guard = crate::clients::claude_messages::lock_fixtures_for_test().await;
     let client =
         ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")));
-    let model = client.completion_model("claude-sonnet-5");
+    let model = client.clone().lifted().completion_model("claude-sonnet-5");
     let err = model
         .completion(ping_request())
         .await
@@ -138,7 +142,7 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
     ]);
     let client =
         ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")));
-    let model = client.completion_model("claude-sonnet-5");
+    let model = client.clone().lifted().completion_model("claude-sonnet-5");
     model
         .completion(ping_request())
         .await
@@ -235,18 +239,18 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800}"#,
     )
     .await;
-    let _env = crate::auth::credential::test_support::TOKEN_URL_ENV
-        .lock()
-        .await;
-    std::env::set_var(
-        crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+    let _refreshing = crate::auth::credential::test_support::bearer_refreshing_at(
+        &node,
+        did,
+        crate::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        crate::auth::credential::OAuthRefreshKind::Claude,
+        crate::auth::claude::CLAUDE_OAUTH_PRODUCT,
         &url,
     );
     let client = ClaudeSubscriptionClient::build(std::sync::Arc::default(), node, did, None)
         .await
         .expect("client");
     let bearer = client.accounts[0].bearer.current_bearer().await;
-    std::env::remove_var(crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     assert_eq!(bearer.expect("token"), "access-NEW");
 
     let request = handle.await.expect("server");
@@ -402,7 +406,7 @@ mod pool_client {
     ) -> (
         Arc<UsageCache>,
         ClaudeSubscriptionClient<StaticBearer>,
-        ClaudeSubscriptionModel<StaticBearer>,
+        LiftedModel<ClaudeSubscriptionModel<StaticBearer>>,
     ) {
         let cache = Arc::new(UsageCache::default());
         let node = test_node().await;
@@ -434,7 +438,7 @@ mod pool_client {
             }),
             route: ClaudeRoute::first_party(crate::clients::claude_messages::MESSAGES_URI),
         };
-        let model = client.completion_model("claude-sonnet-5");
+        let model = client.clone().lifted().completion_model("claude-sonnet-5");
         (cache, client, model)
     }
 
@@ -467,13 +471,14 @@ mod pool_client {
         )
         .await;
         let (cache, _client, model) = pool_model(&["id-a", "id-b"]).await;
-        let rotation = model.rotation.as_ref().expect("rotation");
+        let rotation = model.0.rotation.as_ref().expect("rotation");
         let err = open_rotated(
+            &Default::default(),
             &ClaudeRoute::first_party(&url),
             "claude-sonnet-5",
             &session_request("s"),
             RapidHashSet::new(),
-            &model.accounts,
+            &model.0.accounts,
             rotation,
         )
         .await
@@ -504,13 +509,14 @@ mod pool_client {
         cache
             .claude_accounts()
             .reject(&"id-b".to_string(), now, 4_102_448_400);
-        let rotation = model.rotation.as_ref().expect("rotation");
+        let rotation = model.0.rotation.as_ref().expect("rotation");
         let err = open_rotated(
+            &Default::default(),
             &ClaudeRoute::first_party("http://127.0.0.1:1"),
             "claude-sonnet-5",
             &ping_request(),
             RapidHashSet::new(),
-            &model.accounts,
+            &model.0.accounts,
             rotation,
         )
         .await

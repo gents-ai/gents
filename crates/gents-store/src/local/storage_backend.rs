@@ -2,11 +2,11 @@ use gents_protocol::operations::install_repair::{IncompatibleStore, Incompatible
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use gents_protocol::error_chain::find_map_source;
+use gents_protocol::error_chain::{as_owner, find_map_source};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageBackendError {
-    #[error(transparent)]
+    #[error("{0}")]
     Incompatible(#[from] IncompatibleStore),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -44,15 +44,13 @@ type Result<T, E = StorageBackendError> = std::result::Result<T, E>;
 /// durability; the upstream embedded profile restricts document sizes and
 /// disables background compaction. These are per-store working-set targets,
 /// not a process RSS limit.
-pub fn regolith_options() -> storage::RegolithStoreOptions {
+pub fn regolith_options(block_cache_bytes: usize) -> storage::RegolithStoreOptions {
     let mut options = storage::RegolithStoreOptions::default();
     options.engine = options
         .engine
         .write_buffer_size(32 * 1024 * 1024)
         .max_write_buffer_number(2)
-        .block_cache_size(block_cache_size(
-            std::env::var("GENTS_BLOCK_CACHE_MB").ok().as_deref(),
-        ));
+        .block_cache_size(block_cache_bytes);
     options
 }
 
@@ -61,15 +59,6 @@ pub fn regolith_options() -> storage::RegolithStoreOptions {
 /// spent most of its worker time re-reading, decrypting and decompressing
 /// evicted blocks.
 pub const DEFAULT_BLOCK_CACHE_BYTES: usize = 512 * 1024 * 1024;
-
-/// The block cache size `GENTS_BLOCK_CACHE_MB` asks for (whole MiB, at least
-/// one), else [`DEFAULT_BLOCK_CACHE_BYTES`].
-fn block_cache_size(mib: Option<&str>) -> usize {
-    mib.and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|mib| *mib > 0)
-        .and_then(|mib| mib.checked_mul(1024 * 1024))
-        .unwrap_or(DEFAULT_BLOCK_CACHE_BYTES)
-}
 
 /// Inspect the exact on-disk markers owned by the storage backend without
 /// opening or mutating the store.
@@ -134,7 +123,7 @@ pub async fn refuse_other_version_schema(
     let builder = defra_node::Node::builder()
         .data_path(data_path)
         .with_storage_backend(defra_node::StorageBackend::Regolith)
-        .with_regolith_options(regolith_options());
+        .with_regolith_options(regolith_options(DEFAULT_BLOCK_CACHE_BYTES));
     let builder = match key {
         Some(key) => key.encrypt(builder),
         None => builder,
@@ -164,12 +153,21 @@ pub fn incompatible_store(
             data_path: key.path.clone(),
         });
     }
-    if matches!(
-        super::backend_protection::BackendProtectionError::in_chain(error),
-        Some(super::backend_protection::BackendProtectionError::MissingProvenance)
-    ) {
+    let protection =
+        super::backend_protection::BackendProtectionError::in_chain(error).and_then(|error| {
+            match error {
+                super::backend_protection::BackendProtectionError::MissingProvenance => {
+                    Some(IncompatibleStoreKind::UnknownLineage)
+                }
+                super::backend_protection::BackendProtectionError::DocumentAcp(refused) => {
+                    refused.refusal()
+                }
+                _ => None,
+            }
+        });
+    if let Some(kind) = protection {
         return Some(IncompatibleStore {
-            kind: IncompatibleStoreKind::UnknownLineage,
+            kind,
             data_path: data_path.to_path_buf(),
         });
     }
@@ -193,46 +191,26 @@ pub fn incompatible_store(
 
 /// Each owner is asked by its own type too, since transparent wrappers
 /// forward `source()` past the sentinel they carry.
-fn find_incompatible<'a>(
+pub(crate) fn find_incompatible<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a IncompatibleStore> {
     find_map_source(error, |cause| {
         IncompatibleStore::of(cause)
-            .or_else(|| cause.downcast_ref::<StorageBackendError>()?.incompatible())
+            .or_else(|| as_owner::<crate::local::store_key::StoreKeyError>(cause)?.incompatible())
             .or_else(|| {
-                cause
-                    .downcast_ref::<crate::local::store_key::StoreKeyError>()?
-                    .incompatible()
-            })
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::local::store_key::upgrade::UpgradeError>()?
-                    .incompatible()
+                as_owner::<crate::local::store_key::upgrade::UpgradeError>(cause)?.incompatible()
             })
     })
 }
 
-fn find_insecure_key<'a>(
+pub(crate) fn find_insecure_key<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a crate::identity::InsecureKeyPermissions> {
     find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<crate::identity::InsecureKeyPermissions>()
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::identity::IdentityError>()?
-                    .insecure_key()
-            })
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::local::store_key::StoreKeyError>()?
-                    .insecure_key()
-            })
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::config_client::ConfigClientError>()?
-                    .insecure_key()
-            })
+        as_owner::<crate::identity::InsecureKeyPermissions>(cause)
+            .or_else(|| as_owner::<crate::identity::IdentityError>(cause)?.insecure_key())
+            .or_else(|| as_owner::<crate::local::store_key::StoreKeyError>(cause)?.insecure_key())
+            .or_else(|| crate::config_client::access_owner(cause)?.insecure_key())
     })
 }
 
@@ -359,25 +337,12 @@ mod tests {
     }
 
     #[test]
-    fn block_cache_size_defaults_and_honors_override() {
-        assert_eq!(block_cache_size(None), DEFAULT_BLOCK_CACHE_BYTES);
-        assert_eq!(block_cache_size(Some("2048")), 2048 * 1024 * 1024);
-        assert_eq!(block_cache_size(Some(" 128 ")), 128 * 1024 * 1024);
-        for invalid in ["", "0", "-1", "lots", "1.5"] {
-            assert_eq!(block_cache_size(Some(invalid)), DEFAULT_BLOCK_CACHE_BYTES);
-        }
-    }
-
-    #[test]
     fn in_process_budget_preserves_server_acceptance_and_commit_settings() {
         let server = storage::RegolithStoreOptions::default();
-        let local = regolith_options();
+        let local = regolith_options(128 * 1024 * 1024);
         assert_eq!(local.engine.get_write_buffer_size(), 32 * 1024 * 1024);
         assert_eq!(local.engine.get_max_write_buffer_number(), 2);
-        assert_eq!(
-            local.engine.get_block_cache_size(),
-            block_cache_size(std::env::var("GENTS_BLOCK_CACHE_MB").ok().as_deref())
-        );
+        assert_eq!(local.engine.get_block_cache_size(), 128 * 1024 * 1024);
         assert_eq!(
             local.engine.get_max_key_size(),
             server.engine.get_max_key_size()
@@ -539,8 +504,8 @@ mod tests {
         );
     }
 
-    /// A store from before backend protection (v1.0.0-rc1 and earlier) has
-    /// no provenance marker; it is refused as an older home, with the
+    /// A store from before backend protection, or from an earlier lineage
+    /// version, has no marker of this version's lineage; it is refused as an older home, with the
     /// start-fresh message, not as an internal fault.
     #[test]
     fn a_store_without_backend_provenance_is_an_older_home() {
@@ -586,7 +551,7 @@ mod tests {
         crate::test_support::node_builder()
             .data_path(data)
             .with_storage_backend(defra_node::StorageBackend::Regolith)
-            .with_regolith_options(regolith_options())
+            .with_regolith_options(regolith_options(DEFAULT_BLOCK_CACHE_BYTES))
             .build()
             .await
             .unwrap()

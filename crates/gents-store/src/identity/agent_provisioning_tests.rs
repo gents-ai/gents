@@ -75,9 +75,7 @@ async fn modeled_application_pairing_access_controls_native_overlay() -> anyhow:
     let cases = gents_lean_vocab::families::application_pairing_access_cases::cases();
     let dir = tempfile::tempdir()?;
     let mut actors = Vec::new();
-    for name in [
-        "user", "author", "engineer", "runtime", "manager", "sibling",
-    ] {
+    for name in ["user", "author", "engineer", "runtime", "sibling"] {
         let key = KeyIdentity::load_or_create(dir.path().join(name), None)?;
         actors.push((name, identity::Did::new(key.did())?));
     }
@@ -105,11 +103,7 @@ async fn modeled_application_pairing_access_controls_native_overlay() -> anyhow:
         "overlay",
     )
     .await?;
-    for (relation, actor) in [
-        ("administrator", "engineer"),
-        ("runtime_reader", "runtime"),
-        ("agent_manager", "manager"),
-    ] {
+    for (relation, actor) in [("administrator", "engineer"), ("runtime_reader", "runtime")] {
         assert!(
             acp.add_relationship(
                 &did("user"),

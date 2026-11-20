@@ -1,4 +1,5 @@
 use super::*;
+use crate::operations::goal::GoalStart;
 use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 
 pub(super) mod fingerprint;
@@ -43,19 +44,21 @@ fn resolve_ambiguous_goal_submission_commit(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn stage_goal_backed_request(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    session_id: &str,
-    objective: &str,
-    token_budget: Option<i64>,
+    start: GoalStart<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&GoalCreationIdentity>,
     client_graph: Option<&std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
     reserved_runtime_session: bool,
 ) -> Result<StagedGoalBackedRequest> {
-    let objective = objective.trim();
+    let GoalStart {
+        node_did,
+        session_id,
+        token_budget,
+        ..
+    } = start;
+    let objective = start.objective.trim();
     anyhow::ensure!(!objective.is_empty(), "goal objective must be non-empty");
     anyhow::ensure!(
         token_budget.is_none_or(|budget| budget > 0),
@@ -165,19 +168,18 @@ async fn stage_goal_backed_request(
     .await?;
     let staged_goal = stage_goal_and_claim(
         txn,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-        GoalState {
-            status: GoalStatus::Active,
-            blocked_audits: 0,
-            wrapup_requested: false,
-            wrapup_completed: false,
+        GoalStaging {
+            start: GoalStart { objective, ..start },
+            initial_state: GoalState {
+                status: GoalStatus::Active,
+                blocked_audits: 0,
+                wrapup_requested: false,
+                wrapup_completed: false,
+            },
+            now: &Utc::now().to_rfc3339(),
+            identity,
+            first_request_doc_id: Some(&request_doc_id),
         },
-        &Utc::now().to_rfc3339(),
-        identity,
-        Some(&request_doc_id),
     )
     .await?;
     if disposition == GoalBackedRequestDisposition::Created {
@@ -244,18 +246,13 @@ pub(crate) async fn submit_goal_backed_request(
                     )));
                 };
                 let actor = acting_in_txn(txn, node_did, &session.session.agent_did).await?;
-                if let Err(refusal) = admit_start_in_txn(
-                    txn,
-                    actor,
+                let start = GoalStart {
                     node_did,
                     session_id,
                     objective,
                     token_budget,
-                    None,
-                    None,
-                )
-                .await?
-                {
+                };
+                if let Err(refusal) = admit_start_in_txn(txn, actor, start, None, None).await? {
                     return Ok(Err(refusal));
                 }
                 let Some(signer) = txn.actor_did() else {
@@ -263,30 +260,17 @@ pub(crate) async fn submit_goal_backed_request(
                 };
                 if let Err(refusal) = check_first_request(
                     request,
-                    node_did,
-                    session_id,
-                    &session.session.agent_did,
-                    session.session.requester_did.as_deref(),
+                    &session.session,
                     signer,
                     &gents_protocol::goal::deterministic_goal_id(node_did, session_id),
                     None,
                 ) {
                     return Ok(Err(refusal));
                 }
-                stage_goal_backed_request(
-                    txn,
-                    node_did,
-                    session_id,
-                    objective,
-                    token_budget,
-                    request,
-                    None,
-                    None,
-                    false,
-                )
-                .await
-                .and_then(authorize_goal_submission_commit)
-                .map(Ok)
+                stage_goal_backed_request(txn, start, request, None, None, false)
+                    .await
+                    .and_then(authorize_goal_submission_commit)
+                    .map(Ok)
             })
         })
         .await;
@@ -323,10 +307,12 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
 ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
     stage_goal_backed_request_with_identity_in_txn(
         txn,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
+        GoalStart {
+            node_did,
+            session_id,
+            objective,
+            token_budget,
+        },
         request,
         None,
         None,
@@ -334,30 +320,16 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    session_id: &str,
-    objective: &str,
-    token_budget: Option<i64>,
+    start: GoalStart<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&GoalCreationIdentity>,
     client_graph: Option<&std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
 ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
-    stage_goal_backed_request(
-        txn,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-        request,
-        identity,
-        client_graph,
-        false,
-    )
-    .await
-    .and_then(authorize_goal_submission_commit)?;
+    stage_goal_backed_request(txn, start, request, identity, client_graph, false)
+        .await
+        .and_then(authorize_goal_submission_commit)?;
     let retry_key = request
         .retry_key
         .as_deref()
@@ -394,17 +366,19 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn submit_goal_backed_request_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
-    node_did: &str,
-    session_id: &str,
-    objective: &str,
-    token_budget: Option<i64>,
+    start: GoalStart<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&dyn gents_store::identity::NodeIdentity>,
 ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
+    let GoalStart {
+        node_did,
+        session_id,
+        objective,
+        token_budget,
+    } = start;
     let access = gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
         node.clone(),
         actor,
@@ -469,19 +443,9 @@ pub async fn submit_goal_backed_request_with_identity(
                 *bound_ref
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner()) = Some(create.clone());
-                stage_goal_backed_request(
-                    txn,
-                    node_did,
-                    session_id,
-                    objective,
-                    token_budget,
-                    &create,
-                    None,
-                    None,
-                    reserved,
-                )
-                .await
-                .and_then(authorize_goal_submission_commit)
+                stage_goal_backed_request(txn, start, &create, None, None, reserved)
+                    .await
+                    .and_then(authorize_goal_submission_commit)
             })
         })
         .await;

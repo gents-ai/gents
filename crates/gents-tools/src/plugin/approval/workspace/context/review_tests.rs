@@ -52,8 +52,9 @@ impl Fixture {
         .with_reviewer(reviewer)
     }
 
-    fn decision(&self, covered: bool) -> BindingDecision {
+    fn decision(&self, context: &Context, covered: bool) -> BindingDecision {
         workspace::binding_route(
+            Some(context),
             &self.home,
             || {
                 Ok(BindingAction::Command {
@@ -70,6 +71,14 @@ impl Fixture {
         .unwrap()
         .unwrap()
     }
+}
+
+fn approval(context: &Context) -> gents_loop::tool::ToolCallEnvelope {
+    crate::runtime_context::ToolHostContext {
+        approval: Some(context.clone()),
+        ..Default::default()
+    }
+    .call()
 }
 
 fn reply(id: &str, verdict: &str) -> String {
@@ -103,22 +112,31 @@ async fn reviews_are_serialized_and_routine_actions_skip_the_reviewer() {
             })
         }
     });
-    scope(Some(fixture.context(reviewer)), async {
-        assert!(
-            workspace::consent_binding(&fixture.home, fixture.decision(true), false, None)
-                .await
-                .unwrap()
-        );
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        let mut first = Box::pin(workspace::consent_binding(
+    let review_context = fixture.context(reviewer);
+    async {
+        assert!(workspace::consent_binding(
+            &approval(&review_context),
             &fixture.home,
-            fixture.decision(false),
+            fixture.decision(&review_context, true),
+            false,
+            None
+        )
+        .await
+        .unwrap());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let ambient_call_117 = approval(&review_context);
+        let mut first = Box::pin(workspace::consent_binding(
+            &ambient_call_117,
+            &fixture.home,
+            fixture.decision(&review_context, false),
             false,
             None,
         ));
+        let ambient_call_124 = approval(&review_context);
         let mut second = Box::pin(workspace::consent_binding(
+            &ambient_call_124,
             &fixture.home,
-            fixture.decision(false),
+            fixture.decision(&review_context, false),
             false,
             None,
         ));
@@ -134,7 +152,7 @@ async fn reviews_are_serialized_and_routine_actions_skip_the_reviewer() {
         assert!(approval::pending_requests(&fixture.home)
             .unwrap()
             .is_empty());
-    })
+    }
     .await;
 }
 
@@ -142,10 +160,8 @@ async fn reviews_are_serialized_and_routine_actions_skip_the_reviewer() {
 async fn a_routine_decision_cannot_be_carried_to_another_workspace() {
     let fixture = Fixture::new();
     let reviewer: Reviewer = Arc::new(|_| panic!("routine action does not need review"));
-    let decision = scope(Some(fixture.context(reviewer)), async {
-        fixture.decision(true)
-    })
-    .await;
+    let review_context = fixture.context(reviewer);
+    let decision = async { fixture.decision(&review_context, true) }.await;
     let other = tempfile::tempdir().unwrap();
     let context = for_request(
         Some(&fixture.home),
@@ -156,9 +172,12 @@ async fn a_routine_decision_cannot_be_carried_to_another_workspace() {
         None,
     )
     .unwrap();
-    let error = scope(
-        context,
-        workspace::consent_binding(&fixture.home, decision, false, None),
+    let error = workspace::consent_binding(
+        &approval(context.as_ref().unwrap()),
+        &fixture.home,
+        decision,
+        false,
+        None,
     )
     .await
     .unwrap_err();
@@ -181,10 +200,13 @@ async fn unavailable_review_uses_the_same_question_for_human_consent() {
             Box::pin(async { Ok(Some(reply("another-action", "allow"))) })
         }
     });
-    scope(Some(fixture.context(reviewer)), async {
+    let review_context = fixture.context(reviewer);
+    async {
+        let ambient_call_197 = approval(&review_context);
         let mut consent = Box::pin(workspace::consent_binding(
+            &ambient_call_197,
             &fixture.home,
-            fixture.decision(false),
+            fixture.decision(&review_context, false),
             true,
             None,
         ));
@@ -203,7 +225,7 @@ async fn unavailable_review_uses_the_same_question_for_human_consent() {
         assert!(approval::pending_requests(&fixture.home)
             .unwrap()
             .is_empty());
-    })
+    }
     .await;
 }
 
@@ -221,10 +243,13 @@ async fn changing_permissions_during_review_cannot_authorize_the_old_action() {
             })
         }
     });
-    scope(Some(fixture.context(reviewer)), async {
+    let review_context = fixture.context(reviewer);
+    async {
+        let ambient_call_238 = approval(&review_context);
         let mut consent = Box::pin(workspace::consent_binding(
+            &ambient_call_238,
             &fixture.home,
-            fixture.decision(false),
+            fixture.decision(&review_context, false),
             false,
             None,
         ));
@@ -238,7 +263,7 @@ async fn changing_permissions_during_review_cannot_authorize_the_old_action() {
         assert!(approval::pending_requests(&fixture.home)
             .unwrap()
             .is_empty());
-    })
+    }
     .await;
 }
 
@@ -256,19 +281,29 @@ async fn a_review_that_cancels_the_caller_cannot_release_the_command() {
             })
         }
     });
-    scope(
-        Some(fixture.context(reviewer)),
-        crate::runtime_context::scope_request_tool_execution(None, cancellation, async {
-            let error =
-                workspace::consent_binding(&fixture.home, fixture.decision(false), true, None)
-                    .await
-                    .unwrap_err();
-            assert!(error.to_string().contains("cancelled"));
-            assert!(approval::pending_requests(&fixture.home)
-                .unwrap()
-                .is_empty());
-        }),
-    )
+    let scope_call =
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, cancellation).call();
+    let review_context = fixture.context(reviewer);
+    async {
+        let error = workspace::consent_binding(
+            &scope_call
+                .clone()
+                .with_extension(crate::runtime_context::ToolHostContext {
+                    approval: Some(review_context.clone()),
+                    ..Default::default()
+                }),
+            &fixture.home,
+            fixture.decision(&review_context, false),
+            true,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("cancelled"));
+        assert!(approval::pending_requests(&fixture.home)
+            .unwrap()
+            .is_empty());
+    }
     .await;
 }
 
@@ -284,23 +319,32 @@ async fn stop_cancels_review_before_a_human_question_can_be_published() {
         }
     });
     let cancellation = tokio_util::sync::CancellationToken::new();
-    scope(
-        Some(fixture.context(reviewer)),
-        crate::runtime_context::scope_request_tool_execution(None, cancellation.clone(), async {
-            let mut consent = Box::pin(workspace::consent_binding(
-                &fixture.home,
-                fixture.decision(false),
-                true,
-                None,
-            ));
-            assert!(futures::poll!(consent.as_mut()).is_pending());
-            assert_eq!(started.load(Ordering::SeqCst), 1);
-            cancellation.cancel();
-            assert!(consent.await.unwrap_err().to_string().contains("cancelled"));
-            assert!(approval::pending_requests(&fixture.home)
-                .unwrap()
-                .is_empty());
-        }),
-    )
+    let scope_call =
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, cancellation.clone())
+            .call();
+    let review_context = fixture.context(reviewer);
+    async {
+        let ambient_call_309 =
+            scope_call
+                .clone()
+                .with_extension(crate::runtime_context::ToolHostContext {
+                    approval: Some(review_context.clone()),
+                    ..Default::default()
+                });
+        let mut consent = Box::pin(workspace::consent_binding(
+            &ambient_call_309,
+            &fixture.home,
+            fixture.decision(&review_context, false),
+            true,
+            None,
+        ));
+        assert!(futures::poll!(consent.as_mut()).is_pending());
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        cancellation.cancel();
+        assert!(consent.await.unwrap_err().to_string().contains("cancelled"));
+        assert!(approval::pending_requests(&fixture.home)
+            .unwrap()
+            .is_empty());
+    }
     .await;
 }

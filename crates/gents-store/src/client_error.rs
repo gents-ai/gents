@@ -1,0 +1,835 @@
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum BridgeErrorCode {
+    ClientNotRunning,
+    ClientStartFailed,
+    LocalHistoryLocked,
+    /// Unlock the existing managed-runtime keys through an explicit user action.
+    RuntimeKeyAccess,
+    /// Storage recovery preserves retained history and unresolved submission identity.
+    StorageFull,
+    /// The read could not publish against the current observation fence.
+    ProjectionPending,
+    /// A verified runtime Goal-control rejection, never transport or message classification.
+    GoalControlRejected,
+    /// DefraDB explicitly rejected the authenticated operation.
+    PermissionDenied,
+    NotFound,
+    InvalidArgument,
+    Unsupported,
+    EndpointUnreachable,
+    PathEscapesRoot,
+    Backend,
+    IncompatibleLocalStore,
+    /// A local home this computer provisioned but never finished starting, so
+    /// the requested name was not created. Continue with it or start over.
+    UnfinishedLocalSetup,
+    Pairing,
+    CredentialNotSaved,
+    RuntimeStillBooting,
+    /// The session belongs to another requester, so core would refuse the send.
+    SessionNotOwned,
+    /// A DefraDB transaction conflict that outlasted the store's own attempts.
+    /// Retryable only when the store confirmed the failed attempt did not
+    /// commit (Lean `TransactionReplay.clientMayRepeat`).
+    TransactionConflict,
+    /// The home asks for a credential this version of Gents cannot present.
+    UpdateRequired,
+    Unknown,
+}
+
+impl BridgeErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientNotRunning => "clientNotRunning",
+            Self::ClientStartFailed => "clientStartFailed",
+            Self::LocalHistoryLocked => "localHistoryLocked",
+            Self::RuntimeKeyAccess => "runtimeKeyAccess",
+            Self::StorageFull => "storageFull",
+            Self::ProjectionPending => "projectionPending",
+            Self::GoalControlRejected => "goalControlRejected",
+            Self::PermissionDenied => "permissionDenied",
+            Self::NotFound => "notFound",
+            Self::InvalidArgument => "invalidArgument",
+            Self::Unsupported => "unsupported",
+            Self::EndpointUnreachable => "endpointUnreachable",
+            Self::PathEscapesRoot => "pathEscapesRoot",
+            Self::Backend => "backend",
+            Self::IncompatibleLocalStore => "incompatibleLocalStore",
+            Self::UnfinishedLocalSetup => "unfinishedLocalSetup",
+            Self::Pairing => "pairing",
+            Self::CredentialNotSaved => "credentialNotSaved",
+            Self::RuntimeStillBooting => "runtimeStillBooting",
+            Self::SessionNotOwned => "sessionNotOwned",
+            Self::TransactionConflict => "transactionConflict",
+            Self::UpdateRequired => "updateRequired",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn retryable(self) -> bool {
+        matches!(
+            self,
+            Self::ProjectionPending
+                | Self::ClientStartFailed
+                | Self::EndpointUnreachable
+                | Self::Backend
+                | Self::Pairing
+                | Self::CredentialNotSaved
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum BridgeNextCallKind {
+    Verb,
+    VerbHelp,
+    ResourceHelp,
+    Inspect,
+    List,
+    Preview,
+}
+
+/// The call an operation's refusal names, for the UI to offer as an action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeNextCall {
+    pub kind: BridgeNextCallKind,
+    pub resource: String,
+    pub verb: Option<String>,
+}
+
+impl From<gents_protocol::operations::NextCall> for BridgeNextCall {
+    fn from(next_call: gents_protocol::operations::NextCall) -> Self {
+        use gents_protocol::operations::NextCall;
+        let (kind, resource, verb) = match next_call {
+            NextCall::Verb { resource, verb } => (BridgeNextCallKind::Verb, resource, Some(verb)),
+            NextCall::VerbHelp { resource, verb } => {
+                (BridgeNextCallKind::VerbHelp, resource, Some(verb))
+            }
+            NextCall::ResourceHelp { resource } => {
+                (BridgeNextCallKind::ResourceHelp, resource, None)
+            }
+            NextCall::Inspect { resource } => (BridgeNextCallKind::Inspect, resource, None),
+            NextCall::List { resource } => (BridgeNextCallKind::List, resource, None),
+            NextCall::Preview { resource, verb } => {
+                (BridgeNextCallKind::Preview, resource, Some(verb))
+            }
+        };
+        Self {
+            kind,
+            resource: resource.to_owned(),
+            verb: verb.map(str::to_owned),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeError {
+    pub code: BridgeErrorCode,
+    pub message: String,
+    pub retryable: bool,
+    pub endpoint: Option<String>,
+    pub operation_code: Option<String>,
+    pub next_call: Option<Box<BridgeNextCall>>,
+    #[serde(skip)]
+    #[ts(skip)]
+    transport_source: Option<std::sync::Arc<reqwest::Error>>,
+}
+
+impl PartialEq for BridgeError {
+    fn eq(&self, other: &Self) -> bool {
+        self.code == other.code
+            && self.message == other.message
+            && self.retryable == other.retryable
+            && self.endpoint == other.endpoint
+            && self.operation_code == other.operation_code
+            && self.next_call == other.next_call
+    }
+}
+impl Eq for BridgeError {}
+
+impl BridgeError {
+    pub fn runtime_http_error(error: reqwest::Error, message: String) -> anyhow::Error {
+        if error.status().is_some_and(|status| {
+            matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            )
+        }) {
+            anyhow::Error::from(Self::new(
+                BridgeErrorCode::PermissionDenied,
+                "Access was denied. Check this client's permissions with the runtime owner.",
+            ))
+        } else if error.is_connect() || error.is_timeout() || error.is_body() {
+            let mut bridge = match error.url() {
+                Some(url) => {
+                    Self::endpoint_unreachable(url.origin().ascii_serialization(), message.clone())
+                }
+                None => Self::new(BridgeErrorCode::EndpointUnreachable, message.clone()),
+            };
+            bridge.transport_source = Some(std::sync::Arc::new(error));
+            anyhow::Error::from(bridge).context(message)
+        } else {
+            anyhow::Error::from(error).context(message)
+        }
+    }
+
+    /// What the person is told of a home's refusal (`Identity.HeldAudience.told`):
+    /// an update of Gents when the edge of a Vera home answered that it
+    /// requires a delegation. External premise: only that edge answers 401
+    /// with `DELEGATION_REQUIRED_CODE`.
+    pub fn home_refusal(status: reqwest::StatusCode, body: &[u8]) -> Option<Self> {
+        let edge_requires_delegation = status == reqwest::StatusCode::UNAUTHORIZED
+            && serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|body| {
+                body.get("code").and_then(serde_json::Value::as_str)
+                    == Some(gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE)
+            });
+        edge_requires_delegation.then(Self::update_required)
+    }
+
+    fn update_required() -> Self {
+        Self::new(
+            BridgeErrorCode::UpdateRequired,
+            crate::local::document_acp::DocumentAcpError::DelegationRequired.to_string(),
+        )
+    }
+
+    pub fn new(code: BridgeErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            retryable: code.retryable(),
+            endpoint: None,
+            operation_code: None,
+            next_call: None,
+            transport_source: None,
+        }
+    }
+
+    pub fn operation(
+        code: BridgeErrorCode,
+        operation_code: &str,
+        message: impl Into<String>,
+        next_call: gents_protocol::operations::NextCall,
+    ) -> Self {
+        Self {
+            operation_code: Some(operation_code.to_owned()),
+            next_call: Some(Box::new(next_call.into())),
+            ..Self::new(code, message)
+        }
+    }
+
+    pub fn untyped(message: impl Into<String>) -> Self {
+        Self::new(BridgeErrorCode::Unknown, message)
+    }
+
+    pub fn endpoint_unreachable(endpoint: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            endpoint: Some(endpoint.into()),
+            ..Self::new(BridgeErrorCode::EndpointUnreachable, message)
+        }
+    }
+
+    /// A conflict the store's attempts could not settle. `repeatable` is the
+    /// store's word that the failed attempt did not commit; otherwise the
+    /// change may have been saved and repeating it could apply it twice.
+    pub fn transaction_conflict(repeatable: bool, detail: String) -> Self {
+        let message = if repeatable {
+            format!("Another change to the same data landed first, so nothing was saved. Try again. ({detail})")
+        } else {
+            format!("Another change to the same data landed at the same time, and this change may already have been saved. Check before trying again. ({detail})")
+        };
+        Self {
+            retryable: repeatable,
+            ..Self::new(BridgeErrorCode::TransactionConflict, message)
+        }
+    }
+
+    pub fn storage_full() -> Self {
+        Self::new(BridgeErrorCode::StorageFull,
+            "Storage is full. Free disk space, then restart Gents to reopen the same store. Your saved chats and pending message are kept.")
+    }
+
+    /// The bridge error an application error carries as its root or as a
+    /// context value; a source-chain walk does not see a context value.
+    pub fn carried_by(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+
+    pub fn classify_transport_error(error: anyhow::Error) -> Self {
+        if crate::graphql::is_storage_full(error.as_ref()) {
+            return Self::storage_full();
+        }
+        if let Some(classified) = error
+            .downcast_ref::<Self>()
+            .or_else(|| error.chain().find_map(|cause| cause.downcast_ref::<Self>()))
+        {
+            return classified.clone();
+        }
+        if crate::config_client::TransactionFailure::config_client_error(&error)
+            .is_some_and(crate::config_client::ConfigClientError::edge_requires_delegation)
+        {
+            return Self::update_required();
+        }
+        if crate::config_client::TransactionFailure::permission_denied(&error) {
+            return Self::new(
+                BridgeErrorCode::PermissionDenied,
+                "Access was denied. Check this client's permissions with the runtime owner.",
+            );
+        }
+        if let Some(repeatable) = crate::config_client::classified_conflict_repeatable(&error) {
+            return Self::transaction_conflict(
+                repeatable,
+                gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string(),
+            );
+        }
+        let transport = crate::config_client::TransactionFailure::config_client_error(&error)
+            .and_then(crate::config_client::ConfigClientError::transport_error)
+            .or_else(|| gents_protocol::graphql::graphql_transport_source(error.as_ref()))
+            .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
+        let message = gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string();
+        let Some(transport) = transport else {
+            return Self::untyped(message);
+        };
+        match transport.url() {
+            Some(url) => Self::endpoint_unreachable(url.origin().ascii_serialization(), message),
+            None => Self::new(BridgeErrorCode::EndpointUnreachable, message),
+        }
+    }
+}
+
+/// An agent operation the desktop's operations layer refused or failed, as the
+/// message the UI shows: what happened, then the next step in desktop terms
+/// for the call the operation names.
+pub fn agent_operation_failure(
+    error: gents_protocol::operations::agent::AgentOperationError,
+    next_call: gents_protocol::operations::NextCall,
+) -> anyhow::Error {
+    let message = refusal_message(
+        &gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        next_call,
+    );
+    anyhow::Error::new(error).context(message)
+}
+
+/// An inference backend or profile write or removal the shared handler
+/// refused or failed, as the message the UI shows: what happened, then the
+/// next step in desktop terms for the call the handler names.
+pub fn inference_operation_failure(
+    error: gents_protocol::operations::inference::InferenceOperationError,
+    next_call: gents_protocol::operations::NextCall,
+) -> anyhow::Error {
+    use gents_protocol::operations::NextCall;
+    let next = match next_call {
+        NextCall::Verb {
+            verb: "accounts", ..
+        } => "Open Accounts to see the signed-in accounts and which is each provider's default.",
+        NextCall::List { .. } => "Open the list and choose an existing one.",
+        NextCall::Inspect { .. } => "Open it and review what it holds.",
+        NextCall::Verb { .. } | NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } => {
+            "Review the fields and save again."
+        }
+        NextCall::Preview { .. } => "Review the change again, then confirm it.",
+    };
+    let message = format!(
+        "{}. {next}",
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .trim_end_matches('.')
+    );
+    anyhow::Error::new(error).context(message)
+}
+
+/// A refused or failed request operation with its code and next call carried
+/// to the UI.
+pub fn request_operation_failure(
+    error: gents_protocol::operations::request::RequestOperationError,
+) -> anyhow::Error {
+    use gents_protocol::operations::request::RequestOperationError as E;
+    let code = match &error {
+        E::NotFound { .. } => BridgeErrorCode::NotFound,
+        E::FieldRequired(_)
+        | E::ContentRequired
+        | E::QueueEntryOwned
+        | E::SessionAgentMismatch { .. }
+        | E::MailboxCause { .. }
+        | E::Ambiguous { .. }
+        | E::ReissueParentState { .. }
+        | E::ReissueNotInteractive { .. }
+        | E::RetryBudgetExhausted { .. }
+        | E::ReissueDeadlineClosed { .. }
+        | E::ReissueNotLatest { .. }
+        | E::IdentityConflict { .. }
+        | E::ConflictingActiveRequests { .. }
+        | E::NodeUnavailable { .. }
+        | E::NoDefaultAgent { .. }
+        | E::AgentUnavailable { .. } => BridgeErrorCode::InvalidArgument,
+        E::IdentityRequired => BridgeErrorCode::PermissionDenied,
+        E::WaitTimedOut { .. }
+        | E::OutputUnavailable { .. }
+        | E::SuccessorInvalid { .. }
+        | E::ReceiptMismatch { .. }
+        | E::InterruptNotLatched { .. }
+        | E::Unconfirmed { .. }
+        | E::Passthrough(_) => BridgeErrorCode::Unknown,
+    };
+    let bridge = BridgeError::operation(
+        code,
+        error.code(),
+        gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        error.next_call(),
+    );
+    match error.into_passthrough() {
+        Ok(cause) => anyhow::Error::new(OperationCause(cause)),
+        Err(error @ E::Unconfirmed { .. }) => anyhow::Error::new(error),
+        Err(error) => anyhow::Error::new(error).context(bridge),
+    }
+}
+
+/// A refused or failed session operation with its code and next call carried
+/// to the UI.
+pub fn session_operation_failure(
+    error: gents_protocol::operations::session::SessionOperationError,
+) -> anyhow::Error {
+    use gents_protocol::operations::session::SessionOperationError as E;
+    let code = match &error {
+        E::NotFound { .. } => BridgeErrorCode::NotFound,
+        E::FieldRequired(_)
+        | E::Ambiguous { .. }
+        | E::RequesterMissing { .. }
+        | E::RevisionOutOfRange { .. }
+        | E::ForkSourceBusy { .. }
+        | E::ForkTurnOutOfRange { .. }
+        | E::ForkMessageNotEditable { .. }
+        | E::ForkChildNotCanonical { .. }
+        | E::ForkClientMismatch { .. }
+        | E::CrossAgentForkUnavailable
+        | E::AgentUnavailable { .. }
+        | E::ResumeBlocked { .. } => BridgeErrorCode::InvalidArgument,
+        E::RequesterMismatch { .. } => BridgeErrorCode::SessionNotOwned,
+        E::IdentityRequired => BridgeErrorCode::PermissionDenied,
+        E::RemoteNodeUnsupported { .. } => BridgeErrorCode::Unsupported,
+        E::InvalidDocument { .. }
+        | E::ForkRelationshipsIncomplete { .. }
+        | E::ForkRecoveryIntentRequired { .. }
+        | E::ProcessOwnershipUnverifiable { .. }
+        | E::Passthrough(_) => BridgeErrorCode::Unknown,
+    };
+    let bridge = BridgeError::operation(
+        code,
+        error.code(),
+        gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        error.next_call(),
+    );
+    match error {
+        E::Passthrough(cause) => anyhow::Error::new(OperationCause(Box::new(cause))),
+        error => anyhow::Error::new(error).context(bridge),
+    }
+}
+
+/// An owner's failure an operation passed through, kept in the `source()`
+/// chain so the transport classifiers reach it.
+#[derive(Debug)]
+pub(crate) struct OperationCause(pub(crate) Box<dyn std::error::Error + Send + Sync>);
+
+impl std::fmt::Display for OperationCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for OperationCause {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+/// A mailbox operation the shared handler refused or failed, as the message
+/// the UI shows: what happened, then the next step in desktop terms.
+pub fn mailbox_operation_failure(
+    error: gents_protocol::operations::mailbox::MailboxOperationError,
+) -> anyhow::Error {
+    use gents_protocol::operations::NextCall;
+    let next = match error.recovery() {
+        NextCall::List { .. } => "Reload the mailbox; this item may already be closed.",
+        NextCall::Inspect { .. } => "Open the item again and reply to what it now shows.",
+        NextCall::VerbHelp { .. } | NextCall::Preview { .. } | NextCall::Verb { .. } => {
+            "Answer the question, or skip it when it is optional."
+        }
+        NextCall::ResourceHelp { .. } => "Check the runtime connection and try again.",
+    };
+    let message = format!(
+        "{}. {next}",
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .trim_end_matches('.')
+    );
+    anyhow::Error::new(error).context(message)
+}
+
+fn refusal_message(message: &str, next_call: gents_protocol::operations::NextCall) -> String {
+    use gents_protocol::operations::NextCall;
+    let next = match next_call {
+        NextCall::Inspect { .. } => {
+            "Ask a Node owner or administrator to grant this account access to the agent."
+        }
+        NextCall::List { .. } => {
+            "Open the agent list and choose an enabled agent, or enable this one in the same change."
+        }
+        NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } | NextCall::Verb { .. } => {
+            "Review the agent's fields and save again."
+        }
+        NextCall::Preview { .. } => "Review the change again, then confirm it.",
+    };
+    format!("{}. {next}", message.trim_end_matches('.'))
+}
+
+impl std::fmt::Display for BridgeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code.as_str(), self.message)
+    }
+}
+
+impl std::error::Error for BridgeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.transport_source.as_deref().map(|source| source as _)
+    }
+}
+
+impl From<BridgeError> for String {
+    fn from(value: BridgeError) -> Self {
+        value.message
+    }
+}
+
+impl From<String> for BridgeError {
+    fn from(message: String) -> Self {
+        Self::untyped(message)
+    }
+}
+
+impl From<&str> for BridgeError {
+    fn from(message: &str) -> Self {
+        Self::untyped(message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unclassified_errors_keep_their_whole_cause_chain() {
+        let error = anyhow::anyhow!("schedule_id is required").context("saving Schedule");
+        let bridge = BridgeError::classify_transport_error(error);
+        assert_eq!(bridge.code, BridgeErrorCode::Unknown);
+        assert_eq!(bridge.message, "saving Schedule: schedule_id is required");
+    }
+
+    #[test]
+    fn explicit_database_denial_is_nonretryable_without_inferring_hidden_documents() {
+        let denial = gents_protocol::database_error::GraphqlFailure::new(
+            "write",
+            serde_json::json!([
+                {"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}
+            ]),
+        );
+        let error = crate::config_client::ConfigClientError::Database(denial);
+        let bridge = BridgeError::classify_transport_error(anyhow::Error::new(error));
+        assert_eq!(bridge.code, BridgeErrorCode::PermissionDenied);
+        assert!(!bridge.retryable);
+        assert!(!bridge.message.contains("opaque"));
+        let hidden = crate::config_client::ConfigClientError::Database(
+            gents_protocol::database_error::GraphqlFailure::new(
+                "read",
+                serde_json::json!([
+                    {"message":"not found or unavailable"}
+                ]),
+            ),
+        );
+        let bridge = BridgeError::classify_transport_error(anyhow::Error::new(hidden));
+        assert_eq!(bridge.code, BridgeErrorCode::Unknown);
+    }
+
+    #[test]
+    fn an_unpublished_read_fence_remains_a_retryable_observation() {
+        let error = BridgeError::new(BridgeErrorCode::ProjectionPending, "read fence changed");
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["code"], "projectionPending");
+        assert_eq!(value["retryable"], true);
+        assert!(value["endpoint"].is_null());
+    }
+
+    #[test]
+    fn endpoint_unreachable_carries_the_endpoint_as_a_structured_field() {
+        let err = BridgeError::endpoint_unreachable(
+            "http://127.0.0.1:9181",
+            "sending GET request to http://127.0.0.1:9181/api/v0/p2p/shareable-address",
+        );
+        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
+        assert!(err.retryable);
+        assert_eq!(err.endpoint.as_deref(), Some("http://127.0.0.1:9181"));
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["code"], "endpointUnreachable");
+        assert_eq!(json["endpoint"], "http://127.0.0.1:9181");
+    }
+
+    #[tokio::test]
+    async fn classify_transport_error_uses_reqwest_source_and_url() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind temporary port");
+        let endpoint = format!("http://{}", listener.local_addr().expect("local address"));
+        drop(listener);
+
+        let error = anyhow::Error::new(
+            reqwest::Client::new()
+                .get(&endpoint)
+                .send()
+                .await
+                .expect_err("closed temporary port must refuse the request"),
+        );
+        assert!(error.chain().any(|cause| cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_connect)));
+        let err = BridgeError::classify_transport_error(error);
+        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
+        assert_eq!(err.endpoint.as_deref(), Some(endpoint.as_str()));
+    }
+
+    #[tokio::test]
+    async fn classify_config_transaction_transport_uses_typed_access_source() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let access =
+            crate::config_client::ConfigAccess::graphql(format!("{endpoint}/api/v0/graphql"));
+        let error = access
+            .transact_readonly("test.desktop_transport", |_txn| {
+                Box::pin(async { Ok::<_, anyhow::Error>(()) })
+            })
+            .await
+            .unwrap_err();
+        let error = BridgeError::classify_transport_error(error);
+        assert_eq!(error.code, BridgeErrorCode::EndpointUnreachable);
+        assert_eq!(error.endpoint.as_deref(), Some(endpoint.as_str()));
+    }
+
+    #[tokio::test]
+    async fn classify_config_query_transport_uses_typed_protocol_source() {
+        let endpoint =
+            crate::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1:0/api/v0/graphql");
+        let result = crate::config_client::query_graphql_with_options(
+            &endpoint,
+            "{__typename}",
+            gents_protocol::graphql::GraphqlRequestOptions {
+                timeout: Some(std::time::Duration::from_secs(5)),
+                max_attempts: 1,
+                retry_backoff: std::time::Duration::ZERO,
+            },
+        )
+        .await
+        .unwrap_err();
+        let error = BridgeError::classify_transport_error(result.into());
+        assert_eq!(error.code, BridgeErrorCode::EndpointUnreachable);
+        assert_eq!(error.endpoint.as_deref(), Some("http://127.0.0.1:0"));
+    }
+
+    #[test]
+    fn typed_bridge_context_survives_transport_classification() {
+        let bridge = BridgeError::new(
+            BridgeErrorCode::ProjectionPending,
+            "waiting for the exact row",
+        );
+        let error = anyhow::Error::from(bridge.clone()).context("row not replicated");
+        assert_eq!(BridgeError::classify_transport_error(error), bridge);
+    }
+
+    #[test]
+    fn wrapped_bridge_error_keeps_its_code_and_endpoint() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("outer operation")]
+        struct Wrapped(#[source] BridgeError);
+        let bridge = BridgeError::endpoint_unreachable("http://127.0.0.1:9191", "not reachable");
+        let error = anyhow::Error::new(Wrapped(bridge.clone())).context("caller");
+        assert_eq!(BridgeError::classify_transport_error(error), bridge);
+    }
+
+    #[test]
+    fn classify_transport_error_leaves_application_level_failures_untyped() {
+        let err = BridgeError::classify_transport_error(anyhow::anyhow!(
+            "GET http://127.0.0.1:9181/status failed with 504 Gateway Timeout: request refused"
+        ));
+        assert_eq!(err.code, BridgeErrorCode::Unknown);
+        assert_eq!(err.endpoint, None);
+
+        let err = BridgeError::classify_transport_error(anyhow::anyhow!(
+            "decoding JSON response from http://127.0.0.1:9181/status"
+        ));
+        assert_eq!(err.code, BridgeErrorCode::Unknown);
+        assert_eq!(err.endpoint, None);
+    }
+
+    #[test]
+    fn classify_transport_error_rejects_message_only_transport_lookalikes() {
+        let lookalike = BridgeError::classify_transport_error(anyhow::anyhow!(
+            "no gents server found at http://198.51.100.7:9191/status: connection refused"
+        ));
+        assert_eq!(lookalike.code, BridgeErrorCode::Unknown);
+        assert_eq!(lookalike.endpoint, None);
+    }
+}
+
+#[cfg(test)]
+mod transaction_conflict_tests {
+    use super::*;
+
+    /// A conflict an operation passed through reaches the desktop typed, and
+    /// retryable exactly when the store confirmed its attempt did not commit.
+    #[test]
+    fn passed_through_conflicts_are_typed_and_retryable_only_when_aborted() {
+        use gents_protocol::operations::request::RequestOperationError;
+        for (conflict, repeatable) in [
+            (crate::config_client::classified_conflict_for_test(), true),
+            (
+                crate::config_client::unconfirmed_commit_conflict_for_test(),
+                false,
+            ),
+        ] {
+            let error = BridgeError::classify_transport_error(request_operation_failure(
+                RequestOperationError::passthrough(anyhow::Error::new(conflict)),
+            ));
+            assert_eq!(error.code, BridgeErrorCode::TransactionConflict);
+            assert_eq!(error.retryable, repeatable);
+            assert!(error.message.contains("DefraDB transaction conflict"));
+        }
+    }
+
+    fn passed(
+        conflict: crate::config_client::ConfigClientError,
+    ) -> gents_protocol::error_chain::PassedThrough {
+        gents_protocol::error_chain::PassedThrough::new(anyhow::Error::new(conflict))
+    }
+
+    /// Mailbox and Agent operations reach the desktop through their own
+    /// failure owners; a conflict they pass through stays typed.
+    #[test]
+    fn mailbox_and_agent_passthrough_conflicts_reach_the_desktop_typed() {
+        use gents_protocol::operations::agent::AgentOperationError;
+        use gents_protocol::operations::mailbox::MailboxOperationError;
+        for error in [
+            mailbox_operation_failure(MailboxOperationError::Passthrough(passed(
+                crate::config_client::classified_conflict_for_test(),
+            ))),
+            agent_operation_failure(
+                AgentOperationError::Passthrough(passed(
+                    crate::config_client::classified_conflict_for_test(),
+                )),
+                gents_protocol::operations::NextCall::ResourceHelp { resource: "agent" },
+            ),
+        ] {
+            let error = BridgeError::classify_transport_error(error);
+            assert_eq!(error.code, BridgeErrorCode::TransactionConflict);
+            assert!(error.retryable);
+        }
+    }
+
+    /// Every operation error that passes another owner's failure through keeps
+    /// the store's conflict on its chain, where the store's own classifier
+    /// finds it, and its `passthrough()` accessor yields the store error.
+    #[test]
+    fn every_operation_passthrough_keeps_the_store_conflict_classifiable() {
+        use crate::config_client::{
+            classified_conflict_for_test, classified_conflict_repeatable,
+            unconfirmed_commit_conflict_for_test, ConfigClientError,
+        };
+        use gents_protocol::operations::{agent, document, mailbox};
+        let mailbox =
+            mailbox::MailboxOperationError::Passthrough(passed(classified_conflict_for_test()));
+        let agent =
+            agent::AgentOperationError::Passthrough(passed(unconfirmed_commit_conflict_for_test()));
+        let document =
+            document::DocumentOperationError::Passthrough(passed(classified_conflict_for_test()));
+        for accessor in [mailbox.passthrough(), agent.passthrough()] {
+            assert!(
+                accessor.is_some_and(|error| error.downcast_ref::<ConfigClientError>().is_some())
+            );
+        }
+        assert_eq!(
+            classified_conflict_repeatable(&anyhow::Error::new(mailbox)),
+            Some(true)
+        );
+        assert_eq!(
+            classified_conflict_repeatable(&anyhow::Error::new(agent)),
+            Some(false)
+        );
+        assert_eq!(
+            classified_conflict_repeatable(&anyhow::Error::new(document)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_conflict_under_application_context_keeps_its_type() {
+        let error = anyhow::Error::new(crate::config_client::classified_conflict_for_test())
+            .context("interrupting the request");
+        let error = BridgeError::classify_transport_error(error);
+        assert_eq!(error.code, BridgeErrorCode::TransactionConflict);
+        assert!(error.retryable);
+    }
+}
+
+#[cfg(test)]
+mod storage_failure_tests {
+    use super::*;
+
+    #[test]
+    fn full_storage_is_actionable_and_does_not_authorize_retry() {
+        let error = anyhow::Error::new(gents_protocol::database_error::StorageFull)
+            .context("a database operation");
+        let error = BridgeError::classify_transport_error(error);
+        assert_eq!(error.code, BridgeErrorCode::StorageFull);
+        assert!(!error.retryable);
+        assert!(error.message.contains("Free disk space"));
+        assert!(error.message.contains("pending message"));
+    }
+}
+
+#[cfg(test)]
+mod told_conformance {
+    use super::{BridgeError, BridgeErrorCode};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Told {
+        Update,
+        Refusal,
+    }
+
+    #[test]
+    fn a_refusal_is_told_as_the_lean_model_tells_it() {
+        gents_lean_vocab::families::identity_held_audience_told::replay::<Told>(|input| {
+            let body = if input.edge_requires_delegation {
+                serde_json::json!({
+                    "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+                    "error": "refused",
+                })
+            } else {
+                serde_json::json!({ "error": "refused" })
+            };
+            let body = serde_json::to_vec(&body).unwrap();
+            match BridgeError::home_refusal(reqwest::StatusCode::UNAUTHORIZED, &body) {
+                Some(update) => {
+                    assert_eq!(update.code, BridgeErrorCode::UpdateRequired);
+                    assert!(update.message.contains("update Gents"));
+                    Told::Update
+                }
+                None => Told::Refusal,
+            }
+        });
+    }
+}

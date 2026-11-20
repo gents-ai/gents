@@ -685,10 +685,13 @@ theorem task_receipt_duplicate_preserves_revocation (state : Household.State)
     (creator receipt session agent : String) (committed : Bool) :
     publishTaskReceipt state creator receipt session agent false committed = state := by rfl
 
+/-- Agent creation always grants the created Agent the executor relationship
+on its Agent document (desired-state apply), so the fixture carries it. -/
 def taskReceiptFixture : Household.State :=
   { objects := [⟨"nodes", "node", "user"⟩, ⟨"agents", "agent-doc", "user"⟩,
       ⟨"sessions", "session", "user"⟩],
     relations := [⟨"agents", "agent-doc", "parent", .object "nodes" "node"⟩,
+      ⟨"agents", "agent-doc", "executor", .actor "agent"⟩,
       ⟨"sessions", "session", "parent", .object "agents" "agent-doc"⟩,
       ⟨"sessions", "session", "working_agent", .actor "agent"⟩], enrolled := [] }
 
@@ -800,16 +803,6 @@ theorem declared_outcome_reader_grants_no_other_subject_anything :
         Household.allowed 5 outcomeDeclared actor resource id permission ==
           Household.allowed 5 outcomeUndeclared actor resource id permission))) = true := by
   native_decide
-
-/-- Every modeled actor, document and permission under the declared and the
-undeclared publication. -/
-def outcomeReaderCasesJson : Lean.Json :=
-  Lean.toJson (outcomeActors.flatMap fun actor => outcomeDocuments.flatMap fun (resource, id) =>
-    outcomePermissions.map fun permission => Lean.Json.mkObj
-      [("actor", Lean.toJson actor), ("resource", Lean.toJson resource), ("id", Lean.toJson id),
-       ("permission", Lean.toJson permission), ("declared", Lean.toJson ["supervisor"]),
-       ("undeclared", Lean.toJson (Household.allowed 5 outcomeUndeclared actor resource id permission)),
-       ("after", Lean.toJson (Household.allowed 5 outcomeDeclared actor resource id permission))])
 
 /-- A callback child belongs to its authenticated agent. The publisher must
 bind the physical Agent parent to that same actor even if the actor can read

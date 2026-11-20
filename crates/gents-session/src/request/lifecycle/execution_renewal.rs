@@ -233,9 +233,9 @@ async fn renew_once_with_time(
 pub enum RenewalError {
     #[error("execution lease expired before renewal commit admission")]
     Expired,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] gents_store::config_client::ConfigClientError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

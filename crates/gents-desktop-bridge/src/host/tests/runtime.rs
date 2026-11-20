@@ -22,33 +22,40 @@ async fn runtime_location_rejects_an_unknown_node() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    assert_eq!(
+        error.code,
+        gents_store::client_error::BridgeErrorCode::InvalidArgument
+    );
     core.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn runtime_location_accepts_a_paired_runtime_without_operator_access() {
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+async fn runtime_location_accepts_a_saved_runtime_without_connecting() {
+    use crate::client_runtime::ClientRuntime;
+    use gents_store::client_journal::paths::DesktopPaths;
 
     let directory = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(directory.path());
-    let mut peer = gents_desktop_core::client::PeerRecord::local_standard(
-        "Paired runtime",
-        "iroh://remote-runtime",
-        "did:paired",
-        "http://127.0.0.1:1/api/v0/graphql",
-    );
-    peer.source = Some("enrollment".into());
-    peer.graphql = None;
+    let connection = gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: "did:paired".into(),
+        label: "Remote runtime".into(),
+        graphql: "http://127.0.0.1:1/api/v0/graphql".into(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
     std::fs::write(
-        paths.peer_directory_path(),
-        json!({"peers": [peer]}).to_string(),
+        paths.runtime_directory_path(),
+        json!({"connections": [connection]}).to_string(),
     )
     .unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
-            .await
-            .unwrap(),
+        ClientRuntime::start_with_paths_and_options(
+            paths,
+            crate::client_test_support::file_journal_options(),
+        )
+        .await
+        .unwrap(),
     );
     let host = ClientHost::new(core.clone());
     assert_eq!(
@@ -63,30 +70,27 @@ async fn runtime_location_accepts_a_paired_runtime_without_operator_access() {
         .unwrap(),
         false
     );
-    assert!(host.require_configured_runtime("did:paired").await.is_err());
+    assert!(host.require_configured_runtime("did:paired").await.is_ok());
     core.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn paired_model_settings_use_the_authenticated_client_endpoint() {
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+    use crate::client_runtime::ClientRuntime;
+    use gents_store::client_journal::paths::DesktopPaths;
 
     // Model settings are read as the User over the paired runtime's
     // authenticated GraphQL; the served runtime refuses any other actor.
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(directory.path()),
-            ClientCoreOptions::local_only(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap(),
     );
-    let (runtime, _agent) = crate::tests::support::served_runtime_for(
-        &core,
-        crate::tests::support::ServedRoute::Enrollment,
-    )
-    .await;
+    let (runtime, _agent) = crate::tests::support::served_runtime_for(&core).await;
     let node = runtime.node_did().to_owned();
     let host = ClientHost::new(core.clone());
     let result = host
@@ -114,9 +118,6 @@ async fn paired_model_settings_use_the_authenticated_client_endpoint() {
 
 #[tokio::test]
 async fn private_snapshot_keeps_the_current_requesters_questions_without_config_authority() {
-    // The runtime's mailbox policy lets only an item's recipient read it, so
-    // the desktop observes the current requester's questions alone; the
-    // working Agent files each item through the mailbox owner.
     let served = crate::tests::support::served_desktop().await;
     let core = served.core.clone();
     core.stop_observer_for_test().await;
@@ -174,6 +175,15 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
     )
     .await
     .unwrap();
+    let user = ::identity::Did::new(&requester).unwrap();
+    gents_store::identity::GrantSet::OperatorUser
+        .grant(&served.runtime.runtime_access(), &user)
+        .await
+        .unwrap();
+    gents_store::identity::GrantSet::HouseholdOwner
+        .revoke(&served.runtime.runtime_access(), &user)
+        .await
+        .unwrap();
     core.refresh_node(&node).await.unwrap();
     let host = ClientHost::new(core.clone());
     let result = host
@@ -189,13 +199,12 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
         panic!("one paired runtime: {result}")
     };
     let items = deployment["mailboxItems"].as_array().unwrap();
-    assert_eq!(
-        items.len(),
-        1,
-        "private snapshot must preserve only the current requester's open question: {result}"
-    );
-    assert_eq!(items[0]["sourceId"], "current");
-    assert!(items[0]["questionHash"]
+    let [own] = items.as_slice() else {
+        panic!("expected only the current requester's open question: {items:?}")
+    };
+    assert_eq!(own["sourceId"], "current");
+    assert_eq!(own["requesterDid"], requester);
+    assert!(own["questionHash"]
         .as_str()
         .is_some_and(|hash| !hash.is_empty()));
     assert!(result["bootstrap"]["desktopHome"]

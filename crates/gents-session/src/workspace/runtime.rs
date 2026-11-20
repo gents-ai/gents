@@ -224,15 +224,10 @@ pub async fn seal_on_writer_success(
     capabilities.insert(CAP_SEAL_WORKSPACE.to_string());
     let outcome = {
         let mut ctx = HostExecutorContext {
-            owner_node_did: workspace.owner_node_did.clone(),
+            provenance: workspace.provenance(),
             repository,
             ceiling: operator_tool_root,
             capabilities,
-            writer_principal: workspace.writer_principal.clone(),
-            integrator_principal: workspace.integrator_principal.clone(),
-            caused_by_invocation_id: workspace.caused_by_invocation_id.clone(),
-            caused_by_correlation: workspace.caused_by_correlation.clone(),
-            route: workspace.route.clone(),
             documents: &mut docs,
         };
         execute_seal_workspace_plan(&plan, &mut journal, &mut ctx)
@@ -290,15 +285,10 @@ pub async fn integrate_on_integrator_success(
     let trunk = PathBuf::from(&ctx_repository_path(&repository));
     let outcome = {
         let mut ctx = HostExecutorContext {
-            owner_node_did: workspace.owner_node_did.clone(),
+            provenance: workspace.provenance(),
             repository,
             ceiling: operator_tool_root,
             capabilities,
-            writer_principal: workspace.writer_principal.clone(),
-            integrator_principal: workspace.integrator_principal.clone(),
-            caused_by_invocation_id: workspace.caused_by_invocation_id.clone(),
-            caused_by_correlation: workspace.caused_by_correlation.clone(),
-            route: workspace.route.clone(),
             documents: &mut docs,
         };
         execute_integrate_workspace_plan(&plan, &mut journal, &mut ctx)
@@ -343,15 +333,10 @@ pub async fn cleanup_workspace(
     capabilities.insert(CAP_CLEANUP_WORKSPACE.to_string());
     let outcome = {
         let mut ctx = HostExecutorContext {
-            owner_node_did: workspace.owner_node_did.clone(),
+            provenance: workspace.provenance(),
             repository,
             ceiling: operator_tool_root,
             capabilities,
-            writer_principal: workspace.writer_principal.clone(),
-            integrator_principal: workspace.integrator_principal.clone(),
-            caused_by_invocation_id: workspace.caused_by_invocation_id.clone(),
-            caused_by_correlation: workspace.caused_by_correlation.clone(),
-            route: workspace.route.clone(),
             documents: &mut docs,
         };
         execute_cleanup_workspace_plan(&plan, &mut journal, &mut ctx)

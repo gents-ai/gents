@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::client_installation::{Action, Phase, State};
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::local::file_lock::FileLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -36,7 +36,7 @@ pub struct LocalListener {
 pub enum ListenerBindError {
     #[error("another process owns the client installation listener")]
     Held(#[source] std::fs::TryLockError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

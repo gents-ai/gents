@@ -8,7 +8,7 @@ use crate::config_client::ConfigClientError;
 pub use gents_migration::{
     canonical_versions, check_migration_compatibility, ensure_migrations, ensure_migrations_arc,
     ensure_migrations_dynamic, ensure_migrations_with_registry, fixture_lens_wasm,
-    non_canonical_lineages, non_canonical_store_lineages, predict_transform_id, BaselineCollection,
+    non_canonical_lineages, non_canonical_store_lineages, BaselineCollection,
     BaselineCollectionOwned, CollectionExpectation, DynamicRegistry, Error as MigrationError,
     LensSpec, LensSpecOwned, LineageMismatch, MaterializationStats, MigrationReport, MigrationStep,
     MigrationStepOwned, Registry, DEFAULT_BASELINE, DEFAULT_REGISTRY, DEFAULT_STEPS,

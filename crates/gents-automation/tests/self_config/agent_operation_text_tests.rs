@@ -17,7 +17,7 @@ impl Transcript {
         let (outcome, raw) = match tool
             .call(
                 args.to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
         {
@@ -50,7 +50,7 @@ async fn agent_create_and_clone_text_is_pinned() {
     let fixture = gents_automation::test_support::self_config_fixture("agent-operation-text").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let root = fixture.admitted_workspace_root().await;
     let sibling = fixture.install_sibling("pinned-sibling").await;
     fixture.grant_sibling_configuration(&sibling).await;

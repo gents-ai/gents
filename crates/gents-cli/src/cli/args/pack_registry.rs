@@ -267,6 +267,25 @@ pub(crate) struct PackWireArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct PackApproveArgs {
+    #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
+    pub(crate) package: String,
+    #[arg(long = "dependency-variable", value_name = "NAMESPACE/PACK:NAME=VALUE", action = clap::ArgAction::Append,
+        help = "An install variable the pack was installed with, from which the documents a wire reads are derived; repeat for each variable")]
+    pub(crate) dependency_variables: Vec<String>,
+    #[arg(long = "bind-agent", value_name = "SLOT=AGENT_DID", action = clap::ArgAction::Append,
+        help = "An agent the pack's slot was bound to when it was installed, from which the documents named after that agent are derived; repeat for each slot")]
+    pub(crate) bind_agents: Vec<String>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct PackStarterArgs {
     #[arg(
         long,

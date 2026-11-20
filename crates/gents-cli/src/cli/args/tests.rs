@@ -187,7 +187,16 @@ fn continue_picks_up_a_session_with_its_own_agent() {
 #[test]
 fn installed_services_and_updaters_keep_their_root_names() {
     let cli = Cli::try_parse_from(["gents", "server", "--home", "/h"]).expect("server parses");
-    assert!(matches!(cli.command, Some(Command::Server(_))));
+    assert!(matches!(cli.command, Some(Command::Server(args)) if !args.system_log));
+    let cli = Cli::try_parse_from([
+        "gents",
+        "server",
+        "--home",
+        "/h",
+        gents_service::native_service::SYSTEM_LOG_FLAG,
+    ])
+    .expect("the installed definition's argv parses");
+    assert!(matches!(cli.command, Some(Command::Server(args)) if args.system_log));
     let cli = Cli::try_parse_from(["gents", "service", "update-check", "--home", "/h"])
         .expect("the update preflight parses");
     assert!(matches!(cli.command, Some(Command::Service { .. })));

@@ -44,24 +44,6 @@ def nativeFilesystemBoundary :
         ToolExecution.NativeFilesystemBoundary.queueAdvancesBeforeBlockerReturns
           i.innerPollBlocks i.requestDeadlineMs i.blockerMs }
 
-def managedExecToolBoundaryCaseJson
-    (witness : ManagedExecToolBoundaryCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"tool_name\":" ++ jsonString witness.toolName ++ ","
-    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
-    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
-    ++ "\"kill_scope\":" ++ jsonString witness.killScope ++ ","
-    ++ "\"timeout_requires_kill\":"
-      ++ boolString witness.timeoutRequiresKill ++ ","
-    ++ "\"cancel_requires_kill\":"
-      ++ boolString witness.cancelRequiresKill ++ ","
-    ++ "\"descendants_in_termination_scope\":"
-      ++ boolString witness.descendantsInTerminationScope ++ ","
-    ++ "\"capture_drain_bounded\":"
-      ++ boolString witness.captureDrainBounded
-    ++ "}"
-
 def managedExecLivenessRequest : RequestContext :=
   { state := .processing, origin := .interactive, backend := ⟨"managed-exec"⟩
   , admission := .executing, deadline := 1, claimTime := 0, currentTime := 2
@@ -122,33 +104,6 @@ structure ManagedExecLivenessToolOutput where
 def managedExecLivenessTool : Family ManagedExecLivenessInput ManagedExecLivenessToolOutput where
   inputs := managedExecLivenessInputs
   model := fun i => { toolState := i.post.tool.state.toDefraDB }
-
-def processStopCaseJson (witness : ProcessStopCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"live_evidence\":" ++ jsonString witness.liveEvidence ++ ","
-    ++ "\"worker_released\":" ++ boolString witness.workerReleased ++ ","
-    ++ "\"settle_completed\":" ++ boolString witness.settleCompleted ++ ","
-    ++ "\"settle_cancelled\":" ++ boolString witness.settleCancelled ++ ","
-    ++ "\"settle_timed_out\":" ++ boolString witness.settleTimedOut ++ ","
-    ++ "\"settle_failed\":" ++ boolString witness.settleFailed ++ ","
-    ++ "\"settle_panicked\":" ++ boolString witness.settlePanicked ++ ","
-    ++ "\"retire_before_commit\":" ++ boolString witness.retireBeforeCommit ++ ","
-    ++ "\"retire_after_commit\":" ++ boolString witness.retireAfterCommit ++ ","
-    ++ "\"preserve_timeout\":" ++ boolString witness.preserveTimeout ++ ","
-    ++ "\"preserve_failure\":" ++ boolString witness.preserveFailure ++ ","
-    ++ "\"pending_failure_beats_cancel\":" ++ boolString witness.pendingFailureBeatsCancel ++ ","
-    ++ "\"pending_failure_resolves\":" ++ boolString witness.pendingFailureResolves ++ ","
-    ++ "\"retained_completion_notified\":" ++ boolString witness.retainedCompletionNotified ++ ","
-    ++ "\"retired_completion_notified\":" ++ boolString witness.retiredCompletionNotified ++ ","
-    ++ "\"before\":" ++ jsonString witness.before ++ ","
-    ++ "\"after\":" ++ jsonString witness.after ++ ","
-    ++ "\"may_terminate\":" ++ boolString witness.mayTerminate ++ ","
-    ++ "\"retain_record\":" ++ boolString witness.retainRecord ++ ","
-    ++ "\"outcome\":" ++ jsonString witness.outcome ++ ","
-    ++ "\"cancel_reply\":" ++ jsonString witness.cancelReply ++ ","
-    ++ "\"durable_state\":" ++ jsonString witness.durableState
-    ++ "}"
 
 deriving instance Lean.ToJson for ToolExecution.SchemaStatus, ToolExecution.ToolOperation,
   ToolExecution.IdempotencyEvidence, ToolExecution.RetryDisposition

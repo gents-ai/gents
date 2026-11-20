@@ -31,7 +31,7 @@ use slot::{
 enum ActivationError {
     #[error("active runtime snapshot receiver closed")]
     ReceiverClosed,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

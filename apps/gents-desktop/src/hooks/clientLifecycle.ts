@@ -2,7 +2,6 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
-  P2PHealth,
 } from "@source-inc/gents-desktop-client";
 
 import {
@@ -23,32 +22,6 @@ import { createIncompatibleHomeOps } from "./useIncompatibleHome";
 import { clientStatus } from "./clientStore";
 import { errorText } from "../lib/errorText";
 
-function shouldAutoRestartP2P(
-  previous: P2PHealth | null,
-  next: P2PHealth | null,
-  lastAttemptAt: number | null,
-  now: number,
-  cooldownMs: number,
-) {
-  if (!next || next.status !== "wedged") {
-    return false;
-  }
-
-  if (lastAttemptAt !== null && now - lastAttemptAt < cooldownMs) {
-    return false;
-  }
-
-  if (!previous) {
-    return true;
-  }
-
-  return (
-    previous.status !== "wedged" ||
-    previous.consecutiveFailures !== next.consecutiveFailures ||
-    previous.lastError !== next.lastError
-  );
-}
-
 async function delay(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -68,8 +41,6 @@ type ClientLifecycleParams = {
 export type ClientRecovery = {
   autostartAttempted: boolean;
   autoRestartInFlight: boolean;
-  lastP2PAutoRestartAt: number | null;
-  lastObservedP2PHealth: P2PHealth | null;
 };
 
 export function createClientLifecycle({
@@ -86,8 +57,6 @@ export function createClientLifecycle({
   const recovery: ClientRecovery = {
     autostartAttempted: false,
     autoRestartInFlight: false,
-    lastP2PAutoRestartAt: null,
-    lastObservedP2PHealth: null,
   };
   let localServerAvailable: boolean | null = null;
   let managedServerWaitAbort: AbortController | null = null;
@@ -193,39 +162,11 @@ export function createClientLifecycle({
     const held = starting || stopping || stores.chat.getState().sending;
     if (!snapshot) return;
     if (!snapshot.client) {
-      recovery.lastObservedP2PHealth = null;
       if (held || !clientAutostarts(snapshot) || recovery.autostartAttempted) return;
       recovery.autostartAttempted = true;
       void startClient();
       return;
     }
-    restartIfWedged(snapshot.client.p2pHealth ?? null, held);
-  }
-
-  function restartIfWedged(health: P2PHealth | null, held: boolean) {
-    if (!health || health.status === "healthy") {
-      recovery.lastObservedP2PHealth = health;
-      if (health) recovery.lastP2PAutoRestartAt = null;
-      return;
-    }
-    if (held || recovery.autoRestartInFlight) return;
-    const previous = recovery.lastObservedP2PHealth;
-    recovery.lastObservedP2PHealth = health;
-    if (
-      !shouldAutoRestartP2P(
-        previous,
-        health,
-        recovery.lastP2PAutoRestartAt,
-        Date.now(),
-        timingConfig().p2pAutoRestartCooldownMs,
-      )
-    )
-      return;
-    recovery.lastP2PAutoRestartAt = Date.now();
-    logShellEvent(
-      `auto restart requested reason="P2P transport wedged" status=${health.status} failures=${health.consecutiveFailures}`,
-    );
-    void restartDesktopClient("P2P transport wedged");
   }
 
   client.subscribe((state, prev) => {
@@ -254,7 +195,7 @@ export function createClientLifecycle({
           (repair) =>
             client.setState({
               repairNotes: repair.outcome === "blocked" ? [] : repair.repaired,
-              repairPeers: repair.savedPeers,
+              repairPeers: repair.savedRuntimes,
               localNodeLost: repair.localNodeLost,
             }),
         );

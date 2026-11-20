@@ -129,9 +129,4 @@ def replicationAdmission : Family CollectionInput LocalityOutput where
   inputs := localityCollections.map fun collection => { collection }
   model := fun i => { replicates := Identity.collectionReplicates i.collection }
 
-@[conformance_family]
-def desktopSubscription : Family CollectionInput LocalityOutput where
-  inputs := localityCollections.map fun collection => { collection }
-  model := fun i => { replicates := Identity.collectionReplicates i.collection }
-
 end Conformance.AgentIdentity

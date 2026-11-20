@@ -1,6 +1,5 @@
 use crate::call::hook::fixtures::*;
 use crate::call::hook::*;
-use chrono::Utc;
 use gents_inference::llm::ToolCallHookAction;
 use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
@@ -79,7 +78,7 @@ pub async fn budget_hook_fixture(
     .unwrap()
     .with_background_tool_registry(registry)
     .with_background_execution_registry(executions);
-    bind_claimed_hook_request(&hook, lifecycle, Utc::now() + chrono::Duration::minutes(5)).await;
+    bind_claimed_hook_request(&hook, lifecycle).await;
     BudgetHookFixture {
         db,
         user,
@@ -123,7 +122,7 @@ pub async fn invoke(
             None,
             id,
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {

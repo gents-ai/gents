@@ -19,7 +19,11 @@ use super::txn::StagedRelation;
 use super::{ConfigAccess, ConfigClientError, GraphqlEndpoint, Result};
 use crate::graphql::escape_graphql_string;
 
+mod enrollment;
 mod handler;
+
+pub(super) const PERMISSION_GRANT_PATH: &str = "/gents/node/permission";
+pub(super) const ADMIN_GRANT_PATH: &str = "/gents/node/administrator";
 
 /// Send `change` as one signed command to the runtime `endpoint` serves,
 /// signed with the endpoint's held client key. A refusal is the same
@@ -53,9 +57,8 @@ pub(super) async fn request(
     url.set_fragment(None);
     let client = super::graphql::http_client().await?;
     let response = endpoint
-        .authorize(client.post(url).json(&command))?
-        .send()
-        .await?;
+        .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(&command)))
+        .await??;
     let status = response.status();
     if status.is_success() {
         return Ok(());
@@ -117,12 +120,21 @@ impl OwnerStagedRoute {
         ));
     }
 
-    /// The route, for `HttpConfig::with_extra_routes`.
+    /// The route, for `HttpConfig::with_authenticated_routes`.
     pub fn router(&self) -> axum::Router {
-        axum::Router::new().route(
-            OWNER_STAGED_PATH,
-            axum::routing::post(handler::owner_staged_handler).with_state(self.clone()),
-        )
+        axum::Router::new()
+            .route(
+                &format!("/api/v0{PERMISSION_GRANT_PATH}"),
+                axum::routing::post(enrollment::grant_permission).with_state(self.clone()),
+            )
+            .route(
+                &format!("/api/v0{ADMIN_GRANT_PATH}"),
+                axum::routing::post(enrollment::grant_administrator).with_state(self.clone()),
+            )
+            .route(
+                OWNER_STAGED_PATH,
+                axum::routing::post(handler::owner_staged_handler).with_state(self.clone()),
+            )
     }
 
     fn node(

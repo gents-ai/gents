@@ -49,12 +49,12 @@ fn refused(reason: &'static str, detail: impl Into<String>) -> anyhow::Error {
 /// The promote transaction's failure: a closure that moved since the job froze
 /// it is told apart from every other failure without asking an erased error.
 #[derive(Debug, thiserror::Error)]
-enum PromoteTxnError {
+pub(crate) enum PromoteTxnError {
     #[error("the frozen closure moved: {0:?}")]
     Drift(Vec<DriftedRef>),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] gents_store::config_client::ConfigClientError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 
@@ -1009,6 +1009,16 @@ mod tests {
     ) -> anyhow::Result<()> {
         use gents_store::identity::NodeIdentity;
 
+        harness
+            .grant_node_permissions(
+                outsider.did(),
+                &[
+                    gents_store::config_client::NodePermission::CollectionGet,
+                    gents_store::config_client::NodePermission::DocumentRead,
+                    gents_store::config_client::NodePermission::DocumentUpdate,
+                ],
+            )
+            .await?;
         let hidden = promote(foreign, harness.owner(), job_id, digest)
             .await
             .unwrap_err();
@@ -1048,16 +1058,6 @@ mod tests {
                 &node_doc,
                 "administrator",
                 &identity::Did::new(outsider.did())?,
-            )
-            .await?;
-        harness
-            .grant_node_permissions(
-                outsider.did(),
-                &[
-                    gents_store::config_client::NodePermission::CollectionGet,
-                    gents_store::config_client::NodePermission::DocumentRead,
-                    gents_store::config_client::NodePermission::DocumentUpdate,
-                ],
             )
             .await?;
         let before_prompt = live_prompt(harness).await.expect("target prompt");

@@ -168,13 +168,13 @@ describe("edit an earlier message in a new branch", () => {
   });
 
   it("isn't offered on a joined node whose operator endpoint this app doesn't hold", () => {
-    screenApp(vi.fn(), { source: "enrollment", operatorAccess: false });
+    screenApp(vi.fn(), { local: false, operatorAccess: false });
     expect(screen.getByText("second ask")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
   });
 
   it("is offered on a joined node that advertised its operator endpoint", () => {
-    screenApp(vi.fn(), { source: "enrollment", operatorAccess: true });
+    screenApp(vi.fn(), { local: false, operatorAccess: true });
     expect(screen.getByText("second ask")).toBeVisible();
     expect(screen.queryAllByRole("button", { name: "Fork" }).length).toBeGreaterThan(0);
   });

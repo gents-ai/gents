@@ -17,8 +17,8 @@ pub enum ControlFailure {
         reason: RuntimePreparationRefusal,
         message: String,
     },
-    #[error(transparent)]
-    Authorization(Box<gents_store::config_client::ConfigClientError>),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Authorization(#[source] Box<gents_store::config_client::ConfigClientError>),
     #[error(transparent)]
     Transport(#[from] reqwest::Error),
     #[error(transparent)]
@@ -80,7 +80,8 @@ pub async fn control(
     let mut request = client.post(url).json(&command);
     if let Some(authorization) = authorization {
         request = authorization
-            .authorize(request)
+            .authorize_runtime(request)
+            .await
             .map_err(|error| ControlFailure::Authorization(Box::new(error)))?;
     }
     let mut response = match request.send().await {

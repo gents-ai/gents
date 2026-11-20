@@ -177,6 +177,7 @@ pub fn usage_view(
 pub struct UsageCache {
     endpoints: UsageEndpoints,
     entries: tokio::sync::Mutex<rapidhash::RapidHashMap<CacheKey, UsageObservation>>,
+    recorded: tokio::sync::watch::Sender<u64>,
     claude_accounts: gents_claude::pool::AccountPool<String>,
 }
 
@@ -204,6 +205,14 @@ impl UsageCache {
         &self.claude_accounts
     }
 
+    /// Counts the observations recorded so far and changes after each one.
+    /// A reporter records off the response path (`UsageReporter::observe`),
+    /// so a reader that expects an observation subscribes before it reads
+    /// (TLA+ `UsageRecordObservation`).
+    pub fn subscribe_records(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.recorded.subscribe()
+    }
+
     async fn load(&self, target: &Target) -> Option<UsageObservation> {
         self.entries.lock().await.get(&target.key).cloned()
     }
@@ -226,6 +235,8 @@ impl UsageCache {
         let mut entries = self.entries.lock().await;
         let previous = entries.remove(&target.key).unwrap_or_default();
         entries.insert(target.key.clone(), previous.merge(observation));
+        drop(entries);
+        self.recorded.send_modify(|count| *count += 1);
     }
 }
 
@@ -539,13 +550,17 @@ pub async fn read_account_usage(
                         crate::clients::chatgpt_codex::build_chatgpt_codex_headers(
                             credential.account_id.as_deref(),
                             credential.is_fedramp,
+                            backend.client_version.as_deref(),
                         )?,
                     ),
                     account_usage::codex_usage,
                 ),
                 Kind::XaiGrokOAuth => (
-                    http.get(&endpoints.grok_billing)
-                        .headers(crate::clients::xai_grok::build_xai_grok_oauth_headers()?),
+                    http.get(&endpoints.grok_billing).headers(
+                        crate::clients::xai_grok::build_xai_grok_oauth_headers(
+                            backend.client_version.as_deref(),
+                        )?,
+                    ),
                     account_usage::grok_billing,
                 ),
                 Kind::ClaudeCliSubscription => (

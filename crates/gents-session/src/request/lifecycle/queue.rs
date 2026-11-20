@@ -22,6 +22,8 @@ mod intake;
 mod management;
 pub mod mutation;
 mod position;
+#[cfg(test)]
+pub(crate) use position::PositionError;
 mod submission;
 
 pub use atomic_inputs::background_completion_gate;
@@ -30,7 +32,7 @@ pub use atomic_inputs::persist_background_completion_with_message_canonical_with
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use atomic_inputs::persist_background_completion_with_message_waking_with_access;
 use atomic_inputs::steering_transaction_attempt;
-pub use atomic_inputs::ToolNotificationPublication;
+pub use atomic_inputs::{BackgroundCompletionNotification, ToolNotificationPublication};
 pub use coalescing::parent_agent_did;
 pub use coalescing::supersede_pending_mutation;
 use coalescing::{queue_row_to_enqueued_request, row_matches_coalesced_source_and_key};
@@ -40,7 +42,7 @@ pub use coalescing::{
 pub use draining::drain_all_pending_session_requests_in_txn;
 pub(crate) use draining::drain_automated_wakeups_in_txn;
 pub use edit_submission::{
-    publish_edit_command, submit_pending_user_edit, submit_pending_user_steer,
+    publish_edit_command, submit_pending_user_edit, submit_pending_user_steer, SteeredMessage,
 };
 pub use enqueue::enqueue_local_steering_request;
 #[cfg(test)]

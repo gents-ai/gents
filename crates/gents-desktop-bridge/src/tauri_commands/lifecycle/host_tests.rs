@@ -79,6 +79,8 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
     let state = app.state::<DesktopAppState>();
     let core = current_core(&state).unwrap();
     let client_did = core.node_identity().did().to_owned();
+    let released = core.store_release();
+    drop(core);
     let stream = local::connect(&paths).await.unwrap();
     let mut client = LengthDelimitedCodec::builder().new_framed(stream);
     client
@@ -123,6 +125,9 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
     assert!(Arc::clone(&state.client_lifecycle)
         .try_lock_owned()
         .is_err());
+    tokio::time::timeout(Duration::from_secs(10), released.released())
+        .await
+        .expect("exclusion releases the store once the client is gone");
     let claim = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
     drop(claim);
     drop(exclusion);

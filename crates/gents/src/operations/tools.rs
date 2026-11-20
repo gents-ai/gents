@@ -24,7 +24,7 @@ async fn run(
         .await
         .map_err(|error| {
             gents_protocol::operations::document::DocumentOperationError::Passthrough(
-                error.reallocate_into_boxed_dyn_error_without_backtrace(),
+                gents_protocol::error_chain::PassedThrough::new(error),
             )
         })?;
     let actor = ToolsActor {

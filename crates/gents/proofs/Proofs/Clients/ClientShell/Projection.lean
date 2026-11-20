@@ -77,12 +77,10 @@ def projectTransportRecovery (connected : Bool) : RecoveryStatus :=
   { kind := if connected then .ready else .waiting, action := none }
 
 /-- The chat write route follows the chat write fence alone
-(`ClientChatReadiness`): no refusal is ready, a refusal that awaits the
-runtime's advertisement waits, and one whose next action is connecting the
-runtime is blocked. Pairing is not an input. -/
+(`ClientChatReadiness`): no refusal is ready and an invalid or missing endpoint is blocked. Native
+ACP still decides every request; pairing is not an input. -/
 def projectRouteRecovery : Option ClientChatReadiness.Cause → RecoveryStatus
   | none => { kind := .ready, action := none }
-  | some .endpointNotAdvertised => { kind := .waiting, action := none }
   | some _ => { kind := .blocked, action := none }
 
 def projectConnectionFailure : RecoveryStatus :=

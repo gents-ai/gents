@@ -259,6 +259,8 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ceiling,
         Vec::new(),
@@ -316,6 +318,8 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ceiling,
         Vec::new(),
@@ -372,6 +376,8 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -425,6 +431,8 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -476,6 +484,8 @@ fn selection_cli_tools_require_ceiling_entries() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -537,6 +547,8 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ceiling,
         Vec::new(),
@@ -601,6 +613,8 @@ fn selection_mcp_service_allowlist_is_deduped() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ToolCeiling::meta_only(),
         Vec::new(),
@@ -751,6 +765,8 @@ fn background_tool_allowlist_registers_r6_tools() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -803,6 +819,8 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -863,6 +881,8 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             lsp_config: None,
             plugin_tools: Vec::new(),
             remote_tools: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+            background_limit: Default::default(),
         },
         &ToolCeiling::readwrite(operator_root),
         Vec::new(),
@@ -2517,7 +2537,7 @@ async fn configured_command_output_caps_bound_bash_and_cli_results() {
         ]
     );
     let built = config.host_tools().build_native_tools().unwrap();
-    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+    let envelope = gents_loop::tool::ToolCallEnvelope::default();
     let call = |name: &str, args: serde_json::Value| {
         let tool = built.iter().find(|tool| tool.name() == name).unwrap();
         tool.call(args.to_string(), &envelope)
@@ -2800,7 +2820,7 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
         let raw = tool("read_file")
             .call(
                 args.to_string(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -2908,4 +2928,37 @@ fn provider_limits_is_available_under_an_agent_self_config_grant() {
         .tool_names
         .iter()
         .any(|name| name == "provider_limits"));
+}
+
+#[test]
+fn configured_host_limits_reach_the_surface_and_unset_keeps_the_defaults() {
+    let ceiling = ToolCeiling::readwrite(temp_root("gents-host-limits"));
+    let config = |host: serde_json::Value| {
+        let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
+            "tools_id": "host-limits", "node_did": "did:key:example", "host": host
+        }))
+        .unwrap();
+        AgentToolSurfaceConfig::from_tools_documents(
+            "host-limits",
+            &tools,
+            &[],
+            &[],
+            &ceiling,
+            vec![],
+        )
+        .unwrap()
+    };
+    let configured =
+        config(serde_json::json!({"max_instruction_chars": 100, "max_background_tool_calls": 3}));
+    assert_eq!(configured.max_instruction_chars(), 100);
+    assert_eq!(configured.background_tools().limit.get(), 3);
+    let unset = config(serde_json::json!({}));
+    assert_eq!(
+        unset.max_instruction_chars(),
+        gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS
+    );
+    assert_eq!(
+        unset.background_tools().limit,
+        gents_protocol::job::BackgroundLimit::default()
+    );
 }

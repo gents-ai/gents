@@ -68,7 +68,7 @@ pub(super) async fn shutdown_runtime(
         let background_process_stops = AbortOnDropHandle::new(tokio::spawn(async move {
             let report = background_executions.shutdown().await;
             tracing::info!(
-                target: "gents::shutdown",
+                target: "crate::shutdown",
                 stage = "managed_process_stop",
                 stopped = report.stopped,
                 unstopped = report.unstopped,

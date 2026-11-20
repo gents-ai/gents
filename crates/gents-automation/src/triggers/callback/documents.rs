@@ -907,9 +907,8 @@ pub(super) async fn ensure_callback_parent(
         access.actor_did().as_deref() == Some(agent_did),
         "callback parent actor mismatch"
     );
-    // The Agent creator grants and marks in one native transaction; outside a
-    // transaction native relationship changes also require `get-collection`,
-    // which an Agent does not hold (`Identity.Household.recoverParent`).
+    // The Agent creator grants and marks in one native transaction, so
+    // neither commits without the other (`Identity.Household.recoverParent`).
     access
         .transact_write("callback.publish_parent", |txn| {
             Box::pin(async move {

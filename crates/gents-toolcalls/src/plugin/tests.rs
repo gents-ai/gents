@@ -211,7 +211,7 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
                 &record,
                 &input,
                 &crate::plugin::executor::BindContext::headless(None),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await;
         let admitted = match bound {

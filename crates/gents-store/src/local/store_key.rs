@@ -122,9 +122,9 @@ pub fn store_key_unavailable<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a StoreKeyUnavailable> {
     gents_protocol::error_chain::find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<StoreKeyUnavailable>()
-            .or_else(|| cause.downcast_ref::<StoreKeyError>()?.unavailable())
+        gents_protocol::error_chain::as_owner::<StoreKeyUnavailable>(cause).or_else(|| {
+            gents_protocol::error_chain::as_owner::<StoreKeyError>(cause)?.unavailable()
+        })
     })
 }
 
@@ -388,13 +388,19 @@ pub async fn open_home_store_key_with_custody(
     Ok(key)
 }
 
-pub fn persistent_builder(data_path: &Path, key: &StoreKey) -> Result<defra_node::NodeBuilder> {
+pub fn persistent_builder(
+    data_path: &Path,
+    key: &StoreKey,
+    block_cache_bytes: usize,
+) -> Result<defra_node::NodeBuilder> {
     crate::local::storage_backend::reject_legacy_store(data_path)?;
     Ok(key.encrypt(
         defra_node::Node::builder()
             .data_path(data_path)
             .with_storage_backend(defra_node::StorageBackend::Regolith)
-            .with_regolith_options(crate::local::storage_backend::regolith_options()),
+            .with_regolith_options(crate::local::storage_backend::regolith_options(
+                block_cache_bytes,
+            )),
     ))
 }
 

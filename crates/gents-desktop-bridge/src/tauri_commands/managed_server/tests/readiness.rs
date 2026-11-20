@@ -1,55 +1,6 @@
 use super::*;
 
 #[tokio::test]
-async fn managed_pairing_handoff_matches_user_grant_model() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let contract = snapshot["identity_household_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "configuration-explicit-grants")
-        .unwrap();
-    for case in contract["managed_client_handoff_cases"].as_array().unwrap() {
-        let request = case["request"].as_bool().unwrap();
-        let owner = case["owner"].as_bool().unwrap();
-        let node = case["node"].as_bool().unwrap();
-        let approvals = AtomicUsize::new(0);
-        let result = grant_then_approve_managed(
-            || async move {
-                if !request {
-                    Ok(false)
-                } else if !owner || !node {
-                    Err("native grant failed".to_string())
-                } else {
-                    Ok(true)
-                }
-            },
-            || async {
-                approvals.fetch_add(1, Ordering::SeqCst);
-                Ok(PairingApproval::Committed)
-            },
-        )
-        .await;
-        assert_eq!(
-            approvals.load(Ordering::SeqCst) != 0,
-            case["approve"].as_bool().unwrap(),
-            "{case}"
-        );
-        if request && (!owner || !node) {
-            assert!(result.is_err(), "{case}");
-        }
-        if !request {
-            assert!(
-                matches!(result, Ok(PairingApproval::NotVisibleYet)),
-                "{case}"
-            );
-        }
-    }
-}
-
-#[tokio::test]
 async fn a_slow_booting_runtime_is_waited_on_until_it_publishes_readiness() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -226,65 +177,6 @@ async fn a_booting_runtime_past_the_bound_is_left_running() {
     )
     .await
     .expect("binding restarts the bound");
-}
-
-#[tokio::test]
-async fn cancelling_the_approval_wait_returns_without_waiting_out_its_window() {
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let approvals = AtomicU32::new(0);
-    let wait = await_managed_pairing_approval(
-        &cancel,
-        Duration::from_secs(600),
-        Duration::from_millis(5),
-        || async { false },
-        || async {
-            approvals.fetch_add(1, Ordering::SeqCst);
-            Ok(PairingApproval::NotVisibleYet)
-        },
-        || async { Ok(()) },
-    );
-    let cancelled = async {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        cancel.cancel();
-    };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
-        tokio::join!(wait, cancelled)
-    })
-    .await
-    .expect("a drain is not held for the approval window");
-    assert_eq!(result.unwrap_err(), PairingFailure::Cancelled);
-    assert!(
-        approvals.load(Ordering::SeqCst) > 1,
-        "approval was retried while waiting"
-    );
-}
-
-#[tokio::test]
-async fn an_approval_is_committed_once_then_waits_for_chat_readiness() {
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let (checks, approvals, repairs) = (AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0));
-    await_managed_pairing_approval(
-        &cancel,
-        Duration::from_secs(5),
-        Duration::from_millis(1),
-        || async { checks.fetch_add(1, Ordering::SeqCst) >= 3 },
-        || async {
-            approvals.fetch_add(1, Ordering::SeqCst);
-            Ok(PairingApproval::Committed)
-        },
-        || async {
-            repairs.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        },
-    )
-    .await
-    .expect("paired");
-    assert_eq!(approvals.load(Ordering::SeqCst), 1);
-    assert_eq!(repairs.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]

@@ -5,13 +5,13 @@ use anyhow::{anyhow, bail, Result};
 use super::super::action_plan::{ActionPlan, CreateWorkspaceAction, HostAction};
 use super::super::adapter::{
     artifacts_complete, capture_instruction_manifest, clone_artifacts, observe_dirty_base,
-    observe_effect, observed_tree_hash, provision, resolve_base_sha, write_identity,
+    observe_effect, observed_tree_hash, provision, resolve_base_sha, write_identity, DirtyBase,
     ObservedEffect,
 };
 use super::super::documents::{
     new_isolated_workspace, ProvisioningObservation, WorkspaceDocuments, WorkspacePlacementDoc,
-    ADAPTER_VERSION, LIFECYCLE_CLEANED, LIFECYCLE_CLEANING, LIFECYCLE_PROVISION_FAILED,
-    LIFECYCLE_READY, LIFECYCLE_SEALED,
+    WorkspaceProvenance, ADAPTER_VERSION, LIFECYCLE_CLEANED, LIFECYCLE_CLEANING,
+    LIFECYCLE_PROVISION_FAILED, LIFECYCLE_READY, LIFECYCLE_SEALED,
 };
 use super::super::instructions::is_empty_manifest;
 use super::super::journal::{self, ActionJournalEntry, ActionJournalState};
@@ -21,25 +21,16 @@ use super::{
 };
 use gents_loop::tool_policy::normalize_workspace_lifecycle_state;
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "reservation retains the configured workspace provenance"
-)]
 pub fn prepare_workspace_reservation(
     action: &CreateWorkspaceAction,
     repository: &super::RepositoryPlacementRef,
     ceiling: Option<&Path>,
-    owner_node_did: &str,
-    writer: &str,
-    integrator: &str,
-    invocation: &str,
-    correlation: &str,
-    route: &gents_protocol::trigger_delivery::HandoffRoute,
+    provenance: &WorkspaceProvenance,
 ) -> Result<super::super::documents::IsolatedWorkspaceDoc> {
     anyhow::ensure!(
         repository.enabled
             && repository.repository_id == action.repository_id
-            && repository.owner_node_did == owner_node_did,
+            && repository.owner_node_did == provenance.owner_node_did,
         "workspace repository is unavailable or mismatched"
     );
     workspace_host_path(
@@ -55,15 +46,9 @@ pub fn prepare_workspace_reservation(
         &identity,
         action.creation_policy,
         action.adapter,
-        owner_node_did,
-        writer,
-        integrator,
-        invocation,
-        correlation,
+        provenance,
         "provisioning",
         manifest,
-        None,
-        route,
     ))
 }
 
@@ -103,7 +88,7 @@ pub fn execute_create_workspace_plan(
             ctx.repository.repository_id
         )));
     }
-    if ctx.repository.owner_node_did != ctx.owner_node_did {
+    if ctx.repository.owner_node_did != ctx.provenance.owner_node_did {
         return Err(HostExecuteError::denied(
             "RepositoryPlacement.owner_node_did does not match the executing node DID",
         ));
@@ -141,7 +126,9 @@ fn create_workspace_action(
         .load_isolated_workspace(&identity.workspace_id)
         .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
     if let Some(existing) = &existing {
-        if existing.identity() != identity || existing.owner_node_did != ctx.owner_node_did {
+        if existing.identity() != identity
+            || existing.owner_node_did != ctx.provenance.owner_node_did
+        {
             return Err(HostExecuteError::failed(
                 "workspace creation identity/capability does not match the admitted workspace",
                 true,
@@ -178,7 +165,7 @@ fn create_workspace_action(
     )
     .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
 
-    let (observation, tree_hash, dirty_base) = match observed {
+    let observed = match observed {
         ObservedEffect::Absent
             if matches!(
                 journal::current_state(journal, 0),
@@ -188,31 +175,35 @@ fn create_workspace_action(
             match provision(&source, &dest, action, &resolved_base) {
                 Ok(observation) => {
                     let tree_hash = observed_tree_hash(&dest).unwrap_or_default();
-                    let dirty_base =
-                        observe_dirty_base(&source).unwrap_or(super::super::adapter::DirtyBase {
-                            dirty: false,
-                            summary: String::new(),
-                        });
-                    (observation, tree_hash, dirty_base)
+                    let dirty_base = observe_dirty_base(&source).unwrap_or(DirtyBase {
+                        dirty: false,
+                        summary: String::new(),
+                    });
+                    ObservedProvisioning {
+                        observation,
+                        tree_hash,
+                        dirty_base,
+                    }
                 }
                 Err(err) => {
-                    let dirty_base =
-                        observe_dirty_base(&source).unwrap_or(super::super::adapter::DirtyBase {
-                            dirty: false,
-                            summary: String::new(),
-                        });
+                    let dirty_base = observe_dirty_base(&source).unwrap_or(DirtyBase {
+                        dirty: false,
+                        summary: String::new(),
+                    });
                     journal::advance(journal, 0, ActionJournalState::EffectObserved);
                     let outcome = persist_docs(
                         action,
                         &identity,
                         ctx,
                         &dest,
-                        ProvisioningObservation {
-                            path_exists: dest.exists(),
-                            ..ProvisioningObservation::default()
+                        ObservedProvisioning {
+                            observation: ProvisioningObservation {
+                                path_exists: dest.exists(),
+                                ..ProvisioningObservation::default()
+                            },
+                            tree_hash: String::new(),
+                            dirty_base,
                         },
-                        String::new(),
-                        &dirty_base,
                         LIFECYCLE_PROVISION_FAILED,
                     )
                     .map_err(|persist_err| {
@@ -253,9 +244,11 @@ fn create_workspace_action(
                         &identity,
                         ctx,
                         &dest,
-                        observation,
-                        tree_hash,
-                        &dirty_base,
+                        ObservedProvisioning {
+                            observation,
+                            tree_hash,
+                            dirty_base,
+                        },
                         LIFECYCLE_PROVISION_FAILED,
                     )
                     .map_err(|persist_err| {
@@ -274,7 +267,11 @@ fn create_workspace_action(
                 }
                 observation.artifacts_cloned = artifacts_complete(&source, &dest, &artifacts);
             }
-            (observation, tree_hash, dirty_base)
+            ObservedProvisioning {
+                observation,
+                tree_hash,
+                dirty_base,
+            }
         }
         ObservedEffect::Mismatch {
             reason,
@@ -287,9 +284,11 @@ fn create_workspace_action(
                 &identity,
                 ctx,
                 &dest,
-                observation,
-                String::new(),
-                &dirty_base,
+                ObservedProvisioning {
+                    observation,
+                    tree_hash: String::new(),
+                    dirty_base,
+                },
                 LIFECYCLE_PROVISION_FAILED,
             )
             .map_err(|err| HostExecuteError::failed(err.to_string(), true, None))?;
@@ -299,35 +298,32 @@ fn create_workspace_action(
     };
 
     journal::advance(journal, 0, ActionJournalState::EffectObserved);
-    let outcome = persist_docs(
-        action,
-        &identity,
-        ctx,
-        &dest,
-        observation,
-        tree_hash,
-        &dirty_base,
-        LIFECYCLE_READY,
-    )
-    .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
+    let outcome = persist_docs(action, &identity, ctx, &dest, observed, LIFECYCLE_READY)
+        .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
     journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
     Ok(outcome)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "provisioning results recorded into one document set"
-)]
+/// What the host observed of a provisioned workspace; its placement records it.
+struct ObservedProvisioning {
+    observation: ProvisioningObservation,
+    tree_hash: String,
+    dirty_base: DirtyBase,
+}
+
 fn persist_docs(
     action: &CreateWorkspaceAction,
     identity: &LogicalWorkspaceIdentity,
     ctx: &mut HostExecutorContext<'_>,
     dest: &Path,
-    observation: ProvisioningObservation,
-    tree_hash: String,
-    dirty_base: &super::super::adapter::DirtyBase,
+    observed: ObservedProvisioning,
     lifecycle_state: &str,
 ) -> Result<CreateWorkspaceOutcome> {
+    let ObservedProvisioning {
+        observation,
+        tree_hash,
+        dirty_base,
+    } = observed;
     if let Some(existing) = ctx
         .documents
         .load_isolated_workspace(&identity.workspace_id)?
@@ -375,15 +371,9 @@ fn persist_docs(
         identity,
         action.creation_policy,
         action.adapter,
-        &ctx.owner_node_did,
-        &ctx.writer_principal,
-        &ctx.integrator_principal,
-        &ctx.caused_by_invocation_id,
-        &ctx.caused_by_correlation,
+        &ctx.provenance,
         lifecycle_state,
         instruction_manifest,
-        None,
-        &ctx.route,
     );
     let host_path = dest
         .to_str()
@@ -391,13 +381,13 @@ fn persist_docs(
         .to_string();
     let placement = WorkspacePlacementDoc {
         workspace_id: identity.workspace_id.clone(),
-        owner_node_did: ctx.owner_node_did.clone(),
+        owner_node_did: ctx.provenance.owner_node_did.clone(),
         host_path,
         repository_placement_id: ctx.repository.repository_id.clone(),
         adapter: action.adapter.as_str().to_string(),
         adapter_version: ADAPTER_VERSION.to_string(),
         dirty_base: dirty_base.dirty,
-        dirty_base_summary: dirty_base.summary.clone(),
+        dirty_base_summary: dirty_base.summary,
         provisioning_state: observation.to_json_string(),
         observed_tree_hash: tree_hash,
     };

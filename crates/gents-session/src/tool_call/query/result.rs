@@ -838,10 +838,12 @@ async fn load_accepted_tool_call_inner(
                 session_id,
                 requester_did,
                 request,
-                &call.doc_id,
-                execution_generation,
-                &call.tool_call_id,
-                &call.tool_name,
+                crate::session::plugin_effect_rows::PluginEffectCall {
+                    tool_call_doc_id: &call.doc_id,
+                    tool_call_id: &call.tool_call_id,
+                    tool_name: &call.tool_name,
+                    execution_generation,
+                },
             )?
             .1
         } else {

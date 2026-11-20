@@ -21,7 +21,7 @@ describe("desktop client restart selection ordering", () => {
     async (main) => {
       ownership.main = main;
       const snapshot = {
-        bootstrap: { clientStateExists: true, savedPeers: [] },
+        bootstrap: { clientStateExists: true, savedRuntimes: [] },
         client: {},
       };
       const api = {
@@ -42,7 +42,7 @@ describe("desktop client restart selection ordering", () => {
     const refresh = deferred<Record<string, unknown>>();
     const start = deferred<Record<string, unknown>>();
     const newer = {
-      bootstrap: { clientStateExists: true, savedPeers: [] },
+      bootstrap: { clientStateExists: true, savedRuntimes: [] },
       client: {},
     };
     const store = createSelectionStore();
@@ -63,7 +63,7 @@ describe("desktop client restart selection ordering", () => {
     expect(lifecycle.startupPhase).toBe("ready");
 
     refresh.resolve({
-      bootstrap: { clientStateExists: false, savedPeers: [] },
+      bootstrap: { clientStateExists: false, savedRuntimes: [] },
       client: null,
     });
     await refresh.promise;
@@ -77,7 +77,7 @@ describe("desktop client restart selection ordering", () => {
       ownership.main = false;
       const start = deferred<Record<string, unknown>>();
       const stopped = {
-        bootstrap: { clientStateExists: true, savedPeers: [{}] },
+        bootstrap: { clientStateExists: true, savedRuntimes: [{}] },
         client: null,
       };
       const ready = { ...stopped, client: {} };
@@ -108,11 +108,11 @@ describe("desktop client restart selection ordering", () => {
   it("does not let an older failed start replace a newer refresh success", async () => {
     const start = deferred<Record<string, unknown>>();
     const initial = {
-      bootstrap: { clientStateExists: true, savedPeers: [{}] },
+      bootstrap: { clientStateExists: true, savedRuntimes: [{}] },
       client: null,
     };
     const refreshed = {
-      bootstrap: { clientStateExists: true, savedPeers: [] },
+      bootstrap: { clientStateExists: true, savedRuntimes: [] },
       client: {},
     };
     const api = {
@@ -138,7 +138,7 @@ describe("desktop client restart selection ordering", () => {
   it("reports a failed start when a newer read only observed the stopped client", async () => {
     const start = deferred<Record<string, unknown>>();
     const stopped = {
-      bootstrap: { clientStateExists: true, savedPeers: [{}] },
+      bootstrap: { clientStateExists: true, savedRuntimes: [{}] },
       client: null,
     };
     const api = {
@@ -161,7 +161,7 @@ describe("desktop client restart selection ordering", () => {
     const store = createSelectionStore();
     const api = {
       fetchDesktopSnapshot: vi.fn(async () => ({
-        bootstrap: { clientStateExists: false, savedPeers: [] },
+        bootstrap: { clientStateExists: false, savedRuntimes: [] },
         client: null,
       })),
       shutdownDesktopClient: vi.fn(async () => undefined),
@@ -177,7 +177,7 @@ describe("desktop client restart selection ordering", () => {
       sessionId: "newly-selected-session",
     } as never);
     restarted.resolve({
-      bootstrap: { clientStateExists: true, savedPeers: [] },
+      bootstrap: { clientStateExists: true, savedRuntimes: [] },
       client: null,
     });
     await restart;
@@ -189,7 +189,7 @@ describe("desktop client restart selection ordering", () => {
 
   it("recovers client-error when a successful start is finally observed after a failed read", async () => {
     const stopped = {
-      bootstrap: { clientStateExists: true, savedPeers: [{}] },
+      bootstrap: { clientStateExists: true, savedRuntimes: [{}] },
       client: null,
     };
     const ready = { ...stopped, client: {} };
@@ -207,62 +207,5 @@ describe("desktop client restart selection ordering", () => {
     await lifecycle.refreshSnapshot();
     expect(lifecycle.startupPhase).toBe("ready");
     expect(lifecycle.snapshot).toEqual(ready);
-  });
-
-  it("restarts a wedged transport once the send that held it back ends", async () => {
-    const wedged = {
-      bootstrap: { clientStateExists: true, savedPeers: [{}] },
-      client: {
-        p2pHealth: {
-          status: "wedged",
-          connectedPeerCount: 0,
-          consecutiveFailures: 3,
-          lastError: "dial timeout",
-          lastOkAt: null,
-          lastFailureAt: null,
-        },
-      },
-    };
-    const api = {
-      fetchDesktopSnapshot: vi.fn().mockResolvedValue(wedged),
-      shutdownDesktopClient: vi.fn(async () => undefined),
-      startDesktopClient: vi.fn(async () => wedged),
-    };
-    const lifecycle = lifecycleFor(api);
-    lifecycle.stores.chat.setState({ sending: true });
-    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
-    expect(api.shutdownDesktopClient).not.toHaveBeenCalled();
-
-    lifecycle.stores.chat.setState({ sending: false });
-    await waitFor(() => expect(api.shutdownDesktopClient).toHaveBeenCalledOnce());
-  });
-
-  it("restarts once more for a transport that wedged during a restart", async () => {
-    const withHealth = (status: string) => ({
-      bootstrap: { clientStateExists: true, savedPeers: [{}] },
-      client: {
-        p2pHealth: {
-          status,
-          connectedPeerCount: 0,
-          consecutiveFailures: status === "wedged" ? 3 : 0,
-          lastError: null,
-          lastOkAt: null,
-          lastFailureAt: null,
-        },
-      },
-    });
-    const api = {
-      fetchDesktopSnapshot: vi
-        .fn()
-        .mockResolvedValueOnce(withHealth("healthy"))
-        .mockResolvedValue(withHealth("wedged")),
-      shutdownDesktopClient: vi.fn(async () => undefined),
-      startDesktopClient: vi.fn(async () => withHealth("wedged")),
-    };
-    const lifecycle = lifecycleFor(api);
-    await waitFor(() => expect(lifecycle.snapshot).not.toBeNull());
-
-    await lifecycle.restartDesktopClient("asked");
-    await waitFor(() => expect(api.shutdownDesktopClient).toHaveBeenCalledTimes(2));
   });
 });

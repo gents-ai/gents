@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::SessionScope;
@@ -18,7 +18,7 @@ use crate::types::{
 };
 
 pub async fn session_provenance_request(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     request: DesktopSessionProvenanceRequest,
 ) -> Result<SessionProvenanceView, String> {
     let node_did = request
@@ -40,7 +40,7 @@ pub async fn session_provenance_request(
 }
 
 pub async fn session_provenance(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     scope: SessionScope,
 ) -> Result<SessionProvenanceView, String> {
     let fail = |error: anyhow::Error| format!("session provenance: {error:#}");

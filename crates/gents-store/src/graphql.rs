@@ -15,7 +15,7 @@ pub use gents_protocol::graphql::{
 #[derive(Debug, thiserror::Error)]
 pub enum GraphqlResponseError {
     /// Error list returned by DefraDB; its source exposes storage exhaustion.
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Database(#[from] gents_protocol::database_error::GraphqlFailure),
     #[error(transparent)]
     EncodeErrors(#[from] serde_json::Error),
@@ -144,6 +144,16 @@ pub async fn graphql_response_with_transaction_retry(
     operation: &str,
 ) -> Result<QueryResponse, ConfigClientError> {
     crate::config_client::ConfigAccess::read_local_response(node, graphql, operation).await
+}
+
+/// [`graphql_with_transaction_retry`] for a read a decision is taken on
+/// ([`crate::config_client::ConfigAccess::read_for_decision`]).
+pub async fn graphql_for_decision(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> Result<QueryResponse, ConfigClientError> {
+    graphql_with_transaction_retry(node, graphql, operation).await
 }
 
 pub async fn graphql_with_transaction_retry(

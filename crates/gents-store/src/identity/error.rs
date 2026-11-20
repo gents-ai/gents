@@ -15,6 +15,8 @@ pub struct IdentityKeyUnavailable {
 
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
+    #[error("registering a held signing identity")]
+    RegisterSigningIdentity(#[from] defra_core::signing::IdentityConflict),
     #[error(
         "agent creation_nonce must contain 32 bytes encoded as 64 lowercase hexadecimal characters"
     )]

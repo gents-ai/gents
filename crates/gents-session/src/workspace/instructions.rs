@@ -5,10 +5,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const DEFAULT_INSTRUCTION_PATHS: &[&str] = &["AGENTS.override.md", "AGENTS.md"];
-/// Bound workspace-supplied instructions so they cannot consume the entire
-/// provider context before the actual request is assembled.
-pub const INSTRUCTION_TEXT_BUDGET: usize = 32 * 1024;
 
+/// Workspace instructions frozen at workspace creation. Capture keeps each file
+/// up to the configurable ceiling; the Agent reading the workspace bounds what
+/// reaches its provider context by its own Tools `host.max_instruction_chars`,
+/// exactly as live discovery does.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstructionManifest {
     pub schema: u32,
@@ -53,11 +54,16 @@ impl InstructionManifest {
 }
 
 impl InstructionFile {
-    pub fn from_bytes(path: &str, bytes: &[u8]) -> Self {
-        Self::from_bytes_with_budget(path, bytes, INSTRUCTION_TEXT_BUDGET)
+    /// A file a workspace freezes, kept up to the configurable ceiling.
+    pub fn captured(path: &str, bytes: &[u8]) -> Self {
+        Self::from_bytes(
+            path,
+            bytes,
+            gents_documents::tool_limits::MAX_CONFIGURED_INSTRUCTION_CHARS,
+        )
     }
 
-    fn from_bytes_with_budget(path: &str, bytes: &[u8], budget: usize) -> Self {
+    fn from_bytes(path: &str, bytes: &[u8], budget: usize) -> Self {
         let digest = Sha256::digest(bytes);
         let sha256 = format!("{digest:x}");
         let (text, truncated) = bound_instruction_text_to(bytes, budget);
@@ -78,7 +84,9 @@ pub fn is_empty_manifest(raw: &str) -> bool {
     }
 }
 
-pub fn instruction_context_section(raw: &str) -> Option<String> {
+/// The frozen manifest `raw` as provider context, its files bounded together by
+/// `max_instruction_chars` in manifest order.
+pub fn instruction_context_section(raw: &str, max_instruction_chars: usize) -> Option<String> {
     let manifest = InstructionManifest::parse(raw)?;
     if manifest.is_empty() {
         return None;
@@ -88,16 +96,17 @@ pub fn instruction_context_section(raw: &str) -> Option<String> {
             "# Frozen workspace instructions (base_sha={})",
             manifest.base_sha
         ),
-        &manifest.files,
+        &bound_frozen_files(manifest.files, max_instruction_chars),
     ))
 }
 
 pub fn live_instruction_context_section(
     cwd: Option<&Path>,
     tool_root: Option<&Path>,
+    max_instruction_chars: usize,
 ) -> Option<String> {
     let tool_root = tool_root?;
-    let files = discover_live_instruction_files(cwd, tool_root);
+    let files = discover_live_instruction_files(cwd, tool_root, max_instruction_chars);
     if files.is_empty() {
         return None;
     }
@@ -111,11 +120,30 @@ pub fn instruction_body_for_request(
     frozen_instruction_manifest: Option<&str>,
     live_cwd: Option<&Path>,
     live_tool_root: Option<&Path>,
+    max_instruction_chars: usize,
 ) -> Option<String> {
     match frozen_instruction_manifest {
-        Some(raw) => instruction_context_section(raw),
-        None => live_instruction_context_section(live_cwd, live_tool_root),
+        Some(raw) => instruction_context_section(raw, max_instruction_chars),
+        None => live_instruction_context_section(live_cwd, live_tool_root, max_instruction_chars),
     }
+}
+
+fn bound_frozen_files(files: Vec<InstructionFile>, budget: usize) -> Vec<InstructionFile> {
+    let mut remaining = budget;
+    let mut bounded = Vec::with_capacity(files.len());
+    for mut file in files {
+        if remaining == 0 {
+            break;
+        }
+        if file.text.len() > remaining {
+            let (text, truncated) = bound_instruction_text_to(file.text.as_bytes(), remaining);
+            file.text = text;
+            file.truncated = truncated;
+        }
+        remaining = remaining.saturating_sub(file.text.len());
+        bounded.push(file);
+    }
+    bounded
 }
 
 fn format_instruction_section(header: &str, files: &[InstructionFile]) -> String {
@@ -138,7 +166,11 @@ fn format_instruction_section(header: &str, files: &[InstructionFile]) -> String
     body
 }
 
-fn discover_live_instruction_files(cwd: Option<&Path>, tool_root: &Path) -> Vec<InstructionFile> {
+fn discover_live_instruction_files(
+    cwd: Option<&Path>,
+    tool_root: &Path,
+    max_instruction_chars: usize,
+) -> Vec<InstructionFile> {
     let Ok(tool_root) = std::fs::canonicalize(tool_root) else {
         return Vec::new();
     };
@@ -164,7 +196,7 @@ fn discover_live_instruction_files(cwd: Option<&Path>, tool_root: &Path) -> Vec<
     }
     dirs.reverse();
 
-    let mut remaining = INSTRUCTION_TEXT_BUDGET;
+    let mut remaining = max_instruction_chars;
     let mut files = Vec::new();
     for dir in dirs {
         if remaining == 0 {
@@ -176,7 +208,7 @@ fn discover_live_instruction_files(cwd: Option<&Path>, tool_root: &Path) -> Vec<
         let Some(bytes) = read_live_instruction_prefix(&found.read_path, remaining) else {
             continue;
         };
-        let file = InstructionFile::from_bytes_with_budget(&found.display, &bytes, remaining);
+        let file = InstructionFile::from_bytes(&found.display, &bytes, remaining);
         if file.text.is_empty() {
             continue;
         }
