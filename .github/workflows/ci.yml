@@ -5,12 +5,11 @@ name: CI
 # recipe, so `make gate` runs the same commands locally. A draft is linted
 # across the changed crates and their dependents and tested on the crates it
 # changes; a pull request that is ready for review, and a merge queue entry,
-# also test the dependents; a push to main selects everything. `gate` is the
-# one check to require, so it must run on every event a merge waits for.
+# also test the dependents. Main is not run on push: every change lands
+# through the merge queue, whose run is the change's test, and the nightly
+# scheduled run selects everything on main. `gate` is the one check to
+# require, so it must run on every event a merge waits for.
 on:
-  push:
-    branches:
-      - main
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   merge_group:
@@ -48,14 +47,13 @@ on:
         type: string
         default: ""
 
-# A new push to a pull request or to main cancels that ref's run in progress:
-# only the newest commit's run finishes, so a burst of merges does not queue a
-# full run per commit behind the portable runners. A merge queue entry or a
-# dispatch finishes. GitHub keeps the newest waiting run per group.
+# A new push to a pull request cancels its run in progress. A merge queue
+# entry, the scheduled run or a dispatch finishes. GitHub keeps the newest
+# waiting run per group.
 concurrency:
-  # The scheduled run queues apart from main's pushes so neither replaces the other.
+  # The scheduled run queues apart from dispatches of main so neither replaces the other.
   group: ci-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'schedule' || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Each 32-core Studio runs at most two gents jobs concurrently. Keep eight
@@ -63,13 +61,16 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  # A runner keeps its Cargo target tree between jobs only for pushes to main
-  # and pull requests from this repository's own branches. Fork pull requests
-  # and every other event build in a job-scoped tree, so build outputs,
+  # A runner keeps its Cargo target tree between jobs only for main (a push,
+  # its merge queue or its scheduled run) and pull requests from this
+  # repository's own branches: all build this repository's code. Fork pull requests and
+  # every other event build in a job-scoped tree, so build outputs,
   # build-script outputs included, never cross into another trust domain's job.
   # test-rust-build-space.py evaluates this condition per event.
   GENTS_CI_KEEP_TARGET_TREE: >-
     ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'merge_group' && startsWith(github.ref, 'refs/heads/gh-readonly-queue/main/')) ||
+    (github.event_name == 'schedule' && github.ref == 'refs/heads/main') ||
     (github.event_name == 'pull_request' &&
     github.event.pull_request.head.repo.full_name == github.repository) }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
