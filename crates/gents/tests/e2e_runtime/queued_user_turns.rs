@@ -243,7 +243,6 @@ async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_steers_behind_a_busy_turn_are_answered_by_one_inference() {
-    use crate::support::live_inference::STALL_CEILING;
     use gents_lean_vocab::families::fold_queue_contracts_steers_behind_busy_turn as family;
     let case = family::cases::<String>().into_iter().next().unwrap();
     let head = case.input.head;
@@ -296,7 +295,7 @@ async fn two_steers_behind_a_busy_turn_are_answered_by_one_inference() {
         .await
         .unwrap();
     let runtime = spawn_runtime(&db, agent).await;
-    backend.wait_for_request(&head_marker, STALL_CEILING).await;
+    backend.wait_for_request(&head_marker).await;
     let mut steer_docs = Vec::new();
     for id in &steers {
         let doc = submit_user_request(
@@ -313,7 +312,7 @@ async fn two_steers_behind_a_busy_turn_are_answered_by_one_inference() {
     backend.release(&head_marker);
     let access = &actors.fixture.access;
     assert_eq!(
-        wait_for_request_terminal(access, &head.to_string(), STALL_CEILING).await,
+        wait_for_request_terminal(access, &head.to_string()).await,
         "completed"
     );
 
