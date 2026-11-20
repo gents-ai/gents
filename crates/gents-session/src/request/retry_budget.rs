@@ -138,7 +138,7 @@ pub async fn write_pin(
             })
         })
         .await
-        .map_err(|error| RetryBudgetError::Write(anyhow::Error::from(error)))
+        .map_err(RetryBudgetError::Write)
 }
 
 fn pins_query(node_did: &str, request_doc_ids: &[&str]) -> String {

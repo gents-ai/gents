@@ -37,7 +37,6 @@ pub(super) struct RequestShowHeader {
     pub(super) valid_until: Option<String>,
     pub(super) interrupt_requested_at: Option<String>,
     pub(super) retry_count: Option<i64>,
-    pub(super) max_retries: Option<i64>,
     pub(super) input: Option<RequestInput>,
     pub(super) max_total_tokens: Option<i64>,
     pub(super) caused_by_parent_request_id: Option<String>,
@@ -146,7 +145,6 @@ pub(super) fn request_header_view(
         valid_until: string_field(row, "valid_until"),
         interrupt_requested_at: string_field(row, "interrupt_requested_at"),
         retry_count: integer_field(row, "retry_count"),
-        max_retries: integer_field(row, "max_retries"),
         input: row
             .get("input")
             .filter(|v| !v.is_null())
