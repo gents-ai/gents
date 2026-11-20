@@ -195,4 +195,61 @@ theorem a_refreshed_connection_acts_under_a_current_delegation (holder : Holder)
     Nat.not_le] at fresh prompt ⊢
   omega
 
+
+/-! ### A write's own access changes -/
+
+/-- What the access changes one committed write owes came to when the step
+that depends on them asks. External premise (`acp::OwedWait`, read by
+`Node::await_owed_acp_as` for the write's own transaction and actor): the
+provider holds them all, or nothing more will be sent as things stand
+(waiting for a credential, refused, or discarded), or entries the node can
+still send are left when the deadline passes. -/
+inductive GrantWait where
+  | settled
+  | parked
+  | pending
+  deriving DecidableEq, Repr
+
+/-- What the step that depends on a write's own access changes does. -/
+inductive DependentStep where
+  | proceed
+  /-- The change will not be held as things stand: the owed-settlement pass
+  reports it to the person (`entryStep`), and the step does not run. -/
+  | report
+  /-- The write stands; the step says it is still waiting and does not run. -/
+  | wait
+  deriving DecidableEq, Repr
+
+/-- What a write observes of its own access changes. A home on the node's own
+store applies them in the write's transaction, so nothing is owed and it is
+settled at once: such a home behaves exactly as before. External premise:
+DefraDB owes nothing on a provider that joins the transaction. -/
+def observedGrant (externalProvider : Bool) (provider : GrantWait) : GrantWait :=
+  if externalProvider then provider else .settled
+
+/-- Decision (gents#3831): a step that depends on access a write just staged
+(another actor reading what the write shared with it, in the same request)
+runs only once the write's own access changes are settled. The write waits
+for them, subscribed to the owed records and bounded by
+`ownGrantDeadlineSeconds`. Rust owner: `config_client::owed_access`. -/
+def dependentStep : GrantWait → DependentStep
+  | .settled => .proceed
+  | .parked => .report
+  | .pending => .wait
+
+/-- Decision (gents#3831): how long a write waits for its own access changes
+before the dependent step says it is still waiting. -/
+def ownGrantDeadlineSeconds : Nat := 10
+
+theorem a_dependent_step_runs_only_on_settled_grants (wait : GrantWait)
+    (h : dependentStep wait = .proceed) : wait = .settled := by
+  cases wait <;> simp_all [dependentStep]
+
+theorem a_home_on_the_node_store_proceeds_at_once (provider : GrantWait) :
+    dependentStep (observedGrant false provider) = .proceed := rfl
+
+theorem every_grant_wait_has_a_step (wait : GrantWait) :
+    dependentStep wait = .proceed ∨ dependentStep wait = .report ∨ dependentStep wait = .wait := by
+  cases wait <;> simp [dependentStep]
+
 end Identity.OwedRegistration

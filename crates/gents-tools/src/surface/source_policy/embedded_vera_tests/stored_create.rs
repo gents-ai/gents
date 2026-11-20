@@ -24,7 +24,10 @@ const AGENT_DOC: &str = "bae-stored-create-agent";
 
 /// The User as its client holds it: a key in a signing capability that
 /// DefraDB never holds.
-pub(super) struct ClientUser(pub(super) ClientSigningCapability, identity::RawIdentity);
+pub(super) struct ClientUser(
+    pub(super) ClientSigningCapability,
+    pub(super) identity::RawIdentity,
+);
 
 async fn client_user(root: &std::path::Path, name: &str) -> anyhow::Result<ClientUser> {
     let capability = client_key(root, name).await?;
