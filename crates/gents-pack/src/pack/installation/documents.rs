@@ -764,17 +764,7 @@ async fn prepare_document_pack_archive_inputs(
             node_did: owner.to_owned(),
         },
         &|path| archive.asset(path).map(<[u8]>::to_vec),
-        // A binding is recorded in `agent_bindings`, and only an install that
-        // binds its own slots looks one up (a hosted runtime takes them from
-        // the client), so keeping it out of `variables` lets both sides of a
-        // hosted install record the same installation.
-        &|name| {
-            if super::super::is_agent_binding_variable(name) {
-                root.resolve(name, environment)
-            } else {
-                capture_variable(&captured, name, || root.resolve(name, environment))
-            }
-        },
+        &|name| capture_variable(&captured, name, || root.resolve(name, environment)),
         installed_via,
         super::super::agent_bindings::PackBindingInputs {
             available: &available,
@@ -789,7 +779,9 @@ async fn prepare_document_pack_archive_inputs(
         },
     )
     .await?;
-    let mut root = root.with_variables(captured.into_inner().unwrap_or_else(|e| e.into_inner()));
+    let mut root = root.with_variables(super::super::agent_bindings::recorded_variables(
+        captured.into_inner().unwrap_or_else(|e| e.into_inner()),
+    ));
     let mut config = loaded.config;
     root.installer_root_tools = default_host_tool_roots(
         access,
@@ -1081,9 +1073,11 @@ async fn load_dependency(
         bindings,
     )
     .await;
-    let variables = resolver
-        .finish()
-        .with_context(|| format!("preparing dependency {coordinate}"))?;
+    let variables = super::super::agent_bindings::recorded_variables(
+        resolver
+            .finish()
+            .with_context(|| format!("preparing dependency {coordinate}"))?,
+    );
     let mut bound = bound?;
     let installer_root_tools = default_host_tool_roots(
         access,
