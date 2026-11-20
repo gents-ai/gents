@@ -921,3 +921,41 @@ async fn a_dependent_read_on_a_local_home_runs_once_its_grant_settled() -> anyho
 async fn a_dependent_read_on_a_vera_home_runs_once_its_grant_settled() -> anyhow::Result<()> {
     a_dependent_read_runs_only_once_its_grant_settled(Provider::Vera).await
 }
+
+#[tokio::test]
+async fn a_client_waits_over_http_for_its_own_access_changes_on_a_vera_home() -> anyhow::Result<()>
+{
+    let home = home(Provider::Vera).await?;
+    let owner = ConfigAccess::Graphql(home.owner_endpoint.clone());
+    home.owner_endpoint.runtime_authorization().await?;
+    let input = json!({"node_did": "did:key:z6MkOwedAwaitFixture", "enabled": true});
+    let ticket = owner
+        .transact_write("test.own_grant.http", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                    &json!({"input": input}),
+                    gents_protocol::schemas::NODE,
+                )
+                .await?;
+                Ok::<_, ConfigClientError>(txn.owed_access_ticket()?)
+            })
+        })
+        .await?;
+    assert!(
+        matches!(
+            ticket,
+            crate::config_client::owed::OwedAccessTicket::Http { .. }
+        ),
+        "a Vera home's client transaction waits through the runtime"
+    );
+    assert_eq!(
+        ticket
+            .wait(crate::config_client::owed::OWN_GRANT_DEADLINE)
+            .await?,
+        crate::config_client::owed::GrantWait::Settled
+    );
+    ticket.require_settled().await?;
+    home.shutdown().await
+}
