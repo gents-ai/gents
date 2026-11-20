@@ -124,6 +124,8 @@ export function useDefaultPacks() {
     nodeDid,
     packs: mine ? (state.packs ?? []) : [],
     loading: mine && state.loading,
+    /** the list for this node has been read, or the read has failed */
+    settled: mine && state.packs !== null,
     error: mine ? state.error : null,
     busy: mine && state.busy,
     /** the packs the last install or turn-on could not finish */
