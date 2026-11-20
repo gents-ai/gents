@@ -116,7 +116,6 @@ async fn target(text: &str) -> Result<Target, String> {
 }
 
 #[cfg(target_os = "macos")]
-#[allow(unused_unsafe)]
 mod mac {
     use std::cell::RefCell;
     use std::ffi::c_void;
@@ -316,7 +315,7 @@ mod mac {
                 let url = unsafe { action.request().URL() };
                 let scheme = url
                     .as_ref()
-                    .and_then(|url| unsafe { url.scheme() })
+                    .and_then(|url| url.scheme())
                     .map(|scheme| scheme.to_string());
                 /* web pages and what they embed, and a local page's own
                 folder; a link to another scheme or elsewhere on the disk
@@ -326,7 +325,7 @@ mod mac {
                     Some("file") => {
                         let path = url
                             .as_ref()
-                            .and_then(|url| unsafe { url.path() })
+                            .and_then(|url| url.path())
                             .map(|path| path.to_string());
                         match (path, self.ivars().files.borrow().as_deref()) {
                             (Some(path), Some(folder)) => path.starts_with(folder),
@@ -355,7 +354,7 @@ mod mac {
                 _features: &WKWindowFeatures,
             ) -> Option<Retained<WKWebView>> {
                 let url = unsafe { action.request().URL() }
-                    .and_then(|url| unsafe { url.absoluteString() })
+                    .and_then(|url| url.absoluteString())
                     .map(|url| url.to_string());
                 if let Some(url) = url {
                     emit(&self.ivars().app, "browser-new-tab", NewTab { url });
@@ -473,7 +472,7 @@ mod mac {
         };
         let mtm = MainThreadMarker::from(view);
         let host = unsafe { view.URL() }
-            .and_then(|url| unsafe { url.host() })
+            .and_then(|url| url.host())
             .map(|host| host.to_string())
             .unwrap_or_else(|| "This page".to_owned());
         let alert = NSAlert::new(mtm);

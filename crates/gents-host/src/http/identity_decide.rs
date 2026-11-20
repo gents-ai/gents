@@ -349,6 +349,7 @@ mod tests {
                 serve_lifecycle: Default::default(),
             },
             None,
+            16,
         )
         .contract
         .merge(

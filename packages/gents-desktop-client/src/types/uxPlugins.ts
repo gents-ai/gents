@@ -19,7 +19,8 @@ export interface UxPluginListing {
   description?: string | null;
   contributes?: UxDeclaredContributions | null;
   defaultEnabled?: boolean | null;
-  /** a page document's content digest: a changed digest is an edit */
+  /** a page document's content digest, or the digest of the archive a pack
+      plugin was installed from: a changed digest is an edit or a reinstall */
   digest?: string | null;
 }
 

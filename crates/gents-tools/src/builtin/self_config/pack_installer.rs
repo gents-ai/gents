@@ -22,6 +22,7 @@ impl PackInstaller {
         NodePacks {
             access,
             node_did: self.core.node_did(),
+            registry_url: self.core.registry_url(),
             home: self.home.as_deref(),
             grants_authority: self.core.held_grants().pack_authority,
         }

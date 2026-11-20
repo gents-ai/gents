@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Context;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::tool_call::ToolCallState;
 
 pub fn sequence_message_key(
     node_did: &str,
@@ -187,7 +188,7 @@ pub async fn retry_has_published_input(
                 ))
                 .filter(Filter::any_of(
                     tool_call_fields::LIFECYCLE_STATE,
-                    ["pending", "running"],
+                    ToolCallState::nonterminal().map(ToolCallState::as_str),
                 ))
                 .filter(Filter::any([
                     Filter::eq(tool_call_fields::AWAIT_MODE, "foreground"),

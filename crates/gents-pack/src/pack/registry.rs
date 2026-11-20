@@ -9,7 +9,6 @@ use crate::pack::store::PackStore;
 use crate::pack::PackManifest;
 
 pub const DEFAULT_REGISTRY_URL: &str = "https://registry.dev.gents.xyz";
-pub const REGISTRY_ENV_VAR: &str = "GENTS_REGISTRY";
 
 const DOWNLOAD_HEADER_BOUND: Duration = Duration::from_secs(20);
 
@@ -41,15 +40,10 @@ pub fn split_pack_coordinate(name: &str) -> (&str, &str) {
 }
 
 pub fn resolve_registry_url(explicit: Option<&str>) -> String {
-    for candidate in [
-        explicit.map(str::to_owned),
-        std::env::var(REGISTRY_ENV_VAR).ok(),
-    ] {
-        if let Some(url) = candidate.filter(|value| !value.trim().is_empty()) {
-            return url.trim_end_matches('/').to_owned();
-        }
+    match explicit.filter(|value| !value.trim().is_empty()) {
+        Some(url) => url.trim_end_matches('/').to_owned(),
+        None => DEFAULT_REGISTRY_URL.to_owned(),
     }
-    DEFAULT_REGISTRY_URL.to_owned()
 }
 
 pub struct RegistryClient {

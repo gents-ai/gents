@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents_protocol::goal_control::{GoalOperation, GoalRevision, SessionGoalControlReceipt};
-use gents_protocol::request_input::RequestInput;
+use gents_protocol::authored_submission::AuthoredGoal;
+use gents_protocol::goal_control::SessionGoalControlReceipt;
 use gents_store::identity::NodeIdentity;
 
 use crate::client_runtime::ClientRuntime;
@@ -152,19 +152,15 @@ impl ClientRuntime {
     /// The caller retains its command and destination identities before this
     /// call. Authored equality covers the complete input and observed revision;
     /// a racing proposal cannot replace the journal winner's signed request.
-    #[allow(clippy::too_many_arguments)]
     pub async fn control_session_goal_correlated(
         &self,
-        command_id: &str,
-        node_did: &str,
-        session_id: &str,
-        session_doc_id: Option<String>,
-        expected: Option<GoalRevision>,
-        operation: GoalOperation,
-        agent_did: Option<&str>,
-        input: RequestInput,
+        goal: AuthoredGoal,
         resume_reference: Option<&GoalSubmissionReference>,
     ) -> Result<SessionGoalControlReceipt> {
+        let node_did = goal.node_did.clone();
+        let command_id = goal.command_id.clone();
+        let node_did = node_did.as_str();
+        let command_id = command_id.as_str();
         if let Some(reference) = resume_reference {
             let retained =
                 records::goal::lookup(&self.node, self.node_identity.did(), node_did, command_id)
@@ -181,18 +177,7 @@ impl ClientRuntime {
         let queued = gents_store::client_journal::outbox::reserve(
             &self.node,
             self.node_identity.did(),
-            &gents_protocol::authored_submission::AuthoredSubmission::Goal(Box::new(
-                gents_protocol::authored_submission::AuthoredGoal {
-                    node_did: node_did.to_owned(),
-                    command_id: command_id.to_owned(),
-                    session_id: session_id.to_owned(),
-                    session_doc_id: session_doc_id.clone(),
-                    expected: expected.clone(),
-                    operation: operation.clone(),
-                    agent_did: agent_did.map(str::to_owned),
-                    input: input.clone(),
-                },
-            )),
+            &gents_protocol::authored_submission::AuthoredSubmission::Goal(Box::new(goal)),
         )
         .await?;
         if !queued.pending {
@@ -235,13 +220,13 @@ impl ClientRuntime {
         let node_did = input.node_did.as_str();
         let command_id = input.command_id.as_str();
         let session_id = input.session_id.as_str();
-        let agent_did = input.agent_did.as_deref();
-        let session_doc_id = input.session_doc_id.clone();
-        let expected = input.expected.clone();
-        let operation = input.operation.clone();
-        let input = input.input.clone();
-        let authored =
-            serde_json::to_vec(&(&session_doc_id, &expected, &operation, agent_did, &input))?;
+        let authored = serde_json::to_vec(&(
+            &input.session_doc_id,
+            &input.expected,
+            &input.operation,
+            input.agent_did.as_deref(),
+            &input.input,
+        ))?;
         let intent = goal_delivery::Intent::new(
             self.node_identity.did().into(),
             node_did.into(),
@@ -258,18 +243,7 @@ impl ClientRuntime {
             );
             record
         } else {
-            let (_, command) = self
-                .prepare_session_goal_command(
-                    node_did,
-                    session_id,
-                    session_doc_id,
-                    expected,
-                    operation,
-                    agent_did,
-                    input,
-                    command_id.into(),
-                )
-                .await?;
+            let (_, command) = self.prepare_session_goal_command(*input.clone()).await?;
             let proposal = goal_delivery::Record::proposal(intent, command)?;
             records::goal::reserve(&self.node_arc(), &proposal).await?
         };

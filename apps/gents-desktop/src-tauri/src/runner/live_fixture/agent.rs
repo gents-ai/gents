@@ -110,7 +110,7 @@ async fn seed_live_agent_documents(
     };
     use gents_store::config_client::ConfigAccess;
     use serde_json::json;
-    let inference = inference::LiveInferenceSettings::from_env()?;
+    let inference = inference::LiveInferenceSettings::parse(backend.inference_settings.as_deref())?;
     let tool_root = tool_root
         .to_str()
         .context("fixture tool root is not UTF-8")?;

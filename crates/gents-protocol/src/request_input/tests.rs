@@ -193,7 +193,7 @@ fn request_input_rejects_legacy_controls_and_incomplete_goal_facts() {
 
 #[test]
 fn signed_request_input_fields_follow_the_lean_encoding() {
-    use crate::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+    use crate::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope};
 
     fn read_length(cursor: &mut &[u8]) -> usize {
         let length = cursor.iter().position(|byte| *byte != 0).unwrap();
@@ -219,10 +219,7 @@ fn signed_request_input_fields_follow_the_lean_encoding() {
         let mut request = AgentRequestCreate::base(
             crate::request_admission::RequestPurpose::Normal,
             "request-1",
-            "did:key:agent",
-            "did:key:agent",
-            "default",
-            "session-1",
+            RequestScope::new("did:key:agent", "did:key:agent", "default", "session-1"),
             "input-fields-follow-this-content",
             "interactive",
             "2026-08-30T00:00:00Z",

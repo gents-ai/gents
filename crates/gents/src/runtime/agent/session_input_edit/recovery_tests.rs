@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::embedded::EmbeddedHome;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
@@ -125,10 +125,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "original",
-        did,
-        did,
-        &binding.agent_did,
-        "edit-session",
+        RequestScope::new(did, did, &binding.agent_did, "edit-session"),
         "original content",
         "interactive",
         "2026-10-10T00:00:00Z",

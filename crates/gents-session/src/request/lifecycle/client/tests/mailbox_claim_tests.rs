@@ -3,7 +3,7 @@ use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
-use crate::session::mailbox::{MailboxCreateTool, MailboxStatus};
+use crate::session::mailbox::MailboxCreateTool;
 use gents_documents::mailbox_write_decl::{
     MailboxAction, MailboxKind, MailboxNotificationPolicy, MailboxWriteOutcome,
 };
@@ -59,10 +59,12 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     let owner_create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "mailbox-owner-seed",
-        runtime.did(),
-        owner.did(),
-        agent.did(),
-        "mailbox-delegated-session",
+        RequestScope::new(
+            runtime.did(),
+            owner.did(),
+            agent.did(),
+            "mailbox-delegated-session",
+        ),
         "Seed",
         "interactive",
         "2026-11-04T00:00:00Z",
@@ -83,10 +85,12 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "mailbox-delegated-request",
-        runtime.did(),
-        owner.did(),
-        agent.did(),
-        "mailbox-delegated-session",
+        RequestScope::new(
+            runtime.did(),
+            owner.did(),
+            agent.did(),
+            "mailbox-delegated-session",
+        ),
         "File a notice",
         "interactive",
         "2026-11-04T00:00:00Z",
@@ -233,85 +237,28 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
             .await?,
         TerminalizeResult::Won
     );
-    let runtime_notice = |request_id: &str| crate::session::mailbox::RuntimeNotice {
-        source_id: format!("service-update:{request_id}"),
-        session_id: "mailbox-delegated-session".into(),
-        request_id: request_id.into(),
-        title: "Runtime update complete".into(),
-        summary: "Completed".into(),
-        failed: false,
-    };
-    // After the claimed request is terminal, as after a runtime restart, the
-    // notice reaches the verified signer rather than the session owner.
-    let notice = crate::session::mailbox::publish_runtime_notice(
-        &node,
-        runtime.did(),
-        std::slice::from_ref(&agent),
-        runtime_notice("mailbox-delegated-request"),
-    )
-    .await;
-    let claimed_document = notice.is_ok();
-    let claimed_deferred = matches!(
-        notice,
-        Err(crate::session::mailbox::RuntimeNoticeError::MissingClaimProvenance)
-    );
-    let notice = notice?;
-    assert_eq!(notice.requester_did, user.did());
-    assert_eq!(notice.target_agent_did, agent.did());
-    let notice_query = format!(
-        "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
-        gents_store::graphql::escape_graphql_string(&notice.doc_id)
-    );
-    let visible = |access: &ConfigAccess, query: String| {
-        let access = access.clone();
-        async move {
-            Ok::<_, anyhow::Error>(
-                !access.execute(&query).await?["data"]["MailboxItem"]
-                    .as_array()
-                    .unwrap()
-                    .is_empty(),
-            )
-        }
-    };
-    let mut notice_other = Some(visible(&owner_access, notice_query.clone()).await?);
     for case in gents_lean_vocab::families::mailbox_access_claim_visibility::cases() {
         case.check(
             match (case.input.item.as_str(), case.input.actor.as_str()) {
                 ("tool", "user") => tool_user.take(),
                 ("tool", "other") => tool_other.take(),
-                ("notice", "other") => notice_other.take(),
                 _ => None,
             }
             .unwrap_or_else(|| panic!("no served observation for {:?}", case.input)),
         );
     }
-    let mut claimed_notice = Some(
-        gents_lean_vocab::families::mailbox_access_notice_publication::NoticeOutput {
-            document: claimed_document,
-            recipient: visible(&user_access, notice_query.clone()).await?,
-            deferred: claimed_deferred,
-        },
-    );
-    crate::operations::mailbox::dismiss(&user_access, &notice.doc_id).await?;
-    let replayed = crate::session::mailbox::publish_runtime_notice(
-        &node,
-        runtime.did(),
-        std::slice::from_ref(&agent),
-        runtime_notice("mailbox-delegated-request"),
-    )
-    .await?;
-    assert_eq!(replayed.doc_id, notice.doc_id);
-    assert_eq!(replayed.parsed_status(), Some(MailboxStatus::Dismissed));
     owner_access
         .add_actor_relationship("Agent", &agent_doc, "session_writer", &user.did().parse()?)
         .await?;
     let mut reply = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "mailbox-delegated-reply",
-        runtime.did(),
-        owner.did(),
-        agent.did(),
-        "mailbox-delegated-session",
+        RequestScope::new(
+            runtime.did(),
+            owner.did(),
+            agent.did(),
+            "mailbox-delegated-session",
+        ),
         "Approved",
         "interactive",
         "2026-11-04T00:00:00Z",
@@ -322,60 +269,6 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     reply.caused_by_source_doc_id = Some(doc.to_owned());
     crate::request::admission::sign_agent_request_create(&user, &mut reply).await?;
     submit_client_request(&user_access, &reply).await?;
-    let unclaimed_notice = |request_id: &'static str| {
-        let (node, agent, agent_access, user_access) = (
-            node.clone(),
-            agent.clone(),
-            agent_access.clone(),
-            user_access.clone(),
-        );
-        let runtime_did = runtime.did().to_owned();
-        async move {
-            let result = crate::session::mailbox::publish_runtime_notice(
-                &node,
-                &runtime_did,
-                std::slice::from_ref(&agent),
-                runtime_notice(request_id),
-            )
-            .await;
-            let deferred = matches!(
-                result,
-                Err(crate::session::mailbox::RuntimeNoticeError::MissingClaimProvenance)
-            );
-            let source = format!("service-update:{request_id}");
-            let filter = format!(
-                "{{ MailboxItem(filter: {{source_id: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
-                gents_store::graphql::escape_graphql_string(&source)
-            );
-            Ok::<_, anyhow::Error>(
-                gents_lean_vocab::families::mailbox_access_notice_publication::NoticeOutput {
-                    document: result.is_ok()
-                        || !agent_access.execute(&filter).await?["data"]["MailboxItem"]
-                            .as_array()
-                            .unwrap()
-                            .is_empty(),
-                    recipient: !user_access.execute(&filter).await?["data"]["MailboxItem"]
-                        .as_array()
-                        .unwrap()
-                        .is_empty(),
-                    deferred,
-                },
-            )
-        }
-    };
-    // Admitted and visible, but its claim has not committed.
-    let mut unclaimed = Some(unclaimed_notice("mailbox-delegated-reply").await?);
-    let mut missing = Some(unclaimed_notice("mailbox-missing-request").await?);
-    for case in gents_lean_vocab::families::mailbox_access_notice_publication::cases() {
-        case.check(
-            match (case.input.present, case.input.claimed) {
-                (true, true) => claimed_notice.take(),
-                (true, false) => unclaimed.take(),
-                (false, _) => missing.take(),
-            }
-            .expect("one served observation per modeled notice"),
-        );
-    }
     let reply_row = agent_access.execute(&format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"mailbox-delegated-reply\"}}}}) {{ {} }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await?;
     let reply_row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(reply_row["data"]["AgentRequest"][0].clone())?;

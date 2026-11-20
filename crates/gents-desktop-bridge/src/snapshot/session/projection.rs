@@ -341,27 +341,39 @@ fn canonical_live_tool_output(
     })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "projection inputs come from separate stores and request options"
-)]
+pub(super) struct SessionProjection<'a> {
+    pub store: &'a ClientStore,
+    pub transcript_store: &'a ClientStore,
+    pub context_store: &'a ClientStore,
+    pub canonical_dependencies:
+        Option<&'a gents_observe::client_projection::query::CanonicalTranscriptDependencies>,
+    pub prompt_ownership:
+        Option<&'a gents_observe::client_projection::query::RequestPromptOwnership>,
+    pub request_projection: Option<&'a [AgentRequestRow]>,
+    pub transcript_is_bounded: bool,
+    pub context_totals_exact: bool,
+    pub pending_owner_known: bool,
+    pub include_live_tail: bool,
+}
+
 pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
-    store: &ClientStore,
-    transcript_store: &ClientStore,
-    context_store: &ClientStore,
-    canonical_dependencies: Option<
-        &gents_observe::client_projection::query::CanonicalTranscriptDependencies,
-    >,
-    prompt_ownership: Option<&gents_observe::client_projection::query::RequestPromptOwnership>,
-    transcript_is_bounded: bool,
-    context_totals_exact: bool,
-    pending_owner_known: bool,
-    include_live_tail: bool,
+    projection: SessionProjection<'_>,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
-    request_projection: Option<&[AgentRequestRow]>,
 ) -> Option<DesktopSessionSnapshot> {
+    let SessionProjection {
+        store,
+        transcript_store,
+        context_store,
+        canonical_dependencies,
+        prompt_ownership,
+        request_projection,
+        transcript_is_bounded,
+        context_totals_exact,
+        pending_owner_known,
+        include_live_tail,
+    } = projection;
     let session_row = store.sessions.iter().find(|row| {
         row.session_id == session_id && node_did.is_none_or(|node_did| row.node_did == node_did)
     });
@@ -1287,19 +1299,21 @@ mod tests {
         stale_store.requests[1].input = None;
         for store in [&store, &stale_store] {
             let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-                store,
-                store,
-                store,
-                None,
-                Some(&ownership),
-                true,
-                false,
-                false,
-                true,
+                SessionProjection {
+                    store,
+                    transcript_store: store,
+                    context_store: store,
+                    canonical_dependencies: None,
+                    prompt_ownership: Some(&ownership),
+                    request_projection: Some(&requests),
+                    transcript_is_bounded: true,
+                    context_totals_exact: false,
+                    pending_owner_known: false,
+                    include_live_tail: true,
+                },
                 Some("did:test:amy"),
                 "session-1",
                 Some("head"),
-                Some(&requests),
             )
             .expect("fresh request projection establishes the session");
             let inputs = snapshot
@@ -1428,18 +1442,20 @@ mod tests {
         };
         let snapshot_of = |page: &ClientStore, tip: bool| {
             build_session_snapshot_from_store_for_node_with_transcript(
-                &full,
-                page,
-                page,
-                None,
-                Some(&ownership),
-                true,
-                false,
-                false,
-                tip,
+                SessionProjection {
+                    store: &full,
+                    transcript_store: page,
+                    context_store: page,
+                    canonical_dependencies: None,
+                    prompt_ownership: Some(&ownership),
+                    request_projection: None,
+                    transcript_is_bounded: true,
+                    context_totals_exact: false,
+                    pending_owner_known: false,
+                    include_live_tail: tip,
+                },
                 Some("did:test:amy"),
                 "session-1",
-                None,
                 None,
             )
             .unwrap()
@@ -1561,18 +1577,20 @@ mod tests {
             );
         }
         let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-            &store,
-            &store,
-            &store,
-            None,
-            Some(&ownership),
-            true,
-            false,
-            false,
-            true,
+            SessionProjection {
+                store: &store,
+                transcript_store: &store,
+                context_store: &store,
+                canonical_dependencies: None,
+                prompt_ownership: Some(&ownership),
+                request_projection: None,
+                transcript_is_bounded: true,
+                context_totals_exact: false,
+                pending_owner_known: false,
+                include_live_tail: true,
+            },
             Some("did:test:amy"),
             "session-1",
-            None,
             None,
         )
         .unwrap();
@@ -1679,19 +1697,21 @@ mod tests {
             let page = ClientStore::from_rows(page_rows);
             let context = page.merge_snapshot(tip.clone());
             let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-                &bounded,
-                &page,
-                &context,
-                None,
-                Some(&ownership),
-                true,
-                false,
-                false,
-                sequence == 2,
+                SessionProjection {
+                    store: &bounded,
+                    transcript_store: &page,
+                    context_store: &context,
+                    canonical_dependencies: None,
+                    prompt_ownership: Some(&ownership),
+                    request_projection: Some(&full.requests),
+                    transcript_is_bounded: true,
+                    context_totals_exact: false,
+                    pending_owner_known: false,
+                    include_live_tail: sequence == 2,
+                },
                 Some("did:test:amy"),
                 "session-1",
                 None,
-                Some(&full.requests),
             )
             .unwrap();
             assert!(
@@ -1738,18 +1758,20 @@ mod tests {
         let control_page = ClientStore::from_rows(control_rows);
         let control_context = control_page.merge_snapshot(tip.clone());
         let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-            &control_store,
-            &control_page,
-            &control_context,
-            None,
-            Some(&ownership),
-            true,
-            false,
-            false,
-            false,
+            SessionProjection {
+                store: &control_store,
+                transcript_store: &control_page,
+                context_store: &control_context,
+                canonical_dependencies: None,
+                prompt_ownership: Some(&ownership),
+                request_projection: None,
+                transcript_is_bounded: true,
+                context_totals_exact: false,
+                pending_owner_known: false,
+                include_live_tail: false,
+            },
             Some("did:test:amy"),
             "session-1",
-            None,
             None,
         )
         .unwrap();
@@ -1769,18 +1791,20 @@ mod tests {
             .retain(|row| row.message.sequence == 2);
         let page = ClientStore::from_rows(rows);
         let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-            &full,
-            &page,
-            &full,
-            None,
-            None,
-            true,
-            true,
-            true,
-            true,
+            SessionProjection {
+                store: &full,
+                transcript_store: &page,
+                context_store: &full,
+                canonical_dependencies: None,
+                prompt_ownership: None,
+                request_projection: None,
+                transcript_is_bounded: true,
+                context_totals_exact: true,
+                pending_owner_known: true,
+                include_live_tail: true,
+            },
             Some("did:test:amy"),
             "session-1",
-            None,
             None,
         )
         .unwrap();
@@ -2148,9 +2172,7 @@ pub(super) fn project_transcript_rows(
                     Some(pin.handle.clone()),
                     row.lifecycle_state
                         .as_deref()
-                        .and_then(
-                            gents_session::session::tool_call_state::ToolCallState::from_persisted,
-                        )
+                        .and_then(gents_protocol::tool_call::ToolCallState::from_persisted)
                         .map(|lifecycle| {
                             gents_toolcalls::plugin::job_calls::job_state(
                                 lifecycle,

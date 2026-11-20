@@ -70,7 +70,7 @@ pub(super) async fn seed_agent_request(
     created_at: &str,
 ) -> String {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     let SeededSession {
         access,
@@ -80,10 +80,12 @@ pub(super) async fn seed_agent_request(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        db.node_identity.did(),
-        fixture.agent.did(),
-        fixture.agent.did(),
-        session_id,
+        RequestScope::new(
+            db.node_identity.did(),
+            fixture.agent.did(),
+            fixture.agent.did(),
+            session_id,
+        ),
         "session control witness",
         "interactive",
         created_at,
@@ -318,9 +320,9 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
                 node_did,
                 &stopped_session,
                 Some(fixture.agent.did()),
-                std::sync::Arc::new(gents_toolcalls::call::hook::RuntimeExecutionWitness {
+                std::sync::Arc::new(gents_toolcalls::call::hook::background_executions::RuntimeExecutionWitness {
                     background_executions:
-                        gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
                     job_driver,
                 }),
             )
@@ -414,9 +416,9 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
                 node_did,
                 &session_id,
                 Some(fixture.agent.did()),
-                std::sync::Arc::new(gents_toolcalls::call::hook::RuntimeExecutionWitness {
+                std::sync::Arc::new(gents_toolcalls::call::hook::background_executions::RuntimeExecutionWitness {
                     background_executions:
-                        gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
                     job_driver: job_driver.clone(),
                 }),
             )

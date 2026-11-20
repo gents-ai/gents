@@ -16,10 +16,10 @@ use gents_store::graphql::{created_doc_id, escape_graphql_string};
 
 use super::ToolCallLifecycle;
 use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
+use gents_protocol::tool_call::ToolCallState;
 use gents_session::session::plugin_effect_rows::{
     arguments_from_rows, receipt_from_rows, receipt_source, PluginEffectBinding, PluginEffectCall,
 };
-use gents_session::session::tool_call_state::ToolCallState;
 
 #[derive(Clone)]
 pub(super) struct PluginEffectTerminal {
@@ -241,12 +241,12 @@ impl ToolCallLifecycle {
     /// its own terminal write.
     pub(crate) async fn settle_interrupted_plugin_effect(
         &mut self,
-        cause: gents_session::session::tool_call_state::CancelCause,
+        cause: gents_protocol::tool_call::CancelCause,
     ) -> Result<()> {
         match self.state {
             ToolCallState::Pending => self.cancel_before_dispatch(cause).await?,
             ToolCallState::Running
-                if cause == gents_session::session::tool_call_state::CancelCause::Deadline
+                if cause == gents_protocol::tool_call::CancelCause::Deadline
                     || self.is_deadline_expired(Utc::now()) =>
             {
                 self.timeout().await?;
@@ -267,7 +267,7 @@ impl ToolCallLifecycle {
     /// receipt, an adopted job) keeps its own owner.
     pub(crate) async fn settle_unfinished_plugin_effects(
         &self,
-        cause: gents_session::session::tool_call_state::CancelCause,
+        cause: gents_protocol::tool_call::CancelCause,
     ) -> Result<Vec<String>> {
         let parent = self
             .doc_id()
@@ -281,12 +281,13 @@ impl ToolCallLifecycle {
             &self.session_id,
             self.requester_did.as_deref(),
         );
+        let nonterminal = ToolCallState::nonterminal_graphql_list();
         let rows = self
             .access()?
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ {scope}, request_doc_id: {{ _eq: "{}" }},
                     plugin_parent_tool_call_doc_id: {{ _eq: "{}" }},
-                    lifecycle_state: {{ _in: ["pending", "running"] }},
+                    lifecycle_state: {{ _in: {nonterminal} }},
                     await_mode: {{ _eq: "foreground" }} }}) {{ _docID }} }}"#,
                 escape_graphql_string(request),
                 escape_graphql_string(parent)

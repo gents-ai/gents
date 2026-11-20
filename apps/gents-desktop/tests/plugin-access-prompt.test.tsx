@@ -5,21 +5,26 @@ import type { PluginApprovalRequest } from "@source-inc/gents-desktop-client";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
-const { windowListeners, unlisten, registration, environment } = vi.hoisted(() => {
-  const registration = {
-    autoResolve: true,
-    resolve: null as null | ((stop: () => void) => void),
-    reject: null as null | ((reason?: unknown) => void),
-  };
-  return {
-    windowListeners: new Map<string, () => void>(),
-    unlisten: vi.fn(),
-    registration,
-    environment: { native: true },
-  };
-});
+const { windowListeners, unlisten, registration, environment, forward } = vi.hoisted(
+  () => {
+    const registration = {
+      autoResolve: true,
+      resolve: null as null | ((stop: () => void) => void),
+      reject: null as null | ((reason?: unknown) => void),
+    };
+    return {
+      windowListeners: new Map<string, () => void>(),
+      unlisten: vi.fn(),
+      registration,
+      environment: { native: true, label: "main" },
+      forward: vi.fn(async () => true),
+    };
+  },
+);
 vi.mock("../src/lib/nativeShell", () => ({
   inNativeShell: () => environment.native,
+  windowLabel: () => environment.label,
+  bringPluginPromptForward: forward,
   homeFolder: () => Promise.resolve(null),
   listenToWindow: (event: string, handler: () => void) => {
     windowListeners.set(event, handler);
@@ -83,6 +88,8 @@ describe("PluginAccessPrompt", () => {
     unsubscribe.mockResolvedValue(undefined);
     vi.mocked(toast.error).mockClear();
     environment.native = true;
+    environment.label = "main";
+    forward.mockClear();
     windowListeners.clear();
     unlisten.mockReset();
     registration.autoResolve = true;
@@ -95,6 +102,22 @@ describe("PluginAccessPrompt", () => {
     show();
     await waitFor(() => expect(pending).toHaveBeenCalled());
     expect(screen.queryByText("Allow once")).toBeNull();
+  });
+
+  it("asks the main window forward once per question, and no other view", async () => {
+    pending.mockResolvedValue({ requests: [question] });
+    const view = show();
+    expect(await screen.findByText(question.prompt)).toBeTruthy();
+    act(() => announceQueueChange());
+    await waitFor(() => expect(pending.mock.calls.length).toBeGreaterThan(1));
+    expect(forward).toHaveBeenCalledTimes(1);
+    view.unmount();
+
+    forward.mockClear();
+    environment.label = "gents-view-2";
+    show();
+    expect(await screen.findByText(question.prompt)).toBeTruthy();
+    expect(forward).not.toHaveBeenCalled();
   });
 
   it("offers only the native command answers without remembering a folder", async () => {

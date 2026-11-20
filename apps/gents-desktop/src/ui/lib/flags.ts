@@ -97,17 +97,6 @@ export const FLAGS = [
     restart: true,
   },
   {
-    id: "packs",
-    name: "Packs",
-    description:
-      "A Packs page for the active node: its installed packs, what each adds and its plugins, and the registry to find more.",
-    default: false,
-    owner: "david-on-github",
-    removeBy: "2027-03-01",
-    removeWhen: "The Packs page ships to everyone.",
-    restart: false,
-  },
-  {
     id: "sharing",
     name: "Sharing",
     description:
@@ -116,6 +105,17 @@ export const FLAGS = [
     owner: "david-on-github",
     removeBy: "2027-04-01",
     removeWhen: "Access decisions ship to everyone.",
+    restart: false,
+  },
+  {
+    id: "get-started",
+    name: "Get started",
+    description:
+      "Shows a short list of things to try in a new chat with the Engineer, each with example messages.",
+    default: false,
+    owner: "david-on-github",
+    removeBy: "2027-03-01",
+    removeWhen: "The list ships to everyone or is removed.",
     restart: false,
   },
 ] as const satisfies readonly Flag[];

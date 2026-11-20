@@ -74,17 +74,17 @@ where
     login.await.map_err(|_| failure)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "sign-in inputs from the IPC request plus the host's callbacks"
-)]
+pub(crate) struct SignInRequest<'a> {
+    pub node_did: &'a str,
+    pub method: InferenceAuthMethod,
+    pub credential_provider: &'a str,
+    pub label: Option<&'a str>,
+}
+
 pub(crate) async fn sign_in<A, O>(
     pending: &PendingOAuthCredentials,
     access: A,
-    node_did: &str,
-    method: InferenceAuthMethod,
-    credential_provider: &str,
-    label: Option<&str>,
+    request: SignInRequest<'_>,
     cancel: &CancellationToken,
     on_url: O,
 ) -> Result<SignIn, BridgeError>
@@ -92,6 +92,12 @@ where
     A: Fn() -> anyhow::Result<gents_store::config_client::ConfigAccess>,
     O: AsyncFnOnce(&str) -> Result<(), BridgeError>,
 {
+    let SignInRequest {
+        node_did,
+        method,
+        credential_provider,
+        label,
+    } = request;
     provider(method)?;
     if node_did.trim().is_empty() {
         return Err(BridgeError::new(
@@ -233,10 +239,12 @@ mod tests {
         let result = sign_in(
             &PendingOAuthCredentials::default(),
             || panic!("cancelled sign-in must not read configuration"),
-            "did:test:node",
-            InferenceAuthMethod::GrokOauth,
-            gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
-            None,
+            SignInRequest {
+                node_did: "did:test:node",
+                method: InferenceAuthMethod::GrokOauth,
+                credential_provider: gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
+                label: None,
+            },
             &cancel,
             async |_| panic!("cancelled sign-in must not open a browser"),
         )

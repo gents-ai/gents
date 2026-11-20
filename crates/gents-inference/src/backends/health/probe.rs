@@ -73,7 +73,7 @@ fn same_probe_inputs(previous: &InferenceBackend, current: &InferenceBackend) ->
 }
 
 pub(super) fn probe_timeout(backend: &InferenceBackend) -> Duration {
-    Duration::from_secs(backend.discovery_timeout_secs.unwrap_or(10).max(1) as u64)
+    Duration::from_secs(backend.effective_discovery_timeout_secs().max(1) as u64)
 }
 
 async fn record_discovered_catalog(

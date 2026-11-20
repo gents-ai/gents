@@ -559,6 +559,19 @@ See `../README.md` for how this fits the broader formal-verification model.
   the seeded fire before disabling and judges once a witness Trigger, due
   after the disabled one, fires (`Settled`). RED: `NoSeedWait`, `NoWitness`
   (observer), `NoRecheck`, `AckBeforeWatch` (product).
+- `CallerAncestry` — a `gents runtime service stop` caller walking its parent
+  chain to decide whether the service's job is its ancestor while processes
+  exit, orphans are adopted and freed process IDs are reused. The caller asks
+  the service manager for the job's pid, reads its own parent, then one
+  parent per step; Lean `ServiceLifecycle.CallerObservation.callerRunsOnTarget`
+  and `admission` decide. `NoSelfStop` (no admitted stop ends the job the
+  caller runs under), `QuietOutsiderIsAdmitted` (an outside caller whose
+  readable chain holds still is admitted) and `Terminates` hold. RED:
+  `UnreadableAsRoot` ends the walk at an unreadable link as if at the root;
+  `Subreaper` lets the job adopt orphans of its tree, which the Lean premise
+  excludes, and a parent read through a reused pid misses the job;
+  `ShortBound` gives up before the root of a real chain; `Unbounded` walks
+  forever through reused pids.
 - `HeldAudienceReads` — concurrent reads of a home's signed status by the
   clones of one endpoint, which share one held audience, clock and client
   authentication (#3963). A read starts after a credential refusal, before a

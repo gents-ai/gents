@@ -209,7 +209,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{sample_chat, ChatLine, Mode, Tab};
+    use crate::app::transcript::{sample_chat, ChatLine, Tab};
+    use crate::app::Mode;
     use crate::draw::theme;
     use crate::keys::KeyCtx;
     use crate::keys::KeySet::{Emacs, Vim};

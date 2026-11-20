@@ -396,7 +396,7 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
         .await?;
     // The runtime reconciles this ordinary index with the collection; the cursor
     // sweep's order is only plannable through it.
-    let cursor_index = gents_migration::DEFAULT_ORDINARY_INDEXES
+    let cursor_index = gents_store::schema::catalog::ORDINARY_INDEXES
         .iter()
         .find(|index| index.name == "MailboxItem_node_status_item_key")
         .context("MailboxItem cursor index is not registered")?;
