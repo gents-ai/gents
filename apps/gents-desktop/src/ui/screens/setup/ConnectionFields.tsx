@@ -53,7 +53,6 @@ export function ConnectionFields({
   option: InferenceProviderOption | undefined;
   purpose: "onboarding" | "add-backend";
   canRetrySave: boolean;
-  /** models are being listed, by the reader or on connecting */
   finding: boolean;
   ops: {
     updateConnection: (

@@ -7,11 +7,13 @@ import { publish, renderIn, testApp } from "./app-fixture";
 
 import {
   BridgeInvokeError,
+  type InferenceDiscoveryRequest,
   type ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
 import { setupErrorMessage } from "../src/lib/setupErrors";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
+import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 
 const CONNECTED = /^(Account connected|Connected as )/;
 
@@ -97,6 +99,7 @@ function holdFailedSignIn(api: MockApi) {
 }
 
 function harness() {
+  const desktopUi = createDesktopUiHarness({ scenario: "empty-fleet" });
   const api: MockApi = {
     getInferenceSetupCatalog: vi.fn().mockResolvedValue(claudeCatalog),
     listProviderAccounts: vi.fn().mockResolvedValue([]),
@@ -109,6 +112,9 @@ function harness() {
     claudeLogin: vi.fn(),
     cancelClaudeLogin: vi.fn().mockResolvedValue(undefined),
     retrySaveProviderAccount: vi.fn(),
+    discoverInferenceModels: vi.fn((request: InferenceDiscoveryRequest) =>
+      desktopUi.adapter.discoverInferenceModels(request),
+    ),
   };
   const app = testApp({
     api,
@@ -119,7 +125,6 @@ function harness() {
 
 const providerChoice = () => screen.findByTestId("setup-provider-anthropic");
 
-/* a sign-in the reader has not finished in the browser */
 const unfinished = () => new Promise<never>(() => {});
 
 function reenter(app: DesktopApp) {
@@ -296,10 +301,42 @@ describe("setup re-entry at the provider step", () => {
     expect(
       screen.queryByRole("button", { name: "Retry save" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Find models" })).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: "Connect and find models" }),
+      await screen.findByRole("option", { name: "claude-sonnet-5" }),
+    ).toBeVisible();
+    expect(api.discoverInferenceModels).toHaveBeenCalledTimes(1);
+    expect(api.discoverInferenceModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeDid: NODE_DID,
+        provider: "anthropic",
+        authMethod: "claude_oauth",
+      }),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /find models/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps the chosen model when the reopened provider is chosen again", async () => {
+    const { api, app } = harness();
+    api.managedServerStatus.mockResolvedValue(
+      status({ state: "running", pairingReady: true }),
+    );
+    api.listProviderAccounts.mockResolvedValue([account]);
+    reenter(app);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("option", { name: "claude-sonnet-5" }));
+    expect(await screen.findByRole("button", { name: "Change model" })).toBeVisible();
+    const choice = await providerChoice();
+    expect(choice).toHaveAttribute("aria-checked", "true");
+    await user.click(choice);
+
+    expect(screen.getByRole("button", { name: "Change model" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Model defaults" })).toBeVisible();
+    expect(api.discoverInferenceModels).toHaveBeenCalledTimes(1);
+    expect(api.claudeLogin).not.toHaveBeenCalled();
   });
 
   it("offers Retry save again after leaving and re-entering setup", async () => {

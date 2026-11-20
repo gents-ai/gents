@@ -466,8 +466,6 @@ describe.each(["onboarding", "add-backend"] as const)("%s API-key setup", (purpo
       );
       const user = userEvent.setup();
       if (purpose === "onboarding") {
-        /* setup opens on the saved account; the method is offered again
-           once that account is set aside */
         expect(await screen.findByText("Connected as work@example.com")).toBeVisible();
         expect(
           screen.queryByRole("combobox", { name: "Connection method" }),

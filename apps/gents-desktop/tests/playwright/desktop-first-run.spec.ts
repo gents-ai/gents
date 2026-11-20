@@ -9,7 +9,6 @@ import {
   type Page,
 } from "./desktopTest";
 
-/* on a narrow window the chosen provider's setup stands in for the list */
 async function backToProviders(page: Page) {
   const back = page.getByRole("button", { name: "All providers" });
   if (await back.isVisible()) await back.click();
@@ -102,7 +101,6 @@ test.describe("first-run install", () => {
   }) => {
     await gotoHarness(page, "empty-fleet");
     await page.getByTestId("setup-next").click();
-    /* picking a provider that signs in starts its sign-in */
     await page.getByTestId("setup-provider-openai").click();
     await expect(page.getByText("Account connected", { exact: true })).toBeVisible();
     await page.getByRole("option", { name: "gpt-5.6-sol", exact: true }).click();

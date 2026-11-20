@@ -174,6 +174,9 @@ export function ModelChoice({
                   placeholder="Exact served model ID"
                 />
               </Field>
+              {limits ? (
+                <p className="text-xs text-muted-foreground">{limits}</p>
+              ) : null}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">No discovery result.</p>

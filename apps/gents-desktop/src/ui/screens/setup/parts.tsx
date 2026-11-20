@@ -4,8 +4,8 @@ import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { preferences, useTheme } from "@/preferences";
+import { Hint } from "../Hint";
 import { InfoTip } from "../InfoTip";
 
 export function Frame({
@@ -17,11 +17,7 @@ export function Frame({
 }: {
   children: React.ReactNode;
   embedded?: boolean;
-  /** the column may gain an equal one to its right, so it is no wider
-      than half the window less the gap between the two */
   paired?: boolean;
-  /** that second column is there, so this one moves over by half its own
-      width and the gap to centre the pair */
   aside?: boolean;
   onBack?: () => void;
 }) {
@@ -220,7 +216,6 @@ export function Field({
   );
 }
 
-/** a small action shown as its icon, named by its tooltip */
 export function IconAction({
   label,
   icon: Icon,
@@ -233,22 +228,17 @@ export function IconAction({
   disabled?: boolean;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={label}
-            disabled={disabled}
-            onClick={onClick}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <Icon />
-          </Button>
-        }
-      />
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
+    <Hint label={label}>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        <Icon />
+      </Button>
+    </Hint>
   );
 }

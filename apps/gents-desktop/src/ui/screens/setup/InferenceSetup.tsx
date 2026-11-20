@@ -96,13 +96,9 @@ export function InferenceSetup({
     recommendation: selectedRecommendation,
     settings,
   } = form.model;
-  /* nothing is chosen for the reader; a provider with an account already
-     connected, or a sign-in still to be saved, is where they left off */
   const resumed = catalog?.providers.find(
     (option) => signedIn[option.id] || pendingSave[option.id],
   )?.id;
-  /* the resumed provider stays the chosen one after its account is set
-     aside, until the reader picks another or setup turns to another node */
   const [resumedPin, setResumedPin] = useState<ProviderId | null>(null);
   useEffect(() => {
     if (resumed && !resumedPin) setResumedPin(resumed);
@@ -124,7 +120,6 @@ export function InferenceSetup({
   const setupNodeDidRef = useRef(setupNodeDid);
   setupNodeDidRef.current = setupNodeDid;
   const discoveryRevision = useRef(0);
-  /* the connection whose models were last listed unasked */
   const autoDiscovered = useRef("");
   const currentDiscoveryKey = useRef("");
   const setupDeployment = useFleet((s) => nodeOf(s, setupNodeDid));
@@ -464,8 +459,6 @@ export function InferenceSetup({
     }
   };
 
-  /* a connected account needs no further word from the reader to list its
-     models; a failed attempt is not repeated, the button retries it */
   const connectedId =
     connection && oauthProviderFor(connection.authMethod)
       ? signedIn[provider]?.credentialId
@@ -483,16 +476,13 @@ export function InferenceSetup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoPending, busy, autoKey]);
 
-  /* on a narrow window the list and the chosen provider's setup take turns;
-     this is the reader having gone back to the list */
   const [browsing, setBrowsing] = useState(false);
-  /* setup has the page to itself; a backend added from settings does not */
   const side = purpose === "onboarding" && !fixedProvider;
   const pickProvider = (id: ProviderId) => {
     if (busy) return;
     setBrowsing(false);
-    if (id !== form.provider) invalidateDiscovery();
-    dispatch({ type: "providerPicked", provider: id, current: form.provider });
+    if (id !== chosen) invalidateDiscovery();
+    dispatch({ type: "providerPicked", provider: id, current: chosen });
   };
   useEffect(() => {
     if (
@@ -655,9 +645,6 @@ export function InferenceSetup({
           {providerDetails}
         </div>
       ) : catalog ? (
-        /* The list keeps its place and width. Where there is room the
-           chosen provider's setup stands beside it, and the page shifts
-           over to centre the pair; elsewhere the two take turns. */
         <div className="relative">
           <div
             className={cn(
