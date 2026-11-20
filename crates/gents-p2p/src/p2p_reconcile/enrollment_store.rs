@@ -549,7 +549,7 @@ impl GraphqlEnrollmentStore {
     }
 
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
-        let decision_lock = gents_store::identity::enrollment_decision_gate(node.as_ref());
+        let decision_lock = gents_store::identity::enrollment_decision_gate(&node);
         Self {
             node,
             identity,

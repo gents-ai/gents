@@ -8,8 +8,9 @@
 (* Each notifier publishes its tool notification through                    *)
 (* `persist_background_completion_with_message_canonical_inner`             *)
 (* (gents-session request/lifecycle/queue/atomic_inputs.rs:97-190). It      *)
-(* first takes the process gate for (node, session, owner, queue key)      *)
-(* (`background_completion_gate`, :23-51; held to :189), then runs one     *)
+(* first takes the node's gate for (session, owner, queue key), held on     *)
+(* the node's extensions (`background_completion_gate`, :27-51; held to     *)
+(* :186), then runs one                                                     *)
 (* `transact_idempotent` transaction (:130-156) that reads the pending      *)
 (* wakes of that queue and the session's message sequence, reuses a pending *)
 (* wake or creates the next generation, and appends the notification bound *)
@@ -35,7 +36,7 @@ EXTENDS Integers, FiniteSets
 
 CONSTANTS
   Notifiers,       \* concurrent notifications of the same completed request
-  Gate,            \* the process gate serializes the publications
+  Gate,            \* the node's gate serializes the publications
   ReadConflicts,   \* a commit aborts when what it read changed
   MaxAttempts,     \* bounded rebuilds of an aborted transaction
   Deadline,        \* ticks from the claim to the accepted tool deadline

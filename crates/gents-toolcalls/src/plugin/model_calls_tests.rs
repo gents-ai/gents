@@ -10,7 +10,7 @@ use crate::plugin::rounds::{drive, HostCalls, Round};
 use futures::future::BoxFuture;
 use gents_documents::InferenceProfile;
 use gents_pack::plugin::model_binding::{
-    endpoint_for, AccessModels, ModelBinding, ModelEndpoint, ModelResolver,
+    endpoint_for, AccessModels, ModelBinding, ModelCallLimiters, ModelEndpoint, ModelResolver,
 };
 use gents_pack::plugin::store::{self, InstalledPlugin};
 use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
@@ -40,6 +40,7 @@ struct Fake {
     seen: Arc<Mutex<Vec<Seen>>>,
     in_flight: Arc<AtomicUsize>,
     max_in_flight: Arc<AtomicUsize>,
+    limiters: Arc<ModelCallLimiters>,
 }
 
 impl Fake {
@@ -120,6 +121,7 @@ impl Fake {
             seen: shared.seen.clone(),
             in_flight: shared.in_flight.clone(),
             max_in_flight: shared.max_in_flight.clone(),
+            limiters: Arc::default(),
         };
         let app = axum::Router::new()
             .route("/v1/chat/completions", post(handle))
@@ -139,7 +141,7 @@ impl Fake {
             api_key: Some(KEY.to_owned()),
             model: "chandra".to_owned(),
             max_concurrent,
-            backend_key: self.url.clone(),
+            limiter: self.limiters.limiter(&self.url, max_concurrent),
             connect_timeout: Duration::from_secs(2),
             request_timeout: Duration::from_secs(30),
             max_output_tokens: None,

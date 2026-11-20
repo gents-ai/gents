@@ -155,6 +155,39 @@ pub(crate) fn attach_all(
     attached
 }
 
+/// The node's one `T`, attached on first use. The table lock is held across
+/// the lookup and the attachment, so every caller on the same node receives
+/// the same value.
+pub fn attached_or_default<T>(node: &Arc<EmbeddedNode>) -> Arc<T>
+where
+    T: Any + Default + Send + Sync,
+{
+    let (dead, value) = {
+        let mut table = table()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dead = take_dead(&mut table);
+        let slots = table.entry(key(node)).or_insert_with(|| Slots {
+            node: Arc::downgrade(node),
+            values: Extensions::default(),
+        });
+        let value = slots.values.get::<T>().unwrap_or_else(|| {
+            let value = Arc::new(T::default());
+            slots.values.0.insert(
+                TypeId::of::<T>(),
+                Slot {
+                    value: Arc::clone(&value) as Arc<dyn Any + Send + Sync>,
+                    type_name: std::any::type_name::<T>(),
+                },
+            );
+            value
+        });
+        (dead, value)
+    };
+    drop(dead);
+    value
+}
+
 pub fn attached<T>(node: &EmbeddedNode) -> Option<Arc<T>>
 where
     T: Any + Send + Sync,
@@ -215,6 +248,22 @@ mod tests {
             Err(ExtensionError::AlreadyAttached { .. })
         ));
         assert_eq!(attached::<Marker>(&node).unwrap().0, "composed");
+    }
+
+    #[derive(Default)]
+    struct State;
+
+    #[tokio::test]
+    async fn every_caller_on_a_node_shares_its_default_state() {
+        let first = node().await;
+        let second = node().await;
+        let shared = attached_or_default::<State>(&first);
+        assert!(Arc::ptr_eq(&shared, &attached_or_default::<State>(&first)));
+        assert!(Arc::ptr_eq(&shared, &attached::<State>(&first).unwrap()));
+        assert!(!Arc::ptr_eq(
+            &shared,
+            &attached_or_default::<State>(&second)
+        ));
     }
 
     #[tokio::test]
