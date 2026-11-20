@@ -151,15 +151,15 @@ VERA_TESTS = {
     "gents-toolcalls": "call::lifecycle::recovery::vera_tests::",
 }
 
-# Packages with no test of their own. The list only shrinks: a listed package
-# that runs a test fails the gate, as does an unlisted one that runs none.
+# Packages with no test of their own, each with why. The list only shrinks: a
+# listed package that runs a test fails the gate, as does an unlisted one that
+# runs none.
 NO_TESTS = {
-    "fixture-domain-plugin",
-    "gents-callback-fixture-create-workspace",
-    "gents-core-packs",
-    "gents-desktop",
-    "gents-lens-fixture-add-label",
-    "gents-workspace-hack",
+    "fixture-domain-plugin": "a fixture; gents-fixture-host's tests exercise it",
+    "gents-callback-fixture-create-workspace": "a fixture; gents-automation's callback tests run it",
+    "gents-core-packs": "only embeds the archives its build script finds; gents-cli's init tests install them",
+    "gents-lens-fixture-add-label": "a fixture",
+    "gents-workspace-hack": "holds no code; it unifies dependency features",
 }
 
 # With GATE_PORTABLE_SHARDS above zero the portable groups' crates build once
@@ -284,7 +284,7 @@ def check_groups(members):
     if duplicates or missing or unknown:
         fail(f"GROUPS in scripts/ci/gate.py must hold each workspace member once: "
              f"missing {missing}, unknown {unknown}, duplicated {duplicates}")
-    stale = sorted(NO_TESTS - set(members))
+    stale = sorted(NO_TESTS.keys() - set(members))
     if stale:
         fail(f"NO_TESTS names packages outside the workspace: {stale}")
 
