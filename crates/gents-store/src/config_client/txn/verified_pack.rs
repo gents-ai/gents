@@ -93,7 +93,9 @@ impl VerifiedPackTxn<'_, '_> {
         if super::super::client_signed_agent::trusted_delete_schema(&relationship.collection)
             .is_none()
         {
-            return Err(PackEvidenceError::UnsupportedCollection);
+            return Err(PackEvidenceError::UnsupportedCollection(
+                relationship.collection.clone(),
+            ));
         }
         let target = match &relationship.target {
             PackRelationshipTarget::Actor { did } => identity::Did::new(did)
