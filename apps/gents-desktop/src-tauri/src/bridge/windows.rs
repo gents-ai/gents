@@ -150,7 +150,7 @@ fn menu_window(app: &AppHandle) -> Option<WebviewWindow> {
         return Some(focused);
     }
     app.get_webview_window("main")
-        .filter(|main| main.is_visible().unwrap_or(false))
+        .filter(|main| !super::main_closed_out_of_sight(app, main))
 }
 
 pub fn handle_menu(app: &AppHandle, action: &str) -> tauri::Result<()> {

@@ -177,10 +177,7 @@ pub fn run() {
                 .any(|label| label != "main" && label != window.label());
             let main_hidden = main
                 .as_ref()
-                .is_some_and(|view| matches!(view.is_visible(), Ok(false)))
-                && app
-                    .try_state::<TrayRuntimeState>()
-                    .is_some_and(|state| state.main_hidden_by_close.load(Ordering::SeqCst));
+                .is_some_and(|view| main_closed_out_of_sight(app, view));
             let action = window_close::close_action(
                 cfg!(target_os = "macos"),
                 window.label() == "main",
@@ -479,6 +476,17 @@ fn managed_agent_tooltip(state: Option<&str>) -> &'static str {
         Some("failed") | None => "Gents node service — status unavailable",
         Some(_) => "Gents node service — status unavailable",
     }
+}
+
+#[cfg(desktop)]
+fn main_closed_out_of_sight<R>(app: &tauri::AppHandle<R>, main: &tauri::WebviewWindow<R>) -> bool
+where
+    R: tauri::Runtime,
+{
+    matches!(main.is_visible(), Ok(false))
+        && app
+            .try_state::<TrayRuntimeState>()
+            .is_some_and(|state| state.main_hidden_by_close.load(Ordering::SeqCst))
 }
 
 #[cfg(desktop)]

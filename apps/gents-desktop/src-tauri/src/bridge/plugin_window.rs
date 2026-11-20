@@ -1,10 +1,10 @@
 //! A UX plugin's page in a window of its own. The window loads the app
 //! with a start address the UI reads, and gets only the `plugin-window`
-//! capability: the client's snapshot and start, the node list, the page's
-//! own plugin reads and calls, a place it opens in the main view, and the
-//! notifications its plugin raises while this window speaks for it. It can
-//! neither quit the app nor shut its client down, and closing it closes
-//! only that window.
+//! capability: the client's snapshot, start and reconnect, the node list,
+//! the page's own plugin reads and calls, a place it opens in the main view,
+//! and the notifications its plugin raises while this window speaks for it.
+//! It can neither quit the app nor shut its client down, and closing it
+//! closes only that window.
 use std::fmt::Write;
 
 use serde::Serialize;
@@ -68,6 +68,9 @@ where
 {
     checked_place(window.label(), &path)?;
     let app = window.app_handle();
+    if app.get_webview_window("main").is_none() {
+        return Err("the main view is closed".into());
+    }
     super::show_main_window(app);
     app.emit_to(
         "main",
@@ -349,6 +352,7 @@ mod tests {
             "gents-desktop-bridge:core",
             "gents-desktop-bridge:allow-desktop-client-start",
             "gents-desktop-bridge:allow-desktop-set-selected-node",
+            "gents-desktop-bridge:allow-desktop-node-reconnect",
             "gents-desktop-bridge:ux-plugins-read",
             "gents-desktop-bridge:ux-plugins-call",
             "notification:default",
