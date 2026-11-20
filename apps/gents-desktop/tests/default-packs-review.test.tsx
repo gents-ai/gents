@@ -343,7 +343,6 @@ describe("starter packs on the Packs page", () => {
 
   it("links an opened pack to its own page, which the card does not", async () => {
     const { api } = harness([web, git]);
-    withFlags({ packs: true });
     rememberPacksView("installed");
     renderIn(
       local(api),
@@ -417,7 +416,6 @@ describe("starter packs on the Packs page", () => {
   it("says the list couldn't be read even when the packs are put off", async () => {
     const { api, listDefaultPacks } = harness([web, notes, git]);
     listDefaultPacks.mockRejectedValueOnce(new Error("The node didn't answer."));
-    withFlags({ packs: true });
     rememberPacksView("installed");
     preferences.dismissStarterPacks(deployment.nodeDid);
     renderIn(local(api), <PacksScreen />);
