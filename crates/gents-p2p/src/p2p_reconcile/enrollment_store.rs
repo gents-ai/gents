@@ -1379,7 +1379,7 @@ impl GraphqlEnrollmentStore {
     }
 
     pub async fn load_projection(&self) -> Result<EnrollmentProjection> {
-        let response = gents_store::graphql::graphql_with_transaction_retry(
+        let response = gents_store::graphql::graphql_for_decision(
             &self.node,
             ENROLLMENT_DOCUMENT_QUERY,
             "query authenticated enrollment documents",

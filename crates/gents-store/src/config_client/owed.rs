@@ -4,8 +4,14 @@ pub use gents_protocol::owed_settlement::OwedStanding;
 
 use super::user_write::Verdict;
 
+mod access;
 mod client;
 mod pass;
+
+pub use access::{
+    dependent_step, observed_grant, serve_await, DependentStep, GrantWait, OwedAccessTicket,
+    OwnGrantError, OWN_GRANT_DEADLINE,
+};
 
 pub use client::{
     settle_owed_while_online, spawn_settlement, EndpointPass, OwedPass, OwedSettlementFailed,
