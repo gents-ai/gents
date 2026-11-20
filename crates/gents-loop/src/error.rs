@@ -1,7 +1,8 @@
 use thiserror::Error;
 
 use crate::provider_limit::{
-    classify_attempt_provider_limit, strip_provider_limit_marker, ProviderLimit, ProviderLimitHeaders,
+    classify_attempt_provider_limit, strip_provider_limit_marker, ProviderLimit,
+    ProviderLimitHeaders,
 };
 
 #[derive(Debug, Error)]

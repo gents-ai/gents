@@ -208,7 +208,14 @@ async fn a_minted_call_carries_its_requests_identity() {
         "default",
         "backend-1",
     );
-    let pending = super::client::next_call(&context, "runtime-test", None, None, gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT, None);
+    let pending = super::client::next_call(
+        &context,
+        "runtime-test",
+        None,
+        None,
+        gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+        None,
+    );
     assert_eq!(pending.request_id, "req-x");
     assert_eq!(pending.request_doc_id, "doc-req-x");
     assert_eq!(
@@ -227,12 +234,26 @@ async fn current_call_join_reflects_the_minted_call() {
     );
     assert!(context.current_join().is_none());
 
-    let first = super::client::next_call(&context, "runtime-test", None, None, gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT, None);
+    let first = super::client::next_call(
+        &context,
+        "runtime-test",
+        None,
+        None,
+        gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+        None,
+    );
     let join = context.current_join().expect("join after mint");
     assert_eq!(join.call_id, first.call_id);
     assert_eq!(join.call_seq, 1);
 
-    let second = super::client::next_call(&context, "runtime-test", None, None, gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT, None);
+    let second = super::client::next_call(
+        &context,
+        "runtime-test",
+        None,
+        None,
+        gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+        None,
+    );
     let join = context.current_join().expect("join after second mint");
     assert_eq!(join.call_id, second.call_id);
     assert_eq!(join.call_seq, 2);
@@ -248,10 +269,26 @@ async fn concurrent_call_contexts_return_their_own_exact_join() {
     );
     let compaction_context = context.for_call(CallKind::Compaction, 1);
     let title_context = context.for_call(CallKind::OneOff, 1);
-    let compaction =
-        async { super::client::next_call(&compaction_context, "runtime-test", None, None, gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT, None) };
-    let title =
-        async { super::client::next_call(&title_context, "runtime-test", None, None, gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT, None) };
+    let compaction = async {
+        super::client::next_call(
+            &compaction_context,
+            "runtime-test",
+            None,
+            None,
+            gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+            None,
+        )
+    };
+    let title = async {
+        super::client::next_call(
+            &title_context,
+            "runtime-test",
+            None,
+            None,
+            gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+            None,
+        )
+    };
     let (compaction_call, title_call) = tokio::join!(compaction, title);
     let compaction_join = compaction_context.current_join().expect("compaction join");
     let title_join = title_context.current_join().expect("title join");

@@ -305,7 +305,11 @@ impl CompletionRetryState {
     /// that wait ends (Lean: `CompletionRetry.step?` fails a transport wake
     /// beyond `Budget.maxWait` permanently). The loop reads every attempt
     /// failure through it before choosing a lane.
-    pub fn read_failure(&self, failure: ClassifiedFailure, now: DateTime<Utc>) -> ClassifiedFailure {
+    pub fn read_failure(
+        &self,
+        failure: ClassifiedFailure,
+        now: DateTime<Utc>,
+    ) -> ClassifiedFailure {
         match provider_limit_verdict(&failure, now, self.policy.max_rate_limit_wait) {
             Some(ProviderLimit::UsageExhausted(limit)) => ClassifiedFailure {
                 error: InferenceError::UsageLimited(limit),

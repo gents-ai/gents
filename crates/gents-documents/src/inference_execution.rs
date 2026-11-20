@@ -264,7 +264,10 @@ impl InferenceRetryPolicy {
                 "InferenceRetryPolicy {retry_policy_id} backoff_ms entries must be positive"
             ));
         }
-        let max_wait_ms = self.completion_retry_fields().max_rate_limit_wait().as_millis();
+        let max_wait_ms = self
+            .completion_retry_fields()
+            .max_rate_limit_wait()
+            .as_millis();
         if self.backoff_ms.as_ref().is_some_and(|values| {
             values
                 .iter()
@@ -289,7 +292,9 @@ impl InferenceRetryPolicy {
 
     /// The owned loop's view of this policy; unset fields keep the loop's
     /// origin defaults.
-    pub fn completion_retry_fields(&self) -> gents_loop::completion_retry::CompletionRetryProfileFields {
+    pub fn completion_retry_fields(
+        &self,
+    ) -> gents_loop::completion_retry::CompletionRetryProfileFields {
         gents_loop::completion_retry::CompletionRetryProfileFields {
             retry_max_transport: self.max_transport_retries,
             retry_backoff_ms: self.backoff_ms.clone(),

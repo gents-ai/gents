@@ -1335,13 +1335,12 @@ impl TitleFixture {
                 },
             )]),
         );
-        let mut model =
-            gents_inference::admission::AdmittedCompletionModel::new(
-                model,
-                registry,
-                "scripted",
-                self.agent_config.completion_retry.max_rate_limit_wait(),
-            );
+        let mut model = gents_inference::admission::AdmittedCompletionModel::new(
+            model,
+            registry,
+            "scripted",
+            self.agent_config.completion_retry.max_rate_limit_wait(),
+        );
         model.agent_signer = self.agent_config.agent_identity.managed_agent_signer();
         model
     }

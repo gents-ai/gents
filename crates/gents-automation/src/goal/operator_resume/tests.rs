@@ -1,7 +1,7 @@
 use super::support::*;
 use super::*;
-use gents_documents::read_desired_state_record_in_txn;
 use crate::goal::blocked_turn::permit_recorded;
+use gents_documents::read_desired_state_record_in_txn;
 use gents_loop::provider_limit::ProviderLimitHeaders;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
