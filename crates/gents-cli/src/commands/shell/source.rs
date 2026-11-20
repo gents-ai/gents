@@ -22,7 +22,7 @@ use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::session::SessionScope;
 use gents_session::session::mailbox::MailboxItem;
-use gents_shell::app::ChatLine;
+use gents_shell::app::transcript::ChatLine;
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
 use gents_shell::source::{

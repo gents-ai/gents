@@ -15,7 +15,7 @@ use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
 use gents_protocol::tool_call::ToolCallState;
 use gents_protocol::tool_names::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
 use gents_protocol::transcript::present_message;
-use gents_shell::app::ChatLine;
+use gents_shell::app::transcript::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState};
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -577,7 +577,7 @@ mod tests {
     };
     use gents_protocol::row::{AgentRequestRow, AgentToolCallRow, CompactionEntryRow};
     use gents_protocol::session::AgentSession;
-    use gents_shell::app::ChatLine;
+    use gents_shell::app::transcript::ChatLine;
     use gents_shell::sample::{Opens, RunState, Running, Tone};
     use gents_shell::source::{Change, ChangeKind, Day, SessionState};
     use rapidhash::{HashMapExt, RapidHashMap};
