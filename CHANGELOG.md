@@ -6,6 +6,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `gents server --pack-watch-limit` (default 16) bounds the pack UX
+  observation streams (`/packs/ux/watch`) one runtime serves at once; the
+  bound was a fixed count shared by every runtime in the process (#1764).
 - Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
   background calls one request holds at once: Bash runs, remote service calls
   and plugin jobs together. The refusal reports the configured limit.

@@ -10,7 +10,14 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuild
 
 mod placement;
 
-use placement::{placement_of, remember, screens, Placement};
+use placement::{placement_of, remember, screens, Placement, Places};
+
+pub(super) fn setup<R>(app: &tauri::App<R>)
+where
+    R: Runtime,
+{
+    app.manage(Places::default());
+}
 
 pub(super) const LABEL_PREFIX: &str = "gents-plugin-";
 const MAX_ID: usize = 256;

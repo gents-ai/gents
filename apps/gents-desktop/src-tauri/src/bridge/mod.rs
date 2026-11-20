@@ -100,6 +100,7 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 links::setup(app)?;
+                plugin_window::setup(app);
                 setup_tray(app)?;
                 #[cfg(target_os = "macos")]
                 windows::setup(app)?;

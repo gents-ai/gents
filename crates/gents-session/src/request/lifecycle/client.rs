@@ -1596,6 +1596,7 @@ mod tests {
                 deadline_duration_secs: 60,
                 execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
                 backend_id: "fixture-backend".into(),
+                operator_tool_root: None,
             },
             crate::request::lifecycle::TriggerLineage::default(),
             Some(agent.clone()),
