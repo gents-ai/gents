@@ -86,38 +86,21 @@ pub async fn prepare_signed_mailbox_turn(
     chunks: Vec<StreamChunk>,
 ) -> anyhow::Result<(PreparedAcceptedTurn, SignedMailboxTurn)> {
     let user = KeyIdentity::load_or_create(db.data_path().join("mailbox-client.key"), None)?;
-    let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse()?);
-    // The client key is an enrolled User; its Agent creation projects only
-    // what that enrollment grants.
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(&admin, &user.did().parse()?)
-        .await?;
     let client = ConfigAccess::Graphql(
         GraphqlEndpoint::as_principal(db.client_endpoint(), user.did())
             .with_client_signing_capability(user.client_signing_capability()?)?
             .with_client_signed_agent_creates(),
     );
+    // The client key is an enrolled User; its Agent creation projects only
+    // what that enrollment grants.
+    gents_documents::test_support::enroll_test_user(
+        &db.node,
+        db.node_identity.as_ref(),
+        &user,
+        &client,
+    )
+    .await;
     let node_did = db.node_identity.did().to_owned();
-    // Agent provisioning is authorized by the caller's hold on the Node.
-    let node_doc = serde_json::json!({"node_did": node_did});
-    let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Node,
-        add: node_doc.clone(),
-        update: node_doc,
-    }])?;
-    client
-        .transact_write("test.mailbox.node", |txn| {
-            let plan = &node_plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await?;
     let binding = gents_store::identity::provision_agent_identity_authorized(
         &db.node,
         db.node_identity.as_ref(),

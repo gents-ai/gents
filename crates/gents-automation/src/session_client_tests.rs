@@ -279,7 +279,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         .execute("{ AgentSession { _docID } }")
         .await
         .is_err());
-    gents_session::test_support::grant_operator_user(&node, &runtime, &user).await;
+    gents_store::test_support::grant_operator_user(&node, &runtime, &user).await;
     let runtime_local = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     for did in [
         agent.agent_did.as_str(),

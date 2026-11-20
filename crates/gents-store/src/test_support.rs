@@ -89,6 +89,25 @@ pub fn test_identity(name: &str) -> crate::identity::KeyIdentity {
     crate::identity::KeyIdentity::load_or_create(path, None).unwrap()
 }
 
+/// Grants the user the `OperatorUser` set as the runtime admin. Without it,
+/// seeding the user's client-signed Node and Agent ends in an incomplete
+/// signing conversation.
+pub async fn grant_operator_user(
+    node: &std::sync::Arc<defra_node::Node>,
+    runtime: &dyn crate::identity::NodeIdentity,
+    user: &crate::identity::KeyIdentity,
+) {
+    use crate::identity::NodeIdentity as _;
+    let admin = crate::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(runtime.did()).unwrap(),
+    );
+    crate::identity::GrantSet::OperatorUser
+        .grant(&admin, &identity::Did::new(user.did()).unwrap())
+        .await
+        .unwrap();
+}
+
 fn home_status_body(
     node_did: &str,
     reports: &gents_protocol::delegation_audience::ReportedDelegationAudience,

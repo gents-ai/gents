@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use defra_node::Node as EmbeddedNode;
-use gents_documents::test_support::{bootstrap_signed_test_node, set_test_default_agent_as};
+use gents_documents::test_support::{enroll_test_user, set_test_default_agent_as};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_store::local::store_key::StoreKey;
 use gents_store::local::{ProjectedOperationSource, ProjectedPluginRef, ToolSourcePolicy};
@@ -436,9 +436,6 @@ pub async fn signed_test_node_without_agent_from_db(
     KeyIdentity,
     gents_store::config_client::ConfigAccess,
 ) {
-    use gents_store::config_client::ConfigAccess;
-    use gents_store::identity::GrantSet;
-
     let fixture_name = name.to_owned();
     let user = tokio::task::spawn_blocking(move || {
         gents_store::test_support::test_identity(&fixture_name)
@@ -447,14 +444,8 @@ pub async fn signed_test_node_without_agent_from_db(
     .unwrap();
     let runtime = db.node_identity.as_ref();
     assert_ne!(runtime.did(), user.did());
-    let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
-    let user_did = identity::Did::new(user.did()).unwrap();
-    GrantSet::OperatorUser
-        .grant(&admin, &user_did)
-        .await
-        .unwrap();
     let access = db.client_access(&user);
-    bootstrap_signed_test_node(&access, runtime.did()).await;
+    enroll_test_user(&db.node, runtime, &user, &access).await;
     (db, user, access)
 }
 
@@ -468,21 +459,33 @@ pub async fn signed_test_node_from_db(
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
     let (db, user, access) = signed_test_node_without_agent_from_db(db, name).await;
-    let runtime = db.node_identity.as_ref();
+    let binding =
+        install_user_default_agent(&db.node, db.node_identity.as_ref(), &user, &access).await;
+    (db, user, access, binding)
+}
+
+/// Provisions the enrolled User's default fixture Agent on the runtime and
+/// selects it, through the User's client-signed `access`.
+pub async fn install_user_default_agent(
+    node: &Arc<EmbeddedNode>,
+    runtime: &dyn NodeIdentity,
+    user: &KeyIdentity,
+    access: &gents_store::config_client::ConfigAccess,
+) -> gents_protocol::agent_identity::AgentIdentityBinding {
     let user_did = identity::Did::new(user.did()).unwrap();
     let binding =
-        gents_store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
+        gents_store::identity::provision_agent_identity_authorized(node, runtime, &user_did)
             .await
             .unwrap();
     super::install_test_agent_binding_with_access(
         runtime.did(),
         "Default fixture agent",
         &binding,
-        &access,
+        access,
     )
     .await;
-    set_test_default_agent_as(&access, runtime.did(), &binding.agent_did).await;
-    (db, user, access, binding)
+    set_test_default_agent_as(access, runtime.did(), &binding.agent_did).await;
+    binding
 }
 
 pub async fn test_db_with_p2p<F>(

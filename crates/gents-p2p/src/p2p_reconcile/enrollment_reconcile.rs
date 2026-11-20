@@ -1229,10 +1229,10 @@ mod tests {
     async fn signed_enrollment_reconciles_the_local_pairing_witness_without_replicating_it() {
         use crate::p2p_reconcile::embedded_impl::push_documents_to_peer;
         use crate::p2p_reconcile::embedded_impl::tests::fixtures::{
-            authorize_enrollment_peer, runtime_http_test_node, wait_for_active_peer,
-            wait_for_peer_info,
+            runtime_http_test_node, wait_for_active_peer, wait_for_peer_info,
         };
         use crate::p2p_reconcile::{PairingFilters, RemoteP2pAdmin};
+        use crate::test_support::enrollment::authorize_enrollment_peer;
         use defra_p2p_adapter::P2pDocumentRequest;
         use gents_store::config_client::ConfigAccess;
         use gents_store::graphql::escape_graphql_string;
@@ -1288,6 +1288,8 @@ mod tests {
         .unwrap();
         authorize_enrollment_peer(
             receiver.clone(),
+            &format!("network-{}", uuid::Uuid::new_v4()),
+            "final admission test",
             admin.clone(),
             member.clone(),
             &peer,
