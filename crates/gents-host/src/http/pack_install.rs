@@ -188,7 +188,11 @@ pub async fn encode_install_request(
         .collect::<Vec<_>>();
     let from_environment =
         gents_pack::pack::install_flow::environment_variables(&packs, &supplied, &|name| {
-            std::env::var(name).ok()
+            gents_pack::operations::pack::install_value(
+                gents_protocol::operations::pack::PackActor::User,
+                &supplied,
+                name,
+            )
         })?;
     let root = pack.shared_archive();
     let root_source = pack.provenance();
