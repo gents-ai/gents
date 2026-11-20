@@ -92,28 +92,6 @@ theorem admitted_delegate_is_recipient :
 theorem uncommitted_claim_has_no_recipient :
     claimedRecipient (some ⟨"delegate", "request", "session", "agent"⟩) false = none := by rfl
 
-/-- A restart notice names its request only by a logical label in a durable
-source receipt. The label locates the request's signed record as its held
-target Agent sees it; the recipient is that record's claimed recipient, so a
-session field or label never establishes the requester. Without a committed
-claim the notice is deferred and its durable source receipt remains available
-for later repair. -/
-def runtimeNotice (admitted : Option AdmittedRequest) (claimCommitted committed : Bool) :
-    Publication :=
-  publish true (claimedRecipient admitted claimCommitted).isSome committed
-
-def runtimeNoticeWithoutClaim : Publication :=
-  runtimeNotice (some ⟨"delegate", "request", "session", "agent"⟩) false true
-
-theorem unavailable_runtime_notice_has_no_publication :
-    runtimeNoticeWithoutClaim = ⟨false, false⟩ := by rfl
-
-theorem claimed_runtime_notice_reaches_admitted_signer :
-    runtimeNotice (some ⟨"delegate", "request", "session", "agent"⟩) true true = ⟨true, true⟩ := by rfl
-
-theorem missing_request_runtime_notice_has_no_publication :
-    runtimeNotice none true true = ⟨false, false⟩ := by rfl
-
 /-! ## What a client lists -/
 
 /-- A stored item as a client reads it: its document and the requester it was
