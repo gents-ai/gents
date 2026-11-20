@@ -27,6 +27,22 @@ source consistency checks, not a separate runtime compatibility version.
   change such a service, the command names the two calls that start a node
   beside it or move the service. Test builds no longer reach the machine's
   service manager at all.
+- Breaking: the runtime no longer reads its behaviour from environment
+  variables; each is a `gents server` flag (#1764). `--block-cache-mb`
+  replaces `GENTS_BLOCK_CACHE_MB` and refuses zero.
+  `--p2p-registry-heartbeat-ms`, `--p2p-pairing-sweep-ms`,
+  `--p2p-endpoint-heartbeat-ms` and `--p2p-registry-stale-ms` replace
+  `GENTS_REGISTRY_HEARTBEAT_MS`, `GENTS_PAIRING_SWEEP_MS`,
+  `GENTS_ENDPOINT_HEARTBEAT_MS` and `GENTS_REGISTRY_STALE_MS`, and
+  `--p2p-network-id` replaces `GENTS_NETWORK_ID`.
+- Breaking: `gents server --system-log` replaces `GENTS_SYSTEM_LOG=1`. The
+  installed launchd and systemd definitions pass the flag, and a definition
+  without it gains it from `gents service repair` or a managed update. On
+  macOS, setup and repair no longer report the service log as out of date
+  after a managed update re-serializes the LaunchAgent.
+- Breaking: `gents init` and the interactive backend setup take the inference
+  endpoint only from `--inference-url` (or a preset); `INFERENCE_ENDPOINT` is
+  no longer read.
 
 ## 1.0.0-rc2 - 2026-11-10
 
