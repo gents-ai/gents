@@ -77,13 +77,16 @@ pub async fn control(
     };
     let mut url = endpoint.clone();
     url.set_path(RUNTIME_CONTROL_PATH);
-    let mut request = client.post(url).json(&command);
-    if let Some(authorization) = authorization {
-        request = authorization
-            .authorize(request)
-            .map_err(|error| ControlFailure::Authorization(Box::new(error)))?;
-    }
-    let mut response = match request.send().await {
+    let sent = match authorization {
+        Some(authorization) => authorization
+            .send_resolving(|authorization| {
+                authorization.authorize(client.post(url.clone()).json(&command))
+            })
+            .await
+            .map_err(|error| ControlFailure::Authorization(Box::new(error)))?,
+        None => client.post(url).json(&command).send().await,
+    };
+    let mut response = match sent {
         Ok(response) => response,
         Err(error)
             if error.is_connect() && matches!(command.operation, RuntimeOperation::Observe) =>

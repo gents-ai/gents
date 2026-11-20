@@ -89,34 +89,26 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
     let args = serde_json::json!({"argv": ["-c",
         "printf 'partial stdout'; printf 'partial stderr' >&2; sleep 30"]})
     .to_string();
-    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+    let envelope = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+        Some(gents_store::test_support::unreached_deadline_at()),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .call();
     let dispatch =
-        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
-            None,
-            Some(gents_store::test_support::unreached_deadline_at()),
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            None,
-            gents_loop::loop_stream::dispatch_tool(
-                &tools,
-                "sh",
-                args,
-                Some(writer),
-                None,
-                &envelope,
-            ),
-        );
+        gents_loop::loop_stream::dispatch_tool(&tools, "sh", args, Some(writer), None, &envelope);
     tokio::pin!(dispatch);
     let raw = tokio::select! {
         outcome = &mut dispatch => panic!("the child ended before the cut: {outcome:?}"),
         raw = gents_store::test_support::read_when_changed(
             &node,
-            &["AgentOutputSegment"],
+            "AgentOutputSegment",
             "the child's output is committed before the cut",
             async || {
                 let raw = committed_output(&node, &tool).await;
-                (raw.contains("partial stdout") && raw.contains("partial stderr")).then_some(raw)
+                if raw.contains("partial stdout") && raw.contains("partial stderr") {
+                    return Ok(raw);
+                }
+                Err(raw)
             },
         ) => raw,
     };
@@ -176,17 +168,12 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
         let cli = CliTool::new(config(timeout_secs));
         let args = serde_json::json!({"argv": ["-c", script]}).to_string();
         let stop = tokio_util::sync::CancellationToken::new();
-        let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
-        let call =
-            gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
-                None,
-                None,
-                stop.clone(),
-                None,
-                Some(writer),
-                None,
-                cli.call(args, &envelope),
-            );
+        let envelope = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            live_output: Some(writer),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, stop.clone())
+        }
+        .call();
+        let call = cli.call(args, &envelope);
         let dispatched = if name == "cli-stopped" {
             // The stop is driven, not raced (TLA+ `WallClockBound`
             // `"driven"`): the owning request cancels once the child's last
@@ -198,11 +185,14 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
                 result = &mut call => panic!("{name}: the child ended before its stop: {result:?}"),
                 () = gents_store::test_support::read_when_changed(
                     &node,
-                    &["AgentOutputSegment"],
+                    "AgentOutputSegment",
                     "the stopped child's output is committed",
                     async || {
                         let raw = committed_output(&node, &tool).await;
-                        (raw.contains("last out") && raw.contains("last err")).then_some(())
+                        if raw.contains("last out") && raw.contains("last err") {
+                            return Ok(());
+                        }
+                        Err(raw)
                     },
                 ) => {}
             }

@@ -1,4 +1,4 @@
-use gents_desktop_core::client::{ClientStore, ClientStoreRows};
+use gents_observe::client_projection::store::{ClientStore, ClientStoreRows};
 use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -21,6 +21,8 @@ use super::read_stored_init_config;
 use super::recent_runs_for_task_views;
 use super::session_summaries;
 use super::task_run_histories;
+use super::LiveDeltaBase;
+use super::LiveDeltaStores;
 
 #[test]
 fn bootstrap_init_config_status_distinguishes_absence_from_unreadable_and_configured() {
@@ -136,23 +138,29 @@ pub(super) fn push_canonical_text_message(
     rows.output_segments.push(segment);
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "session_basic.rs and session_state.rs call this positionally"
-)]
-fn push_canonical_text_message_for_node(
-    rows: &mut ClientStoreRows,
-    doc_id: &str,
-    session_id: &str,
-    request_doc_id: Option<&str>,
+struct CanonicalText<'a> {
+    doc_id: &'a str,
+    session_id: &'a str,
+    request_doc_id: Option<&'a str>,
     sequence: u32,
     role: MessageRole,
-    text: &str,
+    text: &'a str,
+}
+
+fn push_canonical_text_message_for_node(
+    rows: &mut ClientStoreRows,
+    message: CanonicalText<'_>,
     node_did: &str,
     requester_did: Option<&str>,
 ) {
-    let (mut header, mut segment) =
-        canonical_text_message(doc_id, session_id, request_doc_id, sequence, role, text);
+    let (mut header, mut segment) = canonical_text_message(
+        message.doc_id,
+        message.session_id,
+        message.request_doc_id,
+        message.sequence,
+        message.role,
+        message.text,
+    );
     header.message.node_did = node_did.to_string();
     header.message.requester_did = requester_did.map(str::to_string);
     segment.segment.node_did = node_did.to_string();

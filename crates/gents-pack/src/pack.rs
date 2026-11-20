@@ -7,6 +7,7 @@ pub use agent_bindings::{
     load_pack_install_config_with_provisioner, rewrite_references as bind_agent_references,
     AgentProvisioner,
 };
+pub mod approvals;
 pub mod archive;
 pub use agent_bindings::{
     agent_binding_variable, agent_did_variable, agent_slot_reference, is_agent_binding_variable,
@@ -44,6 +45,7 @@ pub mod rooted_paths;
 pub mod schema_apply;
 pub mod store;
 mod ux;
+pub mod wire_subject;
 pub mod wiring;
 pub use gents_documents::{is_valid_ux_data_tool_name, UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN};
 pub use home_install::{
@@ -69,17 +71,19 @@ pub use installation::{
     collections_install_creates, declared_readers, document_pack_schema_paths,
     edited_installed_documents, ensure_plugins_unreferenced, hosted_document_graph,
     install_prepared_document_graph, install_prepared_document_pack, installed_catalog,
-    installed_pack_documents, installed_packs, installer_tool_root, list_installed_packs,
-    pack_root_record, plugin_data_unique_keys, plugin_pin_conflicts, prepare_document_pack_archive,
-    prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
-    prepare_hosted_document_pack_archive, read_installed_pack, record_plugin_retirement_as,
-    record_plugin_store_change, record_plugin_store_change_as, record_staged_plugin_store_change,
-    referenced_pack_digests, remove_pack, tools_taking_installer_root, visible_plugin_selections,
-    DependencyVariableOverrides, DriftPolicy, HostedDocumentGraph, HostedPackPreparation,
-    InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, InstallerRootAgent,
-    PackAgentRoot, PackChangeError, PackIdentity, PackRemovalError, PackRootRecord, PackSource,
-    PackSourceHistory, PluginPinConflict, PluginSelection, PluginStoreChangeError,
-    PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
+    installed_pack_documents, installed_pack_record, installed_packs, installer_tool_root,
+    list_installed_packs, pack_root_record, plugin_data_unique_keys, plugin_pin_conflicts,
+    prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
+    prepare_document_pack_install, prepare_hosted_document_pack_archive, read_installed_pack,
+    record_plugin_retirement_as, record_plugin_store_change, record_plugin_store_change_as,
+    record_staged_plugin_store_change, referenced_pack_digests, remove_pack,
+    tools_taking_installer_root, visible_plugin_selections, DependencyVariableOverrides,
+    DocumentGraphPolicy, DriftPolicy, HostedDocumentGraph, HostedPackPreparation, InstallReport,
+    InstallTarget, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, InstallerRootAgent,
+    PackAgentRoot, PackChangeError, PackGraphInputs, PackIdentity, PackRemovalError,
+    PackRootRecord, PackSource, PackSourceHistory, PluginPinConflict, PluginSelection,
+    PluginStoreChangeError, PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall,
+    RemoveReport, Retained,
 };
 pub(crate) use installation::{
     prepare_document_pack_archive_with_provisioner,
@@ -202,11 +206,12 @@ pub struct PackManifest {
     )]
     #[schemars(transform = gents_documents::accepts_null)]
     pub external_dependencies: Vec<PackageExternalDependency>,
-    /// The plugin interface the pack was built for (Lean
-    /// `Pack.CorePacks.builtFor`): absent is interface 1, from before the
-    /// interface had a version.
+    /// The Gents release the pack was built for, `MAJOR.MINOR.PATCH` or
+    /// `MAJOR.MINOR.PATCH-rcN` (Lean `Pack.CorePacks.builtFor`): absent counts
+    /// as `core_packs::Release::BASELINE`. `gents config pack build` stamps the
+    /// building CLI's release when the source does not declare one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_interface: Option<u32>,
+    pub gents_version: Option<String>,
 }
 
 impl PackManifest {

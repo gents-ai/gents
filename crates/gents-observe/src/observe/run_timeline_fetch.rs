@@ -5,10 +5,13 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::observe::run_timeline::{
-    build_run_timeline, RunTimeline, RunTimelineRows, TimelineCompactionRow,
-    TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
-    TimelineProviderContextReductionRow, TimelineRenderedRequestRef, TimelineRenderedRequestRow,
-    TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow,
+    build::build_run_timeline,
+    events::RunTimeline,
+    rows::{
+        RunTimelineRows, TimelineCompactionRow, TimelineGoalVersionRow, TimelineInferenceCallRow,
+        TimelineMessageRow, TimelineProviderContextReductionRow, TimelineRenderedRequestRef,
+        TimelineRenderedRequestRow, TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow,
+    },
 };
 use crate::observe::run_timeline_fetch::event_loaders::resolve_timeline_messages_for_session;
 use gents_store::config_client::ConfigAccess;
@@ -151,7 +154,7 @@ pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Resul
 async fn name_serving_accounts(
     access: &ConfigAccess,
     node_did: &str,
-    events: &mut [crate::observe::run_timeline::RunTimelineEvent],
+    events: &mut [crate::observe::run_timeline::events::RunTimelineEvent],
 ) -> Result<()> {
     let accounts = gents_inference::auth::credential::list_accounts(access, node_did).await?;
     let backends = access
@@ -162,7 +165,8 @@ async fn name_serving_accounts(
         })
         .await?;
     for event in events {
-        let crate::observe::run_timeline::RunTimelineEvent::InferenceCall(call) = event else {
+        let crate::observe::run_timeline::events::RunTimelineEvent::InferenceCall(call) = event
+        else {
             continue;
         };
         let Some(backend) = backends
@@ -672,7 +676,7 @@ mod tests {
             .await
             .expect("load timeline");
         let inference = timeline.events.iter().find_map(|event| match event {
-            crate::observe::run_timeline::RunTimelineEvent::InferenceCall(inference) => {
+            crate::observe::run_timeline::events::RunTimelineEvent::InferenceCall(inference) => {
                 Some(inference)
             }
             _ => None,
@@ -833,7 +837,7 @@ mod tests {
                 .events
                 .into_iter()
                 .filter_map(|event| match event {
-                    crate::observe::run_timeline::RunTimelineEvent::InferenceCall(call) => {
+                    crate::observe::run_timeline::events::RunTimelineEvent::InferenceCall(call) => {
                         Some((call.call_id, call.account))
                     }
                     _ => None,
@@ -887,7 +891,7 @@ mod tests {
     #[tokio::test]
     async fn fetches_native_goal_history_without_projecting_usage_only_commits() {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         use gents_store::identity::NodeIdentity;
         let (node_db, _user, _user_access, binding) =
@@ -912,13 +916,15 @@ mod tests {
             .transact_write("test.timeline_session", |txn| {
                 Box::pin(gents_session::session::ensure_session_in_txn(
                     txn,
-                    "session-goal-history",
-                    root.did(),
-                    agent.did(),
-                    Some(agent.did()),
-                    None,
-                    None,
-                    "2026-08-14T12:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: "session-goal-history",
+                        node_did: root.did(),
+                        agent_did: agent.did(),
+                        requester_did: Some(agent.did()),
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-08-14T12:00:00Z",
+                    },
                 ))
             })
             .await
@@ -926,10 +932,7 @@ mod tests {
         let mut request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "request-goal-history",
-            root.did(),
-            agent.did(),
-            agent.did(),
-            "session-goal-history",
+            RequestScope::new(root.did(), agent.did(), agent.did(), "session-goal-history"),
             "ship the timeline",
             "interactive",
             "2026-08-14T12:00:00Z",
@@ -988,7 +991,7 @@ mod tests {
             .events
             .iter()
             .filter_map(|event| match event {
-                crate::observe::run_timeline::RunTimelineEvent::GoalTransition(event) => {
+                crate::observe::run_timeline::events::RunTimelineEvent::GoalTransition(event) => {
                     Some(event)
                 }
                 _ => None,

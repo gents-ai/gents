@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 use gents::support::live_inference::{live_target, wait_for_request_terminal, InferenceTarget};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
@@ -120,9 +121,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     command
         .current_dir(root)
         .envs(homes.env())
-        .env_remove("GENTS_SYSTEM_LOG")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&home)
+        .arg("--desktop-home")
+        .arg(homes.desktop_home())
         .args([
             "--tool-package",
             if matches!(
@@ -164,7 +166,6 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     server
         .current_dir(root)
         .envs(homes.env())
-        .env_remove("GENTS_SYSTEM_LOG")
         .args(["server", "--home"])
         .arg(&home)
         .arg("--http-port")
@@ -233,15 +234,23 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     );
     let paths = DesktopPaths::from_root(root.join("client"));
     let seed = Arc::new(
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
-            .await?,
+        ClientRuntime::start_with_paths_and_options(
+            paths.clone(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
+        )
+        .await?,
     );
     let client_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
     drop(seed);
     let operator_paths = homes.cli_identity();
     let operator = tokio::task::spawn_blocking(move || {
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&operator_paths)
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+            &operator_paths,
+        )
     })
     .await??;
     let access = ConfigAccess::Graphql(
@@ -294,7 +303,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         client.try_call(1, "client_connect_local", json!({"nodeHome": home})).await?;
         client.try_call(2, "client_enroll_local", json!({"nodeHome": home})).await?;
         let author_paths = paths.clone();
-        let author = tokio::task::spawn_blocking(move || gents_desktop_core::client::PrincipalIdentity::load_existing(&author_paths)).await??;
+        let author = tokio::task::spawn_blocking(move || gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(&author_paths)).await??;
         ensure!(author.did() == client_did);
         let access = ConfigAccess::Graphql(GraphqlEndpoint::as_principal(ready["graphql"].as_str().context("runtime GraphQL endpoint")?, author.did()).with_client_signing_capability(author.client_signing_capability()?)?);
         let mut id = 3;
@@ -306,7 +315,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
         let configured_from = active_generation(&deployment, node).context("the serving runtime reports its active generation")?;
-        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref(), undo.as_ref(), fault.as_ref(), replacement).await?;
+        configure(&mut client, &mut id, Configure { node, agent: &agent, target: &target, goal, gates: &gates, editor, questions: questions.as_ref(), related_work: related_work.as_ref(), inventory: inventory.as_ref(), undo: undo.as_ref(), fault: fault.as_ref(), replacement }).await?;
         if goal || !gates.is_empty() {
             wait_configuration_active(&mut client, &mut updates, &mut id, node, configured_from).await?;
         }
@@ -344,7 +353,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         }).await?;
         ensure!(live["sessionId"] == session, "live output crossed the selected session");
         }
-        ensure!(wait_for_request_terminal(&access, request, WAIT).await == "completed");
+        ensure!(wait_for_request_terminal(&access, request,).await == "completed");
         let mut projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({
             "nodeDid":node,"sessionId":session,"timelineLimit":40,
         }), |projection| projection["turnState"] == "completed" && projection["timelineItems"].as_array().is_some_and(|items|
@@ -381,7 +390,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             id += 1;
             let resumed_request = resumed["requestId"].as_str().context("resumed goal request")?;
             ensure!(resumed["goalId"] == seeded.goal_id && resumed_request != request);
-            ensure!(wait_for_request_terminal(&access, resumed_request, WAIT).await == "completed");
+            ensure!(wait_for_request_terminal(&access, resumed_request,).await == "completed");
             wait_goal(&mut client, &mut updates, &mut id, node, session, "complete").await?;
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == resumed_request && value["turnState"] == "completed").await?;
         }
@@ -398,7 +407,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
                     let sent = client.try_call(id, "desktop_chat_send", json!({"request":{"nodeDid":node,"agentDid":agent,"sessionId":session,"content":prompt,"delivery":"queue"}})).await?;
                     id += 1;
                     let request = sent["requestId"].as_str().context("inventory request receipt")?;
-                    ensure!(wait_for_request_terminal(&access, request, WAIT).await == "completed");
+                    ensure!(wait_for_request_terminal(&access, request,).await == "completed");
                     projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == request && value["turnState"] == "completed").await?;
                 }
             }
@@ -412,7 +421,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
                     id += 1;
                     ensure!(sent["sessionId"] == session);
                     let request = sent["requestId"].as_str().context("history request receipt")?;
-                    ensure!(wait_for_request_terminal(&access, request, WAIT).await == "completed");
+                    ensure!(wait_for_request_terminal(&access, request,).await == "completed");
                     projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == request && value["turnState"] == "completed").await?;
                 }
                 tokio::fs::write(root.join("editor-live-history-fixture.json"), serde_json::to_vec(&json!({"initialPrompt":opening,"latestPrompt":prompts.last(),"turnPrompts":prompts}))?).await?;
@@ -468,7 +477,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             gents_store::identity::request_receipt::verify_request_receipt_signature(submitted)?;
             ensure!(submitted.admission_signer_did.as_deref() == Some(client_did.as_str()));
             ensure!(rows.iter().all(|row| row.content.as_deref() != evidence["draft"].as_str()), "the retained editor draft was submitted");
-            ensure!(wait_for_request_terminal(&access, &submitted.request_id, WAIT).await == "completed");
+            ensure!(wait_for_request_terminal(&access, &submitted.request_id,).await == "completed");
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == submitted.request_id && value["turnState"] == "completed").await?;
             }
         }
@@ -545,23 +554,36 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     result.and(released).and(stopped).and(drained)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn configure(
-    client: &mut Attachment,
-    id: &mut u32,
-    node: &str,
-    agent: &str,
-    target: &InferenceTarget,
+struct Configure<'a> {
+    node: &'a str,
+    agent: &'a str,
+    target: &'a InferenceTarget,
     goal: bool,
-    gates: &[live_gate::HeldTool],
-    editor: Option<&str>,
-    questions: Option<&live_questions::Questions>,
-    related_work: Option<&live_related_work::RelatedWork>,
-    inventory: Option<&live_inventory::Inventory>,
-    undo: Option<&live_undo::Undo>,
-    fault: Option<&live_faults::FaultRelay>,
+    gates: &'a [live_gate::HeldTool],
+    editor: Option<&'a str>,
+    questions: Option<&'a live_questions::Questions>,
+    related_work: Option<&'a live_related_work::RelatedWork>,
+    inventory: Option<&'a live_inventory::Inventory>,
+    undo: Option<&'a live_undo::Undo>,
+    fault: Option<&'a live_faults::FaultRelay>,
     replacement: bool,
-) -> Result<()> {
+}
+
+async fn configure(client: &mut Attachment, id: &mut u32, inputs: Configure<'_>) -> Result<()> {
+    let Configure {
+        node,
+        agent,
+        target,
+        goal,
+        gates,
+        editor,
+        questions,
+        related_work,
+        inventory,
+        undo,
+        fault,
+        replacement,
+    } = inputs;
     let setup = client
         .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
         .await?;
@@ -717,7 +739,8 @@ pub(super) async fn wait_client(
                 }
                 Ok(_) => {}
                 Err(error)
-                    if error.code == gents_desktop_bridge::BridgeErrorCode::ProjectionPending => {}
+                    if error.code
+                        == gents_store::client_error::BridgeErrorCode::ProjectionPending => {}
                 Err(error) => return Err(anyhow::Error::from(error)),
             }
             *id += 1;

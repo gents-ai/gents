@@ -9,6 +9,16 @@ export type InferenceExecution = { node_did: string, execution_id: string, displ
  */
 max_total_tokens?: number | null,
 /**
+ * Invalid-argument, unknown-tool and policy-denied calls one execution
+ * may make before it stops; default 8.
+ */
+max_invalid_tool_calls?: number | null,
+/**
+ * Identical failing calls (same tool, arguments and error) dispatched
+ * before the next repeat is refused; default 3.
+ */
+repeated_tool_failure_limit?: number | null,
+/**
  * Persistence batching cadence, not provider latency; default 1,000ms.
  */
 stream_batch_ms?: number | null,
@@ -20,6 +30,10 @@ stream_liveness_timeout_secs?: number | null,
  * Max provider transport silence per attempt; expiry is retryable. Default 300s.
  */
 provider_idle_timeout_secs?: number | null,
+/**
+ * Title-generation attempt timeout; default 10s.
+ */
+title_timeout_secs?: number | null,
 /**
  * Overall claimed-request duration, including tools; default 86,400s.
  */

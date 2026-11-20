@@ -189,7 +189,8 @@ mod tests {
     use std::sync::mpsc::{channel, Receiver};
 
     use super::*;
-    use crate::app::{Pane, Tab};
+    use crate::app::transcript::Tab;
+    use crate::app::Pane;
     use crate::keys::KeySet::Vim;
     use crate::sample;
     use crate::sample::Tone;

@@ -2,16 +2,21 @@ use rapidhash::RapidHashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 
 pub use gents_store::graphql::escape_graphql_string;
 
-/// The CLI client key a served port's User reads and writes with. `gents
-/// init` may not have created it when the server is spawned, so it is located
-/// at registration and loaded on first use.
+/// The CLI client key a served port's User reads and writes with: the one the
+/// served home records (`init --desktop-home`), else the default folder under
+/// the `HOME` the CLI ran with, as the CLI resolves it. `gents init` may not
+/// have set the home up or created the key when the server is spawned, so it
+/// is located and loaded on first use.
 enum ServedPrincipal {
-    Pending(gents_desktop_core::client::DesktopPaths),
+    Pending {
+        gents_home: std::path::PathBuf,
+        default: gents_store::client_journal::paths::DesktopPaths,
+    },
     Loaded(gents_store::config_client::ClientSigningCapability),
 }
 
@@ -34,11 +39,14 @@ pub fn register_served_home(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(port, gents_home.to_path_buf());
-    let paths = cli_client_paths(user_home, envs);
+    let pending = ServedPrincipal::Pending {
+        gents_home: gents_home.to_path_buf(),
+        default: cli_client_paths(user_home, envs),
+    };
     served_principals()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(port, ServedPrincipal::Pending(paths));
+        .insert(port, pending);
     Ok(())
 }
 
@@ -62,11 +70,21 @@ fn served_capability(port: u16) -> Option<gents_store::config_client::ClientSign
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let principal = principals.get_mut(&port)?;
-    if let ServedPrincipal::Pending(paths) = principal {
+    if let ServedPrincipal::Pending {
+        gents_home,
+        default,
+    } = principal
+    {
+        let paths = gents_store::local::home::recorded_client_identity(gents_home)
+            .map(gents_store::client_journal::paths::DesktopPaths::from_root)
+            .unwrap_or_else(|| default.clone());
         if !paths.identity_key_path().exists() {
             return None;
         }
-        let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(paths)
+        let identity =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+                &paths,
+            )
             .unwrap_or_else(|error| {
                 panic!(
                     "loading CLI client key under {}: {error:#}",
@@ -82,7 +100,7 @@ fn served_capability(port: u16) -> Option<gents_store::config_client::ClientSign
     }
     match principal {
         ServedPrincipal::Loaded(capability) => Some(capability.clone()),
-        ServedPrincipal::Pending(_) => None,
+        ServedPrincipal::Pending { .. } => None,
     }
 }
 
@@ -117,37 +135,16 @@ pub fn node_principal_endpoint(graphql: &str) -> gents_store::config_client::Gra
     endpoint_for(graphql, node_principals())
 }
 
-/// Mirrors the CLI's client-key discovery for a process run with
-/// `HOME=user_home` and `envs`.
+/// Mirrors the CLI's default client-key folder for a process run with
+/// `HOME=user_home` and `envs`, for a home whose settings record none.
 pub fn cli_client_paths(
     user_home: &Path,
     envs: &[(&str, &str)],
-) -> gents_desktop_core::client::DesktopPaths {
-    let desktop_root = envs
-        .iter()
-        .rev()
-        .find(|(name, _)| *name == gents_desktop_core::client::DESKTOP_HOME_ENV)
-        .map(|(_, value)| std::path::PathBuf::from(value))
-        .or_else(|| {
-            std::env::var_os(gents_desktop_core::client::DESKTOP_HOME_ENV)
-                .filter(|value| !value.is_empty())
-                .map(std::path::PathBuf::from)
-        })
-        .unwrap_or_else(|| {
-            user_data_local_dir(user_home, envs)
-                .join("gents")
-                .join("desktop")
-        });
-    gents_desktop_core::client::DesktopPaths::from_root(desktop_root.join("cli"))
-}
-
-/// The operator's User DID: the CLI client key a CLI process with this
-/// `HOME` signs with.
-pub fn cli_user_did(cli_home: &Path) -> Result<String> {
-    let paths = cli_client_paths(cli_home, &[]);
-    let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
-        .with_context(|| format!("loading the CLI User key under {}", paths.root().display()))?;
-    Ok(identity.did().to_owned())
+) -> gents_store::client_journal::paths::DesktopPaths {
+    let desktop_root = user_data_local_dir(user_home, envs)
+        .join("gents")
+        .join("desktop");
+    gents_store::client_journal::paths::DesktopPaths::from_root(desktop_root.join("cli"))
 }
 
 #[cfg(target_os = "macos")]
@@ -272,12 +269,4 @@ pub async fn doc_id_for_tools(graphql: &str, tools_id: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| anyhow!("Tools row missing _docID for {tools_id}"))
-}
-
-pub async fn exec(node: &gents::defra_node::Node, query: &str) -> Result<()> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        bail!("GraphQL mutation failed: {:?}", response.errors);
-    }
-    Ok(())
 }

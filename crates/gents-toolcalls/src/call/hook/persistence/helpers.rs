@@ -4,8 +4,11 @@ use anyhow::Context;
 /// Why a request cannot take one more background slot.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BackgroundSlotRefusal {
-    #[error("background tool budget exceeded ({0} admitted)")]
-    CapacityExceeded(usize),
+    #[error("background tool budget exceeded ({admitted} of {} admitted)", limit.get())]
+    CapacityExceeded {
+        admitted: usize,
+        limit: gents_protocol::job::BackgroundLimit,
+    },
     /// A slot belongs to a running request: its completion is delivered to
     /// that request's session (Lean `admitSpawnedBackgroundCore`).
     #[error("the request that would own the background slot is no longer running")]
@@ -13,9 +16,10 @@ pub(crate) enum BackgroundSlotRefusal {
 }
 
 impl BackgroundSlotRefusal {
+    #[cfg(test)]
     pub(crate) fn capacity(&self) -> Option<usize> {
         match self {
-            Self::CapacityExceeded(admitted) => Some(*admitted),
+            Self::CapacityExceeded { admitted, .. } => Some(*admitted),
             Self::RequestStopped => None,
         }
     }
@@ -53,13 +57,14 @@ where
     R: gents_store::config_client::ConfigRead,
 {
     let escaped_request_doc_id = gents_store::graphql::escape_graphql_string(request_doc_id);
+    let nonterminal = gents_protocol::tool_call::ToolCallState::nonterminal_graphql_list();
     let query = format!(
         r#"{{
             AgentToolCall(
                 filter: {{
                     request_doc_id: {{ _eq: "{escaped_request_doc_id}" }},
                     await_mode: {{ _eq: "background" }},
-                    lifecycle_state: {{ _in: ["running", "pending"] }}
+                    lifecycle_state: {{ _in: {nonterminal} }}
                 }}
             ) {{
                 lifecycle_state spawned_by_tool_call_doc_id
@@ -92,7 +97,8 @@ pub enum BackgroundSlot {
 }
 
 /// Admits one background slot on `request_doc_id` in `txn`, refusing with
-/// [`BackgroundSlotRefusal::CapacityExceeded`] at the ceiling, and returns the request row
+/// [`BackgroundSlotRefusal::CapacityExceeded`] once `limit` slots are live (Lean
+/// `Background.admitBackground`), and returns the request row
 /// with `request_fields`. DefraDB transactions do not conflict on predicate
 /// reads, so every admission bumps the request's
 /// `background_admission_sequence`: concurrent admissions to one request then
@@ -105,6 +111,7 @@ pub async fn reserve_background_slot_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
     slot: BackgroundSlot,
+    limit: gents_protocol::job::BackgroundLimit,
     request_fields: &str,
 ) -> anyhow::Result<serde_json::Value> {
     txn.contend_with_request_siblings();
@@ -115,8 +122,8 @@ pub async fn reserve_background_slot_in_txn(
         } else {
             live
         };
-        if admitted >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return Err(BackgroundSlotRefusal::CapacityExceeded(admitted).into());
+        if admitted >= limit.get() {
+            return Err(BackgroundSlotRefusal::CapacityExceeded { admitted, limit }.into());
         }
     }
     let escaped = gents_store::graphql::escape_graphql_string(request_doc_id);
@@ -404,20 +411,22 @@ pub(super) fn background_tool_not_allowed_payload(
 pub(super) fn background_budget_exceeded_payload(
     tool_name: &str,
     current_backgrounded: usize,
+    limit: gents_protocol::job::BackgroundLimit,
 ) -> String {
+    let max_backgrounded = limit.get();
     json_string(json!({
         "ok": false,
         "failure_class": "service_unavailable",
         "code": "background_tool_budget_exceeded",
         "path": "/",
         "message": format!(
-            "parent request has reached the concurrent backgrounded tool ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT}); wait for a completion notification, then retry"
+            "parent request has reached the concurrent backgrounded tool ceiling ({max_backgrounded}); wait for a completion notification, then retry"
         ),
         "retryable": true,
         "service_id": "process",
         "tool_name": tool_name,
         "current_backgrounded": current_backgrounded,
-        "max_backgrounded": MAX_BACKGROUNDED_TOOLS_PER_PARENT
+        "max_backgrounded": max_backgrounded
     }))
 }
 
@@ -746,7 +755,14 @@ mod tests {
         access
             .transact_write("test.background_admission_bump", |txn| {
                 Box::pin(async move {
-                    reserve_background_slot_in_txn(txn, doc_id, BackgroundSlot::Requested, "").await
+                    reserve_background_slot_in_txn(
+                        txn,
+                        doc_id,
+                        BackgroundSlot::Requested,
+                        Default::default(),
+                        "",
+                    )
+                    .await
                 })
             })
             .await
@@ -878,6 +894,7 @@ mod tests {
             &admission,
             &doc_id,
             BackgroundSlot::Requested,
+            Default::default(),
             "lifecycle_state execution_generation execution_lease_expires_at",
         )
         .await

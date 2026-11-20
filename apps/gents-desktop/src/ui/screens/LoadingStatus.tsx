@@ -38,12 +38,12 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
   const nodeDid = useSelectedNodeDid();
   const selectedSessionId = stores.selection.use.sessionId();
   const [busy, setBusy] = useState(false);
-  const savedPeers = useBootstrap()?.savedPeers;
+  const savedRuntimes = useBootstrap()?.savedRuntimes;
   /* once its folder is deleted, init.json no longer names the local node;
      its saved connection still does */
   const local =
     useWorkingNode()?.nodeDid === nodeDid ||
-    Boolean(savedPeers?.some((peer) => peer.local && peer.nodeDid === nodeDid));
+    Boolean(savedRuntimes?.some((peer) => peer.local && peer.nodeDid === nodeDid));
   const managed = stores.localServer.use.status();
   const deletedHome = local ? managed?.deletedHome : null;
   /* read only while something is shown: each read asks the OS service manager.

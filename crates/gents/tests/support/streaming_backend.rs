@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::http::{header, StatusCode};
@@ -11,6 +11,7 @@ use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use gents_store::test_support::STALL_CEILING;
 use serde_json::json;
 use tokio::sync::{oneshot, Notify};
 
@@ -255,22 +256,19 @@ impl MockStreamingBackend {
         self.state.request_count(marker)
     }
 
-    pub async fn wait_for_request(&self, marker: &str, timeout: Duration) {
-        tokio::time::timeout(timeout, async {
-            loop {
-                let changed = self.state.notify.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                if self.observed_requests(marker) > 0 {
-                    return;
-                }
-                changed.await;
+    pub async fn wait_for_request(&self, marker: &str) {
+        loop {
+            let changed = self.state.notify.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let observed = self.observed_requests(marker);
+            if observed > 0 {
+                return;
             }
-        })
-        .await
-        .unwrap_or_else(|_| {
-            panic!("request for {marker} did not reach the provider before its deadline")
-        });
+            if tokio::time::timeout(STALL_CEILING, changed).await.is_err() {
+                panic!("request for {marker} stalled for {STALL_CEILING:?}; observed={observed}");
+            }
+        }
     }
 
     pub fn enable_dynamic_followups(&self, marker: &str) {
@@ -323,10 +321,7 @@ impl MockStreamingBackend {
     }
 
     pub async fn wait_for_chunks(&self, marker: &str, expected: usize) {
-        let observed = self
-            .state
-            .wait_for_chunk_count(marker, expected, Duration::from_secs(5))
-            .await;
+        let observed = self.state.wait_for_chunk_count(marker, expected).await;
         assert!(
             observed >= expected,
             "timed out waiting for {expected} chunk(s) for marker {marker}, observed {observed}"
@@ -504,19 +499,18 @@ impl StreamingState {
             .unwrap_or_default()
     }
 
-    async fn wait_for_chunk_count(
-        &self,
-        marker: &str,
-        expected: usize,
-        timeout: Duration,
-    ) -> usize {
-        let started = Instant::now();
+    async fn wait_for_chunk_count(&self, marker: &str, expected: usize) -> usize {
         loop {
+            let changed = self.notify.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let actual = self.chunk_count(marker);
-            if actual >= expected || started.elapsed() >= timeout {
+            if actual >= expected {
                 return actual;
             }
-            let _ = tokio::time::timeout(Duration::from_millis(25), self.notify.notified()).await;
+            if tokio::time::timeout(STALL_CEILING, changed).await.is_err() {
+                return actual;
+            }
         }
     }
 

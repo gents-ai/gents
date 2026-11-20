@@ -1,6 +1,5 @@
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use gents_documents::FileToolMode;
 use gents_documents::{FileTools, HostTools, Tools};
@@ -112,12 +111,7 @@ async fn startup_binds_an_agent_authored_workspace_request() {
     )
     .await
     .unwrap();
-    let terminal = wait_for_request_terminal(
-        &actors,
-        "workspace-recovery-request",
-        Duration::from_secs(60),
-    )
-    .await;
+    let terminal = wait_for_request_terminal(&actors, "workspace-recovery-request").await;
     let row = actors
         .request_row(
             &doc,

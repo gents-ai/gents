@@ -12,7 +12,7 @@ use gents_documents::ConfigurationNodeBinding;
 use gents_loop::tool::{ToolDyn, ToolError};
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::identity::NodeIdentity;
-use gents_tools::builtin::self_config::build_self_config_tools_with_runtime;
+use gents_tools::builtin::self_config::{build_self_config_tools_with_runtime, SelfConfigRuntime};
 use gents_tools::surface::SelfConfigToolConfig;
 
 /// A signed node whose Engineer is the fixture Agent, reached through the
@@ -133,16 +133,20 @@ impl PolicyFixture {
             process_ceiling: Default::default(),
             selected_plugins: Vec::new(),
             ceiling_plugins: None,
+            registry_url: None,
+            plugin_builder: None,
         };
         build_self_config_tools_with_runtime(
-            Arc::default(),
-            self.db.node.clone(),
-            self.db.node_identity.did().to_owned(),
-            Some(self.agent.clone()),
-            Some(self.db.node_identity.clone()),
+            SelfConfigRuntime {
+                usage_cache: Arc::default(),
+                node: self.db.node.clone(),
+                node_did: self.db.node_identity.did().to_owned(),
+                identity: Some(self.agent.clone()),
+                runtime_identity: Some(self.db.node_identity.clone()),
+                plugins: Arc::new(crate::plugin::executor::PluginExecutor::default()),
+                tasks: Arc::new(gents_tools::task_run::NoTaskRunService),
+            },
             &config,
-            Arc::new(crate::plugin::executor::PluginExecutor::default()),
-            Arc::new(gents_tools::task_run::NoTaskRunService),
             Some(self.node_binding.clone()),
         )
     }
@@ -162,7 +166,7 @@ async fn run(tool: &dyn ToolDyn, argv: Value) -> std::result::Result<Value, Valu
     match tool
         .call(
             argv.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     {
@@ -391,7 +395,11 @@ async fn explain_reports_missing_add_nac_relation_when_permission_is_held() {
     let fixture = PolicyFixture::new("policy-explain-no-operation").await;
     let sibling = fixture.install_sibling("Reviewer").await;
     fixture
-        .grant_engineer(&[NodePermission::NacStatus, NodePermission::DocumentDelete])
+        .grant_engineer(&[
+            NodePermission::NacStatus,
+            NodePermission::CollectionGet,
+            NodePermission::DocumentDelete,
+        ])
         .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
@@ -579,5 +587,91 @@ async fn policy_revoke_of_own_lockout_permissions_is_refused_under_no_lockout() 
     assert_eq!(
         receipt["answer"].as_str().unwrap(),
         "Revoked node permission delete-document from you."
+    );
+}
+
+/// Lean `SelfConfig.catalog_refusal_words_name_the_node` and
+/// `catalog_is_not_self_granted`: the refusal's words are words the policy
+/// tool answers for the Node, and its next call confirms what the Agent holds.
+#[tokio::test]
+async fn the_catalog_refusal_names_what_the_policy_tool_answers() {
+    let fixture = PolicyFixture::new("policy-catalog-words").await;
+    fixture.grant_engineer_sets(&[]).await;
+    let tools = fixture.tools(&["agent", "policy"], false);
+    let tool = config(&tools);
+    let [permission, administrator] = gents_protocol::operations::agent::CATALOG_REFUSAL_WORDS;
+    let check = |word: &str| json!({"argv": ["policy", "check", "--permission", word]});
+
+    let refusal = run(
+        tool,
+        json!({"argv": ["agent", "default", fixture.agent_did]}),
+    )
+    .await
+    .expect_err("an Agent without the catalog cannot choose the default");
+    let message = refusal["error"].as_str().unwrap();
+    for word in [permission, administrator] {
+        assert!(message.contains(word), "{message}");
+    }
+    assert!(
+        message.contains(&format!(
+            "policy grant --subject {} --permission {administrator}",
+            fixture.agent_did
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains("gents config agent grant-node-admin"),
+        "{message}"
+    );
+    assert_eq!(refusal["recovery"]["next_call"], check(permission));
+
+    let lacking = run(tool, check(permission))
+        .await
+        .expect("the refusal's next call is answered");
+    assert!(
+        lacking["answer"].as_str().unwrap().starts_with(&format!(
+            "no: you do not hold permission {permission} on Node document"
+        )),
+        "{lacking}"
+    );
+    assert!(
+        lacking["how_to_proceed"]
+            .as_str()
+            .unwrap()
+            .contains(administrator),
+        "{lacking}"
+    );
+    for relation in [administrator, "agent_manager"] {
+        let answered = match run(tool, check(relation)).await {
+            Ok(answer) | Err(answer) => answer.to_string(),
+        };
+        assert!(!answered.contains("unknown permission"), "{answered}");
+    }
+    let view = run(tool, json!({"argv": ["policy", "get"]})).await.unwrap();
+    assert!(
+        view["node_document_permissions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"permission": permission, "held": false})),
+        "{view}"
+    );
+
+    fixture
+        .user_access
+        .transact_write("test.policy.grant_node_administration", |txn| {
+            let node_did = fixture.db.node_identity.did();
+            let agent_did = &fixture.agent_did;
+            Box::pin(async move {
+                gents_documents::grant_node_administration(txn, node_did, agent_did).await
+            })
+        })
+        .await
+        .unwrap();
+    let held = run(tool, check(permission)).await.unwrap();
+    assert!(
+        held["answer"].as_str().unwrap().starts_with(&format!(
+            "yes: you hold permission {permission} on Node document"
+        )),
+        "{held}"
     );
 }

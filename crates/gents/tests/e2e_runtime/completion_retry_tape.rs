@@ -4,9 +4,10 @@ use gents::Gents;
 use gents_loop::completion_retry::{CompletionRetryPolicy, CompletionRetryProfileFields};
 use gents_loop::execution_origin::ExecutionOrigin;
 use gents_observe::{
-    observe::run_timeline::build_run_timeline, observe::run_timeline::RunTimeline,
-    observe::run_timeline::RunTimelineRows, observe::run_timeline::TimelineInferenceCallRow,
-    observe::run_timeline::TimelineRequestRow,
+    observe::run_timeline::build::build_run_timeline, observe::run_timeline::events::RunTimeline,
+    observe::run_timeline::rows::RunTimelineRows,
+    observe::run_timeline::rows::TimelineInferenceCallRow,
+    observe::run_timeline::rows::TimelineRequestRow,
 };
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -68,7 +69,7 @@ async fn backend_restart_cluster_recovers() {
     }
 
     for (doc_id, request_id, marker) in &request_doc_ids {
-        let terminal_state = wait_for_request_terminal_state(&actors, doc_id, STALL_CEILING).await;
+        let terminal_state = wait_for_request_terminal_state(&actors, doc_id).await;
         if terminal_state != RequestLifecycleState::Completed {
             let snapshot = fetch_request_snapshot(&actors, doc_id).await;
             let calls = fetch_inference_calls(&actors, request_id).await;
@@ -115,6 +116,12 @@ async fn backend_restart_cluster_recovers() {
     agent.shutdown().await;
 }
 
+/// An execution whose lease runs out while it backs off a failed provider call
+/// dispatches no retry, and recovery fails the request (`tla/RetryBackoffLease`).
+/// The backoff is unreached, so the expiry lands during it however long the
+/// fixture takes (`WallClock`), and the expiry write matches only the observed
+/// generation, so a renewal between its read and its write cannot make it miss
+/// (`DeadlineCas`).
 #[tokio::test]
 async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     let marker = "backoff-vs-liveness";
@@ -132,12 +139,17 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     )
     .unwrap();
     let db = test_db("completion-retry-backoff-liveness").await;
+    let unreached_backoff_ms = i64::try_from(UNREACHED_DEADLINE.as_millis()).unwrap();
     let (actors, runtime) = build_retry_agent_with_liveness(
         &db,
         backend.endpoint(),
         1,
-        UNREACHED_DEADLINE.as_secs(),
+        2 * UNREACHED_DEADLINE.as_secs(),
         Some(30),
+        CompletionRetryProfileFields {
+            retry_backoff_ms: Some(vec![unreached_backoff_ms]),
+            ..Default::default()
+        },
     )
     .await;
     let identities = runtime
@@ -182,7 +194,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     let tuple = actors
         .query(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }} ) {{
-        lifecycle_state execution_generation execution_lease_expires_at
+        lifecycle_state execution_generation
     }} }}"#
         ))
         .await;
@@ -190,12 +202,11 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     let observed = &tuple.data.as_ref().unwrap()["AgentRequest"][0];
     assert_eq!(observed["lifecycle_state"], "processing");
     let generation = escape_graphql_string(observed["execution_generation"].as_str().unwrap());
-    let expiry = escape_graphql_string(observed["execution_lease_expires_at"].as_str().unwrap());
     let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(
         filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }}, lifecycle_state: {{ _eq: "processing" }},
-            execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
+            execution_generation: {{ _eq: "{generation}" }} }},
         input: {{ execution_lease_expires_at: "{}" }}
     ) {{ _docID }} }}"#,
         escape_graphql_string(&expired)
@@ -214,7 +225,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         "observed execution lease must be expired by the fixture"
     );
 
-    let terminal_state = wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await;
+    let terminal_state = wait_for_request_terminal_state(&actors, &doc_id).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Failed,
@@ -309,8 +320,7 @@ async fn deadline_tight_fails_cleanly() {
     )
     .await;
 
-    let terminal_state =
-        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
+    let terminal_state = wait_for_request_terminal_state(&actors, &request_doc_id).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Failed,
@@ -386,8 +396,7 @@ async fn interactive_budget_is_quick() {
     )
     .await;
 
-    let terminal_state =
-        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
+    let terminal_state = wait_for_request_terminal_state(&actors, &request_doc_id).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Completed,
@@ -396,6 +405,19 @@ async fn interactive_budget_is_quick() {
     assert_eq!(backend.observed_requests(marker), in_loop_attempts + 1);
     let calls = fetch_inference_calls(&actors, request_id).await;
     assert_parked_once_then_answered(&actors, &request_doc_id, &calls, in_loop_attempts).await;
+    assert_eq!(
+        calls.iter().map(|call| call.call_seq).collect::<Vec<_>>(),
+        (1..=i64::try_from(in_loop_attempts + 1).unwrap()).collect::<Vec<_>>(),
+        "the resumed execution continues the request's call sequence: {calls:?}"
+    );
+    let timeline = build_timeline(&actors, request_id).await;
+    assert_eq!(
+        timeline.request.retry_summary.retry_count,
+        u32::try_from(in_loop_attempts).unwrap(),
+        "every failed attempt before and after the park is a retry: {:?}",
+        timeline.request.retry_summary
+    );
+    assert!(timeline.request.retry_summary.recovered);
 
     agent.shutdown().await;
 }
@@ -530,7 +552,7 @@ async fn start_stall_tape(
 async fn assert_stall_recovered(marker: &str, responses: Vec<StreamResponse>) {
     let (backend, _db, actors, agent, doc_id) =
         start_stall_tape(marker, responses, "interactive").await;
-    wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await;
+    wait_for_request_terminal_state(&actors, &doc_id).await;
     let request = fetch_terminal_request(&actors, &doc_id).await;
     let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
     assert_eq!(
@@ -596,7 +618,7 @@ async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await,
+        wait_for_request_terminal_state(&actors, &doc_id).await,
         RequestLifecycleState::Completed
     );
     assert_eq!(backend.observed_requests(marker), 2);
@@ -629,7 +651,7 @@ async fn repeated_provider_silence_parks_the_request_until_the_provider_answers(
     ));
     let (backend, _db, actors, agent, doc_id) =
         start_stall_tape(marker, responses, "interactive").await;
-    wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await;
+    wait_for_request_terminal_state(&actors, &doc_id).await;
     let request = fetch_terminal_request(&actors, &doc_id).await;
     let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Completed);
@@ -671,8 +693,7 @@ async fn deterministic_400_tape() {
     .await;
 
     let agent = spawn_runtime(&db, agent).await;
-    let terminal_state =
-        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
+    let terminal_state = wait_for_request_terminal_state(&actors, &request_doc_id).await;
 
     let calls = fetch_inference_calls(&actors, request_id).await;
     assert_eq!(
@@ -699,9 +720,15 @@ async fn boot_retry_agent(
     max_concurrent: usize,
     deadline_duration_secs: u64,
 ) -> (RequestActors, BootedAgent) {
-    let (actors, runtime) =
-        build_retry_agent_with_liveness(db, endpoint, max_concurrent, deadline_duration_secs, None)
-            .await;
+    let (actors, runtime) = build_retry_agent_with_liveness(
+        db,
+        endpoint,
+        max_concurrent,
+        deadline_duration_secs,
+        None,
+        CompletionRetryProfileFields::default(),
+    )
+    .await;
     let agent = spawn_runtime(db, runtime).await;
     (actors, agent)
 }
@@ -712,8 +739,15 @@ async fn build_retry_agent(
     max_concurrent: usize,
     deadline_duration_secs: u64,
 ) -> (RequestActors, Gents) {
-    build_retry_agent_with_liveness(db, endpoint, max_concurrent, deadline_duration_secs, None)
-        .await
+    build_retry_agent_with_liveness(
+        db,
+        endpoint,
+        max_concurrent,
+        deadline_duration_secs,
+        None,
+        CompletionRetryProfileFields::default(),
+    )
+    .await
 }
 
 async fn build_retry_agent_with_liveness(
@@ -722,6 +756,7 @@ async fn build_retry_agent_with_liveness(
     max_concurrent: usize,
     deadline_duration_secs: u64,
     stream_liveness_timeout_secs: Option<u64>,
+    completion_retry: CompletionRetryProfileFields,
 ) -> (RequestActors, Gents) {
     let actors = builder_actors(db, RETRY_BACKEND_ID, endpoint, RETRY_MODEL, max_concurrent).await;
     let mut behavior = fixture_agent(
@@ -732,7 +767,8 @@ async fn build_retry_agent_with_liveness(
     .backend_id(RETRY_BACKEND_ID)
     .model_name(RETRY_MODEL)
     .stream_batch_ms(0)
-    .deadline_duration_secs(deadline_duration_secs);
+    .deadline_duration_secs(deadline_duration_secs)
+    .completion_retry(completion_retry);
     if let Some(secs) = stream_liveness_timeout_secs {
         behavior = behavior.stream_liveness_timeout_secs(secs);
     }

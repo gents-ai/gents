@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents_observe::observe::run_timeline::{
-    RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineRequestEvent, TimelineRequestRow,
-    TimelineToolCallEvent,
+    events::{RunTimeline, RunTimelineEvent, TimelineRequestEvent, TimelineToolCallEvent},
+    rows::{RunTimelineRows, TimelineRequestRow},
 };
 use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use gents_store::config_client::document_decide::{
@@ -733,7 +733,7 @@ mod tests {
     use std::sync::Arc;
 
     use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
-    use gents_observe::observe::run_timeline::{
+    use gents_observe::observe::run_timeline::rows::{
         TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
         TimelineRenderedRequestRef, TimelineSessionRow, TimelineToolCallRow,
     };

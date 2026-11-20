@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::cli::args::{FleetCommand, FleetSlotsArgs};
 use crate::print_json;
-use gents_host::http_client::http_get_json;
+use gents_host::http_client::endpoint_get_json;
 use gents_service::home_state::resolve_graphql_endpoint;
 
 pub(crate) async fn dispatch(command: FleetCommand) -> Result<()> {
@@ -21,7 +21,8 @@ async fn fleet_slots(args: FleetSlotsArgs) -> Result<()> {
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .context("building HTTP client")?;
-    let snapshot: Value = http_get_json(graphql.authorize(client.get(&url))?).await?;
+    let snapshot: Value =
+        endpoint_get_json(&graphql, |graphql| graphql.authorize(client.get(&url))).await?;
     print_json(&snapshot)?;
     Ok(())
 }

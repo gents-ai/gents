@@ -109,10 +109,10 @@ export function useOnline() {
   return useStore(useApp().stores.client, clientRunning);
 }
 
-export function useEnrollmentRequests() {
+export function useAccessRequests() {
   return useStore(
     useApp().stores.client,
-    (state) => state.snapshot?.client?.enrollmentRequests,
+    (state) => state.snapshot?.client?.accessRequests,
   );
 }
 

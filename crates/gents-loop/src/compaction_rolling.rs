@@ -12,22 +12,30 @@ use super::{rolling_step_input, CompactionError, ReductionError, ReductionOption
 use crate::provider_input::budget::{configured_output_ceiling, rolling_summary_input_budget};
 use crate::rig_compat::ProviderModel;
 
+pub(super) struct RollingSummaryWindow<'a> {
+    pub(super) summary_config: &'a crate::loop_stream::LoopConfig,
+    pub(super) options: &'a ReductionOptions,
+    pub(super) context_window: usize,
+}
+
 /// The longest pair-safe prefix of `remaining`, at most `max_messages` long,
 /// whose summary request fits the calibrated input budget.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn largest_fitting_summary_chunk<M>(
     model: &M,
     remaining: &[Message],
     max_messages: usize,
     prior_summary: Option<&str>,
-    summary_config: &crate::loop_stream::LoopConfig,
-    options: &ReductionOptions,
     absolute_start: usize,
-    context_window: usize,
+    window: &RollingSummaryWindow<'_>,
 ) -> Result<(usize, usize), CompactionError>
 where
     M: ProviderModel,
 {
+    let RollingSummaryWindow {
+        summary_config,
+        options,
+        context_window,
+    } = *window;
     let mut boundaries = history::pair_safe_boundaries(remaining);
     let all_boundaries = boundaries.len();
     boundaries.retain(|boundary| *boundary <= max_messages);
@@ -182,7 +190,7 @@ where
             let mut fallback_config = summary_config;
             fallback_config.structured_output = None;
             fallback_config.on_rendered_request =
-                Some(crate::rendered_request::scope::ambient_arming_sink(
+                Some(crate::rendered_request::scope::arming_sink(
                     crate::rendered_request::CaptureScopeKind::CompactionFallback,
                 ));
             fallback_config.retry_policy =

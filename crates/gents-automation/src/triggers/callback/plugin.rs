@@ -381,6 +381,7 @@ async fn commit_success(
 mod tests {
     use super::*;
     use gents_documents::callback_plugin_handler::validate_handler;
+    use gents_store::test_support::{fixture_agent_access, fixture_agent_did, FIXTURE_AGENT_NONCE};
     use serde_json::json;
 
     fn port(name: &str, cardinality: PortCardinality, required: bool) -> PortSpec {
@@ -539,7 +540,7 @@ mod tests {
         .await
         .unwrap();
         let owner = db.node_identity.did();
-        let agent = crate::triggers::callback::test_agent_did();
+        let agent = fixture_agent_did(FIXTURE_AGENT_NONCE);
         crate::triggers::callback::seed_test_agent(&node, owner).await;
         crate::triggers::callback::seed_test_configuration(&node, owner, vec![
             (gents_store::collection::Collection::Callback, json!({"callback_id":"cb-echo","enabled":true,
@@ -575,7 +576,7 @@ mod tests {
         query: &str,
         collection: &str,
     ) -> Vec<Value> {
-        let response = crate::triggers::callback::test_agent_access(node)
+        let response = fixture_agent_access(node, FIXTURE_AGENT_NONCE)
             .execute(query)
             .await
             .unwrap();
@@ -741,7 +742,7 @@ mod tests {
         );
         assert_eq!(
             rows(&node, "{ PluginOwned { body owner } }", "PluginOwned").await,
-            vec![json!({"body": "x", "owner": crate::triggers::callback::test_agent_did()})]
+            vec![json!({"body": "x", "owner": fixture_agent_did(FIXTURE_AGENT_NONCE)})]
         );
         assert_eq!(
             rows(&node, "{ CallbackResult { result_id } }", "CallbackResult")

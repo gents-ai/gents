@@ -18,14 +18,12 @@ async fn claim_atomically_projects_the_request_owned_session() {
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = support::agent_requests::canonical_now();
-    let (access, agent_doc, session_doc) =
+    let seeded =
         super::session_control::seed_agent_session(&db, &fixture, &session_id, &created_at).await;
     let doc_id = super::session_control::seed_agent_request(
         &db,
         &fixture,
-        &access,
-        &agent_doc,
-        &session_doc,
+        &seeded,
         &session_id,
         &request_id,
         &created_at,
@@ -56,10 +54,11 @@ async fn claim_atomically_projects_the_request_owned_session() {
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let response = access
+    let response = seeded
+        .access
         .execute(&format!(
             "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} }} }}",
-            escape_graphql_string(&session_doc),
+            escape_graphql_string(&seeded.session_doc),
             gents_protocol::session::AGENT_SESSION_FIELDS,
         ))
         .await
@@ -1090,9 +1089,12 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         db.node_identity.clone(),
         agent.clone(),
         "scheduled prompt body",
-        DEADLINE_SECS,
-        ExecutionOrigin::Scheduled,
-        BACKEND_ID,
+        gents_session::request::lifecycle::ExecutionBinding {
+            deadline_duration_secs: DEADLINE_SECS,
+            execution_origin: ExecutionOrigin::Scheduled,
+            backend_id: BACKEND_ID.into(),
+            operator_tool_root: None,
+        },
         TriggerLineage::default(),
     )
     .await
@@ -1175,9 +1177,12 @@ async fn materialized_lineage_follows_the_lean_model() {
             db.node_identity.clone(),
             agent.clone(),
             "materialized prompt body with lineage",
-            DEADLINE_SECS,
-            origin,
-            BACKEND_ID,
+            gents_session::request::lifecycle::ExecutionBinding {
+                deadline_duration_secs: DEADLINE_SECS,
+                execution_origin: origin,
+                backend_id: BACKEND_ID.into(),
+                operator_tool_root: None,
+            },
             lineage,
         )
         .await;
@@ -1671,13 +1676,15 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     let parent_request_id = "queue-deadline-cancel-parent";
     create_queue_request(
         &actors,
-        parent_request_id,
-        &session_id,
-        "completed",
-        "2026-03-23T00:00:00Z",
-        "interactive",
-        None,
-        None,
+        support::agent_requests::RequestSeed {
+            execution_origin: Some("interactive"),
+            ..support::agent_requests::RequestSeed::new(
+                parent_request_id,
+                &session_id,
+                "2026-03-23T00:00:00Z",
+            )
+            .state("completed")
+        },
         None,
     )
     .await;
@@ -1686,28 +1693,34 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     let user_id = case.pre_pending_request_ids[1];
     create_queue_request(
         &actors,
-        &automated_id.to_string(),
-        &session_id,
-        "pending",
-        "2026-03-23T00:00:10Z",
-        "scheduled",
-        Some(&automated_queue_input(
-            case.queue_key.as_deref().expect("queue key"),
-            parent_request_id,
-        )),
-        None,
+        support::agent_requests::RequestSeed {
+            input: Some(&automated_queue_input(
+                case.queue_key.as_deref().expect("queue key"),
+                parent_request_id,
+            )),
+            execution_origin: Some("scheduled"),
+            ..support::agent_requests::RequestSeed::new(
+                &automated_id.to_string(),
+                &session_id,
+                "2026-03-23T00:00:10Z",
+            )
+            .state("pending")
+        },
         None,
     )
     .await;
     create_queue_request(
         &actors,
-        &user_id.to_string(),
-        &session_id,
-        "pending",
-        "2026-03-23T00:00:20Z",
-        "scheduled",
-        Some(&user_queue_input()),
-        None,
+        support::agent_requests::RequestSeed {
+            input: Some(&user_queue_input()),
+            execution_origin: Some("scheduled"),
+            ..support::agent_requests::RequestSeed::new(
+                &user_id.to_string(),
+                &session_id,
+                "2026-03-23T00:00:20Z",
+            )
+            .state("pending")
+        },
         None,
     )
     .await;
@@ -1750,14 +1763,16 @@ async fn drive_claim_preserves_explicit_deadline(case: &ClaimDeadlineInput) -> C
     let explicit_deadline = explicit_deadline_at.to_rfc3339();
     let doc_id = create_queue_request(
         &actors,
-        &request_id.to_string(),
-        &session_id,
-        "pending",
-        &created_at,
-        "interactive",
-        None,
+        support::agent_requests::RequestSeed {
+            execution_origin: Some("interactive"),
+            ..support::agent_requests::RequestSeed::new(
+                &request_id.to_string(),
+                &session_id,
+                &created_at,
+            )
+            .state("pending")
+        },
         Some(&explicit_deadline),
-        None,
     )
     .await;
     let request = request_from_parts(
@@ -1795,39 +1810,15 @@ async fn drive_claim_preserves_explicit_deadline(case: &ClaimDeadlineInput) -> C
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn create_queue_request(
     actors: &support::agent_requests::RequestActors,
-    request_id: &str,
-    session_id: &str,
-    status: &str,
-    created_at: &str,
-    execution_origin: &str,
-    input: Option<&str>,
+    seed: support::agent_requests::RequestSeed<'_>,
     deadline: Option<&str>,
-    node_did: Option<&str>,
 ) -> String {
-    assert!(
-        node_did.is_none(),
-        "queue fixtures are owned by the fixture runtime"
-    );
-    let lifecycle_state = match status {
-        "pending" => "pending",
-        "processing" => "processing",
-        "completed" => "completed",
-        "interrupted" => "interrupted",
-        "superseded" => "superseded",
-        "dead" => "dead",
-        "error" => "failed",
-        other => panic!("unsupported queue request status {other}"),
-    };
     let doc_id = actors
         .create_request(support::agent_requests::RequestSeed {
-            input,
             content: Some("queue deadline conformance"),
-            execution_origin: Some(execution_origin),
-            ..support::agent_requests::RequestSeed::new(request_id, session_id, created_at)
-                .state(lifecycle_state)
+            ..seed
         })
         .await;
     if let Some(deadline) = deadline {

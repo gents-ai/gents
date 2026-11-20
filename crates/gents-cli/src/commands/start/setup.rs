@@ -118,18 +118,14 @@ fn parse_init_args(argv: &[String]) -> Result<InitArgs> {
 pub(super) async fn setup(
     home_given: Option<PathBuf>,
     store_key_custody: Option<StoreKeyCustodyArg>,
+    registry: Option<&str>,
 ) -> Result<PathBuf> {
     next_screen();
     eprintln!("Welcome to Gents. A few questions and this machine is ready.\n");
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let user_home = std::env::home_dir().context("resolving the user home directory")?;
-    let home_fixed = home_given.or_else(|| {
-        std::env::var_os("GENTS_HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    });
-    let folder_asked = home_fixed.is_none();
-    let home = match home_fixed {
+    let folder_asked = home_given.is_none();
+    let home = match home_given {
         Some(home) => crate::absolutize(home)?,
         None => {
             let default = crate::absolutize(resolve_home_dir(None))?;
@@ -153,6 +149,7 @@ pub(super) async fn setup(
     next_screen();
     let mut args = parse_init_args(&init_argv(&home, &tool_root))?;
     args.store_key_custody = store_key_custody;
+    args.registry = registry.map(str::to_owned);
     resolve_backend_interactively(&mut args, next_screen).await?;
 
     let initialized = init_home(args).await?;
@@ -166,8 +163,8 @@ pub(super) async fn setup(
 }
 
 /// Continues a setup that stopped before it installed every core pack.
-pub(super) async fn continue_setup(home: &Path) -> Result<()> {
-    default_packs::install_missing(home, gents_core_packs::archives()).await?;
+pub(super) async fn continue_setup(home: &Path, registry: Option<&str>) -> Result<()> {
+    default_packs::install_missing(home, gents_core_packs::archives(), registry).await?;
     default_packs::record_installed(home)
 }
 

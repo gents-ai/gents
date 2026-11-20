@@ -101,7 +101,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
 
     assert!(processor.has_observable_activity());
     use gents_inference::rendered_request::scope::{
-        arm, claim_pending, current_audit_sender, scope_request, RequestCaptureScope,
+        arm, claim_pending, current_audit_sender, RequestCaptureScope,
     };
     use gents_inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
@@ -121,8 +121,12 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
         },
         capture_sink,
     ));
-    scope_request(scope, async {
+    async {
+        let capture_scope = scope;
+        let capture = Some(&capture_scope);
+        processor = processor.with_capture(Some(capture_scope.clone()));
         let label = arm(
+            capture,
             gents_inference::rendered_request::CaptureScopeKind::Inference,
             0,
             0,
@@ -130,8 +134,8 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
         )
         .expect("arm exact inference capture");
         assert_eq!(label, "inference.1");
-        claim_pending().expect("claim exact inference capture");
-        let sender = current_audit_sender().expect("claimed audit sender");
+        claim_pending(capture).expect("claim exact inference capture");
+        let sender = current_audit_sender(capture).expect("claimed audit sender");
         let mut reservation = sender.reserve().await.expect("audit capacity");
         reservation
             .emit(ClaudeAuditEvent::Signature {
@@ -147,7 +151,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
             .persist_received_partial_turn("persist deadline-expired assistant turn")
             .await
             .unwrap());
-    })
+    }
     .await;
 
     let history = gents_session::session::load_history_with_access(
@@ -338,7 +342,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(
@@ -500,7 +504,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             Some("call-1".to_string()),
             "internal-1",
             r#"{"path":"/work/entry.c"}"#,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await,
         gents_inference::llm::ToolCallHookAction::Continue
@@ -519,10 +523,12 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     let mut wake = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "concurrent-notification-wake",
-        runtime_did.clone(),
-        user.did(),
-        &agent_did,
-        &session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            runtime_did.clone(),
+            user.did(),
+            &agent_did,
+            &session_id,
+        ),
         "Review background completion",
         "scheduled",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -552,12 +558,14 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         &access,
         &node,
         &notification_request,
-        "<tool-notification status=\"completed\" />",
-        "background-completion-notification:concurrent-tool:tool",
-        "Review background completion",
-        queue,
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "<tool-notification status=\"completed\" />",
+            message_key: "background-completion-notification:concurrent-tool:tool",
+            wake_content: "Review background completion",
+            queue,
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        },
     )
     .await
     .unwrap();
@@ -713,7 +721,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
                 Some(call_id.clone()),
                 &internal_id,
                 &args,
-                &gents_loop::tool::ToolCallEnvelope::ambient()
+                &gents_loop::tool::ToolCallEnvelope::default()
             )
             .await,
             gents_inference::llm::ToolCallHookAction::Continue
@@ -829,7 +837,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
             None,
             "call-1",
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     assert!(
@@ -1149,7 +1157,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             Some("call-1".to_string()),
             "internal-1",
             gents_store::test_support::CORRUPT_TOOL_ARGS_589,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await,
         gents_inference::llm::ToolCallHookAction::Continue

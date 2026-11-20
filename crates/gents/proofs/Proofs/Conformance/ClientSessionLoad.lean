@@ -19,7 +19,7 @@ def phaseName : Phase → String
   | .cached => "cached"
 
 def layerName : Layer → String
-  | .localDatabase => "localDatabase" | .p2p => "p2p" | .sessionSync => "sessionSync"
+  | .localDatabase => "localDatabase" | .sessionSync => "sessionSync"
   | .sync => "sync" | .runtime => "runtime" | .inference => "inference"
 
 def actionName : Option Action → String
@@ -32,7 +32,7 @@ def statusPhaseName : StatusPhase → String
   | .loading => "loading" | .blocked => "blocked" | .failed => "failed"
 
 def operationalLayerName : OperationalLayer → String
-  | .client => "client" | .selection => "selection" | .sync => "sync" | .p2p => "p2p"
+  | .client => "client" | .selection => "selection" | .sync => "sync"
   | .route => "route" | .runtime => "runtime" | .inference => "inference"
   | .reconcile => "reconcile"
 
@@ -84,7 +84,7 @@ def statusRows : List String :=
                               reread, blocker }
 
 def operationalLayers : List OperationalLayer :=
-  [.client, .selection, .sync, .p2p, .route, .runtime, .inference, .reconcile]
+  [.client, .selection, .sync, .route, .runtime, .inference, .reconcile]
 
 def operationalKinds : List OperationalKind := [.ready, .working, .waiting, .syncing, .blocked]
 

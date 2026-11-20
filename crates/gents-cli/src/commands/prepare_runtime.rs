@@ -26,7 +26,8 @@ pub async fn prepare_runtime_after_unlock(
         unreachable!("the explicit entry point selects runtime preparation");
     };
     args.serve.keychain_startup_approval = true;
-    let telemetry = gents_service::telemetry::init(crate::DEFAULT_LOG_FILTER)?;
+    let telemetry =
+        gents_service::telemetry::init(crate::DEFAULT_LOG_FILTER, args.serve.system_log)?;
     let result = gents_host::prepare_runtime::prepare(
         args,
         runtime,

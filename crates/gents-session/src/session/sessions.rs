@@ -581,54 +581,30 @@ pub async fn stage_session_relationships_in_txn(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn ensure_session_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    session_id: &str,
-    node_did: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-    title: Option<gents_protocol::session::SessionTitle>,
-    provenance: Option<gents_protocol::session::SessionProvenance>,
-    now: &str,
-) -> Result<bool> {
-    ensure_session_with_pending_in_txn(
-        txn,
-        session_id,
-        node_did,
-        agent_did,
-        requester_did,
-        title,
-        provenance,
-        now,
-        true,
-    )
-    .await
+/// The AgentSession a transaction ensures: its scope and Agent, and what a
+/// row it creates records.
+pub struct NewAgentSession<'a> {
+    pub session_id: &'a str,
+    pub node_did: &'a str,
+    pub agent_did: &'a str,
+    pub requester_did: Option<&'a str>,
+    pub title: Option<gents_protocol::session::SessionTitle>,
+    pub provenance: Option<gents_protocol::session::SessionProvenance>,
+    pub created_at: &'a str,
 }
 
-#[allow(clippy::too_many_arguments)]
+pub async fn ensure_session_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    session: NewAgentSession<'_>,
+) -> Result<bool> {
+    ensure_session_with_pending_in_txn(txn, session, true).await
+}
+
 pub(crate) async fn ensure_reserved_session_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    session_id: &str,
-    node_did: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-    title: Option<gents_protocol::session::SessionTitle>,
-    provenance: Option<gents_protocol::session::SessionProvenance>,
-    now: &str,
+    session: NewAgentSession<'_>,
 ) -> Result<bool> {
-    ensure_session_with_pending_in_txn(
-        txn,
-        session_id,
-        node_did,
-        agent_did,
-        requester_did,
-        title,
-        provenance,
-        now,
-        false,
-    )
-    .await
+    ensure_session_with_pending_in_txn(txn, session, false).await
 }
 
 /// Complete provenance for a session reserved earlier in this same transaction.
@@ -681,18 +657,20 @@ pub(crate) async fn finalize_reserved_runtime_session_in_txn(
     patch_session_in_txn(txn, session_doc, serde_json::json!({"provenance": origin})).await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn ensure_session_with_pending_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    session_id: &str,
-    node_did: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-    title: Option<gents_protocol::session::SessionTitle>,
-    mut provenance: Option<gents_protocol::session::SessionProvenance>,
-    now: &str,
+    session: NewAgentSession<'_>,
     relationships_pending: bool,
 ) -> Result<bool> {
+    let NewAgentSession {
+        session_id,
+        node_did,
+        agent_did,
+        requester_did,
+        title,
+        mut provenance,
+        created_at: now,
+    } = session;
     anyhow::ensure!(
         !session_id.trim().is_empty(),
         "session_id must be non-empty"

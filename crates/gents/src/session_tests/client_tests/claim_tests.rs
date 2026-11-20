@@ -1,10 +1,11 @@
 use super::*;
-use gents_protocol::request_admission::AgentRequestCreate;
+use gents_protocol::request_admission::{AgentRequestCreate, RequestScope};
 use gents_protocol::row::AgentRequest;
 use gents_session::request::admission::AgentRequestAdmissionVerifier;
 use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
-use gents_session::test_support::{grant_operator_user, seed_owned_agent, serve_client_node};
+use gents_session::test_support::{seed_owned_agent, serve_client_node};
 use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::test_support::grant_operator_user;
 
 #[tokio::test]
 async fn watcher_routes_native_private_requests_as_their_selected_agents() {
@@ -194,10 +195,12 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         let mut request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("{session_id}-request"),
-            runtime.did(),
-            &binding.agent_did,
-            &binding.agent_did,
-            session_id,
+            RequestScope::new(
+                runtime.did(),
+                &binding.agent_did,
+                &binding.agent_did,
+                session_id,
+            ),
             "autonomous work",
             "interactive",
             "2026-11-04T00:00:00Z",
@@ -317,7 +320,9 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         claim, claim_paused, claim_unavailable, execute_claimed, prepare, read_receipt,
         recover_claim, submit, ClaimPause,
     };
-    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        publish_accepted_on_claimed_request, AcceptedFixtureCall,
+    };
 
     let grant_cases = gents_lean_vocab::families::native_refinement_grant_scenario::cases();
     let mut publications = Vec::new();
@@ -362,10 +367,12 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "tool-control-request",
-        runtime.did(),
-        user.did(),
-        &binding.agent_did,
-        "tool-control-session",
+        RequestScope::new(
+            runtime.did(),
+            user.did(),
+            &binding.agent_did,
+            "tool-control-session",
+        ),
         "run",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -443,12 +450,14 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         node.clone(),
         &mut lifecycle,
         runtime.did(),
-        0,
-        "bash",
-        "control-call",
-        serde_json::json!({"command":"work"}),
-        AwaitMode::Background,
-        false,
+        AcceptedFixtureCall {
+            turn: 0,
+            tool_name: "bash",
+            tool_call_id: "control-call",
+            arguments: serde_json::json!({"command":"work"}),
+            await_mode: AwaitMode::Background,
+            start_running: false,
+        },
     )
     .await
     .unwrap();
@@ -826,7 +835,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
             execute_claimed(
                 &node,
                 &agent_access,
-                &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
                 &agent,
                 failed_claim,
             ),
@@ -897,7 +906,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         execute_claimed(
             &node,
             &agent_access,
-            &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
             &agent,
             recovered
         )
@@ -965,7 +974,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         execute_claimed(
             &node,
             &agent_access,
-            &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
             &agent,
             retained
         )

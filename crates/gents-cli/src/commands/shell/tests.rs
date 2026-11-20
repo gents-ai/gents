@@ -10,7 +10,8 @@ use gents_pack::pack::PackChangeError;
 use gents_pack::plugin::authority::GrantError;
 use gents_protocol::output::MessageRole;
 use gents_protocol::row::AgentRequestRow;
-use gents_shell::app::{App, ChatLine};
+use gents_shell::app::transcript::ChatLine;
+use gents_shell::app::App;
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone, View};
 use gents_shell::source::{
@@ -2404,6 +2405,7 @@ pub(super) fn home_serving(
                     tool_root: None,
                     store_encryption: None,
                     document_acp: Default::default(),
+                    client_identity: None,
                 },
             )
             .unwrap();
@@ -4693,7 +4695,7 @@ async fn changing_the_default_agent_enables_it() {
     let (node, work, home) = served(config).await;
     let access = work.access();
     let scout = || async {
-        let state = gents_desktop_core::inference::load_inference_setup_state(&access, OWNER);
+        let state = gents_observe::client_inference::load_inference_setup_state(&access, OWNER);
         let agents = state.await.unwrap().agents;
         let scout = agents
             .into_iter()

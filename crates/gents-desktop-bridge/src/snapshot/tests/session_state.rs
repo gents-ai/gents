@@ -256,7 +256,7 @@ fn session_snapshot_projection_matches_the_lean_model() {
             })
             .expect("selected case row");
         let refs = rows.iter().collect::<Vec<_>>();
-        let answer = gents_desktop_core::client::request_answer_owner(&refs, selected);
+        let answer = gents_observe::client_projection::store::request_answer_owner(&refs, selected);
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
                 "session-1",
@@ -316,7 +316,8 @@ fn session_snapshot_projection_matches_the_lean_model() {
             .collect::<Vec<_>>();
         let bounded_refs = bounded_rows.iter().collect::<Vec<_>>();
         assert_eq!(
-            gents_desktop_core::client::request_answer_owner(&bounded_refs, selected).doc_id,
+            gents_observe::client_projection::store::request_answer_owner(&bounded_refs, selected)
+                .doc_id,
             answer.doc_id,
             "{} bounded read closure retains the answer owner",
             input.name
@@ -455,23 +456,27 @@ fn requester_scope_does_not_cross_canonical_output_facts() {
     };
     push_canonical_text_message_for_node(
         &mut rows,
-        "owner",
-        "session-1",
-        None,
-        1,
-        MessageRole::User,
-        "owner prompt",
+        CanonicalText {
+            doc_id: "owner",
+            session_id: "session-1",
+            request_doc_id: None,
+            sequence: 1,
+            role: MessageRole::User,
+            text: "owner prompt",
+        },
         "did:test:amy",
         None,
     );
     push_canonical_text_message_for_node(
         &mut rows,
-        "other",
-        "session-1",
-        None,
-        2,
-        MessageRole::User,
-        "other prompt",
+        CanonicalText {
+            doc_id: "other",
+            session_id: "session-1",
+            request_doc_id: None,
+            sequence: 2,
+            role: MessageRole::User,
+            text: "other prompt",
+        },
         "did:test:amy",
         Some("did:test:other"),
     );

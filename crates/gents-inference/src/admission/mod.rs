@@ -5,17 +5,12 @@ mod permit;
 mod persistence;
 mod recovery;
 mod registry;
+mod resumed;
 mod slot_accounting;
 pub(crate) mod stream_guard;
 
-pub(crate) use client::{
-    current_call_join, current_session_id, scope_backend, AdmissionError, AdmittedCallError,
-};
-pub use client::{
-    scope_call, scope_call_with_join, scope_call_with_token_and_failure_reason, scope_request,
-    set_terminal_failure_reason, terminal_failure_reason_observer,
-};
-pub use client::{AdmissionCallContext, AdmittedCompletionModel, CallKind};
+pub use client::AdmittedCompletionModel;
+pub(crate) use client::{AdmissionError, AdmittedCallError};
 pub(crate) use config::backend_connection_fingerprint;
 pub use config::exportable_backend_fingerprint;
 pub use config::BackendAvailability;
@@ -23,6 +18,7 @@ pub use config::{document_configured_from_fields, BackendAdmissionConfig};
 pub(crate) use persistence::ProviderCallUsage;
 pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub use registry::AdmissionRegistry;
+pub use resumed::last_recorded_call_seq;
 pub use slot_accounting::call_state_holds_backend_slot;
 
 /// The recovery and persistence owners' items that full-request tests above

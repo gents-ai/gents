@@ -197,24 +197,26 @@ async fn enqueue_generated_wake(
         access,
         node,
         parent,
-        &format!("notification {}", entry.request_id),
-        &format!(
-            "background-completion-notification:{}:{}",
-            case.name, entry.request_id
-        ),
-        "review notifications",
-        RequestQueue {
-            delivery: Default::default(),
-            position: None,
-            source,
-            policy,
-            key: Some(format!("background_completion:{key}")),
-            queued_after_request_id: entry.queued_after.map(|id| id.to_string()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
+        crate::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: &format!("notification {}", entry.request_id),
+            message_key: &format!(
+                "background-completion-notification:{}:{}",
+                case.name, entry.request_id
+            ),
+            wake_content: "review notifications",
+            queue: RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source,
+                policy,
+                key: Some(format!("background_completion:{key}")),
+                queued_after_request_id: entry.queued_after.map(|id| id.to_string()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            },
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         },
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap()
@@ -726,21 +728,23 @@ async fn interrupted_queue_drain_rolls_back_with_latch(case: &ModeledCase) {
         &fixture.agent_access,
         &node,
         parent,
-        "notification",
-        "background-completion-notification:rollback:tool",
-        "review notifications",
-        RequestQueue {
-            delivery: Default::default(),
-            position: None,
-            source: QueueSource::BackgroundCompletion,
-            policy: QueuePolicy::Coalesce,
-            key: Some("background_completion:900".into()),
-            queued_after_request_id: Some(parent.request_id.clone()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
+        crate::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "notification",
+            message_key: "background-completion-notification:rollback:tool",
+            wake_content: "review notifications",
+            queue: RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source: QueueSource::BackgroundCompletion,
+                policy: QueuePolicy::Coalesce,
+                key: Some("background_completion:900".into()),
+                queued_after_request_id: Some(parent.request_id.clone()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            },
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         },
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap()

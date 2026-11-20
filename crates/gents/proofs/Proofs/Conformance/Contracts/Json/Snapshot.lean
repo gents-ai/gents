@@ -1,3 +1,4 @@
+import Proofs.Conformance.ClientDelegation
 import Proofs.Conformance.BackendPreflight
 import Proofs.Conformance.Identity.SessionChild
 import Proofs.Conformance.RemoteDelivery
@@ -99,6 +100,7 @@ import Proofs.Conformance.Identity.WorkspaceCapability
 import Proofs.Conformance.Identity.MailboxAccess
 import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
 import Proofs.Conformance.Identity.NodeProvisioning
+import Proofs.Conformance.Identity.RuntimeUse
 import Proofs.Conformance.Identity.WorkspaceRootAccess
 import Proofs.Conformance.HomeResolution
 import Proofs.Conformance.GraphqlName
@@ -209,6 +211,7 @@ import Proofs.Conformance.SessionQueueOrderCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
+import Proofs.Conformance.EditorUndoCheckpoint
 import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.EnrollmentInvite
 import Proofs.Conformance.WorkspacePermissionResolution
@@ -245,6 +248,10 @@ import Proofs.Conformance.HomeRetirement
 import Proofs.Conformance.StoreHandoff
 import Proofs.Conformance.StoreKeyCustody
 import Proofs.Conformance.DocumentAcpChoice
+import Proofs.Conformance.UserDelegation
+import Proofs.Conformance.OwedRegistration
+import Proofs.Conformance.HeldAudience
+import Proofs.Conformance.NodePublication
 import Proofs.Conformance.BackgroundExecutionRegistry
 import Proofs.Conformance.BackgroundWaitChange
 import Proofs.Conformance.InvocationReply
@@ -390,12 +397,23 @@ def snapshotPromptTailJson : String :=
   ""
 
 set_option maxHeartbeats 2000000 in
-/-- Every family's schema elaborates in one list term, whose definitional
-checks grow with the family count past the default heartbeat budget. -/
+private def functionEntries : List (String × Lean.Json) :=
+  conformance_function_entries%
+
+set_option maxHeartbeats 2000000 in
+private def familyEntries : List (String × Lean.Json) :=
+  conformance_family_entries%
+
+def snapshotFamiliesJson : String :=
+  (Lean.Json.mkObj (functionEntries ++ familyEntries)).compress
+
+def snapshotVocabulariesJson : String :=
+  (conformance_vocabularies%).compress
+
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"families\":" ++ (conformance_families%).compress ++ ","
-    ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
+    ++ "\"families\":" ++ snapshotFamiliesJson ++ ","
+    ++ "\"family_vocabularies\":" ++ snapshotVocabulariesJson ++ ","
 
 def snapshotCoverageTailJson : String :=
   ""

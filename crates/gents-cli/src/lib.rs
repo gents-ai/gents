@@ -108,7 +108,7 @@ Examples:
   gents init --backend-preset claude-cli-subscription   # then: gents accounts login claude
   gents init --write
   gents init --yolo
-  gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
+  gents init --inference-url http://HOST:PORT/v1 --model-name MODEL --write
   gents init --defra-query-collection AgentRequest
   gents init --identity-only
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
@@ -338,6 +338,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                 commands::start::StartArgs {
                     home: cli.home,
                     store_key_custody: cli.store_key_custody,
+                    registry: cli.registry,
                     agent: cli.agent,
                     print: cli.print,
                     steer: cli.steer,
@@ -359,7 +360,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(Command::Shell(args)) => return commands::start::shell(args, runtime).await,
         Some(command) => command,
     };
-    gents_tools::native::enable_self_runner();
     if let Command::Utils {
         command: UtilsCommand::Eval { command },
     } = &command
@@ -390,7 +390,15 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     if let Some(home) = read_only_home {
         gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
     }
-    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
+    let system_log = match &command {
+        Command::Server(args) => args.system_log,
+        Command::Runtime {
+            command: RuntimeCommand::Server(args),
+        } => args.system_log,
+        Command::PrepareRuntime(args) => args.serve.system_log,
+        _ => false,
+    };
+    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER, system_log)?;
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
@@ -552,6 +560,20 @@ fn absolutize(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
+pub(crate) fn host_executable() -> Option<PathBuf> {
+    std::env::current_exe().ok()
+}
+
+pub(crate) fn embedded_runtime_options() -> gents::DocumentRuntimeOptions {
+    gents::DocumentRuntimeOptions {
+        native_executables: gents_tools::native::NativeExecutables {
+            host: host_executable(),
+            fs_runner: None,
+        },
+        ..Default::default()
+    }
+}
+
 /// A path as one shell word, for a command printed for a person to paste. Only an
 /// interior NUL cannot be quoted, and no path has one.
 pub(crate) fn shell_word(path: &Path) -> String {
@@ -579,12 +601,6 @@ pub(crate) async fn resolve_config_access_under_plugin_store(
         resolve_config_access_inner(Some(home), None, false, Some(guard)).await?;
     Ok((access, home))
 }
-
-/// How long an offline command waits for a previous holder of the home's
-/// store that declared its release, such as the node an earlier command in
-/// this process shut down (Lean `StoreHandoff.decide`); a serving runtime is
-/// refused at once.
-const OFFLINE_STORE_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub(crate) async fn resolve_pack_config_access(
     home: Option<&Path>,
@@ -627,6 +643,11 @@ async fn resolve_config_access_inner(
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
             let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql).await?;
+            gents_store::config_client::owed::spawn_settlement(
+                endpoint.clone(),
+                runtime_state.node_did,
+                |failed| tracing::warn!("{failed}"),
+            );
             return Ok((
                 ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
                 home_dir,
@@ -649,7 +670,7 @@ async fn resolve_config_access_inner(
     let claim = gents_store::local::home::acquire_store(
         &home_dir,
         &data_dir,
-        OFFLINE_STORE_RELEASE_WAIT,
+        gents_store::local::home::STORE_RELEASE_WAIT,
     )
     .await
     .map_err(|error| {
@@ -720,6 +741,12 @@ async fn resolve_config_access_inner(
             .await?
         }
     };
+    let endpoint = endpoint.with_reported_delegation_audience(
+        gents_store::local::document_acp::status_reports(
+            config.document_acp,
+            gents_store::local::document_acp::node_delegation_audience(&node),
+        ),
+    )?;
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
         node.clone(),
@@ -728,7 +755,7 @@ async fn resolve_config_access_inner(
     )?
     .with_client_signed_writes_through(endpoint.clone())?;
     let local_endpoint = local_http.then_some(endpoint);
-    gents_store::schema::migration::ensure_all_runtime_migrations(migration_node)
+    gents_store::schema::catalog::ensure_runtime_owned(migration_node)
         .await
         .map_err(|error| {
             gents_store::local::storage_backend::classify_store_error(error, &data_dir)
@@ -746,7 +773,9 @@ pub(crate) async fn persistent_node_builder(
     gents_store::local::storage_backend::reject_legacy_store(data_dir)?;
     let key = gents_store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
     Ok(gents_store::local::store_key::persistent_builder(
-        data_dir, &key,
+        data_dir,
+        &key,
+        gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
     )?)
 }
 
@@ -898,6 +927,7 @@ mod tests {
                     .unwrap(),
                 ),
                 document_acp: Default::default(),
+                client_identity: None,
             },
         )
         .unwrap();
@@ -958,6 +988,7 @@ mod tests {
                     .unwrap(),
                 ),
                 document_acp: Default::default(),
+                client_identity: None,
             },
         )
         .unwrap();
@@ -978,9 +1009,11 @@ mod tests {
     /// its config, store key and a fresh protected store whose provenance
     /// names the runtime.
     async fn initialized_home_with_store(temp: &Path) -> PathBuf {
-        gents_service::home_state::client_identity_for_new_node()
-            .await
-            .unwrap();
+        let client = gents_service::home_state::client_identity_for_new_node(
+            &gents_service::home_state::default_cli_identity_paths().unwrap(),
+        )
+        .await
+        .unwrap();
         let home = initialized_home(temp);
         let config = read_init_config(&home).unwrap().unwrap();
         let identity = load_initialized_home_identity(&home, &config).unwrap();
@@ -996,6 +1029,7 @@ mod tests {
             .initialize(
                 &key,
                 &identity,
+                &identity::Did::new(client.did()).unwrap(),
                 gents_store::local::document_acp::DocumentAcp::Local,
             )
             .await
@@ -1075,9 +1109,11 @@ mod tests {
 
     #[tokio::test]
     async fn an_offline_access_refuses_an_unfinished_vera_home_without_writing_to_it() {
-        gents_service::home_state::client_identity_for_new_node()
-            .await
-            .unwrap();
+        gents_service::home_state::client_identity_for_new_node(
+            &gents_service::home_state::default_cli_identity_paths().unwrap(),
+        )
+        .await
+        .unwrap();
         let temp = tempfile::tempdir().unwrap();
         let home = initialized_home(temp.path());
         let mut config = read_init_config(&home).unwrap().unwrap();

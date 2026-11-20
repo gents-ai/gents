@@ -4,7 +4,9 @@ use anyhow::Result;
 use gents_store::graphql::rows;
 use serde_json::Value;
 
-use super::enrollment_projection::project_desktop_approval;
+use super::enrollment_projection::{
+    project_desktop_approval, DesktopApprovalRows, DurableEnrollmentRows, LocalPeer,
+};
 use super::enrollment_projection::{ApprovedStatusEnrollment, DesktopApprovalProjection};
 use super::enrollment_rows::{
     EnrollmentDecisionRow, EnrollmentPinRow, EnrollmentRequestRow, EnrollmentRevisionRow,
@@ -319,13 +321,19 @@ async fn project_status_enrollment_response(
         let server_peer = request_row.server_peer.clone();
         match project_desktop_approval(
             request_row,
-            &requests,
-            &decisions,
-            &revisions,
-            &receipts,
-            &pins,
-            principal,
-            local_peer_id,
+            DesktopApprovalRows {
+                durable: DurableEnrollmentRows {
+                    requests: &requests,
+                    decisions: &decisions,
+                    revisions: &revisions,
+                },
+                receipts: &receipts,
+                pins: &pins,
+            },
+            LocalPeer {
+                principal,
+                peer_id: local_peer_id,
+            },
         )
         .await
         {

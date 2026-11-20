@@ -124,11 +124,11 @@ pub async fn spawn_observed_server(
     port: u16,
     args: &[&str],
     configured: SocketAddr,
-) -> Result<(ServeProcess, Value)> {
+) -> Result<(ServeProcess, u16, Value)> {
     use std::time::Duration;
     const LOG: &str = "warn,p2p::iroh::endpoint_config=info";
     let registered_home = home.to_owned();
-    let registered_gents_home = support::process::served_home_dir(home, args, &[("RUST_LOG", LOG)]);
+    let registered_gents_home = support::process::served_home_dir(home, args);
     let owned_home = home.to_owned();
     let owned_args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
     let mut serve = tokio::task::spawn_blocking(move || {
@@ -193,7 +193,7 @@ pub async fn spawn_observed_server(
     let diagnostic = tokio::fs::read_to_string(stderr).await?;
     ensure!(diagnostic.contains("automatic port mapping disabled: gateway discovery cannot be scoped to the selected address"),
         "the concrete-bind port-mapping diagnostic is absent: {diagnostic}");
-    Ok((serve, readiness))
+    Ok((serve, port, readiness))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -202,14 +202,14 @@ pub async fn spawn_observed_server(
     port: u16,
     args: &[&str],
     configured: SocketAddr,
-) -> Result<(ServeProcess, Value)> {
+) -> Result<(ServeProcess, u16, Value)> {
     let home = home.to_owned();
     let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-    let (serve, readiness) = tokio::task::spawn_blocking(move || {
+    let (serve, port, readiness) = tokio::task::spawn_blocking(move || {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        support::spawn_server_with_ready_json(&home, port, &args, &[])
+        support::spawn_server_with_ready_json_recovering(&home, port, &args, &[])
     })
     .await??;
     reported_socket(&readiness, configured)?;
-    Ok((serve, readiness))
+    Ok((serve, port, readiness))
 }

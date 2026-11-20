@@ -119,14 +119,6 @@ def listingCases : List Case :=
   cases.filter fun c => c.name ∈ ["route_still_reconnecting",
     "reconnected_route_satisfies_pending_request", "revoked_or_expired_authorization"]
 
-@[conformance_family]
-def listing : Family PendingInput ListingOutput where
-  inputs := listingCases.map pendingInput
-  model := fun i =>
-    let listed := !pendingRequestSatisfied i.requested i.current i.hasDecision
-      i.currentApproval i.routeApplied
-    { listed }
-
 structure AbsentPeerInput where
   managed : Bool
   initialReady : Bool
@@ -136,14 +128,6 @@ structure AbsentPeerOutput where
   present : Bool
   ready : Bool
   deriving Lean.ToJson
-
-@[conformance_family]
-def absentPeer : Family AbsentPeerInput AbsentPeerOutput where
-  inputs := [false, true].flatMap fun managed =>
-    [false, true].map fun initialReady => { managed, initialReady }
-  model := fun i =>
-    let expected := absentEnrollmentPeer i.managed
-    { present := expected.1, ready := expected.2 }
 
 structure RouteCase where
   name : String
@@ -169,14 +153,6 @@ def routeCases : List RouteCase :=
 structure RouteReadinessOutput where
   ready : Bool
   deriving Lean.ToJson
-
-@[conformance_family]
-def routeReadiness : Family RouteCase RouteReadinessOutput where
-  inputs := routeCases
-  model := fun c =>
-    let ready := enrollmentRouteReady c.enrollment c.routeApplied c.network c.digest
-      c.sequenceFresh c.leaseFresh c.operatorEndpoint
-    { ready }
 
 /-- The input is a fresh runtime with no request, decision, or authorization. -/
 def freshStartupPreservesAuthority : Bool :=

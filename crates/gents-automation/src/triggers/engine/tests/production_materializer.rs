@@ -172,20 +172,20 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     task.task_id = prepared.receipt.task_id.clone();
     task.agent_did = agent.agent_did.clone();
     materializer
-        .materialize(
-            &task,
-            Some("authority-trigger"),
-            TriggerKind::Schedule,
-            Some("authority-trigger-document"),
-            None,
-            None,
-            None,
-            "work",
-            None,
-            &prepared.receipt.fire_key,
-            Some(&prepared),
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("authority-trigger"),
+            trigger_kind: TriggerKind::Schedule,
+            trigger_doc_id: Some("authority-trigger-document"),
+            source_doc_id: None,
+            correlation: None,
+            trigger_context: None,
+            rendered_prompt: "work",
+            rendered_goal_objective: None,
+            durable_fire_key: &prepared.receipt.fire_key,
+            delivery: Some(&prepared),
+            prepared_ids: None,
+        })
         .await
         .unwrap();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -217,17 +217,21 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         .transact_write("test.task_session", move |txn| {
             let request = session_request.clone();
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
-                    txn,
-                    &request.session_id,
-                    &request.node_did,
-                    &request.agent_did,
-                    request.requester_did.as_deref(),
-                    None,
+                let provenance =
                     gents_session::request::lifecycle::materialize::created_session_provenance(
                         &request,
-                    ),
-                    &request.created_at,
+                    );
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    gents_session::session::NewAgentSession {
+                        session_id: &request.session_id,
+                        node_did: &request.node_did,
+                        agent_did: &request.agent_did,
+                        requester_did: request.requester_did.as_deref(),
+                        title: None,
+                        provenance,
+                        created_at: &request.created_at,
+                    },
                 )
                 .await
             })
@@ -389,17 +393,21 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         .transact_write("test.wrong_requester_session", move |txn| {
             let request = original_request.clone();
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
-                    txn,
-                    &request.session_id,
-                    &request.node_did,
-                    &request.agent_did,
-                    Some("did:wrong:requester"),
-                    None,
+                let provenance =
                     gents_session::request::lifecycle::materialize::created_session_provenance(
                         &request,
-                    ),
-                    &request.created_at,
+                    );
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    gents_session::session::NewAgentSession {
+                        session_id: &request.session_id,
+                        node_did: &request.node_did,
+                        agent_did: &request.agent_did,
+                        requester_did: Some("did:wrong:requester"),
+                        title: None,
+                        provenance,
+                        created_at: &request.created_at,
+                    },
                 )
                 .await
             })
@@ -496,16 +504,18 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                 Box::pin(async move {
                     gents_session::session::ensure_session_in_txn(
                         txn,
-                        &session,
-                        &node_did,
-                        &agent_did,
-                        requester.as_deref(),
-                        None,
-                        Some(gents_protocol::session::SessionProvenance {
-                            opening_request_doc_id: Some(opening),
-                            ..Default::default()
-                        }),
-                        "2030-01-01T00:00:00Z",
+                        gents_session::session::NewAgentSession {
+                            session_id: &session,
+                            node_did: &node_did,
+                            agent_did: &agent_did,
+                            requester_did: requester.as_deref(),
+                            title: None,
+                            provenance: Some(gents_protocol::session::SessionProvenance {
+                                opening_request_doc_id: Some(opening),
+                                ..Default::default()
+                            }),
+                            created_at: "2030-01-01T00:00:00Z",
+                        },
                     )
                     .await
                 })
@@ -563,20 +573,22 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     let identity = crate::goal::task_goal_fire_identity(&node_did, &task.task_id, fire_key);
 
     let invalid = materializer
-        .materialize(
-            &task,
-            Some("release-trigger"),
-            TriggerKind::Event,
-            Some("release-trigger-doc"),
-            Some("release-42"),
-            Some("batch-7"),
-            Some(r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#),
-            "implement release",
-            Some("   "),
-            fire_key,
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("release-trigger"),
+            trigger_kind: TriggerKind::Event,
+            trigger_doc_id: Some("release-trigger-doc"),
+            source_doc_id: Some("release-42"),
+            correlation: Some("batch-7"),
+            trigger_context: Some(
+                r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#,
+            ),
+            rendered_prompt: "implement release",
+            rendered_goal_objective: Some("   "),
+            durable_fire_key: fire_key,
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect_err("an invalid declaration must roll back before publication");
     assert!(invalid.to_string().contains("non-empty"), "{invalid:#}");
@@ -599,20 +611,22 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         gents_store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
             || async {
                 materializer
-                    .materialize(
-                        &task,
-                        Some("release-trigger"),
-                        TriggerKind::Event,
-                        Some("release-trigger-doc"),
-                        Some("release-42"),
-                        Some("batch-7"),
-                        Some(r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#),
-                        "implement release",
-                        Some("ship release"),
-                        fire_key,
-                        None,
-                        None,
-                    )
+                    .materialize(FireMaterialization {
+                        task: &task,
+                        trigger_id: Some("release-trigger"),
+                        trigger_kind: TriggerKind::Event,
+                        trigger_doc_id: Some("release-trigger-doc"),
+                        source_doc_id: Some("release-42"),
+                        correlation: Some("batch-7"),
+                        trigger_context: Some(
+                            r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#,
+                        ),
+                        rendered_prompt: "implement release",
+                        rendered_goal_objective: Some("ship release"),
+                        durable_fire_key: fire_key,
+                        delivery: None,
+                        prepared_ids: None,
+                    })
                     .await
             },
             || async {
@@ -629,20 +643,22 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         "Goal, creation claim, signed request, and physical root share one commit"
     );
     let retry = materializer
-        .materialize(
-            &task,
-            Some("release-trigger"),
-            TriggerKind::Event,
-            Some("release-trigger-doc"),
-            Some("release-42"),
-            Some("batch-7"),
-            Some(r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#),
-            "implement release",
-            Some("ship release"),
-            fire_key,
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("release-trigger"),
+            trigger_kind: TriggerKind::Event,
+            trigger_doc_id: Some("release-trigger-doc"),
+            source_doc_id: Some("release-42"),
+            correlation: Some("batch-7"),
+            trigger_context: Some(
+                r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#,
+            ),
+            rendered_prompt: "implement release",
+            rendered_goal_objective: Some("ship release"),
+            durable_fire_key: fire_key,
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect("exact fire retry");
     assert_eq!(first, identity.request_id);
@@ -829,20 +845,20 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         let scheduled_identity =
             crate::goal::task_goal_fire_identity(&node_did, &scheduled.task_id, &modeled.fire_key);
         let published = materializer
-            .materialize(
-                &scheduled,
-                Some("schedule-goal"),
-                TriggerKind::Schedule,
-                Some("schedule-goal-doc"),
-                None,
-                None,
-                None,
-                "scheduled work",
-                modeled.goal_objective.as_deref(),
-                &modeled.fire_key,
-                None,
-                None,
-            )
+            .materialize(FireMaterialization {
+                task: &scheduled,
+                trigger_id: Some("schedule-goal"),
+                trigger_kind: TriggerKind::Schedule,
+                trigger_doc_id: Some("schedule-goal-doc"),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+                rendered_prompt: "scheduled work",
+                rendered_goal_objective: modeled.goal_objective.as_deref(),
+                durable_fire_key: &modeled.fire_key,
+                delivery: None,
+                prepared_ids: None,
+            })
             .await;
         let published_ok = published.is_ok();
         let request_id = published.unwrap();
@@ -991,20 +1007,20 @@ async fn goal_task_replay_traces_match_the_lean_admission_model() {
         task.agent_did = agent_did.clone();
         task.goal_objective_template = prepared.receipt.goal_objective.clone();
         let publish = || {
-            materializer.materialize(
-                &task,
-                Some("replay-goal-trigger"),
-                TriggerKind::Schedule,
-                Some("replay-goal-trigger-document"),
-                None,
-                None,
-                None,
-                "Finish the task",
-                Some("Finish the task"),
-                &prepared.receipt.fire_key,
-                Some(&prepared),
-                None,
-            )
+            materializer.materialize(FireMaterialization {
+                task: &task,
+                trigger_id: Some("replay-goal-trigger"),
+                trigger_kind: TriggerKind::Schedule,
+                trigger_doc_id: Some("replay-goal-trigger-document"),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+                rendered_prompt: "Finish the task",
+                rendered_goal_objective: Some("Finish the task"),
+                durable_fire_key: &prepared.receipt.fire_key,
+                delivery: Some(&prepared),
+                prepared_ids: None,
+            })
         };
 
         let query = format!(
@@ -1146,20 +1162,20 @@ async fn materialize_recovery_fire(
     fire_key: &str,
 ) -> String {
     materializer
-        .materialize(
+        .materialize(FireMaterialization {
             task,
-            Some("shared-trigger"),
-            TriggerKind::Schedule,
-            Some("shared-trigger-doc"),
-            None,
-            None,
-            None,
-            "shared prompt",
-            Some("shared objective"),
-            fire_key,
-            None,
-            None,
-        )
+            trigger_id: Some("shared-trigger"),
+            trigger_kind: TriggerKind::Schedule,
+            trigger_doc_id: Some("shared-trigger-doc"),
+            source_doc_id: None,
+            correlation: None,
+            trigger_context: None,
+            rendered_prompt: "shared prompt",
+            rendered_goal_objective: Some("shared objective"),
+            durable_fire_key: fire_key,
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect("goal Task materialization")
 }
@@ -1213,10 +1229,12 @@ async fn goal_task_fire_recovery_matches_the_lean_recovery_model() {
                 let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
                     gents_protocol::request_admission::RequestPurpose::Normal,
                     &identity.request_id,
-                    foreign.node_did(),
-                    &agent_did,
-                    &agent_did,
-                    &identity.session_id,
+                    gents_protocol::request_admission::RequestScope::new(
+                        foreign.node_did(),
+                        &agent_did,
+                        &agent_did,
+                        &identity.session_id,
+                    ),
                     "foreign collision",
                     "interactive",
                     "2026-11-04T00:00:00Z",
@@ -1385,20 +1403,20 @@ async fn group_marker_is_read_by_selected_held_agent_without_unrelated_reader_vi
     let next =
         gents_protocol::trigger_delivery::durable_fire_key("event-group", &["generation-two"]);
     let request_id = materializer
-        .materialize(
-            &task,
-            Some(trigger_id),
-            TriggerKind::Event,
-            Some("trigger-doc"),
-            Some("source-doc"),
-            Some("correlation"),
-            None,
-            "work",
-            None,
-            &key,
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some(trigger_id),
+            trigger_kind: TriggerKind::Event,
+            trigger_doc_id: Some("trigger-doc"),
+            source_doc_id: Some("source-doc"),
+            correlation: Some("correlation"),
+            trigger_context: None,
+            rendered_prompt: "work",
+            rendered_goal_objective: None,
+            durable_fire_key: &key,
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect("publish selected Agent's group request");
     let query = format!(
@@ -1647,20 +1665,20 @@ async fn workspace_fires_follow_the_lean_model() {
             let trigger = format!("trigger-fire-{index}-{fire_index}");
             triggers.insert(trigger.clone(), fire_index as u64);
             let result = materializer
-                .materialize(
-                    &workspace_writer_task(&agent_did),
-                    Some(&trigger),
-                    TriggerKind::Event,
-                    Some(&format!("{trigger}-doc")),
-                    Some("source"),
-                    Some("corr"),
-                    Some(&context),
-                    "prompt",
-                    None,
-                    &format!("test-fire-{index}-{fire_index}"),
-                    None,
-                    None,
-                )
+                .materialize(FireMaterialization {
+                    task: &workspace_writer_task(&agent_did),
+                    trigger_id: Some(&trigger),
+                    trigger_kind: TriggerKind::Event,
+                    trigger_doc_id: Some(&format!("{trigger}-doc")),
+                    source_doc_id: Some("source"),
+                    correlation: Some("corr"),
+                    trigger_context: Some(&context),
+                    rendered_prompt: "prompt",
+                    rendered_goal_objective: None,
+                    durable_fire_key: &format!("test-fire-{index}-{fire_index}"),
+                    delivery: None,
+                    prepared_ids: None,
+                })
                 .await;
             let outcome = match &result {
                 Ok(_) => "published",
@@ -1909,37 +1927,37 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     let fire_key = "event:trigger-workspace-goal:doc:source-workspace-goal";
 
     let first = materializer
-        .materialize(
-            &task,
-            Some("trigger-workspace-goal"),
-            TriggerKind::Event,
-            Some("trigger-workspace-goal-doc"),
-            Some("source-workspace-goal"),
-            Some("corr-workspace-goal"),
-            Some(&context),
-            "prompt",
-            Some("finish workspace change"),
-            fire_key,
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("trigger-workspace-goal"),
+            trigger_kind: TriggerKind::Event,
+            trigger_doc_id: Some("trigger-workspace-goal-doc"),
+            source_doc_id: Some("source-workspace-goal"),
+            correlation: Some("corr-workspace-goal"),
+            trigger_context: Some(&context),
+            rendered_prompt: "prompt",
+            rendered_goal_objective: Some("finish workspace change"),
+            durable_fire_key: fire_key,
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect("first goal-backed workspace fire");
     let retry = materializer
-        .materialize(
-            &task,
-            Some("trigger-workspace-goal"),
-            TriggerKind::Event,
-            Some("trigger-workspace-goal-doc"),
-            Some("source-workspace-goal"),
-            Some("corr-workspace-goal"),
-            Some(&context),
-            "prompt",
-            Some("finish workspace change"),
-            fire_key,
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("trigger-workspace-goal"),
+            trigger_kind: TriggerKind::Event,
+            trigger_doc_id: Some("trigger-workspace-goal-doc"),
+            source_doc_id: Some("source-workspace-goal"),
+            correlation: Some("corr-workspace-goal"),
+            trigger_context: Some(&context),
+            rendered_prompt: "prompt",
+            rendered_goal_objective: Some("finish workspace change"),
+            durable_fire_key: fire_key,
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect("activation acknowledgement retry");
 
@@ -2301,13 +2319,15 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                     } else {
                         gents_session::session::ensure_session_in_txn(
                             txn,
-                            target,
-                            node_did,
-                            agent,
-                            Some(owner.as_str()),
-                            None,
-                            None,
-                            &chrono::Utc::now().to_rfc3339(),
+                            gents_session::session::NewAgentSession {
+                                session_id: target,
+                                node_did,
+                                agent_did: agent,
+                                requester_did: Some(owner.as_str()),
+                                title: None,
+                                provenance: None,
+                                created_at: &chrono::Utc::now().to_rfc3339(),
+                            },
                         )
                         .await
                         .map(|_| ())

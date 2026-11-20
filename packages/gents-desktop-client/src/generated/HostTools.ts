@@ -16,4 +16,17 @@ export type HostTools = {
  * still apply; cwd itself is not a sandbox. Hook-driven workspace switching
  * remains a design TODO, not an implicit effect of command output.
  */
-root?: string | null, files?: FileTools | null, bash?: BashTools | null, cli?: Array<CliTool> | null, };
+root?: string | null, files?: FileTools | null, bash?: BashTools | null, cli?: Array<CliTool> | null,
+/**
+ * Bytes of workspace instruction text (AGENTS.md) this Agent places in
+ * provider context, across every file found. Unset uses 32 KiB. Must be
+ * between 1 and 262,144.
+ */
+max_instruction_chars?: number | null,
+/**
+ * Background calls one request can hold at once: Bash runs, remote
+ * service calls and plugin jobs, counted together. Unset uses 8. Must be
+ * between 1 and 8, the host ceiling the store's contention retries are
+ * sized for (`gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT`).
+ */
+max_background_tool_calls?: number | null, };

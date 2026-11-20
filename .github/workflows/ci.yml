@@ -5,12 +5,11 @@ name: CI
 # recipe, so `make gate` runs the same commands locally. A draft is linted
 # across the changed crates and their dependents and tested on the crates it
 # changes; a pull request that is ready for review, and a merge queue entry,
-# also test the dependents; a push to main selects everything. `gate` is the
-# one check to require, so it must run on every event a merge waits for.
+# also test the dependents. Main is not run on push: every change lands
+# through the merge queue, whose run is the change's test, and the nightly
+# scheduled run selects everything on main. `gate` is the one check to
+# require, so it must run on every event a merge waits for.
 on:
-  push:
-    branches:
-      - main
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   merge_group:
@@ -47,17 +46,12 @@ on:
         required: false
         type: string
         default: ""
-      test_cache:
-        description: Test-result cache for the in-build portable slice on this run only (off, on, or full to run every test and record); empty uses GENTS_CI_TEST_CACHE.
-        required: false
-        type: string
-        default: ""
 
-# A new push to a pull request cancels its run in progress. A run of main, a
-# merge queue entry or a dispatch finishes: main's post-merge run is the only
-# run of each merged commit. GitHub keeps the newest waiting run per group.
+# A new push to a pull request cancels its run in progress. A merge queue
+# entry, the scheduled run or a dispatch finishes. GitHub keeps the newest
+# waiting run per group.
 concurrency:
-  # The scheduled run queues apart from main's pushes so neither replaces the other.
+  # The scheduled run queues apart from dispatches of main so neither replaces the other.
   group: ci-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'schedule' || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -67,21 +61,16 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  # A runner keeps its Cargo target tree between jobs only for pushes to main
-  # and pull requests from this repository's own branches. Fork pull requests
-  # and every other event build in a job-scoped tree, so build outputs,
+  # A runner keeps its Cargo target tree between jobs only for main (a push,
+  # its merge queue or its scheduled run) and pull requests from this
+  # repository's own branches: all build this repository's code. Fork pull requests and
+  # every other event build in a job-scoped tree, so build outputs,
   # build-script outputs included, never cross into another trust domain's job.
   # test-rust-build-space.py evaluates this condition per event.
   GENTS_CI_KEEP_TARGET_TREE: >-
     ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-    (github.event_name == 'pull_request' &&
-    github.event.pull_request.head.repo.full_name == github.repository) }}
-  # Only runs of this repository's own code record test results: pushes to
-  # main, the scheduled run, merge queue entries, dispatches and pull requests
-  # from this repository's branches. Fork pull requests never record.
-  GATE_TEST_CACHE_TRUSTED: >-
-    ${{ github.event_name == 'push' || github.event_name == 'schedule' ||
-    github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
+    (github.event_name == 'merge_group' && startsWith(github.ref, 'refs/heads/gh-readonly-queue/main/')) ||
+    (github.event_name == 'schedule' && github.ref == 'refs/heads/main') ||
     (github.event_name == 'pull_request' &&
     github.event.pull_request.head.repo.full_name == github.repository) }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -170,12 +159,7 @@ jobs:
             && 'true' || env.GATE_EVERYTHING }}
           # gate.py selects the scheduled run's jobs itself (resolve_plan).
           GATE_ONLY: ${{ inputs.only }}
-          # scripts/ci/gate.py test_cache_mode reads these.
           GATE_EVENT: ${{ github.event_name }}
-          GATE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          GATE_TEST_CACHE_INPUT: ${{ inputs.test_cache }}
-          GATE_TEST_CACHE: ${{ vars.GENTS_CI_TEST_CACHE }}
-          GATE_TEST_CACHE_MAIN: ${{ vars.GENTS_CI_TEST_CACHE_MAIN }}
           GATE_RUNNER_OVERRIDES: ${{ inputs.runner_overrides }}
           GATE_FALLBACK: ${{ vars.GENTS_CI_FALLBACK }}
           GATE_FORK: >-
@@ -245,7 +229,7 @@ jobs:
       - name: Check the live node backstop
         run: |
           shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh \
-            .github/scripts/setup-shellcheck.sh .github/scripts/setup-ruff.sh
+            .github/scripts/setup-shellcheck.sh .github/scripts/setup-ruff.sh .github/scripts/install-browser-deps.sh
           python3 .github/scripts/test-host-runtime-service.py
 
       - name: Check Harbor runner syntax
@@ -498,13 +482,6 @@ jobs:
       - name: Check proofs, generated files and structure
         run: make gate-run JOB=contract
 
-      # Here rather than in repository-guard: this job already has the
-      # proofs' Lean toolchain and dependencies, which a cold guard runner
-      # spent its whole 10 minutes fetching.
-      - name: Check the test-result cache against its Lean model
-        if: fromJSON(needs.plan.outputs.plan).contract.test_cache_model
-        run: .github/scripts/check-test-cache-model.sh
-
       - name: Show Rust build cache stats
         if: always()
         run: .github/scripts/show-sccache-stats.sh
@@ -554,6 +531,10 @@ jobs:
           echo "LEAN_CACHE_ROOT=$HOME/.cache/gents-lean" >> "$GITHUB_ENV"
           echo "SCCACHE_DIR=$HOME/.cache/sccache" >> "$GITHUB_ENV"
 
+      - name: Compile native tests directly with the runner's Cargo target cache
+        if: matrix.job == 'test:native' && runner.os == 'macOS'
+        run: echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+
       - uses: ./.github/actions/rust-runner
         with:
           lean: "true"
@@ -568,20 +549,6 @@ jobs:
       - name: Run ${{ matrix.job }}
         run: make gate-run JOB="${{ matrix.job }}"
 
-      - name: Collect migration lens diagnostics on failure
-        if: failure() && matrix.group == 'foundation'
-        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
-
-      - name: Upload migration lens diagnostics
-        if: failure() && matrix.group == 'foundation'
-        uses: actions/upload-artifact@v7
-        with:
-          name: gents-migration-lenses-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/gents-migration-lenses
-          include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 14
-
       - name: Show Rust build cache stats
         if: always()
         run: .github/scripts/show-sccache-stats.sh
@@ -592,8 +559,9 @@ jobs:
         run: .github/scripts/host-runtime-service.sh verify
 
   # With GATE_PORTABLE_SHARDS set, the portable groups' crates compile once
-  # here into a nextest archive; `shard` runs slices of it and compiles nothing.
-  # With one slice it runs here, as one partition per portable host group.
+  # here. With one slice it runs here, as the role's hash partitions, straight
+  # from the build; with more they go into a nextest archive and `shard` runs
+  # slices of it, compiling nothing.
   build:
     name: build (${{ matrix.archive }}${{ matrix.partition && format(' {0}/{1}', matrix.partition, matrix.partitions) || '' }})
     needs: [plan, repository-guard]
@@ -625,6 +593,7 @@ jobs:
       # it took 2.5 to 10 minutes before the compile started (PR #3926's runs).
       - uses: ./.github/actions/rust-runner
         with:
+          role: portable
           lean: ${{ (matrix.run || matrix.vera) && 'true' || 'false' }}
           lean-contract: deferred
           afterburner: ${{ matrix.run && matrix.go && 'true' || 'false' }}
@@ -632,19 +601,8 @@ jobs:
       - name: Install cargo-nextest
         run: .github/scripts/setup-nextest.sh
 
-      - name: Build the ${{ matrix.archive }} test archive
-        env:
-          GATE_TEST_CACHE_REPORT: ${{ runner.temp }}/test-cache-report.json
+      - name: Build the ${{ matrix.archive }} tests
         run: make gate-run JOB="build:${{ matrix.archive }}${{ matrix.partition && format(':{0}', matrix.partition) || '' }}"
-
-      - name: Upload the test cache report
-        if: always() && matrix.test_cache != 'off'
-        uses: actions/upload-artifact@v7
-        with:
-          name: gents-test-cache-${{ matrix.archive }}${{ matrix.partition && format('-{0}', matrix.partition) || '' }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/test-cache-report.json
-          if-no-files-found: ignore
-          retention-days: 14
 
       - name: Upload the ${{ matrix.archive }} test archive
         if: ${{ !matrix.run }}
@@ -717,20 +675,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Collect migration lens diagnostics on failure
-        if: failure()
-        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
-
-      - name: Upload migration lens diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: gents-migration-lenses-${{ github.sha }}-${{ matrix.index }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/gents-migration-lenses
-          include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 14
-
       # Read-only; fails the job when one of its steps stopped the host's live node.
       - name: Check the host's live Gents node is still running
         if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
@@ -768,8 +712,9 @@ jobs:
     name: desktop-ui (${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.browser }}
     # On two Playwright workers the browser journeys take 24 to 37 minutes on
-    # a hosted four-core runner (#3786); each third takes about 9 to 12.
-    timeout-minutes: 30
+    # a hosted four-core runner (#3786); each third takes about 9 to 12. The
+    # job allows a cold browser install (30) plus the suite (25).
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -798,7 +743,31 @@ jobs:
       # A hosted runner is a fresh machine: install the browsers' system
       # libraries as root. A self-hosted browser runner has them installed
       # once by its operator (`npx playwright install-deps chromium webkit`)
-      # and keeps the browsers in its account's cache.
+      # and keeps the browsers in its account's cache. On a hosted runner the
+      # apt download alone took 27 minutes from a slow Ubuntu mirror (run
+      # 44319819879), so the packages and the browsers are cached, keyed by
+      # the runner image, the Playwright version and the browsers a lane needs.
+      - name: Select the browsers and their cache key
+        id: browsers
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          set -euo pipefail
+          if [[ "${SUITE}" == browser ]]; then browsers="chromium webkit"; else browsers="chromium"; fi
+          version="$(jq -r '.packages["node_modules/playwright"].version' package-lock.json)"
+          echo "list=${browsers}" >> "${GITHUB_OUTPUT}"
+          echo "key=${ImageOS:-self}-${ImageVersion:-self}-playwright-${version}-${browsers// /-}" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore the browser packages and browsers
+        id: browser-cache
+        if: runner.environment == 'github-hosted'
+        uses: actions/cache/restore@v5.0.5
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/apt-browser-archives
+          key: browsers-${{ steps.browsers.outputs.key }}
+
       - name: Use the Ubuntu archive for browser system dependencies
         if: runner.environment == 'github-hosted'
         run: |
@@ -821,23 +790,49 @@ jobs:
                   path.write_text(updated, encoding='utf-8')
                   print(f'Using the Ubuntu archive in {path}')
           PYTHON
+          # Downloaded packages go to the cached directory, and a stalled
+          # mirror fails a request instead of holding the step.
+          mkdir -p "${HOME}/.cache/apt-browser-archives/partial"
+          printf '%s\n' \
+            "Dir::Cache::Archives \"${HOME}/.cache/apt-browser-archives\";" \
+            'APT::Keep-Downloaded-Packages "true";' \
+            'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' 'Acquire::Retries "3";' \
+            | sudo tee /etc/apt/apt.conf.d/90browser-dependencies >/dev/null
 
       # The unit lane's interaction budgets drive Chromium; the journeys
-      # also need WebKit.
+      # also need WebKit. Its own timeout keeps a slow install from spending
+      # the suite's time; the system packages download in parallel
+      # (install-browser-deps.sh), and a warm cache takes about a minute.
       - name: Install Playwright browsers
         working-directory: apps/gents-desktop
+        timeout-minutes: 30
         env:
           HOSTED: ${{ runner.environment == 'github-hosted' }}
-          BROWSERS: ${{ matrix.suite == 'browser' && 'chromium webkit' || 'chromium' }}
+          BROWSERS: ${{ steps.browsers.outputs.list }}
         run: |
           read -ra browsers <<< "${BROWSERS}"
           if [[ "${HOSTED}" == true ]]; then
-            npx playwright install --with-deps "${browsers[@]}"
-          else
-            npx playwright install "${browsers[@]}"
+            ../../.github/scripts/install-browser-deps.sh "${HOME}/.cache/apt-browser-archives" "${browsers[@]}"
+            # The cache saves as this user; apt may have written as root.
+            sudo chown -R "$(id -u):$(id -g)" "${HOME}/.cache/apt-browser-archives"
           fi
+          npx playwright install "${browsers[@]}"
+
+      # Saved as soon as the install ends, even when it or a later step fails,
+      # so one runner's cold download warms the next run's.
+      - name: Save the browser packages and browsers
+        if: >-
+          always() && runner.environment == 'github-hosted' &&
+          steps.browser-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5.0.5
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/apt-browser-archives
+          key: browsers-${{ steps.browsers.outputs.key }}
 
       - name: Run the desktop ${{ matrix.suite }} suite
+        timeout-minutes: 25
         run: make gate-run JOB="ts-${{ matrix.suite }}"
 
       - name: Upload desktop UI artifacts

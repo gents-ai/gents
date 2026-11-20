@@ -671,10 +671,12 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
             observed,
             observed.execution_generation.as_deref().unwrap(),
             expiry,
-            "recovery-atomicity-generation".into(),
-            now,
-            None,
-            None,
+            crate::request::lifecycle::RecoveryFacts {
+                fresh_generation: "recovery-atomicity-generation".into(),
+                observed_now: now,
+                selection_choice: None,
+                expected_outcome: None,
+            },
         )
         .await
     }
@@ -825,10 +827,12 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
             &observed,
             old_generation,
             &expiry,
-            fresh_generation.into(),
-            observed_now,
-            None,
-            None,
+            crate::request::lifecycle::RecoveryFacts {
+                fresh_generation: fresh_generation.into(),
+                observed_now,
+                selection_choice: None,
+                expected_outcome: None,
+            },
         )
     };
     let (first, fault_fired) = ConfigApplyTxn::with_post_commit_receipt_loss(recover()).await;

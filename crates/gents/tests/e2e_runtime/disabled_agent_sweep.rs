@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::support::builder_runtime::submit_request;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_request_terminal,
@@ -76,7 +74,7 @@ async fn a_disabled_sibling_agent_does_not_stop_the_runtime() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(&actors, "req-disabled-sibling", Duration::from_secs(120)).await,
+        wait_for_request_terminal(&actors, "req-disabled-sibling").await,
         "completed"
     );
     submit_request(
@@ -88,12 +86,7 @@ async fn a_disabled_sibling_agent_does_not_stop_the_runtime() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            &actors,
-            "req-disabled-sibling-next",
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&actors, "req-disabled-sibling-next").await,
         "completed"
     );
     runtime.shutdown().await;

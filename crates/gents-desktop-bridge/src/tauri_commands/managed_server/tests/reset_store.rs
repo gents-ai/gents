@@ -2,7 +2,7 @@ use super::*;
 
 fn record_reset_store_key(
     home: &Path,
-    desktop: &gents_desktop_core::client::DesktopPaths,
+    desktop: &gents_store::client_journal::paths::DesktopPaths,
     record: &gents_store::local::store_key::StoreEncryption,
 ) {
     let mut init: serde_json::Value =
@@ -422,7 +422,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
         Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey),
     );
 
-    let lock = lock_home_for_retirement(&home).unwrap();
+    let lock = lock_home_for_retirement(&home).await.unwrap();
     let plan = plan_home_reset(
         Some(&home),
         Some(refused),
@@ -568,7 +568,8 @@ fn reset_rejects_healthy_store_wrong_confirmation_and_unknown_endpoint() {
     let data = home.join("data");
     std::fs::create_dir_all(&data).unwrap();
     std::fs::write(data.join("MANIFEST"), b"REGOMAN current").unwrap();
-    let desktop = gents_desktop_core::client::DesktopPaths::from_root(temp.path().join("desktop"));
+    let desktop =
+        gents_store::client_journal::paths::DesktopPaths::from_root(temp.path().join("desktop"));
     assert_eq!(
         plan_home_reset(
             Some(&home),
@@ -643,7 +644,8 @@ fn reset_rejects_symlinked_homes_and_stores() {
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("data.lark"), "legacy").unwrap();
     symlink(&outside, home.join("data")).unwrap();
-    let desktop = gents_desktop_core::client::DesktopPaths::from_root(temp.path().join("desktop"));
+    let desktop =
+        gents_store::client_journal::paths::DesktopPaths::from_root(temp.path().join("desktop"));
     assert_eq!(
         plan_home_reset(
             Some(&home),

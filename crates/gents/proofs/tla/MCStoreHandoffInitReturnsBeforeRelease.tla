@@ -1,0 +1,4 @@
+---- MODULE MCStoreHandoffInitReturnsBeforeRelease ----
+EXTENDS StoreHandoff
+
+====

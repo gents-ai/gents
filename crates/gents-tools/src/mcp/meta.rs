@@ -1,10 +1,3 @@
-use std::sync::Arc;
-
-use defra_node::Node as EmbeddedNode;
-
-use crate::mcp::health::ServiceHealthMap;
-use crate::mcp::pool::McpPool;
-
 mod call;
 mod describe;
 mod discover;
@@ -23,35 +16,10 @@ pub use describe::{DescribeToolArgs, DescribeToolTool};
 pub use discover::{DiscoverToolsArgs, DiscoverToolsTool};
 pub use shared::{MetaToolContext, MetaToolError};
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each meta tool context input comes from a separate runtime owner"
-)]
 pub async fn build_meta_tools(
-    node: Arc<EmbeddedNode>,
-    mcp_pool: McpPool,
-    health: ServiceHealthMap,
-    local_hostname: String,
-    local_subnet: Option<String>,
-    node_did: String,
-    actor: identity::Did,
-    allowed_mcp_service_ids: Vec<String>,
-    remote_tools: gents_documents::RemoteTools,
-    configuration: gents_inference::resolved::ResolvedConfiguration,
+    mut ctx: MetaToolContext,
 ) -> anyhow::Result<Vec<Box<dyn gents_loop::tool::ToolDyn>>> {
-    let mcp_pool = mcp_pool.for_agent(actor.as_str());
-    let ctx = MetaToolContext {
-        actor,
-        node,
-        mcp_pool,
-        health,
-        local_hostname,
-        local_subnet,
-        node_did,
-        allowed_mcp_service_ids,
-        remote_tools,
-        configuration,
-    };
+    ctx.mcp_pool = ctx.mcp_pool.for_agent(ctx.actor.as_str());
     let mut tools: Vec<Box<dyn gents_loop::tool::ToolDyn>> = Vec::new();
     let mut discovery = false;
     for selection in &ctx.remote_tools.services {

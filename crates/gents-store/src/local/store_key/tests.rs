@@ -90,11 +90,15 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
     let (_, key, _) = file_key(&temp);
     let data = temp.path().join("data");
     let node = Arc::new(
-        persistent_builder(&data, &key)
-            .unwrap()
-            .build()
-            .await
-            .unwrap(),
+        persistent_builder(
+            &data,
+            &key,
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
+        .unwrap()
+        .build()
+        .await
+        .unwrap(),
     );
     let access = ConfigAccess::local(node.clone());
     access
@@ -117,11 +121,15 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
     drop(node);
 
     let reopened = Arc::new(
-        persistent_builder(&data, &key)
-            .unwrap()
-            .build()
-            .await
-            .unwrap(),
+        persistent_builder(
+            &data,
+            &key,
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
+        .unwrap()
+        .build()
+        .await
+        .unwrap(),
     );
     let result = ConfigAccess::local(reopened.clone())
         .execute("{ BudgetDocument { payload } }")
@@ -145,12 +153,16 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
     assert_eq!(record.custody, StoreKeyCustody::File);
     let data = temp.path().join("data");
 
-    let node = persistent_builder(&data, &key)
-        .unwrap()
-        .with_node_identity_did(node_did)
-        .build()
-        .await
-        .unwrap();
+    let node = persistent_builder(
+        &data,
+        &key,
+        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )
+    .unwrap()
+    .with_node_identity_did(node_did)
+    .build()
+    .await
+    .unwrap();
     write_credential(&node).await;
     node.shutdown().await.expect("node shutdown");
     drop(node);
@@ -160,12 +172,16 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
     }
 
     let key = record.load(&key_file, &data).expect("recorded key");
-    let reopened = persistent_builder(&data, &key)
-        .unwrap()
-        .with_node_identity_did(node_did)
-        .build()
-        .await
-        .unwrap();
+    let reopened = persistent_builder(
+        &data,
+        &key,
+        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )
+    .unwrap()
+    .with_node_identity_did(node_did)
+    .build()
+    .await
+    .unwrap();
     assert_eq!(
         read_refresh_token(&reopened).await.as_deref(),
         Some(REFRESH_TOKEN)
@@ -173,7 +189,9 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
     reopened.shutdown().await.expect("node shutdown");
 
     let plain = temp.path().join("plain");
-    let mut plain_options = crate::local::storage_backend::regolith_options();
+    let mut plain_options = crate::local::storage_backend::regolith_options(
+        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    );
     plain_options.engine = plain_options
         .engine
         .compression(regolith::CompressionType::None);
@@ -263,7 +281,9 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     let log = arrival_log();
     let plaintext_store = storage::RegolithStore::open_with_options(
         &data,
-        crate::local::storage_backend::regolith_options(),
+        crate::local::storage_backend::regolith_options(
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        ),
     )
     .unwrap();
     append_log_entry(
@@ -294,12 +314,16 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     assert_eq!(config.key_path.as_deref(), Some("identity.key"));
     assert!(config.store_encryption.is_some());
     assert!(files_containing(&data, REFRESH_TOKEN.as_bytes()).is_empty());
-    let encrypted = persistent_builder(&data, &key)
-        .unwrap()
-        .with_node_identity_did(node_did)
-        .build()
-        .await
-        .unwrap();
+    let encrypted = persistent_builder(
+        &data,
+        &key,
+        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )
+    .unwrap()
+    .with_node_identity_did(node_did)
+    .build()
+    .await
+    .unwrap();
     assert_eq!(
         read_refresh_token(&encrypted).await.as_deref(),
         Some(REFRESH_TOKEN)
@@ -312,7 +336,10 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
 
     let encrypted_store = storage::RegolithStore::open_with_options(
         &data,
-        crate::local::storage_backend::regolith_options().with_encryption_key(*key.0),
+        crate::local::storage_backend::regolith_options(
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
+        .with_encryption_key(*key.0),
     )
     .unwrap();
     assert_eq!(

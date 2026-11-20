@@ -69,9 +69,13 @@ export function createBridgeHttpAdapter(
         agentDid,
         path,
       }),
-    removePeer: unsupported("removePeer"),
-    renamePeer: unsupported("renamePeer"),
-    dismissEndedAccess: unsupported("dismissEndedAccess"),
+    listRuntimeAccess: (nodeDid) =>
+      client.postJson("/desktop/runtime/access/list", { nodeDid }),
+    decideRuntimeAccess: (request) =>
+      client.postJson("/desktop/runtime/access/decide", request),
+    removeRuntime: (nodeDid) => client.postJson("/desktop/runtime/remove", { nodeDid }),
+    renameRuntime: (nodeDid, label) =>
+      client.postJson("/desktop/runtime/rename", { nodeDid, label }),
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),
@@ -145,8 +149,8 @@ export function createBridgeHttpAdapter(
     setSelectedNode: async (nodeDid) => {
       await client.postJson("/desktop/selected-node", { nodeDid });
     },
-    requestStatusEnrollment: async (serverAddress) =>
-      client.postJson("/desktop/peer/enroll-status", { serverAddress }),
+    requestRuntimeAccess: async (serverAddress) =>
+      client.postJson("/desktop/runtime/access/request", { serverAddress }),
     fetchSessionSnapshot: async (sessionId, nodeDid, requestId, timelinePage) =>
       client.postJson<DesktopSessionSnapshot | null>("/desktop/session/snapshot", {
         sessionId,
@@ -299,7 +303,7 @@ export function createFixtureHelpers(runner: {
   return {
     /** Write an agent document on the remote node; the write triggers P2P
      *  replication so the same document becomes visible on the desktop node
-     *  (write-on-A, read-on-B). Requires GENTS_TAURI_LIVE=1. */
+     *  (write-on-A, read-on-B). Requires the runner's --live flag (GENTS_TAURI_LIVE=1). */
     saveAgentConfigOnRemote: async (request: AgentSaveRequest) =>
       runner.postJson<{ ok: boolean }>(
         "/desktop/test-fixture/remote-save-agent",

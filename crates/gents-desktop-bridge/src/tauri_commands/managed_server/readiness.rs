@@ -7,12 +7,13 @@ use super::start_wait::{
     begin_start_wait, finish_start_wait, relock_start, wait_unlocked, LifecycleGuard, StartWait,
 };
 use super::status::{emit_status, last_runtime_error, store_refusal};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::ManagedServerStatus;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
 use gents_service::repair::crash_loop::{restarts_since, CRASH_LOOP_RESTARTS};
 use gents_service::repair::reason::blocker_for_exit;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
@@ -99,11 +100,7 @@ where
         MANAGED_SERVER_READY_TIMEOUT,
         MANAGED_SERVER_POLL_INTERVAL,
         || async {
-            observe_port_readiness(
-                node_home,
-                user_status_signer(state, node_home).await.as_ref(),
-            )
-            .await
+            observe_port_readiness(node_home, user_status_signer(state).await.as_ref()).await
         },
         || observe_native_progress(app, state),
         || last_runtime_error(state),

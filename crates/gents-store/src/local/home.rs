@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 mod init_config;
@@ -8,12 +7,13 @@ mod test_guard;
 
 pub use init_config::{
     default_key_path, ensure_home_identity_can_serve, init_config_path, keys_dir, read_init_config,
-    write_init_config, StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND,
+    recorded_client_identity, write_init_config, StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND,
 };
 pub use lock::{
-    acquire_store, lock_home_store, lock_store, lock_store_at, reserve_runtime_startup, try_store,
-    wait_for_store_release, RuntimeStartupReservation, StoreAttempt, StoreLock, StoreLockHeld,
-    StoreRelease,
+    acquire_home_store, acquire_store, acquire_store_at, lock_home_store, lock_store,
+    lock_store_at, reserve_runtime_startup, try_store, wait_for_store_release,
+    RuntimeStartupReservation, StoreAttempt, StoreLock, StoreLockHeld, StoreRelease,
+    STORE_RELEASE_WAIT,
 };
 pub use retire::{
     archive_preflight, home_entries, retire_entries, HomeEntries, RetireDisposition, RetireGroup,
@@ -23,7 +23,7 @@ const INIT_CONFIG_FILE_NAME: &str = "init.json";
 
 #[derive(Debug, thiserror::Error)]
 pub enum HomeError {
-    #[error("unable to resolve the user's home directory; set GENTS_HOME")]
+    #[error("unable to resolve the user's home directory; pass --home")]
     HomeDirUnresolved,
     #[error("reading the remembered home file {}", path.display())]
     RememberedHomeRead {
@@ -230,27 +230,11 @@ pub fn store_lock_held<'a>(
 
 type Result<T, E = HomeError> = std::result::Result<T, E>;
 
+/// The folder `gents` opens with no `--home`: the remembered folder, else
+/// `~/.gents` (Lean `HomeResolution.resolve`).
 pub fn default_home_dir() -> Result<PathBuf> {
-    let home = default_home_from(
-        std::env::var_os(GENTS_HOME_ENV),
-        dirs::config_dir().as_deref(),
-        dirs::home_dir().as_deref(),
-    )?;
-    refuse_real_gents_home(&home, GENTS_HOME_ENV);
-    Ok(home)
-}
-
-pub const GENTS_HOME_ENV: &str = "GENTS_HOME";
-
-/// The folder `gents` opens with neither `--home` nor `GENTS_HOME`: the
-/// remembered folder, else `~/.gents`.
-pub fn default_home_ignoring_env() -> Result<PathBuf> {
-    let home = default_home_from(
-        None,
-        dirs::config_dir().as_deref(),
-        dirs::home_dir().as_deref(),
-    )?;
-    refuse_real_gents_home(&home, GENTS_HOME_ENV);
+    let home = default_home_from(dirs::config_dir().as_deref(), dirs::home_dir().as_deref())?;
+    refuse_real_gents_home(&home, "--home");
     Ok(home)
 }
 
@@ -263,14 +247,7 @@ pub fn gents_config_dir() -> Result<PathBuf> {
 
 /// An unreadable remembered file is an error: falling back to `~/.gents` would
 /// open the wrong data.
-fn default_home_from(
-    env_home: Option<OsString>,
-    config_dir: Option<&Path>,
-    user_home: Option<&Path>,
-) -> Result<PathBuf> {
-    if let Some(home) = env_home.filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(home));
-    }
+fn default_home_from(config_dir: Option<&Path>, user_home: Option<&Path>) -> Result<PathBuf> {
     if let Some(home) = config_dir.map(read_remembered_home).transpose()?.flatten() {
         return Ok(home);
     }
@@ -304,10 +281,10 @@ fn read_remembered_home(config_dir: &Path) -> Result<Option<PathBuf>> {
 
 /// Makes `chosen` the default home for later commands, or forgets any earlier
 /// choice when `chosen` is `~/.gents`. Only setup calls this: a one-off `--home`
-/// or `GENTS_HOME` never changes what is remembered.
+/// never changes what is remembered.
 pub fn remember_home(chosen: &Path) -> Result<()> {
     let config_dir = dirs::config_dir().ok_or(HomeError::HomeDirUnresolved)?;
-    refuse_real_gents_home(&remembered_home_dir(&config_dir), GENTS_HOME_ENV);
+    refuse_real_gents_home(&remembered_home_dir(&config_dir), "--home");
     remember_home_in(
         &config_dir,
         &dirs::home_dir().ok_or(HomeError::HomeDirUnresolved)?,

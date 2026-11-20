@@ -5,6 +5,7 @@ use gents_lean_vocab::families::goal_client_start_contracts_starts::{StartInput,
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_admission::RequestPurpose;
+use gents_protocol::request_admission::RequestScope;
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_protocol::session::SessionTitle;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -143,8 +144,18 @@ async fn drive_start(case: &StartInput<String>) -> bool {
             let identity = identity.as_ref();
             let session_agent = &session_agent;
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(txn, SESSION, identity.did(), session_agent,
-                    Some(requester), title, None, &time(session.created_at)).await?;
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    gents_session::session::NewAgentSession {
+                        session_id: SESSION,
+                        node_did: identity.did(),
+                        agent_did: session_agent,
+                        requester_did: Some(requester),
+                        title,
+                        provenance: None,
+                        created_at: &time(session.created_at),
+                    },
+                ).await?;
                 let record = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION)
                     .await?.expect("created modeled session");
                 let tags = if session.tags.is_empty() { Value::Null } else { json!(session.tags) };
@@ -246,13 +257,15 @@ async fn drive_start(case: &StartInput<String>) -> bool {
                 Box::pin(async move {
                     gents_session::session::ensure_session_in_txn(
                         txn,
-                        "separate-signing-session",
-                        identity.did(),
-                        &selected_agent,
-                        Some(user.did()),
-                        None,
-                        None,
-                        "2026-01-01T00:00:00Z",
+                        gents_session::session::NewAgentSession {
+                            session_id: "separate-signing-session",
+                            node_did: identity.did(),
+                            agent_did: &selected_agent,
+                            requester_did: Some(user.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-01-01T00:00:00Z",
+                        },
                     )
                     .await?;
                     let session =
@@ -356,10 +369,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         let mut busy = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "busy",
-            identity.did(),
-            user.did(),
-            &requested_agent,
-            SESSION,
+            RequestScope::new(identity.did(), user.did(), &requested_agent, SESSION),
             "Earlier work",
             "interactive",
             time(2),
@@ -378,13 +388,15 @@ async fn drive_start(case: &StartInput<String>) -> bool {
     let mut initial = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "first",
-        identity.did(),
-        session_before
-            .as_ref()
-            .and_then(|session| session.session.requester_did.as_deref())
-            .unwrap_or(user.did()),
-        &signed_agent,
-        SESSION,
+        RequestScope::new(
+            identity.did(),
+            session_before
+                .as_ref()
+                .and_then(|session| session.session.requester_did.as_deref())
+                .unwrap_or(user.did()),
+            &signed_agent,
+            SESSION,
+        ),
         "Work on this goal",
         "interactive",
         time(case.requested.created_at),
@@ -470,6 +482,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         .await
         .unwrap(),
         replacement_delete: None,
+        request_credentials: Vec::new(),
     });
     command.signature = user
         .sign(&command.signing_payload().unwrap())
@@ -567,13 +580,15 @@ async fn drive_start(case: &StartInput<String>) -> bool {
                         Box::pin(async {
                             gents_session::session::ensure_session_in_txn(
                                 txn,
-                                SESSION,
-                                identity.did(),
-                                &command.agent_did,
-                                Some(user.did()),
-                                None,
-                                None,
-                                &time(3),
+                                gents_session::session::NewAgentSession {
+                                    session_id: SESSION,
+                                    node_did: identity.did(),
+                                    agent_did: &command.agent_did,
+                                    requester_did: Some(user.did()),
+                                    title: None,
+                                    provenance: None,
+                                    created_at: &time(3),
+                                },
                             )
                             .await?;
                             gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
@@ -612,7 +627,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
                 for collection in ["Goal", "AgentRequest", "GoalCreationClaim"] {
                     assert!(before["data"][collection].as_array().unwrap().is_empty());
                 }
-                process_command(&node, &identity, &doc_id, selected_identity)
+                process_command(&node, &identity, &doc_id, selected_identity, None)
                     .await
                     .unwrap();
                 assert!(receipt(&access, &doc_id).await.is_none());
@@ -637,7 +652,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
                 node.shutdown().await.expect("node shutdown");
                 return false;
             }
-            process_command(&node, &identity, &doc_id, selected_identity)
+            process_command(&node, &identity, &doc_id, selected_identity, None)
                 .await
                 .unwrap();
             let outcome = receipt(&access, &doc_id).await.unwrap().outcome;
@@ -680,7 +695,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
     if case.name == "authority_unavailable" {
         let result = ConfigApplyTxn::with_read_storage_failure(
             "AgentSessionGoalControl",
-            process_command(&node, &identity, &doc_id, selected_identity),
+            process_command(&node, &identity, &doc_id, selected_identity, None),
         )
         .await;
         assert!(result.is_err());
@@ -696,7 +711,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         let mut processing = Box::pin(ConfigApplyTxn::with_embedded_before_commit_pause(
             reached.clone(),
             release.clone(),
-            process_command(&node, &identity, &doc_id, selected_identity),
+            process_command(&node, &identity, &doc_id, selected_identity, None),
         ));
         tokio::select! {
             _ = reached.notified() => {}
@@ -712,7 +727,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         matches!(outcome, Some(GoalControlOutcome::Applied { .. }))
     } else if case.commit && (!case.signature_valid || !case.first_request_valid) {
         assert_eq!(
-            process_command(&node, &identity, &doc_id, selected_identity)
+            process_command(&node, &identity, &doc_id, selected_identity, None)
                 .await
                 .unwrap(),
             None,
@@ -741,7 +756,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         false
     } else if case.commit {
         assert_eq!(
-            process_command(&node, &identity, &doc_id, selected_identity)
+            process_command(&node, &identity, &doc_id, selected_identity, None)
                 .await
                 .unwrap(),
             None,
@@ -1109,6 +1124,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 native_evidence: Some(gents_protocol::goal_control::GoalNativeEvidence {
                     request: request_graph,
                     replacement_delete: deletion,
+                    request_credentials: Vec::new(),
                 }),
                 signature: Vec::new(),
             };
@@ -1297,10 +1313,12 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             );
             let result = stage_goal_backed_request_with_identity_in_txn(
                 &txn,
-                runtime.did(),
-                SESSION,
-                "new User work",
-                None,
+                crate::operations::goal::GoalStart {
+                    node_did: runtime.did(),
+                    session_id: SESSION,
+                    objective: "new User work",
+                    token_budget: None,
+                },
                 &request,
                 None,
                 Some(&graph),

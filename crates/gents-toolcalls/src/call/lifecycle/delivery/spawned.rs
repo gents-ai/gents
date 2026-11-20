@@ -2,7 +2,7 @@ use crate::call::lifecycle::ToolCallLifecycle;
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::config_client::IdempotentTransactionRetry;
 use gents_store::graphql::created_doc_id;
 
@@ -148,6 +148,7 @@ impl ToolCallLifecycle {
         let requester_did = self.requester_did.clone();
         let message_sequence = self.message_sequence;
         let parent_tool_call_id = self.tool_call_id.clone();
+        let background_limit = self.background_limit();
         let deadline_at = admission.deadline_at;
         let tool_name = admission.tool_name;
         let persisted_selected = admission.selected_tool_identity;
@@ -281,6 +282,7 @@ impl ToolCallLifecycle {
                         "spawned admission lost its exact running accepted parent");
                     let request_row = &crate::call::hook::persistence::reserve_background_slot_in_txn(
                         txn, &request_doc_id, crate::call::hook::persistence::BackgroundSlot::Requested,
+                        background_limit,
                         "node_did session_id request_id requester_did lifecycle_state execution_generation execution_lease_expires_at interrupt_requested_at",
                     ).await?;
                     anyhow::ensure!(

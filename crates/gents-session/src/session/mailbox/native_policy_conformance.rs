@@ -47,8 +47,8 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         directory.path().join("other.key"),
         None,
     )?;
-    let authority = gents_store::identity::KeyIdentity::load_or_create(
-        directory.path().join("authority.key"),
+    let operator = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("operator.key"),
         None,
     )?;
     let binding = gents_store::identity::provision_agent_identity(&runtime)?;
@@ -61,13 +61,13 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         EmbeddedNode::builder()
             .enable_signing()
             .with_node_identity_did(runtime.did())
-            .with_node_acp_owner(authority.did().to_owned())
+            .with_node_acp_owner(operator.did().to_owned())
             .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
             .await?,
     );
     let context =
-        defra_core::RequestContext::default().with_identity(Some(authority.did().to_owned()));
+        defra_core::RequestContext::default().with_identity(Some(operator.did().to_owned()));
     let policy = node
         .add_dac_policy_with_counter_as(&context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
@@ -396,7 +396,7 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
         .await?;
     // The runtime reconciles this ordinary index with the collection; the cursor
     // sweep's order is only plannable through it.
-    let cursor_index = gents_migration::DEFAULT_ORDINARY_INDEXES
+    let cursor_index = gents_store::schema::catalog::ORDINARY_INDEXES
         .iter()
         .find(|index| index.name == "MailboxItem_node_status_item_key")
         .context("MailboxItem cursor index is not registered")?;
@@ -471,10 +471,6 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
             );
         }
     }
-    let query = format!(
-        "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
-        escape_graphql_string(&ids[0])
-    );
     for case in &gents_lean_vocab::families::mailbox_access_sweep_actors::cases() {
         let access = match case.input.actor.as_str() {
             "agent" => ConfigAccess::local_managed_agent(
@@ -490,8 +486,16 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
             "node" => admin.clone(),
             actor => anyhow::bail!("unknown modeled actor {actor}"),
         };
-        let rows = access.execute(&query).await?;
-        case.check(!rows["data"]["MailboxItem"].as_array().unwrap().is_empty());
+        let observed = gents_store::identity::observe_document_permissions(
+            &node,
+            runtime.did(),
+            &access.actor_did().unwrap().parse()?,
+            Some(("MailboxItem", &ids[0])),
+            &["read".to_owned()],
+        )
+        .await?
+        .context("mailbox access observation")?;
+        case.check(observed.held[0]);
     }
     let mut cursor = None;
     let mut scanned = 0;

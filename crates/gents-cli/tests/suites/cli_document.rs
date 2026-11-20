@@ -42,8 +42,6 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     fs::create_dir_all(&home_dir)?;
     let sdl = write_note_sdl(tempdir.path())?;
     let sdl = sdl.to_str().context("utf-8 SDL path")?;
-    let port = allocate_port()?;
-    let graphql = graphql_url(port);
     let agent_name = format!("cli-document-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
@@ -57,8 +55,9 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve)?;
+    let (mut serve, port, _) =
+        spawn_server_with_ready_json_recovering(&home_dir, allocate_port()?, &[], &[])?;
+    let graphql = graphql_url(port);
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     apply_note_schema(&home_dir, &graphql, sdl)?;
 

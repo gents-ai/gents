@@ -304,6 +304,7 @@ fn agent_with_binding(
         openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
         claude_platform: None,
+        client_version: None,
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         model_name: gents_inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
@@ -316,6 +317,8 @@ fn agent_with_binding(
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -323,6 +326,7 @@ fn agent_with_binding(
         deadline_duration: Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
+        title_timeout: Duration::from_secs(gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(
             gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
@@ -563,7 +567,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
 #[tokio::test]
 async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     use gents_inference::rendered_request::scope::{
-        claim_pending, scope_request, test_scope, CaptureClaim, CaptureScopeKind,
+        claim_pending, test_scope, CaptureClaim, CaptureScopeKind,
     };
     use gents_inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
@@ -584,7 +588,11 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
     let scope = test_scope(context, sink);
 
-    scope_request(scope, async {
+    async {
+        let call = gents_loop::provider_call::ProviderCall {
+            capture: Some(scope),
+            ..Default::default()
+        };
         for (kind, expected) in [
             (CaptureScopeKind::Inference, "inference.1"),
             (CaptureScopeKind::Compaction, "compaction.1"),
@@ -601,6 +609,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
                 .clone()
                 .expect("every production loop config installs an arming sink");
             on_rendered_request(
+                &call,
                 0,
                 0,
                 rig::completion::CompletionRequest {
@@ -622,7 +631,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
             .await
             .expect("arming never fails");
 
-            let (_, claim) = claim_pending().expect("a scope is installed");
+            let (_, claim) = claim_pending(call.capture.as_ref()).expect("a scope is installed");
             let CaptureClaim::Armed(pending) = claim else {
                 panic!("{kind} did not arm a pending capture");
             };
@@ -631,7 +640,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
                 "{kind} armed the wrong scope"
             );
         }
-    })
+    }
     .await;
 }
 

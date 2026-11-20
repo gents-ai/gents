@@ -1,9 +1,9 @@
 use super::fixtures::{
-    authorize_enrollment_peer, collection_values, runtime_test_node_with_identity,
-    wait_for_active_peer, wait_for_peer_info,
+    collection_values, runtime_test_node_with_identity, wait_for_active_peer, wait_for_peer_info,
 };
 use super::seeding::{seed_agent_request, seed_agent_tool_call};
 use super::*;
+use crate::test_support::enrollment::authorize_enrollment_peer;
 
 /// Enrollment authorizes a peer for discovery and enrollment only. An approved
 /// member still cannot route addressed requests or tool rows over P2P: both
@@ -54,6 +54,8 @@ async fn approved_enrollment_does_not_open_peer_request_replication() {
         .expect("coordinator shareable ticket");
     authorize_enrollment_peer(
         host.clone(),
+        &format!("network-{}", uuid::Uuid::new_v4()),
+        "final admission test",
         host_identity.clone(),
         coordinator_identity.clone(),
         &coordinator_peer,

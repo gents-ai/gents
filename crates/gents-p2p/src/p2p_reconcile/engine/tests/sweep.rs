@@ -79,7 +79,14 @@ async fn pairing_reconciler_retries_sweeps_as_the_lean_supervisor_model() {
         let cancel = CancellationToken::new();
         let connections = event_bus.subscribe(&[events::EventName::PeerConnection]);
         let reconciler =
-            run_pairing_reconciler_loop(&admin, &store, subscription, connections, &cancel);
+            run_pairing_reconciler_loop(
+                &admin,
+                &store,
+                subscription,
+                connections,
+                crate::p2p_reconcile::intervals::DEFAULT_SWEEP,
+                &cancel,
+            );
         tokio::pin!(reconciler);
         let started_at = tokio::time::Instant::now();
 
@@ -235,7 +242,14 @@ async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
     let connections = event_bus.subscribe(&[events::EventName::PeerConnection]);
     let cancel = CancellationToken::new();
     let reconciler =
-        run_pairing_reconciler_loop(&admin, &store, subscription, connections, &cancel);
+        run_pairing_reconciler_loop(
+                &admin,
+                &store,
+                subscription,
+                connections,
+                crate::p2p_reconcile::intervals::DEFAULT_SWEEP,
+                &cancel,
+            );
     tokio::pin!(reconciler);
 
     let startup_replay = installed.notified();

@@ -34,9 +34,11 @@ async fn run_and_resume_refuse_a_run_held_by_a_live_process() {
     holder.heartbeat(Duration::ZERO);
     let resumed = resume(
         &launching.access,
-        launching.owner(),
-        "run-held",
-        &launching.runs_dir(),
+        RunLocation {
+            owner: launching.owner(),
+            run_id: "run-held",
+            runs_dir: &launching.runs_dir(),
+        },
         &ScriptedExecutor::new().with_default(passed()),
         &CheckRegistry::builtin(),
         CancellationToken::new(),

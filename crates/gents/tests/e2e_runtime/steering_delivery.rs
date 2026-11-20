@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gents::Gents;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_session::request::lifecycle::{
@@ -12,6 +12,7 @@ use gents_session::request::lifecycle::{
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::UNREACHED_DEADLINE;
 use tokio::sync::Notify;
 
 use super::queue_management::{enqueue_owned, row_as};
@@ -22,11 +23,11 @@ use crate::support::builder_runtime::{
 };
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
-use crate::support::live_inference::STALL_CEILING;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const MODEL: &str = "steering-model";
 const BACKEND: &str = "steering-backend";
@@ -63,8 +64,7 @@ impl ToolDyn for HeldTool {
 }
 
 async fn wait_for_signed_request_terminal(access: &ConfigAccess, request_id: &str) -> String {
-    crate::support::live_inference::wait_for_request_terminal(access, request_id, STALL_CEILING)
-        .await
+    crate::support::live_inference::wait_for_request_terminal(access, request_id).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -125,7 +125,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(60)
+        .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
         .done()
         .build()
         .await
@@ -229,26 +229,33 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
     runtime.shutdown().await;
 }
 
-#[allow(clippy::too_many_arguments)]
+struct ToolCallMessage<'a> {
+    tool_call_doc: &'a str,
+    tool_call_id: &'a str,
+    request_id: &'a str,
+    content: &'a str,
+    queue: Option<RequestQueue>,
+}
+
 async fn caller_message(
     caller: &RequestActors,
     cause: &agent_transcript::Source,
-    tool_call_doc: &str,
-    tool_call_id: &str,
     target_agent_did: &str,
     session_id: &str,
-    request_id: &str,
-    content: &str,
-    queue: Option<RequestQueue>,
+    message: ToolCallMessage<'_>,
 ) -> String {
+    let ToolCallMessage {
+        tool_call_doc,
+        tool_call_id,
+        request_id,
+        content,
+        queue,
+    } = message;
     let caller_did = caller.agent_did();
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        caller.node_did(),
-        caller_did,
-        target_agent_did,
-        session_id,
+        RequestScope::new(caller.node_did(), caller_did, target_agent_did, session_id),
         content,
         "interactive",
         canonical_now(),
@@ -334,7 +341,7 @@ fn held_runtime(
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(60)
+        .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
         .custom_tool(HeldTool {
             entered: entered.clone(),
             release: release.clone(),
@@ -400,13 +407,15 @@ async fn signed_agent_steering_survives_a_forced_mid_turn_crash() {
     let active = caller_message(
         &caller,
         &cause,
-        &open_call,
-        "agent-new-call",
         worker.agent_did(),
         name,
-        "priority-head",
-        name,
-        None,
+        ToolCallMessage {
+            tool_call_doc: &open_call,
+            tool_call_id: "agent-new-call",
+            request_id: "priority-head",
+            content: name,
+            queue: None,
+        },
     )
     .await;
     let caller_did = caller.agent_did().to_owned();
@@ -445,25 +454,29 @@ async fn signed_agent_steering_survives_a_forced_mid_turn_crash() {
     let queued = caller_message(
         &caller,
         &cause,
-        &queue_call,
-        "agent-message-queue",
         worker.agent_did(),
         name,
-        "priority-queued",
-        "queued turn",
-        Some(steering_queue(QueueDelivery::Queue, "priority-head")),
+        ToolCallMessage {
+            tool_call_doc: &queue_call,
+            tool_call_id: "agent-message-queue",
+            request_id: "priority-queued",
+            content: "queued turn",
+            queue: Some(steering_queue(QueueDelivery::Queue, "priority-head")),
+        },
     )
     .await;
     let steer_doc = caller_message(
         &caller,
         &cause,
-        &steer_call,
-        "agent-message-steer",
         worker.agent_did(),
         name,
-        "priority-steer",
-        "steer at tool boundary",
-        Some(steering_queue(QueueDelivery::Steer, "priority-head")),
+        ToolCallMessage {
+            tool_call_doc: &steer_call,
+            tool_call_id: "agent-message-steer",
+            request_id: "priority-steer",
+            content: "steer at tool boundary",
+            queue: Some(steering_queue(QueueDelivery::Steer, "priority-head")),
+        },
     )
     .await;
     const FIELDS: &str = "lifecycle_state failure_reason superseded_by_request_doc_id";

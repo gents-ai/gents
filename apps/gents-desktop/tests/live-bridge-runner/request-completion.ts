@@ -1,3 +1,4 @@
+import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type {
   ChatSendResult,
@@ -5,7 +6,6 @@ import type {
   TaskRunResult,
 } from "@source-inc/gents-desktop-client";
 import {
-  isTerminalTurnState,
   observeRemoteAheadDesktopLag,
   observeRemoteTerminalDesktopStall,
   requestProgressSignature,

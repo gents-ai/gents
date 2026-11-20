@@ -9,7 +9,7 @@ use gents_protocol::job::{
     JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState, JobReadError,
     JobState, JobView,
 };
-use gents_store::config_client::ConfigAccess;
+use gents_store::config_client::{ConfigAccess, ConfigClientError};
 use gents_toolcalls::background::job::dispatch::split_address;
 use gents_toolcalls::background::job::view::{
     list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
@@ -289,6 +289,7 @@ pub(crate) async fn job_promote(args: JobPromoteArgs) -> Result<()> {
             selector: &args.selector,
             name: args.name.as_deref(),
             agent: args.agent.as_deref(),
+            registry: args.registry.as_deref(),
         },
         &promote::javy_command(),
         &mut |step| {
@@ -366,9 +367,12 @@ async fn control_job_remote(
     view: &JobView,
     kind: JobControlKind,
 ) -> std::result::Result<JobControlOutcome, ControlSendError> {
-    let actor = access.actor_did().ok_or(ControlSendError::NotAuthorized)?;
-    let signer = gents_store::identity::RegisteredIdentity::from_registered_did(&actor, None)
-        .map_err(|error| ControlSendError::Unavailable(error.into()))?;
+    let signer = access.client_signer().map_err(|error| match error {
+        ConfigClientError::ClientAgentSignerRequired | ConfigClientError::ClientSignerMismatch => {
+            ControlSendError::NotAuthorized
+        }
+        error => ControlSendError::Unavailable(error.into()),
+    })?;
     gents_toolcalls::call::control::client::send::control_job(
         access,
         &signer,

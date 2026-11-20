@@ -165,7 +165,14 @@ impl Fixture {
         caps: BTreeSet<String>,
     ) -> HostExecutorContext<'a> {
         HostExecutorContext {
-            owner_node_did: "did:key:zWorkspaceOwner".to_string(),
+            provenance: crate::workspace::WorkspaceProvenance {
+                owner_node_did: "did:key:zWorkspaceOwner".to_string(),
+                writer_principal: "did:key:zWriter".to_string(),
+                integrator_principal: "did:key:zIntegrator".to_string(),
+                caused_by_invocation_id: "inv-1".to_string(),
+                caused_by_correlation: "corr-1".to_string(),
+                route: Default::default(),
+            },
             repository: RepositoryPlacementRef {
                 repository_id: "repo-1".to_string(),
                 owner_node_did: "did:key:zWorkspaceOwner".to_string(),
@@ -174,12 +181,7 @@ impl Fixture {
             },
             ceiling: Some(&self.repo),
             capabilities: caps,
-            writer_principal: "did:key:zWriter".to_string(),
-            integrator_principal: "did:key:zIntegrator".to_string(),
-            caused_by_invocation_id: "inv-1".to_string(),
-            caused_by_correlation: "corr-1".to_string(),
             documents: docs,
-            route: Default::default(),
         }
     }
 }

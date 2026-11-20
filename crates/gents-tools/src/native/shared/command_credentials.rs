@@ -30,13 +30,17 @@ pub(super) struct CredentialProtection {
     paths: BTreeSet<PathBuf>,
 }
 
-pub(super) async fn capture() -> Result<CredentialProtection> {
-    let context = crate::runtime_context::current_tool_runtime_context();
+pub(super) async fn capture(
+    call: &gents_loop::tool::ToolCallEnvelope,
+) -> Result<CredentialProtection> {
+    let context = crate::runtime_context::tool_runtime_context(call);
     let runtime_home = context
         .as_ref()
         .and_then(|context| context.runtime_home.clone());
     let node_did = context.and_then(|context| context.node_did);
-    let approval_home = crate::plugin::approval::workspace::command_context_home();
+    let approval_home = crate::plugin::approval::workspace::command_context_home(
+        crate::runtime_context::host(call).approval.as_ref(),
+    );
     let result = tokio::task::spawn_blocking(move || capture_native(runtime_home, approval_home))
         .await
         .context("credential inspection worker failed")
@@ -68,7 +72,7 @@ fn capture_native(
         .collect::<Vec<_>>();
     // Inactive homes may have a different configuration schema. Their standard
     // credential paths do not require decoding configuration or walking data.
-    for home in inactive_runtime_homes(&homes) {
+    for home in inactive_runtime_homes(&homes)? {
         paths.extend(standard_runtime_credentials(&home));
     }
     if let Some(config) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
@@ -85,28 +89,28 @@ fn capture_native(
     CredentialProtection::capture(paths)
 }
 
+/// Each account's `~/.gents` and the home the operator's commands open without
+/// `--home` (the remembered folder). An unreadable remembered file fails the
+/// capture rather than leaving that home unprotected. The runtime's own home
+/// adds its full credential set through `runtimes` in `capture_native`.
 #[cfg(not(any(test, feature = "test-home-guard")))]
-fn inactive_runtime_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
-    homes
+fn inactive_runtime_homes(homes: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    Ok(homes
         .iter()
         .map(|account| account.join(".gents"))
-        .chain(
-            std::env::var_os("GENTS_HOME")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from),
-        )
-        .collect()
+        .chain(Some(gents_store::local::home::default_home_dir()?))
+        .collect())
 }
 
 #[cfg(any(test, feature = "test-home-guard"))]
-fn inactive_runtime_homes(_homes: &[PathBuf]) -> Vec<PathBuf> {
+fn inactive_runtime_homes(_homes: &[PathBuf]) -> Result<Vec<PathBuf>> {
     static NAMESPACE: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
         tempfile::Builder::new()
             .prefix("gents-test-credentials-")
             .tempdir()
             .unwrap()
     });
-    vec![NAMESPACE.path().join("runtime")]
+    Ok(vec![NAMESPACE.path().join("runtime")])
 }
 
 fn runtime_credentials(home: &Path) -> Result<Vec<PathBuf>> {
@@ -154,8 +158,8 @@ impl CredentialProtection {
         Ok(protection)
     }
 
-    pub(super) async fn revalidate(&self) -> Result<()> {
-        let current = capture().await?;
+    pub(super) async fn revalidate(&self, call: &gents_loop::tool::ToolCallEnvelope) -> Result<()> {
+        let current = capture(call).await?;
         ensure!(
             current.paths == self.paths,
             "Credential exclusions changed while the command awaited approval. Retry the command."

@@ -21,13 +21,14 @@ impl InterruptDisposition {
     }
 }
 
-use gents_protocol::tool_call::AwaitMode;
+use completion_delivery::CompletionDelivery;
+use gents_protocol::tool_call::{AwaitMode, CancelCause, ToolCallState};
 use gents_session::session::plugin_effect_rows::PluginEffectBinding;
-use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
 
+pub mod completion_delivery;
 pub mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -44,7 +45,6 @@ pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
-#[allow(dead_code)]
 pub mod admission_fixture;
 mod recovery;
 mod session_message_call;
@@ -166,6 +166,11 @@ pub struct ToolCallLifecycle {
     cancel_cause: Option<CancelCause>,
     selected_tool_identity: Option<SelectedToolIdentity>,
     pub(crate) await_mode: AwaitMode,
+    /// The Agent's resolved Tools `host.max_background_tool_calls`, checked
+    /// when this call reserves a background slot on its parent request. The
+    /// hook binds it at dispatch; a lifecycle read back from its row uses the
+    /// host ceiling.
+    background_limit: gents_protocol::job::BackgroundLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,6 +267,7 @@ impl ToolCallLifecycle {
             cancel_cause: None,
             selected_tool_identity: None,
             await_mode,
+            background_limit: Default::default(),
         })
     }
 
@@ -302,52 +308,6 @@ impl ToolCallLifecycle {
         self.doc_id.as_deref()
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        node: Arc<EmbeddedNode>,
-        actor: identity::Did,
-        request_id: String,
-        session_id: String,
-        node_did: String,
-        tool_call_id: String,
-        message_sequence: u32,
-        tool_name: String,
-        _args: String,
-        deadline_at: chrono::DateTime<chrono::Utc>,
-    ) -> Self {
-        Self {
-            actor,
-            agent_signer: None,
-            node,
-            request_id,
-            request_doc_id: None,
-            session_id,
-            node_did,
-            requester_did: None,
-            tool_call_id,
-            call_id: None,
-            message_sequence,
-            kind: ToolRowKind::of(&tool_name),
-            tool_name,
-            accepted_header_doc_id: None,
-            arguments: None,
-            execution_generation: None,
-            plugin_receipt: None,
-            plugin_writes: None,
-            file_capture: None,
-            spawned_by_tool_call_doc_id: None,
-            plugin_effect: None,
-            doc_id: None,
-            deadline_at,
-            state: ToolCallState::Pending,
-            started_at: None,
-            failure_class: None,
-            cancel_cause: None,
-            selected_tool_identity: None,
-            await_mode: AwaitMode::Foreground,
-        }
-    }
-
     pub fn with_requester_did(mut self, requester_did: Option<String>) -> Self {
         self.requester_did = requester_did.and_then(|did| {
             let did = did.trim();
@@ -361,6 +321,18 @@ impl ToolCallLifecycle {
         self
     }
 
+    pub(crate) fn with_background_limit(
+        mut self,
+        limit: gents_protocol::job::BackgroundLimit,
+    ) -> Self {
+        self.background_limit = limit;
+        self
+    }
+
+    pub(crate) fn background_limit(&self) -> gents_protocol::job::BackgroundLimit {
+        self.background_limit
+    }
+
     pub(crate) fn with_selected_tool_identity(
         mut self,
         selected: Option<(String, String)>,
@@ -372,52 +344,6 @@ impl ToolCallLifecycle {
             });
         }
         self
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_background_tool(
-        node: Arc<EmbeddedNode>,
-        actor: identity::Did,
-        request_id: String,
-        session_id: String,
-        node_did: String,
-        tool_call_id: String,
-        message_sequence: u32,
-        tool_name: String,
-        _args: String,
-        deadline_at: chrono::DateTime<chrono::Utc>,
-    ) -> Self {
-        Self {
-            actor,
-            agent_signer: None,
-            node,
-            request_id,
-            request_doc_id: None,
-            session_id,
-            node_did,
-            requester_did: None,
-            tool_call_id,
-            call_id: None,
-            message_sequence,
-            kind: ToolRowKind::of(&tool_name),
-            tool_name,
-            accepted_header_doc_id: None,
-            arguments: None,
-            execution_generation: None,
-            plugin_receipt: None,
-            plugin_writes: None,
-            file_capture: None,
-            spawned_by_tool_call_doc_id: None,
-            plugin_effect: None,
-            doc_id: None,
-            deadline_at,
-            state: ToolCallState::Pending,
-            started_at: None,
-            failure_class: None,
-            cancel_cause: None,
-            selected_tool_identity: None,
-            await_mode: AwaitMode::Background,
-        }
     }
 
     /// Deadline expiry is inclusive; fresh output admission uses `now > deadline`.
@@ -452,12 +378,13 @@ impl ToolCallLifecycle {
         if (self.is_background_tool_bridge() || self.is_spawned_background())
             && self.state != ToolCallState::Pending
         {
-            completion_reason
-                .map(|reason| format!("completionPending:{reason}"))
-                .unwrap_or_else(|| "completionPending".to_string())
+            CompletionDelivery::Pending {
+                reason: completion_reason,
+            }
         } else {
-            "completed".to_string()
+            CompletionDelivery::Delivered
         }
+        .render()
     }
 
     pub fn actor(&self) -> &identity::Did {
@@ -616,40 +543,17 @@ impl ToolCallLifecycle {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
-        let node_db = gents_inference::test_support::test_db(
-            "tool-row-kind-is-session-message-for-age",
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = node_db.node.clone();
-        let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
-        let kind_of = |tool_name: &str| {
-            ToolCallLifecycle::new(
-                node.clone(),
-                identity::Did::new(node_db.node_identity.did()).unwrap(),
-                "request".into(),
-                "session".into(),
-                "did:test:owner".into(),
-                "call".into(),
-                0,
-                tool_name.into(),
-                "{}".into(),
-                deadline,
-            )
-            .kind()
-        };
+    #[test]
+    fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
         assert_eq!(
-            kind_of(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME),
+            ToolRowKind::of(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME),
             ToolRowKind::SessionMessage
         );
         assert_eq!(
-            kind_of(gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME),
+            ToolRowKind::of(gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME),
             ToolRowKind::SessionMessage
         );
-        assert_eq!(kind_of("tool"), ToolRowKind::Native);
-        node.shutdown().await.expect("shut down test node");
+        assert_eq!(ToolRowKind::of("tool"), ToolRowKind::Native);
     }
 }
 #[cfg(test)]

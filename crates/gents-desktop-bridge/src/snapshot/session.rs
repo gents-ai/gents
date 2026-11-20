@@ -1,10 +1,12 @@
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 
+use crate::client_runtime::ClientRuntime;
 use chrono::{DateTime, Utc};
-use gents_desktop_core::client::{
-    CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
+use gents_observe::client_projection::query::{
+    CanonicalTranscriptDependencies, SessionTranscriptQueryPage,
 };
+use gents_observe::client_projection::store::ClientStore;
 use gents_protocol::job::{JobOutcome, JobState};
 use gents_protocol::message::Message;
 use gents_protocol::output::rows::TranscriptMessageRow;
@@ -84,14 +86,14 @@ mod timeline_page;
 use command_denial::command_denial_from_row;
 pub use context_projection::attach_last_request_context;
 use context_projection::{build_session_context_from_stores, usize_to_i64};
-pub use live_delta::build_session_live_delta;
+pub use live_delta::{build_session_live_delta, LiveDeltaBase};
 #[cfg(test)]
-pub(crate) use live_delta::build_session_live_delta_from_store;
+pub(crate) use live_delta::{build_session_live_delta_from_store, LiveDeltaStores};
 use pending_turn::{project_pending_turn, project_retry_eligibility};
-use projection::build_session_snapshot_from_store_for_node_with_transcript;
 #[cfg(test)]
 pub(crate) use projection::render_transcript_rows;
 pub(crate) use projection::render_transcript_rows_with_provenance;
+use projection::{build_session_snapshot_from_store_for_node_with_transcript, SessionProjection};
 #[cfg(test)]
 use request_context::decode_latest_request_context;
 use request_context::load_latest_session_request_context;
@@ -285,7 +287,7 @@ struct LoadedReduction {
 
 #[cfg(test)]
 pub fn build_session_snapshot_from_store(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
@@ -294,31 +296,33 @@ pub fn build_session_snapshot_from_store(
 
 #[cfg(test)]
 pub fn build_session_snapshot_from_store_for_node(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     build_session_snapshot_from_store_for_node_with_transcript(
-        store,
-        store,
-        store,
-        None,
-        None,
-        false,
-        true,
-        true,
-        true,
+        SessionProjection {
+            store,
+            transcript_store: store,
+            context_store: store,
+            canonical_dependencies: None,
+            prompt_ownership: None,
+            request_projection: None,
+            transcript_is_bounded: false,
+            context_totals_exact: true,
+            pending_owner_known: true,
+            include_live_tail: true,
+        },
         node_did,
         session_id,
         preferred_request_id,
-        None,
     )
 }
 
 #[cfg(test)]
 pub async fn build_session_snapshot_for_node(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
@@ -335,36 +339,48 @@ pub async fn build_session_snapshot_for_node(
         node_did,
         session_id,
         preferred_request_id,
-        None,
-        None,
-        None,
-        None,
-        true,
-        true,
-        None,
+        SessionReadInputs {
+            transcript_store: None,
+            canonical_dependencies: None,
+            context_store: None,
+            prompt_ownership: None,
+            context_totals_exact: true,
+            include_live_tail: true,
+            request_projection: None,
+        },
     )
     .await
     .expect("test session snapshot read")
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "projection inputs come from separate stores and request options"
-)]
+pub struct SessionReadInputs<'a> {
+    pub transcript_store: Option<&'a ClientStore>,
+    pub canonical_dependencies: Option<&'a CanonicalTranscriptDependencies>,
+    pub context_store: Option<&'a ClientStore>,
+    pub prompt_ownership:
+        Option<&'a gents_observe::client_projection::query::RequestPromptOwnership>,
+    pub context_totals_exact: bool,
+    pub include_live_tail: bool,
+    pub request_projection: Option<&'a [AgentRequestRow]>,
+}
+
 pub async fn build_session_snapshot_for_node_with_transcript(
-    core: &ClientCore,
+    core: &ClientRuntime,
     access: &ConfigAccess,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
-    transcript_store: Option<&ClientStore>,
-    canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
-    context_store: Option<&ClientStore>,
-    prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
-    context_totals_exact: bool,
-    include_live_tail: bool,
-    request_projection: Option<&[AgentRequestRow]>,
+    inputs: SessionReadInputs<'_>,
 ) -> anyhow::Result<Option<DesktopSessionSnapshot>> {
+    let SessionReadInputs {
+        transcript_store,
+        canonical_dependencies,
+        context_store,
+        prompt_ownership,
+        context_totals_exact,
+        include_live_tail,
+        request_projection,
+    } = inputs;
     let (store, projection_revision) = core
         .stores()
         .snapshot_with_revision(node_did.unwrap_or_default());
@@ -444,19 +460,21 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         _ => None,
     };
     let mut snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-        store.as_ref(),
-        transcript_store.unwrap_or(store.as_ref()),
-        context_store.or(transcript_store).unwrap_or(store.as_ref()),
-        canonical_dependencies,
-        prompt_ownership,
-        transcript_store.is_some(),
-        context_totals_exact,
-        context_totals_exact,
-        include_live_tail,
+        SessionProjection {
+            store: store.as_ref(),
+            transcript_store: transcript_store.unwrap_or(store.as_ref()),
+            context_store: context_store.or(transcript_store).unwrap_or(store.as_ref()),
+            canonical_dependencies,
+            prompt_ownership,
+            request_projection,
+            transcript_is_bounded: transcript_store.is_some(),
+            context_totals_exact,
+            pending_owner_known: context_totals_exact,
+            include_live_tail,
+        },
         node_did,
         session_id,
         preferred_request_id,
-        request_projection,
     );
     if let Some(snapshot) = snapshot.as_mut() {
         goal_provenance::attach(
@@ -533,27 +551,28 @@ pub(crate) async fn attach_context_history_rows(
         .iter()
         .map(|row| i64::from(row.message.sequence))
         .collect::<RapidHashSet<_>>();
-    let compactions = match gents_desktop_core::client::load_session_compaction_entries_on(
-        access,
-        session_id,
-        node_did,
-        requester_did,
-    )
-    .await
-    {
-        Ok(entries) => Some(entries),
-        Err(error) if error.permission_denied() => return Err(error),
-        Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                session_id,
-                node_did,
-                error = %error,
-                "loading session compaction history failed"
-            );
-            None
-        }
-    };
+    let compactions =
+        match gents_observe::client_projection::query::load_session_compaction_entries_on(
+            access,
+            session_id,
+            node_did,
+            requester_did,
+        )
+        .await
+        {
+            Ok(entries) => Some(entries),
+            Err(error) if error.permission_denied() => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    node_did,
+                    error = %error,
+                    "loading session compaction history failed"
+                );
+                None
+            }
+        };
     let reductions =
         match request_context::load_session_reductions(access, node_did, session_id, requester_did)
             .await
@@ -887,8 +906,8 @@ async fn fill_job_outcomes(
                 }
             }
             Err(gents_protocol::job::JobReadError::PermissionDenied) => {
-                return Err(crate::error::BridgeError::new(
-                    crate::error::BridgeErrorCode::PermissionDenied,
+                return Err(gents_store::client_error::BridgeError::new(
+                    gents_store::client_error::BridgeErrorCode::PermissionDenied,
                     "Access was denied. Check this client's permissions with the runtime owner.",
                 )
                 .into());
@@ -1153,7 +1172,7 @@ mod retry_eligibility_tests;
 #[cfg(test)]
 mod paging_coverage_tests {
     use super::*;
-    use gents_desktop_core::client::ClientStoreRows;
+    use gents_observe::client_projection::store::ClientStoreRows;
 
     #[test]
     fn many_reduction_rows_collapse_to_one_request_summary_that_pages() {
@@ -1281,7 +1300,8 @@ mod paging_coverage_tests {
                 });
             }
             let store = ClientStore::from_rows(rows);
-            let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+            let mut ownership =
+                gents_observe::client_projection::query::RequestPromptOwnership::default();
             if case.known {
                 let doc = if case.observed_request == 1 {
                     "request-doc"
@@ -1290,7 +1310,7 @@ mod paging_coverage_tests {
                 };
                 ownership.by_request_doc_id.insert(
                     doc.into(),
-                    gents_desktop_core::client::RequestPromptFact {
+                    gents_observe::client_projection::query::RequestPromptFact {
                         node_did: "node".into(),
                         session_id: "session".into(),
                         requester_did: None,
@@ -1301,19 +1321,21 @@ mod paging_coverage_tests {
             }
             let page = ClientStore::default();
             let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-                &store,
-                &page,
-                &store,
-                None,
-                Some(&ownership),
-                true,
-                case.complete,
-                false,
-                true,
+                SessionProjection {
+                    store: &store,
+                    transcript_store: &page,
+                    context_store: &store,
+                    canonical_dependencies: None,
+                    prompt_ownership: Some(&ownership),
+                    request_projection: None,
+                    transcript_is_bounded: true,
+                    context_totals_exact: case.complete,
+                    pending_owner_known: false,
+                    include_live_tail: true,
+                },
                 Some("node"),
                 "session",
                 Some("request"),
-                None,
             )
             .unwrap();
             assert_eq!(

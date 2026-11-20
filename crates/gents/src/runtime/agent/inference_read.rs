@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::sync::Arc;
 
 use gents_inference::inference_observation::{InferenceKey, InferenceSnapshot};
@@ -16,22 +17,25 @@ impl super::Gents {
     /// actor, after the route's native node read gate (Lean `activityResponse`).
     pub async fn read_inference_observation(
         &self,
-        actor: identity::Did,
+        authorization: gents_store::config_client::client_authentication::ClientAuthorization,
         key: &InferenceKey,
     ) -> anyhow::Result<InferenceObservationRead> {
         if key.node != self.node_did() {
             return Ok(InferenceObservationRead::Unavailable);
         }
-        Ok(
-            match observation_route(self.observation_node(), &actor, key).await? {
-                ActivityRoute::Forbidden => InferenceObservationRead::Forbidden,
-                ActivityRoute::Unavailable => InferenceObservationRead::Unavailable,
-                ActivityRoute::Visible => self.inference_observations().snapshot(key).map_or(
-                    InferenceObservationRead::Unavailable,
-                    InferenceObservationRead::Visible,
-                ),
-            },
+        let access = gents_store::config_client::ConfigAccess::local_as(
+            self.observation_node().clone(),
+            authorization.actor().clone(),
         )
+        .with_client_authorization(authorization)?;
+        Ok(match observation_route(&access, key).await? {
+            ActivityRoute::Forbidden => InferenceObservationRead::Forbidden,
+            ActivityRoute::Unavailable => InferenceObservationRead::Unavailable,
+            ActivityRoute::Visible => self.inference_observations().snapshot(key).map_or(
+                InferenceObservationRead::Unavailable,
+                InferenceObservationRead::Visible,
+            ),
+        })
     }
 }
 
@@ -56,8 +60,7 @@ fn activity_route(response: Option<&serde_json::Value>) -> ActivityRoute {
 }
 
 async fn observation_route(
-    node: &Arc<defra_node::Node>,
-    actor: &identity::Did,
+    access: &gents_store::config_client::ConfigAccess,
     key: &InferenceKey,
 ) -> anyhow::Result<ActivityRoute> {
     use gents_protocol::document_query::{
@@ -78,11 +81,8 @@ async fn observation_route(
         ))
         .limit(2);
     let query = QuerySet::new().plain(&sessions).plain(&requests).render();
-    gents_store::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        Some(actor.clone()),
-        "inference_observation.authorize",
-        |txn| {
+    access
+        .transact_readonly("inference_observation.authorize", |txn| {
             Box::pin(async {
                 if !txn
                     .actor_holds_node_permission(
@@ -95,9 +95,8 @@ async fn observation_route(
                 let response = txn.run(&query).await?;
                 Ok::<_, anyhow::Error>(activity_route(Some(&response)))
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
 fn activity_visible(response: &serde_json::Value) -> bool {
@@ -226,7 +225,12 @@ resources:
             })
         }).await.unwrap();
         assert_eq!(
-            observation_route(&node, &actor, &key).await.unwrap(),
+            observation_route(
+                &gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone()),
+                &key
+            )
+            .await
+            .unwrap(),
             ActivityRoute::Unavailable
         );
         node.add_dac_actor_relationship(
@@ -239,7 +243,12 @@ resources:
         .await
         .unwrap();
         assert_eq!(
-            observation_route(&node, &actor, &key).await.unwrap(),
+            observation_route(
+                &gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone()),
+                &key
+            )
+            .await
+            .unwrap(),
             ActivityRoute::Unavailable
         );
         node.add_dac_actor_relationship(
@@ -252,7 +261,12 @@ resources:
         .await
         .unwrap();
         assert_eq!(
-            observation_route(&node, &actor, &key).await.unwrap(),
+            observation_route(
+                &gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone()),
+                &key
+            )
+            .await
+            .unwrap(),
             ActivityRoute::Visible
         );
         // A revoked node read refuses the route even though both documents
@@ -265,7 +279,12 @@ resources:
         .await
         .unwrap();
         assert_eq!(
-            observation_route(&node, &actor, &key).await.unwrap(),
+            observation_route(
+                &gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone()),
+                &key
+            )
+            .await
+            .unwrap(),
             ActivityRoute::Forbidden
         );
         node.shutdown().await.expect("node shutdown");

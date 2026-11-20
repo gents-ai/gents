@@ -9,11 +9,9 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  enrollmentActivationMessage,
   projectRuntimeConnectionStatus,
   runtimeConnectionBlocksAdmission,
-  type EndedAccessView,
-  type EnrollmentRequestView,
+  type ClientAccessRequestView,
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
@@ -58,7 +56,7 @@ import { toastFailure } from "@/lib/failure";
 import { useApp } from "@/app/AppContext";
 import {
   useBootstrap,
-  useEnrollmentRequests,
+  useAccessRequests,
   useHomeDid,
   useSelectedNode,
 } from "@/hooks/useClient";
@@ -72,28 +70,24 @@ import { errorText } from "../../lib/errorText";
 import { useHidden } from "@/lib/hidden";
 import { usePackGroups } from "./agent/ListDetail";
 import { preferences, useOpenOn } from "@/preferences";
-import { endedAccessDetail, endedAccessTitle, leaseLeft } from "../../hooks/nodeAccess";
-import { shortTime } from "./TranscriptMarker";
 
 export function AgentsScreen() {
   const {
-    actions: { removePeer, renamePeer },
+    actions: { removeRuntime, renameRuntime },
   } = useApp();
   const nodes = useFleet(useShallow(fleetNodes));
-  const ended = useFleet((fleet) => fleet.endedAccess);
   const [adding, setAdding] = useState(false);
   const [addingLocal, setAddingLocal] = useState(false);
   const [renaming, setRenaming] = useState<{
-    peerId: string;
+    nodeDid: string;
     label: string;
   } | null>(null);
   const [removing, setRemoving] = useState<{
     nodeDid: string;
-    peerId: string;
     label: string;
   } | null>(null);
   const [removingBusy, setRemovingBusy] = useState(false);
-  const pending = useEnrollmentRequests();
+  const pending = useAccessRequests();
   const homeDid = useHomeDid();
   const bootstrap = useBootstrap();
   const hidden = useHidden();
@@ -124,7 +118,18 @@ export function AgentsScreen() {
     },
     [selected, openOn],
   );
-  const shown = nodes.filter((d) => !hidden.node(d.nodeDid));
+  const waiting = (pending ?? []).filter(
+    (request) =>
+      !nodes.some(
+        (node) =>
+          node.nodeDid === request.nodeDid && node.runtimeConnection === "connected",
+      ),
+  );
+  const shown = nodes.filter(
+    (node) =>
+      !hidden.node(node.nodeDid) &&
+      !waiting.some((request) => request.nodeDid === node.nodeDid),
+  );
   const groupChoices = usePackGroups("nodes");
   const hiddenOpen = groupChoices.isOpen("hidden", false);
   if (addingLocal) {
@@ -138,9 +143,7 @@ export function AgentsScreen() {
   }
   /* a request waits among the remote nodes until its node is listed; the
      node's own row then takes its place */
-  const waiting = (pending ?? []).filter(
-    (r) => !nodes.some((node) => node.nodeDid === r.ownerNode),
-  );
+
   const groups = [
     {
       key: "local",
@@ -183,8 +186,8 @@ export function AgentsScreen() {
         </div>
         {pending === null && (
           <p className="mt-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 text-sm text-muted-foreground">
-            Waiting for the signed enrolment state. New enrolment is disabled until the
-            database can be read.
+            Device access status is unavailable. You can still request access using a
+            node’s server address.
           </p>
         )}
         {groups.map((g) => (
@@ -217,34 +220,31 @@ export function AgentsScreen() {
                 )}
               </h2>
             )}
-            {g.nodes.length === 0 &&
-              !(g.key === "remote" && (waiting.length > 0 || ended.length > 0)) && (
-                <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
-                  <p>
-                    {g.key === "local"
-                      ? "No node runs on this machine; work happens on the remote nodes."
-                      : "No remote nodes paired."}
-                  </p>
-                  {g.key === "local" &&
-                    bootstrap?.initConfigStatus === "absent" &&
-                    supportsLocalManagedServer() && (
-                      <Button
-                        className="mt-3"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => setAddingLocal(true)}
-                      >
-                        Set up local node
-                      </Button>
-                    )}
-                </div>
-              )}
+            {g.nodes.length === 0 && !(g.key === "remote" && waiting.length > 0) && (
+              <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
+                <p>
+                  {g.key === "local"
+                    ? "No node runs on this machine; work happens on the remote nodes."
+                    : "No remote connections."}
+                </p>
+                {g.key === "local" &&
+                  bootstrap?.initConfigStatus === "absent" &&
+                  supportsLocalManagedServer() && (
+                    <Button
+                      className="mt-3"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setAddingLocal(true)}
+                    >
+                      Set up local node
+                    </Button>
+                  )}
+              </div>
+            )}
             {(g.key !== "hidden" || hiddenOpen) && (
               <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
                 {g.key === "remote" &&
                   waiting.map((r) => <PendingNodeRow key={r.requestId} request={r} />)}
-                {g.key === "remote" &&
-                  ended.map((e) => <EndedNodeRow key={e.nodeDid} ended={e} />)}
                 {g.nodes.map((d) => (
                   <AgentRow
                     key={d.nodeDid}
@@ -263,13 +263,13 @@ export function AgentsScreen() {
       </div>
       <AddAgentDialog open={adding} onClose={() => setAdding(false)} />
       <RenameDialog
-        key={renaming?.peerId ?? "none"}
+        key={renaming?.nodeDid ?? "none"}
         title="Rename node"
         description="The saved label on this desktop; the node's own name does not change."
         value={renaming?.label ?? null}
         onSave={async (next) => {
           if (!renaming) return;
-          await renamePeer(renaming.peerId, next);
+          await renameRuntime(renaming.nodeDid, next);
           toast("Renamed");
         }}
         onClose={() => setRenaming(null)}
@@ -308,12 +308,14 @@ export function AgentsScreen() {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.label}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This forgets the peer and its synchronization route on this desktop. It
-              does not delete the remote node.
+              This removes the saved connection from this desktop. It does not delete
+              the remote node or change its access grants.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={removingBusy}>Keep peer</AlertDialogCancel>
+            <AlertDialogCancel disabled={removingBusy}>
+              Keep connection
+            </AlertDialogCancel>
             <AlertDialogAction
               disabled={removingBusy}
               onClick={async (event) => {
@@ -321,17 +323,17 @@ export function AgentsScreen() {
                 if (!removing) return;
                 setRemovingBusy(true);
                 try {
-                  await removePeer(removing.peerId, removing.nodeDid);
-                  toast("Peer removed");
+                  await removeRuntime(removing.nodeDid);
+                  toast("Connection removed");
                   setRemoving(null);
                 } catch (error) {
-                  toastFailure("remove the peer", error);
+                  toastFailure("remove the connection", error);
                 } finally {
                   setRemovingBusy(false);
                 }
               }}
             >
-              {removingBusy ? "Removing…" : "Remove peer"}
+              {removingBusy ? "Removing…" : "Remove connection"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -342,10 +344,9 @@ export function AgentsScreen() {
 
 function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const {
-    actions: { requestStatusEnrollment },
+    actions: { requestRuntimeAccess },
   } = useApp();
   const [address, setAddress] = useState("");
-  const [candidateName, setCandidateName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const close = () => {
@@ -357,17 +358,13 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
     setBusy(true);
     setError(null);
     try {
-      const r = await requestStatusEnrollment(
-        address.trim(),
-        candidateName.trim() || undefined,
-      );
-      toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`);
+      const r = await requestRuntimeAccess(address.trim());
+      toast(`Access request ${r.requestId} sent · waiting for acceptance`);
       setAddress("");
-      setCandidateName("");
       close();
     } catch (e) {
       const reason = errorText(e);
-      setError(`Couldn't request enrolment: ${reason}`);
+      setError(`Couldn't request access: ${reason}`);
     } finally {
       setBusy(false);
     }
@@ -378,8 +375,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
         <DialogHeader>
           <DialogTitle>Add node</DialogTitle>
           <DialogDescription>
-            Enter an invitation or connect to a Gents server. Its admin approves the
-            enrolment.
+            Enter a Gents server address. Its administrator reviews your access request.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -390,7 +386,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
           }}
         >
           <label htmlFor="enrol-address" className="text-sm">
-            Invitation or node server
+            Node server address
           </label>
           <Input
             id="enrol-address"
@@ -399,20 +395,11 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
             autoCorrect="off"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            placeholder="Paste an invitation or enter a server address"
+            placeholder="https://your-node.example"
             className="font-mono"
             disabled={busy}
             autoFocus
             data-testid="fleet-add-server-address"
-          />
-          <label htmlFor="enrol-name" className="text-sm">
-            Your name (optional)
-          </label>
-          <Input
-            id="enrol-name"
-            value={candidateName}
-            onChange={(e) => setCandidateName(e.target.value)}
-            disabled={busy}
           />
         </form>
         {error ? (
@@ -430,7 +417,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
             onClick={() => void submit()}
             data-testid="fleet-fetch-status"
           >
-            {busy ? <Spinner /> : null} {busy ? "Working…" : "Request enrolment"}
+            {busy ? <Spinner /> : null} {busy ? "Working…" : "Request access"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -509,8 +496,8 @@ const AgentRow = memo(function AgentRow({
   /** left out of the menus on this device */
   hidden: boolean;
   onHide: (node: NodeView, hide: boolean) => void;
-  onRename: (peer: { peerId: string; label: string }) => void;
-  onRemove: (peer: { nodeDid: string; peerId: string; label: string }) => void;
+  onRename: (peer: { nodeDid: string; label: string }) => void;
+  onRemove: (peer: { nodeDid: string; label: string }) => void;
 }) {
   const {
     stores,
@@ -524,7 +511,7 @@ const AgentRow = memo(function AgentRow({
   );
   const name = d.node.displayName ?? d.label;
   const connection = projectRuntimeConnectionStatus(d.runtimeConnection);
-  const lease = isLocalNode(d, homeDid) ? null : leaseLeft(d.leaseExpiresAt);
+
   /* the node the app is working with, ringed as the rail's avatar is */
   const active = useSelectedNode()?.nodeDid === d.nodeDid;
   const config = href({
@@ -585,25 +572,9 @@ const AgentRow = memo(function AgentRow({
               {d.label}
             </span>
           )}
-          {lease && (
-            <span
-              data-testid="node-lease"
-              title={
-                d.leaseExpiresAt
-                  ? new Date(d.leaseExpiresAt).toLocaleString()
-                  : undefined
-              }
-              className={cn(
-                "min-w-0 truncate text-xs",
-                lease.soon ? "text-warning" : "text-muted-foreground",
-              )}
-            >
-              {lease.text}
-            </span>
-          )}
-          {d.lastError && (
+          {d.runtime?.lastReconcileError && (
             <span className="min-w-0 truncate text-xs text-muted-foreground">
-              {d.lastError}
+              {d.runtime?.lastReconcileError}
             </span>
           )}
         </span>
@@ -687,7 +658,7 @@ const AgentRow = memo(function AgentRow({
               Configure
             </DropdownMenuItem>
             <DropdownMenuItem
-              onClick={() => onRename({ peerId: d.peerId, label: d.label })}
+              onClick={() => onRename({ nodeDid: d.nodeDid, label: d.label })}
             >
               Rename
             </DropdownMenuItem>
@@ -707,12 +678,11 @@ const AgentRow = memo(function AgentRow({
                   onClick={() =>
                     onRemove({
                       nodeDid: d.nodeDid,
-                      peerId: d.peerId,
                       label: d.label,
                     })
                   }
                 >
-                  Remove peer
+                  Remove connection
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </>
@@ -726,16 +696,47 @@ const AgentRow = memo(function AgentRow({
 /** A node asked to accept this desktop, in the place its row will take: a
     dashed outline where the node's portrait goes, its name, and where the
     request stands. */
-function PendingNodeRow({ request: r }: { request: EnrollmentRequestView }) {
-  const failure = enrollmentActivationMessage(r);
-  const name = r.serverLabel ?? r.serverPeer;
+function PendingNodeRow({ request: r }: { request: ClientAccessRequestView }) {
+  const {
+    actions: { requestRuntimeAccess },
+  } = useApp();
+  const bootstrap = useBootstrap();
+  const saved = bootstrap?.savedRuntimes.find(
+    (runtime) => runtime.nodeDid === r.nodeDid,
+  );
+  const address = saved?.graphql;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const connection = useFleet((state) => state.nodes[r.nodeDid]?.runtimeConnection);
+  const failure = ["rejected", "revoked"].includes(r.state)
+    ? `Access ${r.state}`
+    : r.state === "approved" && connection === "refused"
+      ? "Access refused"
+      : null;
+  const askAgain = async () => {
+    if (!address) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await requestRuntimeAccess(address);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const name = saved?.label || r.nodeDid;
   return (
     <li
       data-testid="pending-node"
       className="flex items-center gap-4 rounded-2xl border border-dashed border-border px-5 py-4"
     >
       <span className="grid size-8 shrink-0 place-items-center rounded-full ring-1 ring-border ring-dashed">
-        <Spinner className="size-3.5 text-muted-foreground" />
+        {failure ? (
+          <Inbox className="size-3.5 text-muted-foreground" />
+        ) : (
+          <Spinner className="size-3.5 text-muted-foreground" />
+        )}
       </span>
       <div className="min-w-0 flex-1">
         <p className="flex min-w-0 items-baseline gap-3">
@@ -744,71 +745,31 @@ function PendingNodeRow({ request: r }: { request: EnrollmentRequestView }) {
           </span>
           <span className="min-w-0 truncate text-sm text-muted-foreground">
             {failure
-              ? "Access approved · connection retrying"
+              ? failure
               : r.state === "approved"
-                ? "Approval received · finishing secure route"
+                ? "Access approved · connecting"
                 : `Waiting for ${name} to accept`}
           </span>
         </p>
-        {failure && (
+        {error && (
           <p role="alert" className="break-words text-sm text-destructive">
-            {failure}
+            {error}
           </p>
+        )}
+        {failure && address && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void askAgain()}
+          >
+            {busy ? "Requesting…" : "Request access again"}
+          </Button>
         )}
         <p className="truncate font-mono text-[11px] text-muted-foreground">
           {r.requestId}
-          {r.state !== "approved" && (
-            <> · expires {new Date(r.expiresAt).toLocaleTimeString()}</>
-          )}
         </p>
       </div>
-    </li>
-  );
-}
-
-/** A joined node this app can no longer use, kept where its row was so the
-    person learns why it went, until they dismiss it or join again. */
-function EndedNodeRow({ ended }: { ended: EndedAccessView }) {
-  const {
-    actions: { dismissEndedAccess },
-  } = useApp();
-  const [busy, setBusy] = useState(false);
-  const when = shortTime(ended.endedAt);
-  return (
-    <li
-      data-testid="ended-node"
-      className="flex items-center gap-4 rounded-2xl border border-dashed border-border px-5 py-4"
-    >
-      <NodeAvatar name={ended.label} className="size-8 opacity-50 grayscale" />
-      <div className="min-w-0 flex-1">
-        <p className="flex min-w-0 items-baseline gap-3">
-          <span className="truncate font-heading text-base font-medium text-muted-foreground">
-            {ended.label}
-          </span>
-          <span className="min-w-0 truncate text-sm text-muted-foreground">
-            {ended.reason === "expired" ? "Access ran out" : "Access revoked"}
-            {when && <> · {when}</>}
-          </span>
-        </p>
-        <p className="text-sm text-muted-foreground">{endedAccessDetail(ended)}</p>
-      </div>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={busy}
-        aria-label={`Dismiss: ${endedAccessTitle(ended)}`}
-        onClick={async () => {
-          setBusy(true);
-          try {
-            await dismissEndedAccess(ended.nodeDid);
-          } catch (error) {
-            toastFailure("Dismiss", error);
-            setBusy(false);
-          }
-        }}
-      >
-        Dismiss
-      </Button>
     </li>
   );
 }

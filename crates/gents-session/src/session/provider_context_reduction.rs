@@ -1283,13 +1283,15 @@ mod tests {
                 Box::pin(async move {
                     crate::session::ensure_session_in_txn(
                         txn,
-                        "session",
-                        node_did,
-                        agent.did(),
-                        requester,
-                        None,
-                        None,
-                        "2026-01-01T00:00:00Z",
+                        crate::session::NewAgentSession {
+                            session_id: "session",
+                            node_did,
+                            agent_did: agent.did(),
+                            requester_did: requester,
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-01-01T00:00:00Z",
+                        },
                     )
                     .await
                     .map(|_| ())
@@ -1852,7 +1854,7 @@ mod tests {
             None,
         )
         .unwrap();
-        crate::test_support::grant_operator_user(
+        gents_store::test_support::grant_operator_user(
             &node,
             &gents_store::test_support::held_runtime_identity(&node_did),
             &outsider,

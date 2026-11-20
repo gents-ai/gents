@@ -22,6 +22,57 @@ def adminClass : List String :=
   ["bypass-dac", "add-nac-relation", "delete-nac-relation", "disable-nac",
    "re-enable-nac", "purge-nac", "enable-dac", "disable-dac", "purge-dac"]
 
+/-- Every native node permission, by wire name. External premise: the pinned
+DefraDB revision's `NodePermission::all`. -/
+def nativePermissions : List String :=
+  ["bypass-dac", "enable-dac", "disable-dac", "purge-dac", "get-dac-status",
+   "add-dac-relation", "delete-dac-relation", "add-dac-policy",
+   "re-enable-nac", "disable-nac", "purge-nac", "get-nac-status",
+   "add-nac-relation", "delete-nac-relation",
+   "patch-collection", "get-collection", "truncate-collection",
+   "read-document", "update-document", "delete-document",
+   "list-index", "new-index", "delete-index", "new-encrypted-index",
+   "list-encrypted-index", "list-all-encrypted-index", "delete-encrypted-index",
+   "get-p2p-peer-info", "connect-p2p-peer", "disconnect-p2p-peer",
+   "get-p2p-active-peers", "add-p2p-replicator", "delete-p2p-replicator",
+   "list-p2p-replicator", "add-p2p-collection", "delete-p2p-collection",
+   "list-p2p-collection", "add-p2p-document", "delete-p2p-document",
+   "list-p2p-document", "sync-p2p-documents", "sync-p2p-collection-versions",
+   "sync-p2p-branchable-collection", "verify-signature", "add-lens", "list-lens",
+   "list-action", "refresh-view", "gc-view", "add-view", "set-migration"]
+
+/-- The native permissions the Node is not granted: reading past document ACP,
+and switching document or node access control off, back on, or clearing it. -/
+def withheldFromNode : List String :=
+  ["bypass-dac", "enable-dac", "disable-dac", "purge-dac", "re-enable-nac", "disable-nac",
+   "purge-nac"]
+
+/-- What the Node holds, the NAC owner being the init User
+(`NodeProvisioning.nacOwner`): every native permission but `withheldFromNode`,
+granted by the owner when the fresh store is first opened, before anything
+else is written. External premise (the pinned DefraDB revision): a node
+operation's own check passes the node's DID whatever it holds, but a document
+read, write or relationship change, and a source projection, checks the acting
+identity's NAC grants with no node exception, so a Node that does not own NAC
+needs these granted. It keeps the NAC relation operations, so it projects the
+Agent baselines of the documents it publishes and delegates what it holds, as
+it did as owner; the held-bounded rule still refuses it the admin relation and
+every admin-class permission (`node_runtime_cannot_grant_admin`), which only
+the owner issues. -/
+def nodeRuntimePermissions : List String :=
+  nativePermissions.filter (!withheldFromNode.contains ·)
+
+theorem node_runtime_does_not_read_past_dac :
+    nodeRuntimePermissions.contains "bypass-dac" = false := by decide
+
+theorem node_runtime_switches_no_enforcement :
+    withheldFromNode.all (!nodeRuntimePermissions.contains ·) = true := by decide
+
+theorem node_runtime_reads_and_writes_documents :
+    ["get-collection", "read-document", "update-document", "delete-document",
+      "add-dac-relation", "delete-dac-relation"].all nodeRuntimePermissions.contains = true := by
+  decide
+
 def nacOperation (delete : Bool) : String :=
   if delete then "delete-nac-relation" else "add-nac-relation"
 
@@ -125,7 +176,9 @@ def Recipient.name : Recipient → String
 /-- Direct grants, issued once by the admission that creates the recipient:
 init (or trial installation) for the init User and the default Agent,
 enrollment for an enrolled User, eval authoring for its scratch home's
-operator. They persist until an explicit revocation. -/
+operator. Each is issued as the NAC owner (`NodeProvisioning.nacOwner`),
+the only actor native admits for the admin relation and admin-class
+permissions. They persist until an explicit revocation. -/
 def directSets : Recipient → List GrantSet
   | .initUser => [.householdOwner]
   | .enrolledUser => [.operatorUser]
@@ -223,6 +276,19 @@ theorem missing_operation_admits_nothing (r : Holder) (c : Change)
     (notAdmin : r.admin = false) (missing : r.holds (nacOperation c.delete) = false) :
     admits r c = false := by
   cases rel : c.relation <;> simp [admits, notAdmin, rel, missing]
+
+/-- The Node as a delegate: it projects every Agent baseline permission, and is
+refused the admin relation and `bypass-dac`. -/
+theorem node_runtime_projects_the_agent_baseline :
+    GrantSet.agentBaseline.permissions.all (fun p =>
+      admits ⟨false, nodeRuntimePermissions⟩ ⟨.permission p, false, true, false⟩) = true := by
+  decide
+
+theorem node_runtime_cannot_grant_admin :
+    admits ⟨false, nodeRuntimePermissions⟩ ⟨.admin, false, true, false⟩ = false ∧
+      admits ⟨false, nodeRuntimePermissions⟩ ⟨.permission "bypass-dac", false, true, false⟩ =
+        false := by
+  decide
 
 theorem recipients_receive_expected_sets :
     receives .initUser = [.householdOwner] ∧

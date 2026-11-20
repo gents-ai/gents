@@ -134,23 +134,13 @@ else
   BUILD_DIRTY=false
   [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] || BUILD_DIRTY=true
   env -u GENTS_BUILD_GIT_TAG GENTS_BUILD_GIT_SHA="$BUILD_SOURCE" GENTS_BUILD_GIT_REF="$BUILD_REF" GENTS_BUILD_GIT_DIRTY="$BUILD_DIRTY" \
-    cargo build --quiet --manifest-path "$ROOT/Cargo.toml" -p gents-cli --bin gents -p gents-fs-runner --bin gents-fs-runner
+    cargo build --quiet --manifest-path "$ROOT/Cargo.toml" -p gents-cli --bin gents
   GENTS="$ROOT/target/debug/gents"
   BUILT_VERSION=$("$GENTS" runtime version)
   case "$BUILT_VERSION" in
     *"$BUILD_SOURCE"*) ;;
     *) echo "built binary does not match checkout $BUILD_SOURCE: $BUILT_VERSION" >&2; exit 1 ;;
   esac
-fi
-
-if [ -z "${GENTS_FS_RUNNER:-}" ] && [ -x "$(dirname "$GENTS")/gents-fs-runner" ]; then
-  export GENTS_FS_RUNNER="$(dirname "$GENTS")/gents-fs-runner"
-fi
-if [ -n "${GENTS_FS_RUNNER:-}" ]; then
-  [ -x "$GENTS_FS_RUNNER" ] || { echo "GENTS_FS_RUNNER is not executable: $GENTS_FS_RUNNER" >&2; exit 1; }
-elif [ "$(python3 -c 'import os,sys; print(os.path.basename(os.path.realpath(sys.argv[1])))' "$GENTS")" != gents ]; then
-  echo "Install gents-fs-runner beside $GENTS, or set GENTS_FS_RUNNER to its executable before running evals." >&2
-  exit 1
 fi
 
 target_field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]][0][sys.argv[3]])' "$TARGET_FILE" "$1" "$2"; }

@@ -17,6 +17,8 @@ use serde_json::Value;
 pub(super) const HTTP_PORT: u16 = 21919;
 pub(super) const NO_MODEL_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 pub(super) const NO_MODEL_NAME: &str = "no-model";
+/// Passed as `--registry`, so setup never reaches the public pack registry.
+pub(super) const NO_REGISTRY: &str = "http://127.0.0.1:9";
 /// The built-in shell turns on mouse capture once raw mode and the alternate screen are on.
 pub(super) const SHELL_UP: &str = "\x1b[?1006h";
 /// Longer than the 60 s `gents` itself waits for the endpoint.
@@ -135,11 +137,20 @@ impl LiveBox {
             .env("HOME", &self.root)
             .env("TERM", "xterm-256color")
             .env("RUST_LOG", "error")
-            .env("GENTS_REGISTRY", "http://127.0.0.1:9")
-            .env_remove("GENTS_HOME")
             .env_remove("XDG_CONFIG_HOME")
-            .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("INFERENCE_ENDPOINT");
+            .env_remove("XDG_RUNTIME_DIR");
+        command
+    }
+
+    /// Bare `gents`, which sets up a home it lacks.
+    pub(super) fn gents_root(&self) -> Command {
+        self.root_from(cli_bin())
+    }
+
+    /// Bare `gents` as run from another copy of the binary.
+    pub(super) fn root_from(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
+        let mut command = self.gents_from(program);
+        command.args(["--registry", NO_REGISTRY]);
         command
     }
 
@@ -160,7 +171,7 @@ impl LiveBox {
 
     /// Bare `gents` choosing file store-key custody, as it would on a first run.
     pub(super) fn first_run(&self) -> Command {
-        let mut command = self.gents();
+        let mut command = self.gents_root();
         command.args(["--store-key-custody", "file"]);
         command
     }
@@ -177,6 +188,7 @@ impl LiveBox {
             .args(["init", "--store-key-custody", "file", "--home"])
             .arg(&home)
             .args(["--inference-url", endpoint, "--model-name", model])
+            .args(["--registry", NO_REGISTRY])
             .output()
             .context("running gents init")?;
         ensure!(
@@ -196,7 +208,7 @@ impl LiveBox {
 
     /// `gents --home <home>`.
     pub(super) fn bare_gents(&self, home: &Path) -> Command {
-        let mut command = self.gents();
+        let mut command = self.gents_root();
         command.arg("--home").arg(home);
         command
     }

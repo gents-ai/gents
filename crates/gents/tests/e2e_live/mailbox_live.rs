@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_documents::mailbox_write_decl::{
     canonical_mailbox_write_decl, MailboxAction, MailboxKind, MailboxNotificationPolicy,
 };
@@ -11,7 +9,7 @@ use gents_protocol::operations::mailbox::{
     MailboxListInput, MailboxReply, MailboxReplyRoute, MailboxReplySource,
 };
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_session::operations::mailbox;
 use gents_store::collection::Collection;
@@ -69,7 +67,7 @@ pub(crate) async fn file(actors: &RequestActors, payload: serde_json::Value) {
     submit_user_request(actors.node_did(), &actors.fixture, SESSION, REQUEST,
         &format!("Call file_mailbox_item with exactly these arguments: {payload}. Then give a brief acknowledgement."), Default::default()).await;
     assert_eq!(
-        wait_for_request_terminal(&actors.fixture.access, REQUEST, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&actors.fixture.access, REQUEST).await,
         "completed"
     );
 }
@@ -188,12 +186,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
     };
     submit_answer(&actors, item, answer, "live-mailbox-reply").await;
     assert_eq!(
-        wait_for_request_terminal(
-            &actors.fixture.access,
-            "live-mailbox-reply",
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&actors.fixture.access, "live-mailbox-reply").await,
         "completed"
     );
     let answered = mailbox::get(&actors.fixture.access, &item.doc_id)
@@ -246,10 +239,12 @@ async fn submit_answer(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        actors.node_did(),
-        actors.fixture.user.did(),
-        actors.agent_did(),
-        SESSION,
+        RequestScope::new(
+            actors.node_did(),
+            actors.fixture.user.did(),
+            actors.agent_did(),
+            SESSION,
+        ),
         reply.content,
         "interactive",
         canonical_now(),
@@ -362,7 +357,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     held.release();
     for id in ["live-mailbox-busy-turn", "live-mailbox-busy-reply"] {
         assert_eq!(
-            wait_for_request_terminal(&actors.fixture.access, id, Duration::from_secs(120)).await,
+            wait_for_request_terminal(&actors.fixture.access, id).await,
             "completed"
         );
     }

@@ -30,9 +30,9 @@ use gents_loop::provider_usage::{sum_charged_from_persisted_parts, sum_persisted
 use gents_protocol::job::keys::decode_job_retry_key;
 use gents_protocol::job_settings::effective_ceiling;
 use gents_protocol::row::AgentRequest;
+use gents_protocol::tool_call::ToolCallState;
 use gents_session::request::admission::load_request_context;
 use gents_session::request::binding::load_agent_request_by_doc_id_with_access;
-use gents_session::session::tool_call_state::ToolCallState;
 use gents_session::tool_call::query::result::load_tool_call_arguments;
 use gents_session::workspace::request_workspace_cwd;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, ConfigRead};
@@ -870,56 +870,33 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "test seed helper takes the seeded row's fields"
-    )]
-    pub(crate) async fn request(
-        node: &std::sync::Arc<EmbeddedNode>,
-        chain: &str,
-        request_id: &str,
-        session_id: &str,
-        retry_key: &str,
-        agent_did: &str,
-        state: &str,
-        title: Option<&str>,
-        created_at: &str,
-        terminalized_at: Option<&str>,
-    ) {
-        let value = child_request(
-            chain,
-            request_id,
-            session_id,
-            retry_key,
-            agent_did,
-            state,
-            title,
-            created_at,
-            terminalized_at,
-        );
-        insert(node, "AgentRequest", value).await;
+    /// A job child AgentRequest a test seeds: its chain, ids, retry key,
+    /// Agent, lifecycle state, title and timestamps.
+    pub(crate) struct ChildRequest<'a> {
+        pub(crate) chain: &'a str,
+        pub(crate) request_id: &'a str,
+        pub(crate) session_id: &'a str,
+        pub(crate) retry_key: &'a str,
+        pub(crate) agent_did: &'a str,
+        pub(crate) state: &'a str,
+        pub(crate) title: Option<&'a str>,
+        pub(crate) created_at: &'a str,
+        pub(crate) terminalized_at: Option<&'a str>,
+    }
+
+    pub(crate) async fn request(node: &std::sync::Arc<EmbeddedNode>, child: &ChildRequest<'_>) {
+        insert(node, "AgentRequest", child_request(child)).await;
     }
 
     /// Seeds a job child request through `access`. A job's children are
     /// created by the job's own Agent, so a fixture whose reads run as that
     /// Agent must seed them through its access.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "test seed helper takes the seeded row's fields"
-    )]
-    pub(crate) async fn request_as(
-        access: &ConfigAccess,
-        chain: &str,
-        request_id: &str,
-        session_id: &str,
-        retry_key: &str,
-        agent_did: &str,
-        state: &str,
-        title: Option<&str>,
-        created_at: &str,
-        terminalized_at: Option<&str>,
-    ) {
-        let value = child_request(
+    pub(crate) async fn request_as(access: &ConfigAccess, child: &ChildRequest<'_>) {
+        insert_as(access, "AgentRequest", child_request(child)).await;
+    }
+
+    fn child_request(child: &ChildRequest<'_>) -> Value {
+        let ChildRequest {
             chain,
             request_id,
             session_id,
@@ -929,25 +906,7 @@ pub(crate) mod tests {
             title,
             created_at,
             terminalized_at,
-        );
-        insert_as(access, "AgentRequest", value).await;
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "test seed helper takes the seeded row's fields"
-    )]
-    fn child_request(
-        chain: &str,
-        request_id: &str,
-        session_id: &str,
-        retry_key: &str,
-        agent_did: &str,
-        state: &str,
-        title: Option<&str>,
-        created_at: &str,
-        terminalized_at: Option<&str>,
-    ) -> Value {
+        } = *child;
         let mut value = json!({
             "request_id": request_id,
             "purpose": "normal",
@@ -1000,41 +959,47 @@ pub(crate) mod tests {
         let chain = "chain-row";
         request(
             &node,
-            chain,
-            "a0",
-            &job_session_id("root", "slot-a", 0),
-            &job_spawn_key("root", "slot-a", 0),
-            "agent-a",
-            "processing",
-            Some("Alpha"),
-            "2026-01-01T00:00:00Z",
-            None,
+            &ChildRequest {
+                chain,
+                request_id: "a0",
+                session_id: &job_session_id("root", "slot-a", 0),
+                retry_key: &job_spawn_key("root", "slot-a", 0),
+                agent_did: "agent-a",
+                state: "processing",
+                title: Some("Alpha"),
+                created_at: "2026-01-01T00:00:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         request(
             &node,
-            chain,
-            "a1",
-            &job_session_id("root", "slot-a", 1),
-            &job_spawn_key("root", "slot-a", 1),
-            "agent-a",
-            "processing",
-            Some("Alpha retry"),
-            "2026-01-01T00:01:00Z",
-            None,
+            &ChildRequest {
+                chain,
+                request_id: "a1",
+                session_id: &job_session_id("root", "slot-a", 1),
+                retry_key: &job_spawn_key("root", "slot-a", 1),
+                agent_did: "agent-a",
+                state: "processing",
+                title: Some("Alpha retry"),
+                created_at: "2026-01-01T00:01:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         request(
             &node,
-            "other-row",
-            "b0",
-            &job_session_id("root", "slot-b", 0),
-            &job_spawn_key("root", "slot-b", 0),
-            "agent-b",
-            "processing",
-            Some("Beta"),
-            "2026-01-01T00:02:00Z",
-            None,
+            &ChildRequest {
+                chain: "other-row",
+                request_id: "b0",
+                session_id: &job_session_id("root", "slot-b", 0),
+                retry_key: &job_spawn_key("root", "slot-b", 0),
+                agent_did: "agent-b",
+                state: "processing",
+                title: Some("Beta"),
+                created_at: "2026-01-01T00:02:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         let access = ConfigAccess::local(node.clone());
@@ -1067,41 +1032,47 @@ pub(crate) mod tests {
         let session = job_session_id("root", "slot-a", 0);
         request(
             &node,
-            chain,
-            "spawn",
-            &session,
-            &job_spawn_key("root", "slot-a", 0),
-            "agent-a",
-            "processing",
-            Some("Alpha"),
-            "2026-01-01T00:00:00Z",
-            None,
+            &ChildRequest {
+                chain,
+                request_id: "spawn",
+                session_id: &session,
+                retry_key: &job_spawn_key("root", "slot-a", 0),
+                agent_did: "agent-a",
+                state: "processing",
+                title: Some("Alpha"),
+                created_at: "2026-01-01T00:00:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         request(
             &node,
-            chain,
-            "message",
-            &session,
-            &job_message_key("root", "slot-a", 0, 1),
-            "agent-message",
-            "processing",
-            None,
-            "2026-01-01T00:05:00Z",
-            None,
+            &ChildRequest {
+                chain,
+                request_id: "message",
+                session_id: &session,
+                retry_key: &job_message_key("root", "slot-a", 0, 1),
+                agent_did: "agent-message",
+                state: "processing",
+                title: None,
+                created_at: "2026-01-01T00:05:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         request(
             &node,
-            chain,
-            "stray",
-            "other-session",
-            "not-a-spawn-key",
-            "agent-x",
-            "processing",
-            Some("Stray"),
-            "2026-01-01T00:06:00Z",
-            None,
+            &ChildRequest {
+                chain,
+                request_id: "stray",
+                session_id: "other-session",
+                retry_key: "not-a-spawn-key",
+                agent_did: "agent-x",
+                state: "processing",
+                title: Some("Stray"),
+                created_at: "2026-01-01T00:06:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         usage(&node, "spawn-call", "spawn", 1, 1).await;
@@ -1125,15 +1096,17 @@ pub(crate) mod tests {
         let chain = "chain-row";
         request(
             &node,
-            chain,
-            "spawn",
-            &job_session_id("root", "slot-a", 0),
-            &job_spawn_key("root", "slot-a", 0),
-            "agent-a",
-            "failed",
-            Some("Alpha"),
-            "2026-01-01T00:00:00Z",
-            Some("2026-01-01T00:00:02Z"),
+            &ChildRequest {
+                chain,
+                request_id: "spawn",
+                session_id: &job_session_id("root", "slot-a", 0),
+                retry_key: &job_spawn_key("root", "slot-a", 0),
+                agent_did: "agent-a",
+                state: "failed",
+                title: Some("Alpha"),
+                created_at: "2026-01-01T00:00:00Z",
+                terminalized_at: Some("2026-01-01T00:00:02Z"),
+            },
         )
         .await;
         let access = ConfigAccess::local(node.clone());
@@ -1157,41 +1130,47 @@ pub(crate) mod tests {
         let session = job_session_id("root", "slot-a", 0);
         request(
             &node,
-            chain,
-            "spawn",
-            &session,
-            &job_spawn_key("root", "slot-a", 0),
-            "agent-a",
-            "processing",
-            Some("Alpha"),
-            "2026-01-01T00:00:00Z",
-            None,
+            &ChildRequest {
+                chain,
+                request_id: "spawn",
+                session_id: &session,
+                retry_key: &job_spawn_key("root", "slot-a", 0),
+                agent_did: "agent-a",
+                state: "processing",
+                title: Some("Alpha"),
+                created_at: "2026-01-01T00:00:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         request(
             &node,
-            chain,
-            "message",
-            &session,
-            &job_message_key("root", "slot-a", 0, 1),
-            "agent-a",
-            "processing",
-            None,
-            "2026-01-01T00:01:00Z",
-            None,
+            &ChildRequest {
+                chain,
+                request_id: "message",
+                session_id: &session,
+                retry_key: &job_message_key("root", "slot-a", 0, 1),
+                agent_did: "agent-a",
+                state: "processing",
+                title: None,
+                created_at: "2026-01-01T00:01:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         request(
             &node,
-            chain,
-            "other",
-            &job_session_id("root", "slot-b", 0),
-            &job_spawn_key("root", "slot-b", 0),
-            "agent-b",
-            "processing",
-            Some("Beta"),
-            "2026-01-01T00:00:00Z",
-            None,
+            &ChildRequest {
+                chain,
+                request_id: "other",
+                session_id: &job_session_id("root", "slot-b", 0),
+                retry_key: &job_spawn_key("root", "slot-b", 0),
+                agent_did: "agent-b",
+                state: "processing",
+                title: Some("Beta"),
+                created_at: "2026-01-01T00:00:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         usage(&node, "c1", "spawn", 10, 4).await;
@@ -1356,15 +1335,17 @@ pub(crate) mod tests {
         {
             request(
                 &node,
-                "chain-row",
-                request_id,
-                request_id,
-                &job_spawn_key(retry_root, "review", 0),
-                "agent-a",
-                "processing",
-                None,
-                "2026-01-01T00:00:00Z",
-                None,
+                &ChildRequest {
+                    chain: "chain-row",
+                    request_id,
+                    session_id: request_id,
+                    retry_key: &job_spawn_key(retry_root, "review", 0),
+                    agent_did: "agent-a",
+                    state: "processing",
+                    title: None,
+                    created_at: "2026-01-01T00:00:00Z",
+                    terminalized_at: None,
+                },
             )
             .await;
         }
@@ -1412,28 +1393,32 @@ pub(crate) mod tests {
         let chain = "chain-row";
         request(
             &node,
-            chain,
-            "stopped",
-            &job_session_id("root", "slot-a", 0),
-            &job_spawn_key("root", "slot-a", 0),
-            "agent-a",
-            "interrupted",
-            None,
-            "2026-01-01T00:00:00Z",
-            Some("2026-01-01T00:00:01Z"),
+            &ChildRequest {
+                chain,
+                request_id: "stopped",
+                session_id: &job_session_id("root", "slot-a", 0),
+                retry_key: &job_spawn_key("root", "slot-a", 0),
+                agent_did: "agent-a",
+                state: "interrupted",
+                title: None,
+                created_at: "2026-01-01T00:00:00Z",
+                terminalized_at: Some("2026-01-01T00:00:01Z"),
+            },
         )
         .await;
         request(
             &node,
-            chain,
-            "pending-selection",
-            &job_session_id("root", "slot-b", 0),
-            &job_spawn_key("root", "slot-b", 0),
-            "agent-b",
-            "completed",
-            None,
-            "2026-01-01T00:00:00Z",
-            Some("2026-01-01T00:00:01Z"),
+            &ChildRequest {
+                chain,
+                request_id: "pending-selection",
+                session_id: &job_session_id("root", "slot-b", 0),
+                retry_key: &job_spawn_key("root", "slot-b", 0),
+                agent_did: "agent-b",
+                state: "completed",
+                title: None,
+                created_at: "2026-01-01T00:00:00Z",
+                terminalized_at: Some("2026-01-01T00:00:01Z"),
+            },
         )
         .await;
         let access = ConfigAccess::local(node.clone());
@@ -1450,28 +1435,32 @@ pub(crate) mod tests {
         let session = job_session_id("root", "slot-a", 0);
         request(
             &node,
-            chain,
-            "spawn",
-            &session,
-            &job_spawn_key("root", "slot-a", 0),
-            "agent-a",
-            "processing",
-            Some("Alpha"),
-            "2026-01-01T00:00:00Z",
-            None,
+            &ChildRequest {
+                chain,
+                request_id: "spawn",
+                session_id: &session,
+                retry_key: &job_spawn_key("root", "slot-a", 0),
+                agent_did: "agent-a",
+                state: "processing",
+                title: Some("Alpha"),
+                created_at: "2026-01-01T00:00:00Z",
+                terminalized_at: None,
+            },
         )
         .await;
         request(
             &node,
-            "elsewhere",
-            "title-audit",
-            &session,
-            "title-audit-key",
-            "agent-a",
-            "completed",
-            None,
-            "2026-01-01T00:03:00Z",
-            Some("2026-01-01T00:03:01Z"),
+            &ChildRequest {
+                chain: "elsewhere",
+                request_id: "title-audit",
+                session_id: &session,
+                retry_key: "title-audit-key",
+                agent_did: "agent-a",
+                state: "completed",
+                title: None,
+                created_at: "2026-01-01T00:03:00Z",
+                terminalized_at: Some("2026-01-01T00:03:01Z"),
+            },
         )
         .await;
         usage(&node, "c1", "spawn", 1, 1).await;
@@ -1505,7 +1494,7 @@ pub(crate) mod tests {
     };
     use crate::background::job::JobBinding;
     use crate::call::lifecycle::admission_fixture::{
-        fixture_job_pin, publish_accepted_on_claimed_request,
+        fixture_job_pin, publish_accepted_on_claimed_request, AcceptedFixtureCall,
     };
     use crate::plugin::executor::PluginExecutor;
     use gents_documents::Tools;
@@ -1585,7 +1574,7 @@ pub(crate) mod tests {
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
             data_collection_schemas: Default::default(),
-            plugin_interface: None,
+            gents_version: None,
         }
     }
 
@@ -1684,10 +1673,12 @@ pub(crate) mod tests {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "request-1",
-            node_did(),
-            agent_did(),
-            agent_did(),
-            "session-1",
+            gents_protocol::request_admission::RequestScope::new(
+                node_did(),
+                agent_did(),
+                agent_did(),
+                "session-1",
+            ),
             "spawn",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -1755,12 +1746,14 @@ pub(crate) mod tests {
                 self.node.clone(),
                 &mut self.request,
                 node_did(),
-                self.turn,
-                tool,
-                call_id,
-                arguments,
-                AwaitMode::Foreground,
-                false,
+                AcceptedFixtureCall {
+                    turn: self.turn,
+                    tool_name: tool,
+                    tool_call_id: call_id,
+                    arguments,
+                    await_mode: AwaitMode::Foreground,
+                    start_running: false,
+                },
             )
             .await
             .unwrap();
@@ -2014,15 +2007,17 @@ pub(crate) mod tests {
         ] {
             request_as(
                 &job.access,
-                &row,
-                request_id,
-                &job_session_id("root", slot, attempt),
-                &job_spawn_key("root", slot, attempt),
-                "agent-a",
-                "processing",
-                Some(request_id),
-                "2026-01-01T00:00:00Z",
-                None,
+                &ChildRequest {
+                    chain: &row,
+                    request_id,
+                    session_id: &job_session_id("root", slot, attempt),
+                    retry_key: &job_spawn_key("root", slot, attempt),
+                    agent_did: "agent-a",
+                    state: "processing",
+                    title: Some(request_id),
+                    created_at: "2026-01-01T00:00:00Z",
+                    terminalized_at: None,
+                },
             )
             .await;
         }

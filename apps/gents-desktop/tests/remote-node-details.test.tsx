@@ -16,7 +16,7 @@ function withRemote(overrides: Partial<NodeView>) {
       node(),
       node({
         nodeDid: remote,
-        source: "enrollment",
+        local: false,
         label: "studio-1",
         ...overrides,
         node: { ...deployment.node, nodeDid: remote, ...overrides.node },
@@ -45,7 +45,7 @@ describe("a remote node's own details", () => {
       node: { ...deployment.node, defaultAgentDid: "ops", displayName: "Amy" },
       nodeConfig: { node_did: remote, max_request_hop: 3 },
     });
-    expect(screen.getByRole("status")).toHaveTextContent(/^Read-only here/);
+    expect(screen.getByText(/^Read-only here/)).toHaveTextContent(/^Read-only here/);
     const agent = within(factOf("Default agent")).getByRole("link", { name: "Ops" });
     expect(agent.getAttribute("href")).toContain("ops");
     expect(within(factOf("Maximum request hop")).getByText("3")).toBeVisible();

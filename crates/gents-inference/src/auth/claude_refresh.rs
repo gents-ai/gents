@@ -1,10 +1,8 @@
 use chrono::{DateTime, Utc};
 use gents_claude::oauth::{self, RefreshFailure};
 
-use crate::auth::claude::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV};
-use crate::auth::credential::token_endpoint::{
-    endpoint_url, BadRequest, TokenEndpoint, TransportDetail,
-};
+use crate::auth::claude::CLAUDE_OAUTH_PRODUCT;
+use crate::auth::credential::token_endpoint::{BadRequest, TokenEndpoint, TransportDetail};
 use crate::auth::credential::{OAuthAuthProblem, RefreshedTokens};
 
 const TOKEN_ENDPOINT: TokenEndpoint = TokenEndpoint {
@@ -15,17 +13,7 @@ const TOKEN_ENDPOINT: TokenEndpoint = TokenEndpoint {
     transport_detail: TransportDetail::Kind,
 };
 
-pub async fn refresh_claude_token(
-    refresh_token: &str,
-    http: &reqwest::Client,
-) -> Result<RefreshedTokens, OAuthAuthProblem> {
-    let endpoint = endpoint_url(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV, || {
-        oauth::TOKEN_URL.to_string()
-    });
-    refresh_claude_token_at(&endpoint, refresh_token, http).await
-}
-
-pub(crate) async fn refresh_claude_token_at(
+pub(crate) async fn refresh_claude_token(
     endpoint: &str,
     refresh_token: &str,
     http: &reqwest::Client,
@@ -108,7 +96,7 @@ mod tests {
     ) -> (Result<RefreshedTokens, OAuthAuthProblem>, String) {
         let (url, handle) = one_shot_token_server(status, body).await;
         let http = reqwest::Client::new();
-        let result = refresh_claude_token_at(&url, "refresh-OLD", &http).await;
+        let result = refresh_claude_token(&url, "refresh-OLD", &http).await;
         (result, handle.await.expect("server"))
     }
 
@@ -159,7 +147,7 @@ mod tests {
             );
             let status = u16::try_from(case.input.status).unwrap();
             let (url, handle) = one_shot_token_server(status, body).await;
-            let result = refresh_claude_token_at(&url, "refresh-OLD", &http).await;
+            let result = refresh_claude_token(&url, "refresh-OLD", &http).await;
             handle.await.expect("server");
             let class = match result {
                 Err(OAuthAuthProblem::Expired) => "expired",

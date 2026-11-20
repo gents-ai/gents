@@ -13,6 +13,7 @@ path = "tests/integration.rs"
 
 [features]
 default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
+vera = ["gents-tools/vera"]
 typescript = ["gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript", "gents-inference/typescript", "gents-p2p/typescript", "gents-pack/typescript", "gents-session/typescript", "gents-tools/typescript"]
 live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference/live-e2e", "gents-p2p/live-e2e", "gents-pack/live-e2e", "gents-session/live-e2e", "gents-tools/live-e2e"]
 test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard", "gents-inference/test-home-guard", "gents-p2p/test-home-guard", "gents-pack/test-home-guard", "gents-session/test-home-guard", "gents-tools/test-home-guard"]
@@ -59,9 +60,6 @@ tempfile = "3"
 kovan-map = "0.2.2"
 afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
 afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
-afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1", default-features = false, features = [
-    "afb-run",
-] }
 
 [dev-dependencies]
 gents-workspace-hack = { workspace = true }

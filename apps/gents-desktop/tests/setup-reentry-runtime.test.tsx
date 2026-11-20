@@ -7,11 +7,13 @@ import { publish, renderIn, testApp } from "./app-fixture";
 
 import {
   BridgeInvokeError,
+  type InferenceDiscoveryRequest,
   type ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
 import { setupErrorMessage } from "../src/lib/setupErrors";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
+import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 
 const CONNECTED = /^(Account connected|Connected as )/;
 
@@ -97,6 +99,7 @@ function holdFailedSignIn(api: MockApi) {
 }
 
 function harness() {
+  const desktopUi = createDesktopUiHarness({ scenario: "empty-fleet" });
   const api: MockApi = {
     getInferenceSetupCatalog: vi.fn().mockResolvedValue(claudeCatalog),
     listProviderAccounts: vi.fn().mockResolvedValue([]),
@@ -109,6 +112,9 @@ function harness() {
     claudeLogin: vi.fn(),
     cancelClaudeLogin: vi.fn().mockResolvedValue(undefined),
     retrySaveProviderAccount: vi.fn(),
+    discoverInferenceModels: vi.fn((request: InferenceDiscoveryRequest) =>
+      desktopUi.adapter.discoverInferenceModels(request),
+    ),
   };
   const app = testApp({
     api,
@@ -116,6 +122,10 @@ function harness() {
   });
   return { api, app };
 }
+
+const providerChoice = () => screen.findByTestId("setup-provider-anthropic");
+
+const unfinished = () => new Promise<never>(() => {});
 
 function reenter(app: DesktopApp) {
   return renderIn(app, <SetupScreen initialStep="inference" onDone={vi.fn()} />);
@@ -134,12 +144,19 @@ describe("setup re-entry at the provider step", () => {
       started = true;
       return status({ state: "running" });
     });
+    api.claudeLogin.mockImplementation(unfinished);
     reenter(app);
 
-    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    const choice = await providerChoice();
     expect(api.startManagedServer).toHaveBeenCalledTimes(1);
     expect(api.startManagedServer).toHaveBeenCalledWith("Local Agent");
+    expect(choice).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
     expect(api.claudeLogin).not.toHaveBeenCalled();
+
+    await userEvent.click(choice);
+    await waitFor(() => expect(api.claudeLogin).toHaveBeenCalledTimes(1));
+    expect(api.startManagedServer).toHaveBeenCalledTimes(1);
   });
 
   it("starts the stopped runtime once under StrictMode's second mount", async () => {
@@ -159,7 +176,7 @@ describe("setup re-entry at the provider step", () => {
       </StrictMode>,
     );
 
-    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(await providerChoice()).toBeVisible();
     expect(api.startManagedServer).toHaveBeenCalledTimes(1);
   });
 
@@ -181,7 +198,7 @@ describe("setup re-entry at the provider step", () => {
 
     approved = true;
     expect(
-      await screen.findByRole("button", { name: "Sign in" }, { timeout: 3_000 }),
+      await screen.findByTestId("setup-provider-anthropic", {}, { timeout: 3_000 }),
     ).toBeVisible();
     expect(api.startManagedServer).not.toHaveBeenCalled();
   });
@@ -205,7 +222,7 @@ describe("setup re-entry at the provider step", () => {
       );
       booting = false;
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+      expect(await providerChoice()).toBeVisible();
       expect(api.startManagedServer).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -218,7 +235,7 @@ describe("setup re-entry at the provider step", () => {
       status({ state: "running", pairingReady: true }),
     );
     reenter(app);
-    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(await providerChoice()).toBeVisible();
     expect(api.startManagedServer).not.toHaveBeenCalled();
   });
 
@@ -226,11 +243,13 @@ describe("setup re-entry at the provider step", () => {
     const { api, app } = harness();
     api.managedServerStatus.mockResolvedValue(status({ state: "failed" }));
     api.startManagedServer.mockRejectedValue(new Error(RAW_FAILURE));
+    api.claudeLogin.mockImplementation(unfinished);
     reenter(app);
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/local node is not running/i);
     expect(alert.textContent).not.toMatch(/http|graphql|127\.0\.0\.1/i);
+    expect(screen.queryByTestId("setup-provider-anthropic")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
     expect(api.claudeLogin).not.toHaveBeenCalled();
 
@@ -238,8 +257,12 @@ describe("setup re-entry at the provider step", () => {
     api.managedServerStatus
       .mockResolvedValueOnce(status({ state: "stopped" }))
       .mockResolvedValue(status({ state: "running", pairingReady: true }));
-    await userEvent.setup().click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    const choice = await providerChoice();
+    expect(api.claudeLogin).not.toHaveBeenCalled();
+    await user.click(choice);
+    await waitFor(() => expect(api.claudeLogin).toHaveBeenCalledTimes(1));
   });
 
   it("shows the bridge's reason when starting the runtime fails", async () => {
@@ -263,7 +286,7 @@ describe("setup re-entry at the provider step", () => {
     reenter(app);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    await user.click(await providerChoice());
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "You are signed in to Claude",
     );
@@ -278,10 +301,42 @@ describe("setup re-entry at the provider step", () => {
     expect(
       screen.queryByRole("button", { name: "Retry save" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Find models" })).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: "Connect and find models" }),
+      await screen.findByRole("option", { name: "claude-sonnet-5" }),
+    ).toBeVisible();
+    expect(api.discoverInferenceModels).toHaveBeenCalledTimes(1);
+    expect(api.discoverInferenceModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeDid: NODE_DID,
+        provider: "anthropic",
+        authMethod: "claude_oauth",
+      }),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /find models/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps the chosen model when the reopened provider is chosen again", async () => {
+    const { api, app } = harness();
+    api.managedServerStatus.mockResolvedValue(
+      status({ state: "running", pairingReady: true }),
+    );
+    api.listProviderAccounts.mockResolvedValue([account]);
+    reenter(app);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("option", { name: "claude-sonnet-5" }));
+    expect(await screen.findByRole("button", { name: "Change model" })).toBeVisible();
+    const choice = await providerChoice();
+    expect(choice).toHaveAttribute("aria-checked", "true");
+    await user.click(choice);
+
+    expect(screen.getByRole("button", { name: "Change model" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Model defaults" })).toBeVisible();
+    expect(api.discoverInferenceModels).toHaveBeenCalledTimes(1);
+    expect(api.claudeLogin).not.toHaveBeenCalled();
   });
 
   it("offers Retry save again after leaving and re-entering setup", async () => {
@@ -292,12 +347,15 @@ describe("setup re-entry at the provider step", () => {
     holdFailedSignIn(api);
     const first = reenter(app);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    await user.click(await providerChoice());
     expect(await screen.findByRole("button", { name: "Retry save" })).toBeVisible();
     first.unmount();
 
     reenter(app);
-    await user.click(await screen.findByRole("button", { name: "Retry save" }));
+    const retry = await screen.findByRole("button", { name: "Retry save" });
+    expect(await providerChoice()).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("region", { name: "Set up Anthropic" })).toBeVisible();
+    await user.click(retry);
     expect(await screen.findByText(CONNECTED)).toBeVisible();
     expect(api.claudeLogin).toHaveBeenCalledTimes(1);
     expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
@@ -365,7 +423,7 @@ describe("setup re-entry at the provider step", () => {
 
   it("skips the runtime gate for a remote node", async () => {
     const { api, app } = harness();
-    const remote = { ...deployment, nodeDid: "did:key:zRemote", source: "enrolled" };
+    const remote = { ...deployment, nodeDid: "did:key:zRemote", local: false };
     publish(app, [remote]);
     renderIn(
       app,
@@ -375,7 +433,7 @@ describe("setup re-entry at the provider step", () => {
         onDone={vi.fn()}
       />,
     );
-    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(await providerChoice()).toBeVisible();
     await waitFor(() => expect(api.getInferenceSetupCatalog).toHaveBeenCalled());
     expect(api.managedServerStatus).not.toHaveBeenCalled();
     expect(api.startManagedServer).not.toHaveBeenCalled();

@@ -355,13 +355,15 @@ pub async fn stage_admitted_request_in_txn(
     }
     crate::session::ensure_session_in_txn(
         txn,
-        &create.session_id,
-        &create.node_did,
-        &create.agent_did,
-        Some(&create.requester_did),
-        create.input.initial_title.clone(),
-        provenance,
-        &create.created_at,
+        crate::session::NewAgentSession {
+            session_id: &create.session_id,
+            node_did: &create.node_did,
+            agent_did: &create.agent_did,
+            requester_did: Some(&create.requester_did),
+            title: create.input.initial_title.clone(),
+            provenance,
+            created_at: &create.created_at,
+        },
     )
     .await?;
     Ok(doc_id)
@@ -395,13 +397,15 @@ pub async fn ensure_request_session_in_txn(
     }
     let created = crate::session::ensure_reserved_session_in_txn(
         txn,
-        &create.session_id,
-        &create.node_did,
-        &create.agent_did,
-        Some(&create.requester_did),
-        create.input.initial_title.clone(),
-        None,
-        &create.created_at,
+        crate::session::NewAgentSession {
+            session_id: &create.session_id,
+            node_did: &create.node_did,
+            agent_did: &create.agent_did,
+            requester_did: Some(&create.requester_did),
+            title: create.input.initial_title.clone(),
+            provenance: None,
+            created_at: &create.created_at,
+        },
     )
     .await?;
     let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
@@ -1474,9 +1478,12 @@ pub async fn reconcile_client_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{grant_operator_user, seed_owned_agent, serve_client_node};
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use crate::test_support::{seed_owned_agent, serve_client_node};
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, RequestPurpose, RequestScope,
+    };
     use gents_store::identity::{KeyIdentity, NodeIdentity};
+    use gents_store::test_support::grant_operator_user;
     use std::sync::Arc;
 
     use crate::test_support::assert_block_signer;
@@ -1497,10 +1504,7 @@ mod tests {
             let mut request = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 "request",
-                user.did(),
-                user.did(),
-                "agent",
-                "session",
+                RequestScope::new(user.did(), user.did(), "agent", "session"),
                 "hello",
                 "interactive",
                 "2026-11-04T00:00:00Z",
@@ -1588,9 +1592,12 @@ mod tests {
             &binding.agent_did,
             runtime.clone(),
             "hello",
-            60,
-            crate::request::lifecycle::ExecutionOrigin::Interactive,
-            "fixture-backend",
+            crate::request::lifecycle::ExecutionBinding {
+                deadline_duration_secs: 60,
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                backend_id: "fixture-backend".into(),
+                operator_tool_root: None,
+            },
             crate::request::lifecycle::TriggerLineage::default(),
             Some(agent.clone()),
         )
@@ -1681,10 +1688,7 @@ mod tests {
         let request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "goal-first",
-            runtime.did(),
-            user.did(),
-            &agent.agent_did,
-            "goal-session",
+            RequestScope::new(runtime.did(), user.did(), &agent.agent_did, "goal-session"),
             "work",
             "interactive",
             "2026-11-04T00:00:00Z",
@@ -1738,10 +1742,12 @@ mod tests {
         let mut autonomous = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "agent-goal-first",
-            runtime.did(),
-            &agent.agent_did,
-            &agent.agent_did,
-            "agent-goal-session",
+            RequestScope::new(
+                runtime.did(),
+                &agent.agent_did,
+                &agent.agent_did,
+                "agent-goal-session",
+            ),
             "work",
             "interactive",
             "2026-11-04T00:00:00Z",
@@ -1817,10 +1823,7 @@ mod tests {
         let mut first = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "first",
-            runtime.did(),
-            user.did(),
-            &agent.agent_did,
-            "first-session",
+            RequestScope::new(runtime.did(), user.did(), &agent.agent_did, "first-session"),
             "hello",
             "interactive",
             "2026-11-04T00:00:00Z",
@@ -1905,7 +1908,7 @@ mod tests {
             (&access, 1),
             (&agent_access, 1),
             (&sibling_access, 0),
-            (&runtime_access, 1),
+            (&runtime_access, 0),
         ] {
             let result = reader.execute(session_query).await.unwrap();
             assert_eq!(
@@ -1962,13 +1965,15 @@ mod tests {
                 Box::pin(async {
                     crate::session::ensure_session_in_txn(
                         txn,
-                        "unattended",
-                        runtime.did(),
-                        &agent.agent_did,
-                        Some(user.did()),
-                        None,
-                        None,
-                        "2026-11-04T00:00:00Z",
+                        crate::session::NewAgentSession {
+                            session_id: "unattended",
+                            node_did: runtime.did(),
+                            agent_did: &agent.agent_did,
+                            requester_did: Some(user.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-11-04T00:00:00Z",
+                        },
                     )
                     .await?;
                     let session =
@@ -2047,10 +2052,7 @@ mod tests {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "retry",
-            runtime.did(),
-            user.did(),
-            &agent.agent_did,
-            "retry-session",
+            RequestScope::new(runtime.did(), user.did(), &agent.agent_did, "retry-session"),
             "hello",
             "interactive",
             "2026-11-04T00:00:00Z",
@@ -2190,10 +2192,7 @@ mod tests {
                 let mut create = AgentRequestCreate::base(
                     RequestPurpose::Normal,
                     request_id,
-                    runtime.did(),
-                    user.did(),
-                    &agent.agent_did,
-                    session,
+                    RequestScope::new(runtime.did(), user.did(), &agent.agent_did, session),
                     "hello",
                     "interactive",
                     created_at,
@@ -2347,10 +2346,12 @@ mod tests {
             let mut forged = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 "forged-delegated-request",
-                runtime.did(),
-                &parent.agent_did,
-                &target.agent_did,
-                "forged-delegated-session",
+                RequestScope::new(
+                    runtime.did(),
+                    &parent.agent_did,
+                    &target.agent_did,
+                    "forged-delegated-session",
+                ),
                 "hello",
                 "interactive",
                 "2026-11-04T00:00:00Z",

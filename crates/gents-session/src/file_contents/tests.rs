@@ -191,7 +191,7 @@ async fn measure_per_observation_file_history_storage() {
         .expect("set GENTS_FILE_STORAGE_MEASUREMENT_OUTPUT to an output path");
     let source = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../gents-migration/src/registry.rs"
+        "/../gents-store/src/schema/catalog/indexes.rs"
     ));
     let source = source.chars().take(32_000).collect::<String>();
     let revisions: Vec<String> = (0..=100)
@@ -202,7 +202,7 @@ async fn measure_per_observation_file_history_storage() {
     let per_observation_text = measure(&directory.path().join("text"), true, &revisions).await;
     let result = json!({
         "workload": "100 observations, same 101 UTF-8 revisions capped at 32000 characters",
-        "base_source": "crates/gents-migration/src/registry.rs",
+        "base_source": "crates/gents-store/src/schema/catalog/indexes.rs",
         "inline_directory_growth_bytes": inline,
         "per_observation_text_directory_growth_bytes": per_observation_text,
         "measurement_scope": "embedded database files after shutdown; same observation metadata, excludes lifecycle writes",

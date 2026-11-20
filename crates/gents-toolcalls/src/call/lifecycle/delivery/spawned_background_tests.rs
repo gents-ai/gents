@@ -978,14 +978,16 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
     crate::background::completion::append_background_tool_completion(
         &node,
         &bridge.access().unwrap(),
-        &bridge.session_id,
-        "request-receipt-completion",
-        &tool_doc_id,
-        &bridge.tool_name,
-        "completed",
-        final_bytes,
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        &crate::background::completion::BackgroundToolCompletion {
+            parent_session_id: &bridge.session_id,
+            parent_request_id: "request-receipt-completion",
+            tool_call_doc_id: &tool_doc_id,
+            tool_name: &bridge.tool_name,
+            status: "completed",
+            result: final_bytes,
+            reason: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        },
     )
     .await
     .unwrap();

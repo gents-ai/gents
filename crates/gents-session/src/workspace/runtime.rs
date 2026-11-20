@@ -18,10 +18,11 @@ use super::action_plan::{
 };
 use super::binding::{admit_workspace_binding, new_binding, release_binding, AdmitBinding};
 use super::documents::{
+    decode_access_rows, read_isolated_workspace_doc, read_workspace_placement_doc,
     workspace_cleanup_docs_mutation, workspace_integrate_docs_mutation,
     workspace_seal_docs_mutation, IsolatedWorkspaceDoc, MemoryWorkspaceDocuments,
-    WorkspaceBindingDoc, WorkspaceDocuments, WorkspacePlacementDoc, WorkspaceReceiptDoc,
-    LIFECYCLE_SEALED, RECEIPT_KIND_WRITER,
+    WorkspaceBindingDoc, WorkspaceDocuments, WorkspaceReceiptDoc, LIFECYCLE_SEALED,
+    RECEIPT_KIND_WRITER,
 };
 use super::executor::cleanup::{execute_cleanup_workspace_plan, CleanupWorkspaceOutcome};
 use super::executor::integrate::{
@@ -31,41 +32,6 @@ use super::executor::integrate::{
 use super::executor::seal::{execute_seal_workspace_plan, SealWorkspaceOutcome};
 use super::executor::{HostExecutorContext, RepositoryPlacementRef};
 use super::overlay::{optional_id, IsolatedWorkspaceRecord};
-
-const ISOLATED_WORKSPACE_FIELDS: &str = r#"
-    workspace_id
-    work_unit_id
-    repository_id
-    base_sha
-    branch
-    creation_policy
-    adapter
-    owner_node_did
-    writer_principal
-    integrator_principal
-    instruction_manifest
-    path_capability
-    seal_hash
-    lifecycle_state
-    caused_by_invocation_id
-    caused_by_correlation
-    handoff_id
-    reply_session_id
-    attempt
-"#;
-
-const PLACEMENT_FIELDS: &str = r#"
-    workspace_id
-    owner_node_did
-    host_path
-    repository_placement_id
-    adapter
-    adapter_version
-    dirty_base
-    dirty_base_summary
-    provisioning_state
-    observed_tree_hash
-"#;
 
 pub(super) fn completion_access(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -224,15 +190,10 @@ pub async fn seal_on_writer_success(
     capabilities.insert(CAP_SEAL_WORKSPACE.to_string());
     let outcome = {
         let mut ctx = HostExecutorContext {
-            owner_node_did: workspace.owner_node_did.clone(),
+            provenance: workspace.provenance(),
             repository,
             ceiling: operator_tool_root,
             capabilities,
-            writer_principal: workspace.writer_principal.clone(),
-            integrator_principal: workspace.integrator_principal.clone(),
-            caused_by_invocation_id: workspace.caused_by_invocation_id.clone(),
-            caused_by_correlation: workspace.caused_by_correlation.clone(),
-            route: workspace.route.clone(),
             documents: &mut docs,
         };
         execute_seal_workspace_plan(&plan, &mut journal, &mut ctx)
@@ -290,15 +251,10 @@ pub async fn integrate_on_integrator_success(
     let trunk = PathBuf::from(&ctx_repository_path(&repository));
     let outcome = {
         let mut ctx = HostExecutorContext {
-            owner_node_did: workspace.owner_node_did.clone(),
+            provenance: workspace.provenance(),
             repository,
             ceiling: operator_tool_root,
             capabilities,
-            writer_principal: workspace.writer_principal.clone(),
-            integrator_principal: workspace.integrator_principal.clone(),
-            caused_by_invocation_id: workspace.caused_by_invocation_id.clone(),
-            caused_by_correlation: workspace.caused_by_correlation.clone(),
-            route: workspace.route.clone(),
             documents: &mut docs,
         };
         execute_integrate_workspace_plan(&plan, &mut journal, &mut ctx)
@@ -343,15 +299,10 @@ pub async fn cleanup_workspace(
     capabilities.insert(CAP_CLEANUP_WORKSPACE.to_string());
     let outcome = {
         let mut ctx = HostExecutorContext {
-            owner_node_did: workspace.owner_node_did.clone(),
+            provenance: workspace.provenance(),
             repository,
             ceiling: operator_tool_root,
             capabilities,
-            writer_principal: workspace.writer_principal.clone(),
-            integrator_principal: workspace.integrator_principal.clone(),
-            caused_by_invocation_id: workspace.caused_by_invocation_id.clone(),
-            caused_by_correlation: workspace.caused_by_correlation.clone(),
-            route: workspace.route.clone(),
             documents: &mut docs,
         };
         execute_cleanup_workspace_plan(&plan, &mut journal, &mut ctx)
@@ -822,27 +773,10 @@ pub(super) async fn load_docs_with_access(
     node_did: &str,
 ) -> Result<MemoryWorkspaceDocuments> {
     let mut docs = MemoryWorkspaceDocuments::default();
-    let query = isolated_workspace_doc_query(workspace_id, node_did);
-    let response = access.execute(&query).await?;
-    let mut workspaces: Vec<IsolatedWorkspaceDoc> =
-        decode_access_rows(&response, "IsolatedWorkspace")?;
-    anyhow::ensure!(
-        workspaces.len() <= 1,
-        "ambiguous node-scoped IsolatedWorkspace"
-    );
-    if let Some(workspace) = workspaces.pop() {
+    if let Some(workspace) = read_isolated_workspace_doc(access, workspace_id, node_did).await? {
         docs.write_isolated_workspace(workspace)?;
     }
-    let response = access
-        .execute(&placement_doc_query(workspace_id, node_did))
-        .await?;
-    let mut placements: Vec<WorkspacePlacementDoc> =
-        decode_access_rows(&response, "WorkspacePlacement")?;
-    anyhow::ensure!(
-        placements.len() <= 1,
-        "ambiguous node-scoped WorkspacePlacement"
-    );
-    if let Some(placement) = placements.pop() {
+    if let Some(placement) = read_workspace_placement_doc(access, workspace_id, node_did).await? {
         docs.write_placement(placement)?;
     }
     for binding in
@@ -857,17 +791,6 @@ pub(super) async fn load_docs_with_access(
         docs.write_receipt(receipt)?;
     }
     Ok(docs)
-}
-
-fn decode_access_rows<T>(response: &serde_json::Value, collection: &str) -> Result<Vec<T>>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let values = response
-        .get("data")
-        .and_then(|data| data.get(collection))
-        .with_context(|| format!("{collection} query omitted rows"))?;
-    Ok(serde_json::from_value(values.clone())?)
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -906,32 +829,6 @@ fn workspace_receipts_query(workspace_id: &str) -> String {
             }}
         }}"#,
         id = escape_graphql_string(workspace_id),
-    )
-}
-
-fn isolated_workspace_doc_query(workspace_id: &str, node_did: &str) -> String {
-    format!(
-        r#"{{
-            IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
-                limit: 2
-            ) {{ {ISOLATED_WORKSPACE_FIELDS} }}
-        }}"#,
-        id = escape_graphql_string(workspace_id),
-        owner = escape_graphql_string(node_did),
-    )
-}
-
-fn placement_doc_query(workspace_id: &str, node_did: &str) -> String {
-    format!(
-        r#"{{
-            WorkspacePlacement(
-                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
-                limit: 2
-            ) {{ {PLACEMENT_FIELDS} }}
-        }}"#,
-        id = escape_graphql_string(workspace_id),
-        owner = escape_graphql_string(node_did),
     )
 }
 

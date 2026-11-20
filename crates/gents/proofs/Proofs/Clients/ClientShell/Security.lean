@@ -24,6 +24,14 @@ def send (gesture confirmed sameTarget : Bool) : Bool :=
 def openExternal (gesture : Bool) : Bool :=
   gesture
 
+/-- A plugin page in a window of its own goes to a place within that page
+    there. Any other place opens in the main view, which comes forward over
+    whatever the person is using, so that follows the person's own gesture,
+    as opening a link does: a page could otherwise reopen a main view the
+    person closed, and take their typing, on a timer. -/
+def pageWindowNavigate (withinPage gesture : Bool) : Bool :=
+  withinPage || gesture
+
 theorem developmentRequiresChoice (manifest : Option Bool) :
     pluginEnabled true manifest none = false := by rfl
 
@@ -34,6 +42,8 @@ theorem changedTargetNeverSends (gesture confirmed : Bool) :
     send gesture confirmed false = false := by simp [send]
 
 theorem openingNeedsGesture : openExternal false = false := rfl
+
+theorem mainViewNeedsGesture : pageWindowNavigate false false = false := rfl
 
 theorem unrelatedOriginRefused (applicationWindow : Bool) :
     navigate applicationWindow false false false = false := by cases applicationWindow <;> rfl

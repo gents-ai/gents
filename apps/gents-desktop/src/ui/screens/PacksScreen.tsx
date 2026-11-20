@@ -1,4 +1,5 @@
 import {
+  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -18,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@gents/ui/components/select";
-import { Tabs, TabsList, TabsTrigger } from "@gents/ui/components/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@gents/ui/components/tabs";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { FoundPack } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
@@ -68,7 +69,6 @@ import {
   partsOf,
   publisherOf,
   readInstalledPacks,
-  readPackInfo,
   readRegistryAccount,
   rememberPacksAuthor,
   rememberPacksQuery,
@@ -363,7 +363,7 @@ function PacksHome({
   scroller: HTMLElement | null;
 }) {
   const { actions } = useApp();
-  const { packs, unread, info } = useInstalledPacks();
+  const { packs, unread } = useInstalledPacks();
   const records = useUxPluginRecords();
   const pages = useContributions(PLUGIN_PAGE_AREA);
   const { busy, install, update, remove } = packActions;
@@ -392,9 +392,6 @@ function PacksHome({
   const blocked = elsewhere(local, name);
 
   useEffect(() => {
-    if (local) for (const p of packs ?? []) void readPackInfo(actions, p.pack);
-  }, [actions, local, packs]);
-  useEffect(() => {
     void readRegistryAccount(actions);
   }, [actions]);
   const me = useRegistryAccount();
@@ -415,7 +412,12 @@ function PacksHome({
   const listed = fromAuthor;
 
   return (
-    <>
+    <Tabs
+      value={view}
+      onValueChange={(v) => setView(v as "installed" | "registry")}
+      /* the tabs reach across the page without drawing a box of their own */
+      className="contents"
+    >
       <header className="grid gap-4">
         <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
           <div className="grid min-w-0 flex-1 gap-1">
@@ -453,11 +455,7 @@ function PacksHome({
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           {local && (
-            <Tabs
-              value={view}
-              onValueChange={(v) => setView(v as "installed" | "registry")}
-              className="w-max"
-            >
+            <div className="w-max">
               <TabsList
                 variant="line"
                 aria-label="Show"
@@ -473,7 +471,7 @@ function PacksHome({
                   Registry
                 </TabsTrigger>
               </TabsList>
-            </Tabs>
+            </div>
           )}
           <Input
             value={query}
@@ -492,7 +490,7 @@ function PacksHome({
       {local && view === "installed" && <StarterPacksSection />}
 
       {/* one list at a time: your packs, or the registry's */}
-      <section aria-label="Packs" className="grid gap-2">
+      <PacksList tabbed={local} view={view}>
         {view === "installed" && query.trim() !== "" && elsewhereFound.length > 0 && (
           <MoreRow onClick={() => setView("registry")}>
             {elsewhereFound.length} more in the registry
@@ -512,22 +510,21 @@ function PacksHome({
           ) : (
             <PackList label="Installed packs">
               {shown.map((p) => {
-                const read = info[p.pack];
                 const status = statusOf(p);
                 return (
                   <PackCard
                     key={p.pack}
                     pack={p.pack}
                     to={href({ name: "packs", item: p.pack })}
-                    description={
-                      read && read !== "unread" ? text(read.description) : null
-                    }
+                    /* the registry's words came with the list: no
+                       request for each pack */
+                    description={text(p.description)}
                     adds={
                       node ? partsOf(node, p.pack, records, pages).map(partLabel) : []
                     }
                     status={status.text}
                     warn={status.warn}
-                    badge={publisherOf(read, me)?.yours ? "Yours" : null}
+                    badge={publisherOf({ owner: p.owner }, me)?.yours ? "Yours" : null}
                     menu={
                       <PackMenu
                         opens
@@ -539,7 +536,7 @@ function PacksHome({
                             : []),
                           {
                             label: "Remove",
-                            run: () => void remove(p.pack),
+                            run: () => void remove(p.pack, node),
                             destructive: true,
                           },
                         ]}
@@ -671,7 +668,7 @@ function PacksHome({
             )}
           </>
         )}
-      </section>
+      </PacksList>
 
       {plugins.length > 0 && view === "installed" && query.trim() === "" && (
         <Section title="Local plugins">
@@ -693,7 +690,7 @@ function PacksHome({
           </ul>
         </Section>
       )}
-    </>
+    </Tabs>
   );
 }
 
@@ -703,3 +700,25 @@ const keywordsOf = (pack: FoundPack): string[] =>
   Array.isArray(pack.keywords)
     ? pack.keywords.filter((k): k is string => typeof k === "string")
     : [];
+
+/** The list of packs. On the desktop's own node it is the tabs' panel: the
+    tab shown names it, and it names the tab back. */
+function PacksList({
+  tabbed,
+  view,
+  children,
+}: {
+  tabbed: boolean;
+  view: string;
+  children: ReactNode;
+}) {
+  return tabbed ? (
+    <TabsContent value={view} aria-label="Packs" className="grid flex-none gap-2">
+      {children}
+    </TabsContent>
+  ) : (
+    <section aria-label="Packs" className="grid gap-2">
+      {children}
+    </section>
+  );
+}

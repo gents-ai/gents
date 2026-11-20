@@ -13,10 +13,10 @@ import { deployment } from "./config-panel-wiring/fixtures";
 function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
-    lastError: null,
+
     runtimeCount: 1,
     connectedRuntimeCount: 1,
-    activationErrorCount: 0,
+
     cause: null,
     nextAction: null,
     ...overrides,
@@ -42,15 +42,8 @@ function renderRow(dep: DeploymentView, sync = syncHealth()) {
 
 describe("fleet health visibility", () => {
   it("labels statuses instead of relying on a hover dot", () => {
-    expect(
-      deploymentStatus({ ...deployment, dialSucceeded: true, lastError: null }).label,
-    ).toBe("Online");
-    expect(
-      deploymentStatus(
-        { ...deployment, dialSucceeded: true, lastError: null },
-        syncHealth(),
-      ).label,
-    ).toBe("Online");
+    expect(deploymentStatus({ ...deployment }).label).toBe("Online");
+    expect(deploymentStatus({ ...deployment }, syncHealth()).label).toBe("Online");
     // The label is the presentation owner's (its reason is checked against
     // Lean in lean-conformance/runtime-connection); an outage never reads as
     // a connection attempt.
@@ -63,8 +56,6 @@ describe("fleet health visibility", () => {
     expect(
       deploymentStatus({
         ...deployment,
-        dialSucceeded: false,
-        lastError: "dial timeout",
       }).label,
     ).toBe("Online");
   });
@@ -72,9 +63,8 @@ describe("fleet health visibility", () => {
   it("keeps enrolled chat available when current readiness has an old observation timestamp", () => {
     const stale = {
       ...deployment,
-      source: "enrollment",
-      dialSucceeded: true,
-      lastError: null,
+      local: false,
+
       nodeReadiness: {
         ...deployment.nodeReadiness,
         source: { state: "current" as const },
@@ -88,29 +78,37 @@ describe("fleet health visibility", () => {
     });
     expect(deploymentStatus(stale, syncing).label).toBe("Online");
     renderRow(stale, syncing);
-    expect(screen.getByTestId("fleet-chat-peer-1")).toBeEnabled();
+    expect(screen.getByTestId(`fleet-chat-${deployment.nodeDid}`)).toBeEnabled();
   });
 
-  it("shows a separate P2P error alongside runtime status", () => {
-    renderRow({ ...deployment, dialSucceeded: true, lastError: "dial timeout" });
-    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Online");
-    expect(screen.getByTestId("fleet-error-peer-1")).toHaveTextContent("dial timeout");
+  it("shows the runtime refusal instead of claiming the node is online", () => {
+    renderRow({ ...deployment, runtimeConnection: "refused" });
+    expect(screen.getByTestId(`fleet-status-${deployment.nodeDid}`)).toHaveTextContent(
+      "Refused",
+    );
+    expect(screen.getByTestId(`fleet-chat-${deployment.nodeDid}`)).toBeDisabled();
   });
 
   it("shows useful document counts instead of transport identifiers", () => {
-    renderRow({ ...deployment, dialSucceeded: true, lastError: null });
-    expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
+    renderRow({ ...deployment });
+    expect(screen.getByTestId(`fleet-summary-${deployment.nodeDid}`)).toHaveTextContent(
       "2 agents · 0 sessions · 2 tasks",
     );
     expect(screen.queryByRole("button", { name: "Copy DID" })).not.toBeInTheDocument();
     expect(screen.queryByText(/GraphQL/)).not.toBeInTheDocument();
-    expect(screen.queryByTestId("fleet-error-peer-1")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId(`fleet-error-${deployment.nodeDid}`),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the fleet actions focused on sessions and configuration", () => {
-    renderRow({ ...deployment, dialSucceeded: true, lastError: null });
-    expect(screen.getByTestId("fleet-chat-peer-1")).toBeInTheDocument();
-    expect(screen.getByTestId("fleet-config-peer-1")).toBeInTheDocument();
-    expect(screen.queryByTestId("fleet-code-peer-1")).not.toBeInTheDocument();
+    renderRow({ ...deployment });
+    expect(screen.getByTestId(`fleet-chat-${deployment.nodeDid}`)).toBeInTheDocument();
+    expect(
+      screen.getByTestId(`fleet-config-${deployment.nodeDid}`),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId(`fleet-code-${deployment.nodeDid}`),
+    ).not.toBeInTheDocument();
   });
 });
