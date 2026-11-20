@@ -254,15 +254,17 @@ private def chunkedEntries (entries : Array (TSyntax `term)) : TermElabM (TSynta
 /-- The snapshot entries of every `conformance_function` and
 `conformance_family` in the import closure. A family's key drops a leading
 `Conformance` namespace. -/
-elab "conformance_families%" : term => do
+elab "conformance_function_entries%" : term => do
   let declarations := (functionExtension.getState (← getEnv)).qsort Name.lt
   let functions ← declarations.mapM fun declaration => do
     `(($(quote (wireKey declaration)), $(← familyTerm declaration)))
+  elabTerm (← chunkedEntries functions) none
+
+elab "conformance_family_entries%" : term => do
   let explicit ← ((familyExtension.getState (← getEnv)).qsort Name.lt).mapM fun declaration => do
     let key := wireKey (declaration.replacePrefix `Conformance .anonymous)
     `(($(quote key), $(← explicitFamilyTerm declaration)))
-  let entries := functions ++ explicit
-  elabTerm (← `(Json.mkObj $(← chunkedEntries entries))) (some (mkConst ``Json))
+  elabTerm (← chunkedEntries explicit) none
 
 /-- The wire names of every enum with a `conformance_vocabulary`. The key ends
 in `_vocabulary`: `ManagedExec.StopOutcome` and `ManagedExec.stopOutcome` would

@@ -629,7 +629,10 @@ async fn apply(
                 &access,
                 &owner,
                 home,
-                &source,
+                gents_pack::pack::plugin_wire::SentPack {
+                    archive: &source,
+                    approval: None,
+                },
                 &[engineer.to_owned()],
                 gents_pack::pack::plugin_wire::WireConsent {
                     dynamic: wiring.consent_dynamic,

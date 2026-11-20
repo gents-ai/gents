@@ -150,7 +150,7 @@ pub fn check_plugin_ownership(
 
 /// External premise: a missing record file reaches here only as a
 /// `std::io::Error` of kind `NotFound` in the erased chain.
-pub(crate) fn is_not_found(error: &anyhow::Error) -> bool {
+pub fn is_not_found(error: &anyhow::Error) -> bool {
     gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| {
         cause
             .downcast_ref::<std::io::Error>()

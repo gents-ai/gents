@@ -715,6 +715,406 @@ theorem hosted_effect_requires_approved_plan (actor graph native : Bool) :
     hostedPackEffectAllowed actor graph false native = false := by
   simp [hostedPackEffectAllowed]
 
+/-- What a wiring plan reads of an installed plugin: the pack that owns it,
+by digest and coordinate, and the rest of its record the plan writes from
+(its name, version, artifact digest and declaration), here `record`. -/
+structure WireSubject where
+  packDigest : String
+  coordinate : String
+  /-- The plugin's own coordinate, `namespace/name`, which the wiring pins. -/
+  plugin : String
+  record : String
+  deriving DecidableEq, Repr
+
+/-- Where a client's wiring plan takes the plugin's record from. -/
+inductive WireRecord where
+  /-- Inside an install: from the pack the client itself just sent. -/
+  | sentPack (subject : WireSubject)
+  /-- From the plugin store of the client's own home, which the runtime
+  serves: state the client keeps itself. -/
+  | ownHome (subject : WireSubject)
+  /-- A standalone wire over a runtime: from the record the runtime serves. -/
+  | served (subject : WireSubject)
+  deriving DecidableEq, Repr
+
+def WireRecord.subject : WireRecord → WireSubject
+  | .sentPack subject | .ownHome subject | .served subject => subject
+
+/-- Decision (gents#3962): a client wiring a plugin over a runtime plans from
+a record it can tie to a pack it chose itself, never from the runtime's word.
+Inside an install that is the pack it just sent, and over a runtime that
+serves the client's own home it is that home's plugin store. Otherwise the
+runtime serves the record, and the client takes it only when it is exactly
+what a pack the client approved and recorded (`approved`) yields: an unknown
+pack digest, or a known digest with any other record, plans nothing and
+nothing is signed. Whatever the source, the record must name the plugin the
+client asked to wire (`requested`): the wiring pins the record's coordinate,
+so a record of any other plugin, approved or not, plans nothing. -/
+def wirePlanSubject (requested : String) (approved : List WireSubject) (record : WireRecord) :
+    Option WireSubject :=
+  if record.subject.plugin ≠ requested then none
+  else match record with
+    | .sentPack subject => some subject
+    | .ownHome subject => some subject
+    | .served subject => if approved.contains subject then some subject else none
+
+theorem a_record_of_another_plugin_plans_nothing (requested : String)
+    (approved : List WireSubject) (record : WireRecord) (other : record.subject.plugin ≠ requested) :
+    wirePlanSubject requested approved record = none := by
+  simp [wirePlanSubject, other]
+
+theorem a_planned_record_names_the_requested_plugin (requested : String)
+    (approved : List WireSubject) (record : WireRecord) (subject : WireSubject)
+    (planned : wirePlanSubject requested approved record = some subject) :
+    subject.plugin = requested := by
+  unfold wirePlanSubject at planned
+  split at planned
+  · cases planned
+  · rename_i named
+    cases record with
+    | sentPack sent => simp at planned; subst planned; simpa [WireRecord.subject] using named
+    | ownHome kept => simp at planned; subst planned; simpa [WireRecord.subject] using named
+    | served served =>
+      simp only at planned
+      split at planned
+      · simp at planned; subst planned; simpa [WireRecord.subject] using named
+      · cases planned
+
+theorem a_served_record_of_no_approved_pack_plans_nothing (requested : String)
+    (approved : List WireSubject)
+    (subject : WireSubject) (unknown : ∀ kept ∈ approved, kept.packDigest ≠ subject.packDigest) :
+    wirePlanSubject requested approved (.served subject) = none := by
+  have absent : subject ∉ approved := fun mem => unknown subject mem rfl
+  simp [wirePlanSubject, absent]
+
+theorem an_altered_served_record_plans_nothing (requested : String)
+    (approved : List WireSubject)
+    (subject : WireSubject)
+    (altered : ∀ kept ∈ approved, kept.packDigest = subject.packDigest → kept ≠ subject) :
+    wirePlanSubject requested approved (.served subject) = none := by
+  have absent : subject ∉ approved := fun mem => altered subject mem rfl rfl
+  simp [wirePlanSubject, absent]
+
+theorem a_wire_plans_only_from_its_own_pack_or_an_approved_one (requested : String)
+    (approved : List WireSubject) (record : WireRecord) (subject : WireSubject)
+    (planned : wirePlanSubject requested approved record = some subject) :
+    record = .sentPack subject ∨ record = .ownHome subject ∨ subject ∈ approved := by
+  unfold wirePlanSubject at planned
+  split at planned
+  · cases planned
+  · cases record with
+    | sentPack sent => simp at planned; exact .inl (by rw [planned])
+    | ownHome kept => simp at planned; exact .inr (.inl (by rw [planned]))
+    | served served =>
+      simp only at planned
+      split at planned
+      · rename_i kept
+        simp at planned
+        subst planned
+        exact .inr (.inr (by simpa using kept))
+      · cases planned
+
+/-- A write the runtime proposes while a client wires is signed only when it
+matches the client's own plan (`hostedPackEffectAllowed`); a wire that plans
+nothing has no plan to match, so it signs nothing. -/
+theorem a_wire_with_no_plan_signs_no_write (requested : String) (approved : List WireSubject)
+    (record : WireRecord) (unplanned : wirePlanSubject requested approved record = none)
+    (actor graph native : Bool) :
+    hostedPackEffectAllowed actor graph (wirePlanSubject requested approved record).isSome native
+      = false := by
+  simp [unplanned, hostedPackEffectAllowed]
+
+/-- Decision (gents#3962): over a runtime that serves another home, a client
+signs only document ids that the pack it approved yields: the Tools and Skill
+ids of the plugin's own pack, which the wiring reads its reviewed job from
+and attaches to the agent's Context, and the AgentTarget ids of each pack it
+wires targets from (`--targets-from`). A pack's ids are its configuration's
+own, fixed by the pack, the node and the install variables the client
+supplied, so the approval records them (`approved`); when the approval could
+not derive them, say because the configuration reads a variable only the
+runtime's environment supplies, it records none and nothing of that pack is
+wired. An id the runtime reports that the pack does not yield plans
+nothing. -/
+def wireApprovedIds (approved : Option (List String)) (served : List String) :
+    Option (List String) :=
+  match approved with
+  | none => none
+  | some ids => if served.all ids.contains then some served else none
+
+theorem an_id_the_approved_pack_does_not_yield_plans_nothing (ids served : List String)
+    (target : String) (reported : target ∈ served) (foreign : target ∉ ids) :
+    wireApprovedIds (some ids) served = none := by
+  have : served.all ids.contains = false := by
+    rw [List.all_eq_false]
+    exact ⟨target, reported, by simpa using foreign⟩
+  simp [wireApprovedIds, this]
+
+theorem an_approval_without_ids_wires_none (served : List String) :
+    wireApprovedIds none served = none := rfl
+
+theorem wired_ids_are_approved_ids (ids served planned : List String)
+    (wired : wireApprovedIds (some ids) served = some planned) : ∀ target ∈ planned, target ∈ ids := by
+  simp only [wireApprovedIds] at wired
+  split at wired
+  · rename_i all
+    simp at wired
+    subst wired
+    intro target mem
+    simpa using (List.all_eq_true.mp all) target mem
+  · cases wired
+
+/-- One part of a document id a pack's configuration yields: text the pack,
+the node and the install variables the client supplied fix, or the DID of an
+agent slot the install provisions, which the approval cannot know. A slot the
+client bound to an agent at approval is text. -/
+inductive IdPart where
+  | text (value : String)
+  | slot (name : String)
+  deriving DecidableEq, Repr
+
+def IdPart.fill (agent : String) : IdPart → String
+  | .text value => value
+  | .slot _ => agent
+
+def IdPart.isSlot : IdPart → Bool
+  | .text _ => false
+  | .slot _ => true
+
+/-- Decision (gents#3980 review): an id a pack's configuration derives from an
+agent slot's DID (`${GENTS_PACK_AGENT_DID.worker}:tools`) is fixed only once
+the install provisions that agent. The client never takes that DID from the
+runtime: it fills a slot only with the agent it names itself, the agent the
+wire attaches the plugin to (`agent`), and only for the plugin's own pack; a
+pack it wires targets from fills no slot (`agent = none`), so an id of such a
+slot yields nothing. -/
+def fillId (agent : Option String) (parts : List IdPart) : Option String :=
+  match agent with
+  | some agent => some (String.join (parts.map (IdPart.fill agent)))
+  | none => if parts.any IdPart.isSlot then none else some (String.join (parts.map (IdPart.fill "")))
+
+/-- The ids an approval yields once its slots are filled (`fillId`); an id
+that cannot be filled is not yielded. -/
+def wireFilledIds (approved : Option (List (List IdPart))) (agent : Option String) :
+    Option (List String) :=
+  approved.map (·.filterMap (fillId agent))
+
+theorem a_slot_id_fills_nothing_without_the_wired_agent (parts : List IdPart)
+    (slotted : parts.any IdPart.isSlot = true) : fillId none parts = none := by
+  simp [fillId, slotted]
+
+theorem a_filled_id_puts_only_the_wired_agent_in_its_slots (agent : String)
+    (parts : List IdPart) :
+    fillId (some agent) parts = some (String.join (parts.map (IdPart.fill agent))) :=
+  rfl
+
+theorem wired_filled_ids_are_approved_templates (templates : List (List IdPart))
+    (agent : Option String) (served planned : List String)
+    (wired : wireApprovedIds (wireFilledIds (some templates) agent) served = some planned) :
+    ∀ id ∈ planned, ∃ parts ∈ templates, fillId agent parts = some id := by
+  intro id mem
+  have := wired_ids_are_approved_ids _ served planned wired id mem
+  simpa using List.mem_filterMap.mp this
+
+/-- Decision (gents#3962): over a runtime that serves another home, the job
+block a wire writes for a plugin is the one its own pack's Tools carry for
+it, which the client reads from the node. The client signs it only when it is
+the job the pack it approved yields (`approved`, `none` when the approval
+could not derive it); a job the runtime reports that the pack does not yield,
+including a job where the pack has none or none where it has one, plans
+nothing. -/
+def wireReviewedJob (approved : Option (Option String)) (served : Option String) :
+    Option (Option String) :=
+  match approved with
+  | none => none
+  | some job => if served = job then some job else none
+
+theorem a_job_the_approved_pack_does_not_yield_plans_nothing (job : Option String)
+    (served : Option String) (other : served ≠ job) :
+    wireReviewedJob (some job) served = none := by
+  simp [wireReviewedJob, other]
+
+theorem a_wired_job_is_the_approved_job (approved : Option (Option String))
+    (served job : Option String) (wired : wireReviewedJob approved served = some job) :
+    approved = some job := by
+  cases approved with
+  | none => cases wired
+  | some kept =>
+    simp only [wireReviewedJob] at wired
+    split at wired
+    · simp at wired; rw [wired]
+    · cases wired
+
+/-- One approval a client keeps for a node: the pack it approved, by digest
+and coordinate, and the subjects that pack yields. -/
+structure PackApproval where
+  packDigest : String
+  coordinate : String
+  subjects : List WireSubject
+  /-- The Tools, Skill and AgentTarget ids the pack yields, when the
+  approval could derive them (`wireFilledIds`). -/
+  yields : Option (List (List IdPart))
+  deriving DecidableEq, Repr
+
+/-- What a client finds where it keeps the packs it approved for a node. -/
+inductive ApprovalsFile where
+  | absent
+  /-- Larger than the bound a client reads. -/
+  | oversized
+  /-- Not a record of approvals in the encoding the client writes. -/
+  | unparseable
+  | parsed (approvals : List PackApproval)
+  deriving DecidableEq, Repr
+
+/-- An approval holds only what its pack yields: each subject names the
+approval's digest and coordinate, and no digest is approved twice. -/
+def approvalsConsistent (approvals : List PackApproval) : Bool :=
+  approvals.all (fun approval => approval.subjects.all fun subject =>
+      subject.packDigest == approval.packDigest && subject.coordinate == approval.coordinate)
+    && (approvals.map PackApproval.packDigest).Nodup
+
+/-- Decision (gents#3962): the subjects a client's approvals record lets a
+served record match (`wirePlanSubject`). A client that never approved a
+pack has none. A record it cannot read in full, too large, undecodable or
+inconsistent, is refused rather than read as empty: an empty reading is not
+what the client approved, and a partly edited record cannot be told apart
+from one the client wrote. -/
+def approvedSubjects : ApprovalsFile → Option (List WireSubject)
+  | .absent => some []
+  | .oversized => none
+  | .unparseable => none
+  | .parsed approvals =>
+    if approvalsConsistent approvals then some (approvals.flatMap PackApproval.subjects) else none
+
+theorem an_unreadable_approvals_record_is_refused :
+    approvedSubjects .oversized = none ∧ approvedSubjects .unparseable = none := ⟨rfl, rfl⟩
+
+theorem a_client_that_approved_nothing_has_no_subjects : approvedSubjects .absent = some [] := rfl
+
+theorem an_approved_subject_names_its_approval (approvals : List PackApproval)
+    (subjects : List WireSubject) (subject : WireSubject)
+    (read : approvedSubjects (.parsed approvals) = some subjects) (mem : subject ∈ subjects) :
+    ∃ approval ∈ approvals, subject.packDigest = approval.packDigest
+      ∧ subject.coordinate = approval.coordinate := by
+  simp only [approvedSubjects] at read
+  split at read
+  · rename_i consistent
+    simp at read
+    subst read
+    obtain ⟨approval, member, holds⟩ := List.mem_flatMap.mp mem
+    refine ⟨approval, member, ?_⟩
+    simp only [approvalsConsistent, Bool.and_eq_true, List.all_eq_true] at consistent
+    have := consistent.1 approval member subject holds
+    simp at this
+    exact ⟨this.1, this.2⟩
+  · cases read
+
+/-- Decision (gents#3980 review): a client may approve several versions of a
+pack, each by its digest. The approval that vouches for the plugin's own
+pack, its Tools and Skill ids and the reviewed job (`wireReviewedJob`), is
+the one whose digest the planned record names, the approval that
+vouched for the record (`wirePlanSubject`); another version's approval of
+the same coordinate never does. -/
+def wireOwnApproval (approvals : List PackApproval) (subject : WireSubject) :
+    Option PackApproval :=
+  approvals.find? (·.packDigest = subject.packDigest)
+
+/-- Decision (gents#3980 review): the approval that vouches for a pack a wire
+takes targets from is the one whose digest the node's installation record of
+that coordinate names (`installed`). The client picks no version itself: when
+the record names no digest it approved for that coordinate, however many it
+approved, the pack is refused. -/
+def wireTargetApproval (approvals : List PackApproval) (coordinate : String)
+    (installed : Option String) : Option PackApproval :=
+  approvals.find? fun approval =>
+    approval.coordinate = coordinate ∧ some approval.packDigest = installed
+
+/-- The Tools and Skill ids of the plugin's own pack a client signs for: the
+`served` ids only when the approval that vouched for the record yields each,
+its slots filled with the wired `agent`. -/
+def wireOwnPackIds (approvals : List PackApproval) (subject : WireSubject) (agent : String)
+    (served : List String) : Option (List String) :=
+  (wireOwnApproval approvals subject).bind fun approval =>
+    wireApprovedIds (wireFilledIds approval.yields (some agent)) served
+
+/-- The AgentTarget ids of a pack a client wires targets from: the `served`
+ids only when the approval of the installed digest yields each, filling no
+slot. -/
+def wireTargetPackIds (approvals : List PackApproval) (coordinate : String)
+    (installed : Option String) (served : List String) : Option (List String) :=
+  (wireTargetApproval approvals coordinate installed).bind fun approval =>
+    wireApprovedIds (wireFilledIds approval.yields none) served
+
+theorem the_own_pack_is_vouched_for_by_the_records_approval (approvals : List PackApproval)
+    (subject : WireSubject) (approval : PackApproval)
+    (chosen : wireOwnApproval approvals subject = some approval) :
+    approval ∈ approvals ∧ approval.packDigest = subject.packDigest := by
+  unfold wireOwnApproval at chosen
+  exact ⟨List.mem_of_find?_eq_some chosen, by simpa using List.find?_some chosen⟩
+
+theorem another_version_never_vouches_for_the_record (approvals : List PackApproval)
+    (subject : WireSubject) (other : PackApproval)
+    (version : other.packDigest ≠ subject.packDigest) :
+    wireOwnApproval approvals subject ≠ some other := fun chosen =>
+  version (the_own_pack_is_vouched_for_by_the_records_approval approvals subject other chosen).2
+
+theorem a_target_pack_is_vouched_for_by_its_installed_digest (approvals : List PackApproval)
+    (coordinate : String) (installed : Option String) (approval : PackApproval)
+    (chosen : wireTargetApproval approvals coordinate installed = some approval) :
+    approval ∈ approvals ∧ approval.coordinate = coordinate
+      ∧ some approval.packDigest = installed := by
+  unfold wireTargetApproval at chosen
+  exact ⟨List.mem_of_find?_eq_some chosen, by simpa using List.find?_some chosen⟩
+
+theorem a_target_pack_whose_installed_digest_is_not_approved_is_refused
+    (approvals : List PackApproval) (coordinate : String) (installed : Option String)
+    (unapproved : ∀ approval ∈ approvals,
+      approval.coordinate = coordinate → some approval.packDigest ≠ installed) :
+    wireTargetApproval approvals coordinate installed = none := by
+  unfold wireTargetApproval
+  rw [List.find?_eq_none]
+  intro approval mem
+  simpa using unapproved approval mem
+
+theorem own_pack_ids_come_from_the_records_approval (approvals : List PackApproval)
+    (subject : WireSubject) (agent : String) (served planned : List String)
+    (wired : wireOwnPackIds approvals subject agent served = some planned) :
+    ∃ approval ∈ approvals, approval.packDigest = subject.packDigest ∧
+      ∀ id ∈ planned, ∃ parts ∈ approval.yields.getD [], fillId (some agent) parts = some id := by
+  unfold wireOwnPackIds at wired
+  cases chosen : wireOwnApproval approvals subject with
+  | none => simp [chosen] at wired
+  | some approval =>
+    rw [chosen] at wired
+    simp only [Option.bind] at wired
+    obtain ⟨mem, digest⟩ := the_own_pack_is_vouched_for_by_the_records_approval _ _ _ chosen
+    refine ⟨approval, mem, digest, ?_⟩
+    cases yields : approval.yields with
+    | none => simp [yields, wireFilledIds, wireApprovedIds] at wired
+    | some templates =>
+      rw [yields] at wired
+      simpa using wired_filled_ids_are_approved_templates templates _ served planned wired
+
+theorem target_pack_ids_come_from_the_installed_approval (approvals : List PackApproval)
+    (coordinate : String) (installed : Option String) (served planned : List String)
+    (wired : wireTargetPackIds approvals coordinate installed served = some planned) :
+    ∃ approval ∈ approvals, approval.coordinate = coordinate ∧
+      some approval.packDigest = installed ∧
+      ∀ id ∈ planned, ∃ parts ∈ approval.yields.getD [], fillId none parts = some id := by
+  unfold wireTargetPackIds at wired
+  cases chosen : wireTargetApproval approvals coordinate installed with
+  | none => simp [chosen] at wired
+  | some approval =>
+    rw [chosen] at wired
+    simp only [Option.bind] at wired
+    obtain ⟨mem, named, digest⟩ :=
+      a_target_pack_is_vouched_for_by_its_installed_digest _ _ _ _ chosen
+    refine ⟨approval, mem, named, digest, ?_⟩
+    cases yields : approval.yields with
+    | none => simp [yields, wireFilledIds, wireApprovedIds] at wired
+    | some templates =>
+      rw [yields] at wired
+      simpa using wired_filled_ids_are_approved_templates templates _ served planned wired
+
 /-- Plugin-only hosted installation preserves existing pack documents. Its
   installed plugin records are staged by the host from the reviewed archive;
   the client independently replays the same native-authorized pack record. -/
@@ -788,21 +1188,6 @@ def wireTargetAllowed (localTarget preview remove : Bool) : Bool :=
   localTarget || preview || remove
 
 theorem graphql_wire_cannot_publish_pin : wireTargetAllowed false false false = false := by decide
-
-/-- A served wire request reaches the embedded writer only after operator authentication,
-and only while the owning runtime and its plugin home are available. -/
-def operatorWireAvailable (operatorAuthenticated runtimeReady homeAvailable : Bool) : Bool :=
-  operatorAuthenticated && runtimeReady && homeAvailable
-
-theorem anonymous_operator_wire_refused (runtimeReady homeAvailable : Bool) :
-    operatorWireAvailable false runtimeReady homeAvailable = false := by
-  simp [operatorWireAvailable]
-
-theorem operator_wire_needs_live_local_owner (operatorAuthenticated runtimeReady homeAvailable : Bool)
-    (h : operatorWireAvailable operatorAuthenticated runtimeReady homeAvailable = true) :
-    operatorAuthenticated = true ∧ runtimeReady = true ∧ homeAvailable = true := by
-  simp [operatorWireAvailable, Bool.and_eq_true] at h
-  exact ⟨h.1.1, h.1.2, h.2⟩
 
 /-- Untagged documents retain the existing adoption behavior. A tagged document
 can be written only by the same full pack coordinate; an old unqualified tag
