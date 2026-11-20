@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::client_authentication::ClientAuthentication;
 use crate::delegation_audience::{
     DelegationAudience, ReportedDelegationAudience, ReportedHome, STATUS_NODE_DID_FIELD,
+    STATUS_PROVIDER_TIME_FIELD,
 };
 
 /// The query parameter a client sends its nonce in when it reads its home's
@@ -96,7 +97,6 @@ impl HomeStatement {
     /// What `status` says, as its home signs it for the read that sent
     /// `nonce`.
     pub fn of_status(status: &Value, nonce: &HomeNonce) -> Self {
-        let home = ReportedHome::observe(status);
         Self {
             version: HOME_ATTESTATION_VERSION,
             nonce: nonce.as_str().to_owned(),
@@ -110,8 +110,10 @@ impl HomeStatement {
                 .cloned()
                 .and_then(|value| serde_json::from_value(value).ok())
                 .unwrap_or(ClientAuthentication::Unavailable),
-            delegation_audience: home.audience.into(),
-            provider_time: home.provider_time,
+            delegation_audience: ReportedDelegationAudience::observe(status).into(),
+            provider_time: status
+                .get(STATUS_PROVIDER_TIME_FIELD)
+                .and_then(Value::as_u64),
         }
     }
 

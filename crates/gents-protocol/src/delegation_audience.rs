@@ -68,17 +68,6 @@ pub struct ReportedHome {
     pub provider_time: Option<u64>,
 }
 
-impl ReportedHome {
-    pub fn observe(status: &Value) -> Self {
-        Self {
-            audience: ReportedDelegationAudience::observe(status),
-            provider_time: status
-                .get(STATUS_PROVIDER_TIME_FIELD)
-                .and_then(Value::as_u64),
-        }
-    }
-}
-
 /// The code the edge of a Vera home answers a User's identity token with
 /// (`Identity.UserDelegation.edge`).
 pub const DELEGATION_REQUIRED_CODE: &str = "delegationRequired";
