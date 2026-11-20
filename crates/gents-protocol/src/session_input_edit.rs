@@ -344,14 +344,11 @@ mod tests {
 
     #[test]
     fn signed_edit_binds_native_author_targets_selection_and_graph() {
-        use crate::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+        use crate::request_admission::{AgentRequestAdmissionRecord, RequestPurpose, RequestScope};
         let mut replacement = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "replacement",
-            "node",
-            "session-user",
-            "agent",
-            "session",
+            RequestScope::new("node", "session-user", "agent", "session"),
             "edited",
             "interactive",
             "2026-01-01T00:00:00Z",

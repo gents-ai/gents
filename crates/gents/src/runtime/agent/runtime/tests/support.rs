@@ -442,10 +442,7 @@ pub(super) async fn create_held_agent_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        node_did,
-        did,
-        did,
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(node_did, did, did, session_id),
         content,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

@@ -811,10 +811,12 @@ pub(super) mod tests {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("request-{suffix}"),
-            agent_config.node_did(),
-            member.did(),
-            &agent_config.agent_did,
-            format!("session-{suffix}"),
+            gents_protocol::request_admission::RequestScope::new(
+                agent_config.node_did(),
+                member.did(),
+                &agent_config.agent_did,
+                format!("session-{suffix}"),
+            ),
             "run enrolled request",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

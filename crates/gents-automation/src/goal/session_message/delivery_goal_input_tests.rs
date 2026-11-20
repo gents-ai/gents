@@ -3,7 +3,7 @@ use crate::goal::operator_resume_test_support::Fixture;
 use anyhow::Result;
 use gents_protocol::job::keys::{job_message_key, job_session_id, job_spawn_key};
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
@@ -304,10 +304,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             let mut opening = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 format!("{name}-root-{index}"),
-                f.identity.did(),
-                f.agent.did(),
-                f.agent.did(),
-                &session,
+                RequestScope::new(f.identity.did(), f.agent.did(), f.agent.did(), &session),
                 "Destination opening",
                 "interactive",
                 "2026-10-21T00:00:00Z",

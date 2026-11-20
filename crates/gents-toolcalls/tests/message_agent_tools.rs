@@ -435,10 +435,12 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "trigger-worker-request",
-        identity.did(),
-        caller.agent_did.as_str(),
-        caller.agent_did.as_str(),
-        "correlated-worker",
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            caller.agent_did.as_str(),
+            caller.agent_did.as_str(),
+            "correlated-worker",
+        ),
         "spawn",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

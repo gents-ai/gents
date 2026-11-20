@@ -1,6 +1,6 @@
 use super::*;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
@@ -95,10 +95,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         let mut original = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "original",
-            root.did(),
-            user.did(),
-            &binding.agent_did,
-            "session",
+            RequestScope::new(root.did(), user.did(), &binding.agent_did, "session"),
             "before",
             "interactive",
             "2026-10-10T00:00:00Z",

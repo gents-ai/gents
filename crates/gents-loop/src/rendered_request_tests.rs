@@ -44,15 +44,19 @@ fn build(
 ) -> RenderedCompletionRequest {
     build_rendered_completion_request(
         &context(),
-        "inference.1",
         RenderedRequestSource::OpenAiChatCompletions,
-        Some("https://api.example.test".to_string()),
-        None,
-        turn_index,
-        attempt,
-        trace,
+        ProviderRoute {
+            endpoint: Some("https://api.example.test".to_string()),
+            route_path_sha256: None,
+        },
+        RenderedAttempt {
+            capture_scope: "inference.1".to_string(),
+            turn_index,
+            attempt,
+            assembly_trace: trace,
+            admission_join: None,
+        },
         components,
-        None,
     )
     .expect("rendered request")
 }

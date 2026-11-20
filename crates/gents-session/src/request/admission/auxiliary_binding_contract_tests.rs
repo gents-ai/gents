@@ -1,7 +1,7 @@
 use gents_protocol::output::OutputSource;
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_store::config_client::session_children::*;
 use gents_store::identity::NodeIdentity;
@@ -106,10 +106,7 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
         let mut parent = AgentRequestCreate::base(
             RequestPurpose::Normal,
             uuid::Uuid::new_v4().to_string(),
-            root.did(),
-            root.did(),
-            agent.did(),
-            &session_id,
+            RequestScope::new(root.did(), root.did(), agent.did(), &session_id),
             "parent",
             "interactive",
             "2026-10-21T00:00:00Z",

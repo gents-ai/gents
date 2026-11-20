@@ -1,5 +1,7 @@
 use super::*;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+};
 use gents_protocol::request_input::{GoalAssignmentInput, QueueDelivery};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::{json, Value};
@@ -13,10 +15,7 @@ async fn row(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         doc,
-        identity.did(),
-        identity.did(),
-        "agent",
-        "session",
+        RequestScope::new(identity.did(), identity.did(), "agent", "session"),
         "authored message",
         "interactive",
         "2026-10-21T00:00:00Z",

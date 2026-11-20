@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gents::Gents;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_session::request::lifecycle::{
@@ -255,10 +255,7 @@ async fn caller_message(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        caller.node_did(),
-        caller_did,
-        target_agent_did,
-        session_id,
+        RequestScope::new(caller.node_did(), caller_did, target_agent_did, session_id),
         content,
         "interactive",
         canonical_now(),

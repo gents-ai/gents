@@ -3,7 +3,9 @@ use crate::goal::continuation::prepare_goal_continuation;
 use gents_lean_vocab::families::goal_request_head_contracts_membership as members;
 use gents_lean_vocab::families::goal_request_head_contracts_selection as head;
 use gents_lean_vocab::families::goal_wake_ancestry_contracts_ancestry as ancestry;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::Deserialize;
@@ -51,10 +53,12 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                 let mut create = AgentRequestCreate::base(
                     model.purpose,
                     fixture.base_id(model.request),
-                    identity.did(),
-                    identity.did(),
-                    identity.did(),
-                    format!("session-{}", model.session),
+                    RequestScope::new(
+                        identity.did(),
+                        identity.did(),
+                        identity.did(),
+                        format!("session-{}", model.session),
+                    ),
                     "review notifications",
                     "scheduled",
                     "2026-10-21T00:00:00Z",
@@ -106,10 +110,12 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                     let mut create = AgentRequestCreate::base(
                         model.purpose,
                         row.request_id.clone(),
-                        fixture.identity(model.owner).did(),
-                        fixture.identity(model.owner).did(),
-                        fixture.identity(model.owner).did(),
-                        "session-1",
+                        RequestScope::new(
+                            fixture.identity(model.owner).did(),
+                            fixture.identity(model.owner).did(),
+                            fixture.identity(model.owner).did(),
+                            "session-1",
+                        ),
                         "entry",
                         "interactive",
                         "2026-10-21T00:00:00Z",
@@ -476,10 +482,12 @@ impl Fixture<'_> {
                 let base = AgentRequestCreate::base(
                     gents_protocol::request_admission::RequestPurpose::Normal,
                     self.base_id(parent_request),
-                    identity.did(),
-                    identity.did(),
-                    identity.did(),
-                    format!("session-{}", model.session),
+                    RequestScope::new(
+                        identity.did(),
+                        identity.did(),
+                        identity.did(),
+                        format!("session-{}", model.session),
+                    ),
                     "parent",
                     "interactive",
                     &now,
@@ -509,10 +517,12 @@ impl Fixture<'_> {
             let mut base = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 self.base_id(model.request),
-                identity.did(),
-                identity.did(),
-                identity.did(),
-                format!("session-{}", model.session),
+                RequestScope::new(
+                    identity.did(),
+                    identity.did(),
+                    identity.did(),
+                    format!("session-{}", model.session),
+                ),
                 "signed root",
                 "interactive",
                 &now,
@@ -704,10 +714,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             id,
-            identity.did(),
-            agent.did(),
-            agent.did(),
-            "bound-session",
+            RequestScope::new(identity.did(), agent.did(), agent.did(), "bound-session"),
             "root",
             "interactive",
             created,

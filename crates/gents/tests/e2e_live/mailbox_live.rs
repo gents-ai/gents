@@ -9,7 +9,7 @@ use gents_protocol::operations::mailbox::{
     MailboxListInput, MailboxReply, MailboxReplyRoute, MailboxReplySource,
 };
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_session::operations::mailbox;
 use gents_store::collection::Collection;
@@ -239,10 +239,12 @@ async fn submit_answer(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        actors.node_did(),
-        actors.fixture.user.did(),
-        actors.agent_did(),
-        SESSION,
+        RequestScope::new(
+            actors.node_did(),
+            actors.fixture.user.did(),
+            actors.agent_did(),
+            SESSION,
+        ),
         reply.content,
         "interactive",
         canonical_now(),

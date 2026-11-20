@@ -43,7 +43,7 @@ struct CaptureFixture {
 impl CaptureFixture {
     async fn new() -> Self {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
             "rendered-capture",
@@ -56,10 +56,7 @@ impl CaptureFixture {
         let create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "request",
-            db.node_identity.did(),
-            user.did(),
-            agent.did(),
-            "session",
+            RequestScope::new(db.node_identity.did(), user.did(), agent.did(), "session"),
             "capture",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

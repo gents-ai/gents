@@ -1,7 +1,7 @@
 use super::*;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_session::request::lifecycle::{
@@ -95,10 +95,12 @@ async fn check_turn_chronology(retry: bool) -> Option<Vec<u64>> {
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         format!("successor-{name}"),
-        &fixture.node_did,
-        fixture.requester_identity.did(),
-        signer.did(),
-        &original.session_id,
+        RequestScope::new(
+            &fixture.node_did,
+            fixture.requester_identity.did(),
+            signer.did(),
+            &original.session_id,
+        ),
         &original.content,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

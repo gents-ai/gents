@@ -4,12 +4,38 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::context::RunnerContext;
-use crate::model::{WalkStats, DEFAULT_IGNORED_NAMES};
+use crate::model::{Collected, WalkStats, DEFAULT_IGNORED_NAMES};
 
 pub(crate) struct WalkLimits {
     pub(crate) max_entries_visited: usize,
     pub(crate) max_bytes_read: u64,
     pub(crate) max_wall: Duration,
+}
+
+pub(crate) struct Sweep<T> {
+    pub(crate) items: Vec<T>,
+    pub(crate) truncated: bool,
+    pub(crate) walk: WalkState,
+    pub(crate) ignores: GitignoreStack,
+}
+
+impl<T> Sweep<T> {
+    pub(crate) fn new(walk: WalkState) -> Self {
+        Self {
+            items: Vec::new(),
+            truncated: false,
+            walk,
+            ignores: GitignoreStack::new(),
+        }
+    }
+
+    pub(crate) fn finish(self) -> Collected<T> {
+        Collected {
+            items: self.items,
+            truncated: self.truncated,
+            walk: self.walk.into_stats(),
+        }
+    }
 }
 
 pub(crate) struct WalkState {

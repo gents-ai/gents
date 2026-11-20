@@ -166,10 +166,12 @@ pub async fn claimed_hook_request(
     let create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        root.did(),
-        root.did(),
-        root.did(),
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            root.did(),
+            root.did(),
+            root.did(),
+            session_id,
+        ),
         "child request",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -203,10 +205,12 @@ pub async fn create_corroborated_child_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         child_request_id,
-        &hook.node_did,
-        signer.did(),
-        signer.did(),
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            &hook.node_did,
+            signer.did(),
+            signer.did(),
+            session_id,
+        ),
         "child request",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
