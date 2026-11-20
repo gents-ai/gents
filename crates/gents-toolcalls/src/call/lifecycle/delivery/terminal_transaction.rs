@@ -3,7 +3,7 @@ use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;
 use gents_protocol::output::{OutputSource, OutputWriter, PayloadPresentation};
-use gents_protocol::tool_call::ToolCallState;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::config_client::session_children::output_segment_bound_variables;
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::graphql::{created_doc_id, escape_graphql_string};

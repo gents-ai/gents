@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use gents_store::graphql::escape_graphql_string;
@@ -188,10 +189,10 @@ pub fn recovery_outcome(
     row: &StaleInferenceCallRow,
     parent: &AgentRequestRow,
 ) -> Option<InferenceRecoveryOutcome> {
-    if parent.is_interrupted() {
+    if request_is_interrupted(parent) {
         return Some(InferenceRecoveryOutcome::Cancelled);
     }
-    if !parent.is_terminal() {
+    if !request_is_terminal(parent) {
         return None;
     }
 
@@ -243,6 +244,16 @@ pub async fn recover_inference_call_row(
         "update_InferenceCall",
     )?
     .is_empty())
+}
+
+fn request_is_interrupted(parent: &AgentRequestRow) -> bool {
+    parent.lifecycle_state == Some(RequestLifecycleState::Interrupted)
+}
+
+fn request_is_terminal(parent: &AgentRequestRow) -> bool {
+    parent
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
 }
 
 #[cfg(test)]

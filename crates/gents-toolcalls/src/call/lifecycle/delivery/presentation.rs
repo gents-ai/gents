@@ -2,8 +2,8 @@ use super::TerminalFields;
 use crate::call::lifecycle::FailureClass;
 use anyhow::{Context, Result};
 use gents_protocol::output::PayloadPresentation;
-use gents_protocol::tool_call::{CancelCause, ToolCallState};
 use gents_session::session::output_render::terminal_output_tail;
+use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
 use gents_session::session::tool_presentation::render_presentation;
 
 pub(crate) fn terminal_diagnostic_presentation(

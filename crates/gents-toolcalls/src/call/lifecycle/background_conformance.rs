@@ -3,7 +3,7 @@ use super::ToolRowKind;
 use crate::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use gents_protocol::tool_call::CancelCause;
+use gents_session::session::tool_call_state::CancelCause;
 use gents_store::config_client::ConfigAccess;
 
 /// Reads through the owning Agent's access; ACP hides the row from the node.

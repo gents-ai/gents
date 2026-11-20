@@ -500,8 +500,7 @@ async fn load_page_canonical_dependencies(
 
     let mut sources_by_request = BTreeMap::new();
     for tool in page_tools.iter().filter(|tool| {
-        tool.lifecycle_state.as_deref()
-            == Some(gents_protocol::tool_call::ToolCallState::Running.as_str())
+        tool.lifecycle_state.as_deref() == Some("running")
             || (tool.spawned_by_tool_call_doc_id.is_some()
                 && gents_protocol::wait_status::WaitLifecycle::from_persisted(
                     tool.lifecycle_state.as_deref(),

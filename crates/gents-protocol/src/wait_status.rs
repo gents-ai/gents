@@ -20,15 +20,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::tool_call::ToolCallState;
-
 /// Upper bound on recent-output evidence carried per projected entry. Callers
 /// produce the preview through the canonical bounded-output slice owner and
 /// drill down with their read tool; this constant only caps what is embedded.
 pub const PREVIEW_MAX_BYTES: usize = 2048;
 
-/// Serialized projection of the persisted `lifecycle_state`: a
-/// [`ToolCallState`], or `Unknown` when the token is absent or unparseable.
+/// Lifecycle classification parsed from the persisted `lifecycle_state`
+/// string. Mirrors the persisted token set exactly; anything else is
+/// `Unknown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WaitLifecycle {
@@ -41,53 +40,42 @@ pub enum WaitLifecycle {
     Unknown,
 }
 
-impl From<ToolCallState> for WaitLifecycle {
-    fn from(state: ToolCallState) -> Self {
-        match state {
-            ToolCallState::Pending => Self::Pending,
-            ToolCallState::Running => Self::Running,
-            ToolCallState::Completed => Self::Completed,
-            ToolCallState::Failed => Self::Failed,
-            ToolCallState::TimedOut => Self::TimedOut,
-            ToolCallState::Cancelled => Self::Cancelled,
-        }
-    }
-}
-
 impl WaitLifecycle {
     pub fn from_persisted(value: Option<&str>) -> Self {
-        value
-            .map(str::trim)
-            .and_then(ToolCallState::from_persisted)
-            .map_or(Self::Unknown, Self::from)
-    }
-
-    pub fn tool_call_state(self) -> Option<ToolCallState> {
-        match self {
-            Self::Pending => Some(ToolCallState::Pending),
-            Self::Running => Some(ToolCallState::Running),
-            Self::Completed => Some(ToolCallState::Completed),
-            Self::Failed => Some(ToolCallState::Failed),
-            Self::TimedOut => Some(ToolCallState::TimedOut),
-            Self::Cancelled => Some(ToolCallState::Cancelled),
-            Self::Unknown => None,
+        match value.map(str::trim) {
+            Some("pending") => Self::Pending,
+            Some("running") => Self::Running,
+            Some("completed") => Self::Completed,
+            Some("failed") => Self::Failed,
+            Some("timedOut") => Self::TimedOut,
+            Some("cancelled") => Self::Cancelled,
+            _ => Self::Unknown,
         }
     }
 
     pub fn as_str(self) -> Option<&'static str> {
-        self.tool_call_state().map(ToolCallState::as_str)
+        match self {
+            Self::Pending => Some("pending"),
+            Self::Running => Some("running"),
+            Self::Completed => Some("completed"),
+            Self::Failed => Some("failed"),
+            Self::TimedOut => Some("timedOut"),
+            Self::Cancelled => Some("cancelled"),
+            Self::Unknown => None,
+        }
     }
 
     pub fn is_terminal(self) -> bool {
-        self.tool_call_state()
-            .is_some_and(ToolCallState::is_terminal)
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::TimedOut | Self::Cancelled
+        )
     }
 
     /// Only an active (pending or running) lifecycle counts time against
     /// `started_at`.
     fn is_active(self) -> bool {
-        self.tool_call_state()
-            .is_some_and(|state| !state.is_terminal())
+        matches!(self, Self::Pending | Self::Running)
     }
 }
 

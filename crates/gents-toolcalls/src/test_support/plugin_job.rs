@@ -17,7 +17,8 @@ use gents_protocol::job::{
     JobGuestPin, JobInterrupt, JobMessage, JobPin, JobPolicy, JobProgress, JobResume,
     JobResumeEngine, JobScratch, JobSpawn, JobState, JobStepOutput, JobSuspend,
 };
-use gents_protocol::tool_call::{AwaitMode, ToolCallState};
+use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_tools::surface::EndpointScope;
 use serde::de::DeserializeOwned;
 

@@ -1,5 +1,5 @@
 use gents_protocol::output::{MessagePublication, PresentedPayload};
-use gents_protocol::tool_call::ToolCallState;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_session::tool_call::query::result::*;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;

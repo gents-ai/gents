@@ -2,7 +2,7 @@ use super::ToolCallLifecycle;
 use crate::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use gents_protocol::tool_call::CancelCause;
+use gents_session::session::tool_call_state::CancelCause;
 use gents_store::config_client::ConfigAccess;
 
 /// The admission's Agent owns its request and tool rows; ACP hides them

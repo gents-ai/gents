@@ -9,7 +9,7 @@ use gents_protocol::row::AgentRequestRow;
 use gents_store::graphql::escape_graphql_string;
 
 use super::{AwaitMode, FailureClass, ToolCallLifecycle};
-use gents_protocol::tool_call::{CancelCause, ToolCallState};
+use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
 
 pub type RecoveryIdentities = [std::sync::Arc<dyn gents_store::identity::NodeIdentity>];
 type RecoveryAccesses =

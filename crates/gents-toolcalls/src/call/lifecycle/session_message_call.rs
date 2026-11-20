@@ -6,8 +6,8 @@ use defra_node::Node as EmbeddedNode;
 
 use super::delivery::{BackgroundReceiptBinding, DispatchStart};
 use super::ToolCallLifecycle;
-use gents_protocol::tool_call::ToolCallState;
 use gents_session::session::message::{SessionMessageCall, ToolCallTerminal};
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 impl SessionMessageCall for ToolCallLifecycle {

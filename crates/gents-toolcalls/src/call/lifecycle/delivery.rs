@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use gents_protocol::output::PayloadPresentation;
 
 use super::FailureClass;
-use gents_protocol::tool_call::{CancelCause, ToolCallState};
+use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
 
 mod background_receipt;
 mod dispatch;

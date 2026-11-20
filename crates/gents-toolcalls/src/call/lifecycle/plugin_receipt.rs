@@ -1,6 +1,6 @@
 use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 
-use gents_protocol::tool_call::ToolCallState;
+use gents_session::session::tool_call_state::ToolCallState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -89,7 +89,10 @@ mod tests {
 
     #[test]
     fn receipt_terminals_are_the_terminal_tool_call_states() {
-        let terminal: Vec<ToolCallState> = ToolCallState::terminal().collect();
+        let terminal: Vec<ToolCallState> = ToolCallState::ALL
+            .into_iter()
+            .filter(|state| state.is_terminal())
+            .collect();
         gents_lean_vocab::families::tool_policy_plugin_receipt_terminal_vocabulary::replay(
             &terminal,
         );

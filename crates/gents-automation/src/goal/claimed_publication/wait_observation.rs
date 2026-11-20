@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole};
 use serde_json::Value;
 
-use gents_protocol::tool_call::ToolCallState;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::config_client::ConfigApplyTxn;
 use gents_tools::native::background_args::WaitToolArgs;
 

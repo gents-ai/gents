@@ -10,7 +10,8 @@ use crate::background::status::{ProcessControlScope, ReadToolOutputOutcome};
 use crate::call::lifecycle::ToolCallLifecycle;
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_loop::truncation::{truncate_text, TruncationMode};
-use gents_protocol::tool_call::{AwaitMode, CancelCause};
+use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::tool_call_state::CancelCause;
 use gents_session::session::tool_output_rows::BackgroundToolArgs;
 use gents_session::tool_call::query::result::load_tool_call_result;
 use gents_tools::native::background_args::{

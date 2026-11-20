@@ -7,7 +7,7 @@ use super::super::input::{chain_of, derive_children_in_txn, CallArgs};
 use super::super::records::{read_pin, read_progress, read_step_state};
 use crate::call::lifecycle::ToolCallLifecycle;
 use crate::plugin::job_calls::job_state;
-use gents_protocol::tool_call::ToolCallState;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_session::tool_call::query::result::load_tool_call_arguments_in_txn;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
