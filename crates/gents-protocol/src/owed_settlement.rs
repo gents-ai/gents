@@ -48,3 +48,30 @@ pub struct OwedRemoval {
 pub struct OwedRemovalsReport {
     pub removals: Vec<OwedRemoval>,
 }
+
+/// Where a client waits, after a commit, for the access changes its own
+/// transaction owes (Lean `Identity.OwedRegistration.dependentStep`).
+pub const OWED_AWAIT_PATH: &str = "/owed/await";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwedAwaitRequest {
+    pub node_did: String,
+    pub transaction: String,
+}
+
+/// What a committed write's own access changes came to
+/// (`Identity.OwedRegistration.GrantWait`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantWait {
+    Settled,
+    Parked,
+    Pending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwedAwaitReport {
+    pub wait: GrantWait,
+}

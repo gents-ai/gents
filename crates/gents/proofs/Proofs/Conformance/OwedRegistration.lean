@@ -4,9 +4,11 @@ import Proofs.Conformance.UserDelegation
 
 namespace Identity.OwedRegistration
 
-deriving instance Lean.ToJson for Recorded, Standing, Handling, EntryStep, Refresh
+deriving instance Lean.ToJson for Recorded, Standing, Handling, EntryStep, Refresh, GrantWait,
+  DependentStep
 
-attribute [conformance_function] standing handling servesPass entryStep adopt
+attribute [conformance_function] standing handling servesPass entryStep adopt dependentStep
+  observedGrant
 
 end Identity.OwedRegistration
 

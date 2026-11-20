@@ -222,10 +222,11 @@ fn worse(left: Verdict, right: Verdict) -> Verdict {
 /// What one request-bound credential comes to for `command`. External
 /// premise (`vera_delegation::bearer::request`, defradb.rs#2987): DefraDB sends
 /// `command` under `token` only when the token verifies, names the provider's
-/// worker and deployment, is current with an operation identity still open,
-/// names the deployment's genesis identity and the digest of `command`; it
-/// offers no way to ask before the write, so the runtime asks the same of the
-/// token here and DefraDB asks again when it sends.
+/// worker and deployment, is current with an operation identity still open
+/// and due within `DEFAULT_OPERATION_LEAD`, names the deployment's genesis
+/// identity and the digest of `command`; it offers no way to ask before the
+/// write, so the runtime asks the same of the token here and DefraDB asks
+/// again when it sends.
 fn judge_one<F>(
     command: &vera_delegation::PolicyCommand<'_>,
     token: &str,
@@ -256,7 +257,10 @@ where
             && claims
                 .authorize(&audience.worker, audience.deployment, now)
                 .is_ok()
-            && request.id.validate(now).is_ok()
+            && request
+                .id
+                .validate(now, vera_crypto::operation::DEFAULT_OPERATION_LEAD)
+                .is_ok()
             && audience.genesis_id == Some(request.genesis_id)
             && claims.exp <= request.id.expires_at()
     });
