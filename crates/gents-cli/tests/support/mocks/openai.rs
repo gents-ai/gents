@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value;
 
-use super::fake_llm::{completion_text_sse, tool_call_sse, ChatAction, FakeLlm};
 use super::request_has_tool_result_message;
+use gents::support::fake_llm::{completion_text_sse, tool_call_sse, ChatAction, FakeLlm};
 
 pub struct MockOpenAIEndpoint {
     inner: FakeLlm,

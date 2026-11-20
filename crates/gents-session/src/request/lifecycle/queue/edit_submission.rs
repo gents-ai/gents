@@ -34,7 +34,13 @@ pub async fn submit_pending_user_edit(
     submit_prepared_edit(access, signer, node_did, session_id, edit, replacements).await
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The queued message a steer delivers first, and the request id its
+/// replacement takes when the caller chose one.
+pub struct SteeredMessage<'a> {
+    pub request_doc_id: &'a str,
+    pub request_id: Option<&'a str>,
+}
+
 pub async fn submit_pending_user_steer(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
@@ -42,9 +48,12 @@ pub async fn submit_pending_user_steer(
     node_did: &str,
     session_id: &str,
     edit: PendingQueueEdit,
-    request_doc_id: &str,
-    request_id: Option<&str>,
+    steered: SteeredMessage<'_>,
 ) -> Result<SessionInputEditReceipt> {
+    let SteeredMessage {
+        request_doc_id,
+        request_id,
+    } = steered;
     anyhow::ensure!(
         edit.messages
             .first()
@@ -67,9 +76,11 @@ pub async fn submit_pending_user_steer(
         access,
         signer,
         admission,
-        node_did,
-        session_id,
-        &requester_did,
+        super::management::PendingEditActor {
+            node_did,
+            session_id,
+            requester_did: &requester_did,
+        },
         &edit,
         Some(&deliveries),
         request_id,
@@ -113,6 +124,7 @@ async fn submit_prepared_edit(
         })
         .await?;
     let mut replacement_evidence = Vec::with_capacity(replacements.len());
+    let mut replacement_credentials = Vec::with_capacity(replacements.len());
     for create in &replacements {
         anyhow::ensure!(
             create.session_doc_id.as_deref() == Some(session_doc_id.as_str())
@@ -121,15 +133,19 @@ async fn submit_prepared_edit(
                 && create.admission.signer_did == requester_did,
             "replacement physical targets or signer changed"
         );
-        replacement_evidence.push(
-            gents_store::config_client::prepare_request_evidence(
-                signer,
-                gents_store::config_client::client_request_input(create)?,
-            )
-            .await?,
+        let evidence = gents_store::config_client::prepare_request_evidence(
+            signer,
+            gents_store::config_client::client_request_input(create)?,
+        )
+        .await?;
+        replacement_credentials.push(
+            access
+                .stored_create_credentials(signer, create, &evidence)
+                .await?,
         );
+        replacement_evidence.push(evidence);
     }
-    let now = chrono::Utc::now();
+    let now = access.home_now().await;
     let mut command = SessionInputEdit {
         version: SESSION_INPUT_EDIT_VERSION,
         command_id: uuid::Uuid::new_v4().to_string(),
@@ -145,6 +161,7 @@ async fn submit_prepared_edit(
         edit,
         replacements,
         replacement_evidence,
+        replacement_credentials,
         signature: Vec::new(),
     };
     command.signature = signer.sign(&command.signing_payload()).await?;

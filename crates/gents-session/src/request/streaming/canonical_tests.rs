@@ -671,10 +671,12 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
             observed,
             observed.execution_generation.as_deref().unwrap(),
             expiry,
-            "recovery-atomicity-generation".into(),
-            now,
-            None,
-            None,
+            crate::request::lifecycle::RecoveryFacts {
+                fresh_generation: "recovery-atomicity-generation".into(),
+                observed_now: now,
+                selection_choice: None,
+                expected_outcome: None,
+            },
         )
         .await
     }
@@ -825,10 +827,12 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
             &observed,
             old_generation,
             &expiry,
-            fresh_generation.into(),
-            observed_now,
-            None,
-            None,
+            crate::request::lifecycle::RecoveryFacts {
+                fresh_generation: fresh_generation.into(),
+                observed_now,
+                selection_choice: None,
+                expected_outcome: None,
+            },
         )
     };
     let (first, fault_fired) = ConfigApplyTxn::with_post_commit_receipt_loss(recover()).await;
@@ -1587,6 +1591,7 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
 
 #[tokio::test]
 async fn modeled_inputs_survive_publication_replay_and_forks() {
+    gents_lean_vocab::snapshot().await;
     use gents_protocol::request_input::RequestInput;
     const SESSION: &str = "captured-documents";
     let (node, path, mut lifecycle, writer) = fixture_with_ids(
@@ -1597,22 +1602,14 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
     .await;
     let access = fixture_access(&node, &lifecycle);
     let mut expected = Vec::new();
-    for (index, case) in gents_lean_vocab::snapshot()
-        .await
-        .request_input_cases
-        .iter()
-        .enumerate()
+    for (index, case) in
+        gents_lean_vocab::families::request_input_contracts_published_capture::cases()
+            .into_iter()
+            .enumerate()
     {
-        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
-        if (input.captured_context.is_empty() && input.attachments.is_empty())
-            || case["expected_provider_parts"].is_null()
-            || !input.attachments_well_formed()
-        {
-            continue;
-        }
-        let message = input
-            .authored_message(case["authored_text"].as_str().unwrap())
-            .unwrap();
+        let name = &case.input.name;
+        let input: RequestInput = gents_lean_vocab::production_request_input(&case.input.input);
+        let message = input.authored_message(&case.input.authored_text).unwrap();
         let key = format!("capture:{index}");
         let first = writer
             .publish_authored_message(&lifecycle, &key, &message)
@@ -1622,7 +1619,7 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
             .publish_authored_message(&lifecycle, &key, &message)
             .await
             .unwrap();
-        assert_eq!(first, replay, "{}: publication replay", case["name"]);
+        assert_eq!(first, replay, "{name}: publication replay");
         let (_, reconstructed) = crate::session::load_canonical_message(
             &access,
             &first,
@@ -1632,14 +1629,16 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
         .await
         .unwrap();
         assert_eq!(
-            serde_json::to_value(&reconstructed).unwrap(),
-            case["expected_native_input"],
-            "{}: sealed document reconstruction",
-            case["name"]
-        );
-        assert_eq!(
             gents_protocol::request_input::CapturedContext::from_message(&reconstructed).unwrap(),
-            input.captured_context
+            input.captured_context,
+            "{name}: sealed captures"
+        );
+        case.check(
+            gents_lean_vocab::families::request_input_contracts_published_capture::Publication {
+                native_input: gents_lean_vocab::family::Json(
+                    serde_json::to_value(&reconstructed).unwrap(),
+                ),
+            },
         );
         expected.push(message);
     }

@@ -84,6 +84,8 @@ impl ConfigAccess {
                 )
                 .await?;
                 txn.agent_proof = local.agent_proof.clone();
+                txn.client_authorization = local.client_authorization.clone();
+                txn.presented_delegation = local.presented_delegation();
                 Ok(txn)
             }
         }
@@ -241,14 +243,20 @@ impl ConfigAccess {
                 WriteBackend::Embedded,
                 TransactionMode::ConflictRetry,
                 move |operation, rollback| {
-                    Box::pin(ConfigApplyTxn::begin_local_owned_with_signer(
-                        local.node(),
-                        local.identity().cloned(),
-                        local.agent_signer.clone(),
-                        operation,
-                        rollback,
-                        EmbeddedTransactionPurpose::ReadOnly,
-                    ))
+                    Box::pin(async move {
+                        ConfigApplyTxn::begin_local_owned_with_signer(
+                            local.node(),
+                            local.identity().cloned(),
+                            local.agent_signer.clone(),
+                            operation,
+                            rollback,
+                            EmbeddedTransactionPurpose::ReadOnly,
+                        )
+                        .await
+                        .map(|txn| {
+                            txn.with_client_authorization(local.client_authorization.clone())
+                        })
+                    })
                 },
                 callback,
             )

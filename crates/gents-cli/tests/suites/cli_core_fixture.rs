@@ -3,7 +3,7 @@ use std::process::{Output, Stdio};
 use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
-use gents::support::live_inference::{live_target, wait_for_request_terminal, wait_for_rows};
+use gents::support::live_inference::{live_target, rows_when, wait_for_request_terminal};
 use gents_protocol::row::{
     decode_node_readiness_snapshot, NodeReadinessProcessState, NodeReadinessRow,
 };
@@ -98,7 +98,6 @@ impl LiveCli {
         let mut child = Command::new(cli_bin())
             .env("HOME", &home)
             .env("RUST_LOG", "error")
-            .env_remove("GENTS_SYSTEM_LOG")
             .current_dir(&home)
             .args(["server", "--http-port", &port.to_string()])
             .stdout(Stdio::piped())
@@ -132,26 +131,20 @@ impl LiveCli {
         .await??;
         let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&graphql));
         let query = format!("{{ NodeReadiness(filter: {{node_did: {{_eq: \"{}\"}}}}) {{node_did snapshot_json updated_at}} }}", crate::support::escape_graphql_string(&node));
-        wait_for_rows(
-            &access,
-            "NodeReadiness",
-            &query,
-            Duration::from_secs(30),
-            |data| {
-                data["NodeReadiness"].as_array().is_some_and(|rows| {
-                    rows.iter().any(|value| {
-                        serde_json::from_value::<NodeReadinessRow>(value.clone())
-                            .ok()
-                            .and_then(|row| decode_node_readiness_snapshot(&row, &node).ok())
-                            .is_some_and(|snapshot| {
-                                snapshot.process_state == NodeReadinessProcessState::Ready
-                                    && snapshot.active_generation > 0
-                                    && snapshot.router_generation == snapshot.active_generation
-                            })
-                    })
+        rows_when(&access, "NodeReadiness", &query, |data| {
+            data["NodeReadiness"].as_array().is_some_and(|rows| {
+                rows.iter().any(|value| {
+                    serde_json::from_value::<NodeReadinessRow>(value.clone())
+                        .ok()
+                        .and_then(|row| decode_node_readiness_snapshot(&row, &node).ok())
+                        .is_some_and(|snapshot| {
+                            snapshot.process_state == NodeReadinessProcessState::Ready
+                                && snapshot.active_generation > 0
+                                && snapshot.router_generation == snapshot.active_generation
+                        })
                 })
-            },
-        )
+            })
+        })
         .await;
         let live = Self {
             home,
@@ -242,8 +235,7 @@ impl LiveCli {
     }
 
     pub(crate) async fn terminal(&self, request: &str) -> Result<()> {
-        let state =
-            wait_for_request_terminal(&self.access, request, Duration::from_secs(120)).await;
+        let state = wait_for_request_terminal(&self.access, request).await;
         ensure!(state == "completed", "request {request} ended as {state}");
         Ok(())
     }

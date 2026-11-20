@@ -476,9 +476,8 @@ async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
             .to_string()
             .into_boxed_str(),
     );
-    let _env = test_support::TOKEN_URL_ENV.lock().await;
     let (token_url, token_handle) = test_support::one_shot_token_server(200, token_body).await;
-    std::env::set_var(REFRESH_ENV, &token_url);
+    let _bearer = codex_bearer_refreshing_at(&node, did, &token_url);
     let (usage_url, usage_handle) =
         test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
     let mut codex = backend(
@@ -499,7 +498,6 @@ async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
         Utc::now(),
     )
     .await;
-    std::env::remove_var(REFRESH_ENV);
 
     assert_eq!(result, UsageRead::Read);
     token_handle.await.unwrap();
@@ -518,7 +516,20 @@ async fn read_expired_sign_in_refreshes_through_the_owner_then_reads() {
     assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }
 
-const REFRESH_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+fn codex_bearer_refreshing_at(
+    node: &Arc<EmbeddedNode>,
+    did: &str,
+    token_url: &str,
+) -> Arc<crate::auth::credential::DbCredentialBearer> {
+    test_support::bearer_refreshing_at(
+        node,
+        did,
+        CODEX,
+        crate::auth::credential::OAuthRefreshKind::ChatGpt,
+        crate::auth::credential::CHATGPT_OAUTH_PRODUCT,
+        token_url,
+    )
+}
 
 #[tokio::test]
 async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
@@ -594,9 +605,8 @@ async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
     )
     .await
     .unwrap();
-    let _env = test_support::TOKEN_URL_ENV.lock().await;
     let (token_url, token_handle) = test_support::one_shot_token_server(200, "{}").await;
-    std::env::set_var(REFRESH_ENV, &token_url);
+    let _bearer = codex_bearer_refreshing_at(&node, did, &token_url);
     let codex = backend(
         did,
         "ChatGptCodex",
@@ -613,7 +623,6 @@ async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
         now + Duration::minutes(1),
     )
     .await;
-    std::env::remove_var(REFRESH_ENV);
     assert_eq!(result, UsageRead::SkippedRecent);
     never_called(token_handle).await;
 }
@@ -629,10 +638,9 @@ async fn read_guard_refresh_failure_is_sign_in_expired() {
     let node = db.node.clone();
     let did = db.node_identity.did();
     sign_in(&node, did, CODEX, Utc::now() - Duration::hours(1), None).await;
-    let _env = test_support::TOKEN_URL_ENV.lock().await;
     let (token_url, token_handle) =
         test_support::one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
-    std::env::set_var(REFRESH_ENV, &token_url);
+    let _bearer = codex_bearer_refreshing_at(&node, did, &token_url);
     let (usage_url, usage_handle) =
         test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
     let mut codex = backend(
@@ -653,7 +661,6 @@ async fn read_guard_refresh_failure_is_sign_in_expired() {
         Utc::now(),
     )
     .await;
-    std::env::remove_var(REFRESH_ENV);
 
     assert_eq!(result, UsageRead::Unavailable("sign-in expired".into()));
     token_handle.await.unwrap();
@@ -1079,7 +1086,7 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
     let output = tool
         .call(
             ProviderLimitsArgs {},
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1087,7 +1094,7 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
     let cached = tool
         .call(
             ProviderLimitsArgs {},
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();

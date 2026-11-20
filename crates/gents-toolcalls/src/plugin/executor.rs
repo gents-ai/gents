@@ -32,17 +32,35 @@ struct Admitted {
     bytes: u64,
 }
 
-/// How a model tool call reaches a plugin: the tool's working root, whether
-/// the plugin is granted `tool_calls`, and the envelope of the call.
+/// What one plugin call is granted beyond its input: the folder bound to
+/// it, a dispatcher for the calling agent's tools, data and job calls, and
+/// the actor it runs as.
+#[derive(Default)]
+struct CallGrants {
+    bound: Option<BoundDir>,
+    tools: Option<super::tool_calls::Session>,
+    data: Option<DataCaller>,
+    jobs: Option<JobCaller>,
+    actor: Option<identity::Did>,
+}
+
+/// How a model tool call reaches a plugin: the tool's working root, the root
+/// the calling agent's file-writing tools write (Lean `ownFolderGrant`'s
+/// `ownFolder`), whether the plugin is granted `tool_calls`, and the envelope
+/// of the call.
 #[derive(Clone, Copy)]
 pub struct ToolInvocation<'a> {
     pub tool_root: Option<&'a Path>,
+    pub own_folder: Option<&'a Path>,
     pub tool_calls: bool,
     pub context: &'a ToolCallEnvelope,
 }
 
 pub struct BindContext<'a> {
     pub workdir: Option<&'a Path>,
+    /// The root the calling agent's file-writing tools write (Lean
+    /// `ownFolderGrant`'s `ownFolder`).
+    pub own_folder: Option<&'a Path>,
     pub session_id: Option<&'a str>,
     pub interactive: bool,
 }
@@ -51,6 +69,7 @@ impl BindContext<'_> {
     pub fn headless(workdir: Option<&Path>) -> BindContext<'_> {
         BindContext {
             workdir,
+            own_folder: None,
             session_id: None,
             interactive: false,
         }
@@ -221,6 +240,7 @@ pub struct PluginExecutor {
     admitted: kovan_map::HopscotchMap<String, Arc<Admitted>>,
     admitted_bytes: AtomicU64,
     services: super::service::Services,
+    release: allowed::ReleaseDigests,
 }
 
 impl std::fmt::Debug for PluginExecutor {
@@ -273,7 +293,31 @@ impl PluginExecutor {
             admitted: kovan_map::HopscotchMap::new(),
             admitted_bytes: AtomicU64::new(0),
             services: super::service::Services::default(),
+            release: allowed::ReleaseDigests::embedded(),
         }
+    }
+
+    /// Replaces the core pack digests of this build, which decide whose
+    /// plugins write their agent's own folder.
+    pub fn with_release(mut self, release: allowed::ReleaseDigests) -> Self {
+        self.release = release;
+        self
+    }
+
+    /// Lean `pluginScope`: what a call of `record` may bind.
+    pub(crate) fn bind_scope(
+        &self,
+        approval: Option<&approval::workspace::Context>,
+        home: &Path,
+        record: &InstalledPlugin,
+        context: &BindContext<'_>,
+        user_home: Option<&Path>,
+    ) -> Result<allowed::Scope> {
+        let release = self.release.is_release(record);
+        Ok(
+            approval::workspace::allowed_scope(approval, home, context.workdir, user_home)?
+                .with_own_folder(home, user_home, release, context.own_folder),
+        )
     }
 
     pub fn home(&self) -> Option<&std::path::Path> {
@@ -324,7 +368,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: &serde_json::Value,
         context: &BindContext<'_>,
-        _call: &ToolCallEnvelope,
+        call: &ToolCallEnvelope,
     ) -> Result<Option<BoundDir>, String> {
         let Some(binding) = &record.declaration.bind_dir else {
             return Ok(None);
@@ -353,12 +397,22 @@ impl PluginExecutor {
                 "Runtime permission files cannot be shared with a plugin.".into(),
             ));
         }
-        let scope = approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
+        let approval_context = gents_tools::runtime_context::host(call).approval;
+        let approval_context = approval_context.as_ref();
+        let scope = self
+            .bind_scope(
+                approval_context,
+                home,
+                record,
+                context,
+                user_home.as_deref(),
+            )
             .map_err(|error| refuse(format!("{error:#}")))?;
         let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
         let route = approval::workspace::binding_route(
+            approval_context,
             home,
             || {
                 Ok(approval::workspace::BindingAction::Plugin {
@@ -370,7 +424,7 @@ impl PluginExecutor {
                     access,
                 })
             },
-            covered || approval::workspace::within_workspace(&resolved.target),
+            covered || approval::workspace::within_workspace(approval_context, &resolved.target),
             || Ok(input.clone()),
         )
         .map_err(|error| refuse(format!("{error:#}")))?;
@@ -379,7 +433,9 @@ impl PluginExecutor {
             let allowed = match route {
                 Some(decision) => {
                     let binding = decision.binding.clone();
+                    let consent_context = decision.context().clone();
                     let allowed = approval::workspace::consent_binding(
+                        call,
                         home,
                         decision,
                         context.interactive,
@@ -387,7 +443,11 @@ impl PluginExecutor {
                     )
                     .await
                     .map_err(|error| refuse(format!("{error:#}")))?;
-                    consent = Some(approval::workspace::action_consent(home, binding));
+                    consent = Some(approval::workspace::action_consent(
+                        &consent_context,
+                        home,
+                        binding,
+                    ));
                     allowed
                 }
                 None => match approval::consent(context.interactive) {
@@ -396,7 +456,7 @@ impl PluginExecutor {
                         let session_id = context.session_id.map(str::to_owned);
                         let request =
                             approval::Request::new(&plugin, &resolved, access, session_id);
-                        approval::ask(home, &request, approval::WAIT)
+                        approval::ask(approval_context, home, &request, approval::WAIT)
                             .await
                             .map_err(|error| refuse(format!("{error:#}")))?
                     }
@@ -412,11 +472,17 @@ impl PluginExecutor {
                 )));
             }
         }
-        let folder_allowed =
-            approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
-                .map_err(|error| refuse(format!("{error:#}")))?
-                .granted(resolved.folder())
-                .is_some();
+        let folder_allowed = self
+            .bind_scope(
+                approval_context,
+                home,
+                record,
+                context,
+                user_home.as_deref(),
+            )
+            .map_err(|error| refuse(format!("{error:#}")))?
+            .granted(resolved.folder())
+            .is_some();
         allowed::bind(&resolved, access, folder_allowed)
             .map(|bound| {
                 bound.with_consent(consent.map(|consent| {
@@ -476,14 +542,27 @@ impl PluginExecutor {
     ) -> Result<PluginCall, RunError> {
         let ToolInvocation {
             tool_root,
+            own_folder,
             tool_calls,
             context: call,
         } = invocation;
-        let session = gents_tools::runtime_context::current_tool_runtime_context();
+        let session = gents_tools::runtime_context::tool_runtime_context(call);
         let workdir = session
             .as_ref()
             .and_then(|context| context.workspace_cwd.clone())
             .or_else(|| tool_root.map(Path::to_path_buf));
+        // A session workspace overlay moves where the agent's file tools
+        // write; a configured root it replaced is not the agent's own folder.
+        let overlay = session
+            .as_ref()
+            .and_then(|context| context.workspace_root.as_deref())
+            .map(|root| root.canonicalize().ok());
+        let own_folder = own_folder.filter(|own| match &overlay {
+            None => true,
+            Some(root) => root
+                .as_ref()
+                .is_some_and(|root| own.canonicalize().is_ok_and(|own| own == *root)),
+        });
         let session_id = session.and_then(|context| context.session_id);
         let record = &self.resolve(
             &format!("{}/{}", record.namespace, record.name),
@@ -491,8 +570,9 @@ impl PluginExecutor {
         )?;
         let context = BindContext {
             workdir: workdir.as_deref(),
+            own_folder,
             session_id: session_id.as_deref(),
-            interactive: approval::interactive(),
+            interactive: gents_tools::runtime_context::host(call).interactive,
         };
         let bound = self
             .bind_input(record, &input, &context, call)
@@ -501,11 +581,13 @@ impl PluginExecutor {
         self.run(
             record,
             input,
-            bound,
-            super::tool_calls::Session::for_call(tool_calls, call),
-            data,
-            jobs,
-            actor,
+            CallGrants {
+                bound,
+                tools: super::tool_calls::Session::for_call(tool_calls, call),
+                data,
+                jobs,
+                actor,
+            },
             call,
         )
         .await
@@ -580,7 +662,16 @@ impl PluginExecutor {
     ) -> (Result<PluginCall, RunError>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
-            .run(record, input, None, None, data, Some(jobs), None, context)
+            .run(
+                record,
+                input,
+                CallGrants {
+                    data,
+                    jobs: Some(jobs),
+                    ..CallGrants::default()
+                },
+                context,
+            )
             .await;
         let receipt = receipt_of(&result, refused);
         (result, receipt)
@@ -631,7 +722,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, None, None, None, context)
+        self.run(record, input, CallGrants::default(), context)
             .await
             .map_err(RunError::into_anyhow)
     }
@@ -645,9 +736,17 @@ impl PluginExecutor {
         caller: DataCaller,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, Some(caller), None, None, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                data: Some(caller),
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
     /// [`Self::call`] offering `job_calls` as `caller` when the plugin
@@ -659,9 +758,17 @@ impl PluginExecutor {
         caller: JobCaller,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, None, Some(caller), None, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                jobs: Some(caller),
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
     pub async fn call_bound(
@@ -671,9 +778,17 @@ impl PluginExecutor {
         bound: BoundDir,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, Some(bound), None, None, None, None, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                bound: Some(bound),
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
     /// [`Self::call`] granting `bound` and offering `data_calls.query` as
@@ -686,9 +801,18 @@ impl PluginExecutor {
         data: Option<DataCaller>,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, bound, None, data, None, None, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                bound,
+                data,
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
     pub async fn call_bound_data_as(
@@ -700,26 +824,35 @@ impl PluginExecutor {
         actor: Option<identity::Did>,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, bound, None, data, None, actor, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                bound,
+                data,
+                actor,
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "call-scoped capabilities and actor travel together"
-    )]
     async fn run(
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        bound: Option<BoundDir>,
-        tools: Option<super::tool_calls::Session>,
-        data: Option<DataCaller>,
-        jobs: Option<JobCaller>,
-        actor: Option<identity::Did>,
-        _context: &ToolCallEnvelope,
+        grants: CallGrants,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginCall, RunError> {
+        let CallGrants {
+            bound,
+            tools,
+            data,
+            jobs,
+            actor,
+        } = grants;
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
             let coordinate = receipt.coordinate.clone();
@@ -734,7 +867,7 @@ impl PluginExecutor {
             }
             let admitted = self.admit(record)?;
             let budget = if record.declaration.imports_host_call() {
-                super::host_calls::budget_for_invocation(admitted.budget)
+                super::host_calls::budget_for_invocation(context, admitted.budget)
             } else { admitted.budget };
             let mut input = input.clone();
             if record.declaration.service.is_some() {
@@ -912,26 +1045,24 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginOutcome> {
-        Ok(
-            PluginExecutor::call(self, record, input, &ToolCallEnvelope::ambient())
-                .await?
-                .outcome,
-        )
+        Ok(PluginExecutor::call(self, record, input, context)
+            .await?
+            .outcome)
     }
 
     async fn run_plugin_once(
         self: Arc<Self>,
         coordinate: &str,
         selected: &[gents_documents::PluginToolRef],
-        node: Arc<defra_node::Node>,
-        node_did: &str,
-        agent_did: Option<&str>,
+        agent: gents_tools::plugin_host::PluginRunAgent<'_>,
         input: serde_json::Value,
+        context: &ToolCallEnvelope,
     ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
         super::tool::PluginTool::for_run(self, coordinate, selected)?
-            .with_agent_data(node, node_did, agent_did)?
-            .run_once(input, &ToolCallEnvelope::ambient())
+            .with_agent_data(agent.node, agent.node_did, agent.agent_did)?
+            .run_once(input, context)
             .await
     }
 
@@ -952,12 +1083,14 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
         self: Arc<Self>,
         plugin: &gents_documents::PluginToolRef,
         read_root: Option<PathBuf>,
+        own_folder: Option<PathBuf>,
         node: Arc<defra_node::Node>,
         node_did: &str,
         agent_did: Option<&str>,
     ) -> Result<Box<dyn gents_loop::tool::ToolDyn>> {
         Ok(Box::new(
             super::tool::PluginTool::resolve(self, plugin, read_root)?
+                .with_own_folder(own_folder)
                 .with_agent_data(node, node_did, agent_did)?,
         ))
     }

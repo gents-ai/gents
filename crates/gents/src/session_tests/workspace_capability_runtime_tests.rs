@@ -148,20 +148,20 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         let action = invalid_action.clone();
         let repository = repo.clone();
         let ceiling = fx.parent().to_path_buf();
-        let owner = user.did().to_owned();
-        let writer = writer.did().to_owned();
-        let integrator = integrator.did().to_owned();
+        let provenance = gents_session::workspace::WorkspaceProvenance {
+            owner_node_did: user.did().to_owned(),
+            writer_principal: writer.did().to_owned(),
+            integrator_principal: integrator.did().to_owned(),
+            caused_by_invocation_id: "denied-invocation".to_owned(),
+            caused_by_correlation: "denied-correlation".to_owned(),
+            route: Default::default(),
+        };
         tokio::task::spawn_blocking(move || {
             gents_session::workspace::executor::create::prepare_workspace_reservation(
                 &action,
                 &repository,
                 Some(&ceiling),
-                &owner,
-                &writer,
-                &integrator,
-                "denied-invocation",
-                "denied-correlation",
-                &Default::default(),
+                &provenance,
             )
         })
         .await??
@@ -500,7 +500,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             gents_loop::tool::Tool::call(
                 &tool,
                 args,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .is_ok(),
@@ -612,7 +612,7 @@ async fn overlapping_native_workspace_fences_conflict(
     for handle in [&first, &second] {
         let response = node
             .execute_request_in_txn(
-                signer.native().attach(
+                signer.attach(
                     defra_node::QueryRequest::new(&query)
                         .with_identity(Some(writer.did().parse()?)),
                 ),
@@ -645,7 +645,7 @@ async fn overlapping_native_workspace_fences_conflict(
         );
         let response = node
             .execute_request_in_txn(
-                signer.native().attach(
+                signer.attach(
                     defra_node::QueryRequest::new(&fence)
                         .with_identity(Some(writer.did().parse()?)),
                 ),
@@ -671,7 +671,7 @@ async fn overlapping_native_workspace_fences_conflict(
         let mutation = workspace_binding_upsert_mutation(&document);
         let response = node
             .execute_request_in_txn(
-                signer.native().attach(
+                signer.attach(
                     defra_node::QueryRequest::new(&mutation)
                         .with_identity(Some(writer.did().parse()?)),
                 ),

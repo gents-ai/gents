@@ -6,17 +6,12 @@ use serde_json::json;
 use gents_documents::test_support::desired_state_fixtures::{
     apply_selection_changes, apply_task_selections, canonical, Change,
 };
-use gents_lean_vocab::lean_identity_household_cases;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
 async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> Result<()> {
-    let model = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .context("configuration model")?;
     let dir = tempfile::tempdir()?;
     let key_dir = dir.path().to_owned();
     let (user, runtime, a, b, listener) = tokio::task::spawn_blocking(move || -> Result<_> {
@@ -40,7 +35,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
     );
     let ctx = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&ctx, &model.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
     for actor in [runtime.did(), a.did(), b.did()] {
         for permission in [
@@ -169,9 +164,11 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
             })
         })
         .await?;
-    for case in &model.configuration_task_target_cases {
-        let transition = case["transition"].as_str().context("transition")?;
-        if case["name"] == "task-old-target" {
+    let cases = gents_lean_vocab::families::household_task_target_visibility::cases();
+    let mut observed = Vec::new();
+    for case in &cases {
+        let transition = case.input.transition.as_str();
+        if case.input.name == "task-old-target" {
             let changes = vec![change(
                 Collection::Task,
                 task_doc,
@@ -192,7 +189,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
                 })
                 .await?;
         }
-        if case["name"] == "task-explicit-reader" {
+        if case.input.name == "task-explicit-reader" {
             access
                 .add_actor_relationship("Task", task_doc, "reader", &identity::Did::new(a.did())?)
                 .await?;
@@ -249,14 +246,14 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
                 })
                 .await?;
         }
-        let actor = match case["actor"].as_str() {
-            Some("user") => user.did(),
-            Some("runtime") => runtime.did(),
-            Some("agent-a") => a.did(),
-            Some("agent-b") => b.did(),
+        let actor = match case.input.actor.as_str() {
+            "user" => user.did(),
+            "runtime" => runtime.did(),
+            "agent-a" => a.did(),
+            "agent-b" => b.did(),
             _ => anyhow::bail!("unknown model actor"),
         };
-        let (name, doc) = if case["document"] == "task" {
+        let (name, doc) = if case.input.document == "task" {
             ("Task", task_doc)
         } else {
             ("AgentTarget", target_doc)
@@ -268,20 +265,14 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
             rows.iter()
                 .any(|row| row["_docID"].as_str() == Some(doc.as_str()))
         });
-        assert_eq!(
-            visible,
-            case["expected"].as_bool().context("model expectation")?,
-            "{}",
-            case["name"]
-        );
+        observed.push((case.input.name.clone(), visible));
     }
-    let modeled = |name: &str| -> Result<bool> {
-        model
-            .configuration_task_target_cases
+    let native = |name: &str| -> Result<bool> {
+        observed
             .iter()
-            .find(|case| case["name"] == name)
-            .and_then(|case| case["expected"].as_bool())
-            .context("missing model case")
+            .find(|(observed, _)| observed == name)
+            .map(|(_, visible)| *visible)
+            .context("case was not observed natively")
     };
     let signed_access = ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(
@@ -322,7 +313,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         )
         .await?
         .is_some();
-        assert_eq!(visible, modeled(expected_case)?, "{expected_case}");
+        assert_eq!(visible, native(expected_case)?, "{expected_case}");
     }
     let published = signed_access
         .execute("{ Task(filter: {task_id: {_eq: \"published-task\"}}) {_docID} }")
@@ -388,7 +379,10 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         )
         .await?
         .is_some();
-        assert_eq!(visible, modeled(expected_case)?, "{expected_case}");
+        assert_eq!(visible, native(expected_case)?, "{expected_case}");
+    }
+    for (case, (_, visible)) in cases.iter().zip(&observed) {
+        case.check(*visible);
     }
     node.shutdown().await?;
     Ok(())

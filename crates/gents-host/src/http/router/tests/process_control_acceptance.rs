@@ -1,22 +1,17 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents_protocol::process_control::{
     OperatorProcessControlRequest, ProcessControlOutcome, ToolControlReceiptOutcome,
 };
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity as _;
+use gents_store::test_support::STALL_CEILING;
 use gents_toolcalls::call::control::client::{submit, ClientControlError};
 use serde_json::Value;
 
-#[path = "../../../../../gents/tests/support/streaming_backend.rs"]
-#[expect(
-    dead_code,
-    reason = "The shared backend also supports stream gates and counters used by other test binaries."
-)]
-mod streaming_backend;
-
-use streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
+use gents::support::streaming_backend::{
+    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
+};
 
 #[cfg(unix)]
 #[tokio::test]
@@ -74,6 +69,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     home.mark_backend_healthy(&binding).await;
     let identity: Arc<dyn gents_store::identity::NodeIdentity> = owner.clone();
     let records = dir.path().join("process-records");
+    std::fs::create_dir_all(&records).unwrap();
     let runtime = gents::Gents::from_default_agent_documents(
         node.clone(),
         identity,
@@ -118,32 +114,62 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     )
     .await
     .unwrap();
+    // A worker's ownership record is a host file written after its row's
+    // last commit, so the wait watches the record directory as well as the
+    // rows, both opened before the request exists
+    // (TLA+ `NativeWorkerRecordObservation`).
+    let mut tool_calls =
+        gents_store::subscription_source::subscribe_collections(&node, ["AgentToolCall"]).unwrap();
+    let (record_tx, mut record_changes) = tokio::sync::mpsc::unbounded_channel();
+    let mut record_watch = notify::recommended_watcher(move |event| {
+        let _ = record_tx.send(event);
+    })
+    .unwrap();
+    notify::Watcher::watch(
+        &mut record_watch,
+        &records,
+        notify::RecursiveMode::NonRecursive,
+    )
+    .unwrap();
     gents_session::request::lifecycle::submit_client_request(&user_access, &request)
         .await
         .unwrap();
 
-    let workers = tokio::time::timeout(Duration::from_secs(20), async {
-        loop {
-            let response = user_access.execute(&format!(r#"{{AgentToolCall(filter: {{session_id: {{_eq: "{session}"}}, tool_name: {{_eq: "bash"}}, lifecycle_state: {{_eq: "running"}}}}) {{_docID tool_call_id await_mode}}}}"#)).await.unwrap();
-            let rows = response["data"]["AgentToolCall"].as_array().unwrap();
-            if rows.len() == 2 {
-                let mut found = Vec::new();
-                for row in rows {
-                    assert_eq!(row["await_mode"], "background");
-                    let doc = row["_docID"].as_str().unwrap();
-                    let name = doc.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
-                    if let Ok(bytes) = tokio::fs::read(records.join(format!("{name}.json"))).await {
-                        let record: Value = serde_json::from_slice(&bytes).unwrap();
-                        assert_eq!(record["tool_call_doc_id"], doc);
-                        assert_eq!(record["tool_call_id"], row["tool_call_id"]);
-                        found.push((row.clone(), i32::try_from(record["identity"]["pid"].as_i64().unwrap()).unwrap()));
-                    }
-                }
-                if found.len() == 2 { break found; }
+    let workers = loop {
+        let response = user_access.execute(&format!(r#"{{AgentToolCall(filter: {{session_id: {{_eq: "{session}"}}, tool_name: {{_eq: "bash"}}, lifecycle_state: {{_eq: "running"}}}}) {{_docID tool_call_id await_mode}}}}"#)).await.unwrap();
+        let rows = response["data"]["AgentToolCall"].as_array().unwrap();
+        let mut found = Vec::new();
+        for row in rows {
+            assert_eq!(row["await_mode"], "background");
+            let doc = row["_docID"].as_str().unwrap();
+            let path = gents_session::exec::ownership::record_path(&records, doc);
+            if let Ok(bytes) = tokio::fs::read(path).await {
+                let record: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(record["tool_call_doc_id"], doc);
+                assert_eq!(record["tool_call_id"], row["tool_call_id"]);
+                found.push((
+                    row.clone(),
+                    i32::try_from(record["identity"]["pid"].as_i64().unwrap()).unwrap(),
+                ));
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-    }).await.expect("both native workers must start and record ownership");
+        if rows.len() == 2 && found.len() == 2 {
+            break found;
+        }
+        tokio::select! {
+            change = tool_calls.recv() => {
+                change.expect("the AgentToolCall change feed closed");
+            }
+            change = record_changes.recv() => {
+                change.expect("the record watch closed").expect("the record watch failed");
+            }
+            () = tokio::time::sleep(STALL_CEILING) => panic!(
+                "both native workers must start and record ownership; nothing changed for \
+                 {STALL_CEILING:?}; running rows: {rows:?}; recorded: {found:?}"
+            ),
+        }
+    };
+    drop((tool_calls, record_watch));
     let command = |row: &Value| OperatorProcessControlRequest {
         node_did: did.clone(),
         session_id: session.into(),
@@ -227,25 +253,24 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let intent_doc_id = submit(&owner_access, &target)
         .await
         .expect("control must save a durable intent");
-    let receipt = tokio::time::timeout(Duration::from_secs(20), async {
-        loop {
-            if let Some(receipt) = gents_toolcalls::call::control::client::read_receipt(
-                &user_access,
-                &did,
-                &intent_doc_id,
-                &target.tool_call_doc_id,
-                "process_stop",
-            )
-            .await
-            .unwrap()
-            {
-                break receipt;
-            }
-            changes.recv().await.expect("control observation closed");
+    let receipt = loop {
+        if let Some(receipt) = gents_toolcalls::call::control::client::read_receipt(
+            &user_access,
+            &did,
+            &intent_doc_id,
+            &target.tool_call_doc_id,
+            "process_stop",
+        )
+        .await
+        .unwrap()
+        {
+            break receipt;
         }
-    })
-    .await
-    .expect("selected agent must confirm control");
+        tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("selected agent must confirm control: AgentToolControl unchanged for {STALL_CEILING:?}"))
+            .expect("control observation closed");
+    };
     assert_eq!(receipt.agent_did, agent_did);
     assert_eq!(receipt.client_did, user.did());
     assert_eq!(
@@ -267,25 +292,24 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let intent_doc_id = submit(&owner_access, &sibling)
         .await
         .expect("sibling control must save a durable intent");
-    let receipt = tokio::time::timeout(Duration::from_secs(20), async {
-        loop {
-            if let Some(receipt) = gents_toolcalls::call::control::client::read_receipt(
-                &user_access,
-                &did,
-                &intent_doc_id,
-                &sibling.tool_call_doc_id,
-                "process_stop",
-            )
-            .await
-            .unwrap()
-            {
-                break receipt;
-            }
-            changes.recv().await.expect("control observation closed");
+    let receipt = loop {
+        if let Some(receipt) = gents_toolcalls::call::control::client::read_receipt(
+            &user_access,
+            &did,
+            &intent_doc_id,
+            &sibling.tool_call_doc_id,
+            "process_stop",
+        )
+        .await
+        .unwrap()
+        {
+            break receipt;
         }
-    })
-    .await
-    .expect("selected agent must confirm sibling control");
+        tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("selected agent must confirm sibling control: AgentToolControl unchanged for {STALL_CEILING:?}"))
+            .expect("control observation closed");
+    };
     assert_eq!(
         receipt.outcome,
         ToolControlReceiptOutcome::Process(ProcessControlOutcome::Cancelled {

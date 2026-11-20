@@ -141,9 +141,11 @@ async fn a_cancel_marker_stops_the_loop_at_its_next_launch_and_resume_clears_it(
 
     let resumed = resume(
         &launching.access,
-        launching.owner(),
-        "run-marker",
-        &launching.runs_dir(),
+        RunLocation {
+            owner: launching.owner(),
+            run_id: "run-marker",
+            runs_dir: &launching.runs_dir(),
+        },
         &ScriptedExecutor::new().with_default(passed()),
         &CheckRegistry::builtin(),
         CancellationToken::new(),
@@ -318,9 +320,11 @@ async fn a_cancelled_slot_is_planned_again_under_no_infrastructure_retries() {
 
     let resumed = resume(
         &launching.access,
-        launching.owner(),
-        "run-abandoned",
-        &launching.runs_dir(),
+        RunLocation {
+            owner: launching.owner(),
+            run_id: "run-abandoned",
+            runs_dir: &launching.runs_dir(),
+        },
         &ScriptedExecutor::new().with_default(passed()),
         &CheckRegistry::builtin(),
         CancellationToken::new(),

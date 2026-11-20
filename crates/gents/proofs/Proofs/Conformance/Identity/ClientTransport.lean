@@ -5,6 +5,11 @@ namespace Conformance.ClientTransport
 
 open Lean Identity.Household Identity.Operations
 
+/-- The decision owner explicitly addresses the receiving Node in the signed
+genesis. Its initial reader grant is scoped to that decision. -/
+def addressedDecision : State := apply clientTransportPublished
+  (.grantAs "server" ⟨"enrollment_records", "decision", "reader", .actor "client"⟩)
+
 structure DecisionAccessInput where
   actor : String
   permission : String
@@ -25,10 +30,32 @@ def decisionAccess : Family DecisionAccessInput DecisionAccessOutput where
     , { actor := "agent", permission := "read" }
     , { actor := "outsider", permission := "read" } ]
   model := fun i =>
-    let granted := allowed 5 clientTransportPublished i.actor "enrollment_records" "decision" i.permission
+    let granted := allowed 5 addressedDecision i.actor "enrollment_records" "decision" i.permission
     { allowed := granted
       graphqlVisible :=
         if i.permission == "read" && ["user", "agent", "outsider"].contains i.actor then some granted
         else none }
+
+structure RevokedReaderInput where
+  reopened : Bool
+  deriving ToJson
+
+structure RevokedReaderOutput where
+  documentAcp : Bool
+  hostRead : Bool
+  deriving ToJson
+
+/-- The owner revokes the client’s `reader` relation on the received decision.
+Document ACP then grants it nothing, and it still reads the decision as the
+key hosting its own store (`Household.nativeRead`), before and after the
+store is reopened. -/
+@[conformance_family]
+def revokedReader : Family RevokedReaderInput RevokedReaderOutput where
+  inputs := [{ reopened := false }, { reopened := true }]
+  model := fun _ =>
+    let revoked := apply addressedDecision
+      (.revoke ⟨"enrollment_records", "decision", "reader", .actor "client"⟩)
+    { documentAcp := allowed 5 revoked "client" "enrollment_records" "decision" "read"
+      hostRead := nativeRead true 5 revoked "client" "enrollment_records" "decision" }
 
 end Conformance.ClientTransport

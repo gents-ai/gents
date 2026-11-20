@@ -191,19 +191,19 @@ pub fn next_blocked_audit(
     (state.blocked_audits, state.status == GoalStatus::Blocked)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn decide_goal_continuation(
-    status: GoalStatus,
-    terminal: GoalRequestTerminal,
-    session_idle: bool,
-    child_exists: bool,
-    budget_reached: bool,
-    has_activity: bool,
-    request_is_wrapup: bool,
-    infrastructure_retries: i64,
-    wrapup_requested: bool,
-    wrapup_completed: bool,
-) -> GoalDecision {
+pub fn decide_goal_continuation(facts: GoalContinuationFacts) -> GoalDecision {
+    let GoalContinuationFacts {
+        status,
+        terminal,
+        session_idle,
+        child_exists,
+        budget_reached,
+        has_activity,
+        request_is_wrapup,
+        infrastructure_retries,
+        wrapup_requested,
+        wrapup_completed,
+    } = facts;
     if !session_idle || child_exists {
         return GoalDecision::None;
     }

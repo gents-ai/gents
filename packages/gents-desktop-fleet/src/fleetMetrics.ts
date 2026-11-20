@@ -4,13 +4,10 @@ import type {
   Tools,
 } from "@source-inc/gents-desktop-client";
 import {
-  isLocalRuntimeSource,
   nodeReadinessIsInferenceFailure,
   projectDeploymentOperationalState,
   selectedNodeReadinessDecision,
 } from "@source-inc/gents-desktop-client";
-
-export { isLocalRuntimeSource } from "@source-inc/gents-desktop-client";
 
 export type StatusTone = "green" | "yellow" | "red";
 
@@ -37,10 +34,8 @@ export function deploymentStatus(
     null,
     syncHealth,
   );
-  const lastError =
-    deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
+  const lastError = deployment.runtime?.lastReconcileError ?? null;
   const title = [
-    operational.transport.detail,
     operational.connection.detail,
     operational.route.detail,
     operational.sync.detail,
@@ -64,7 +59,7 @@ export function deploymentStatus(
 }
 
 export function inferenceBackendTitle(deployment: DeploymentView) {
-  if (deployment.source === "enrollment") {
+  if (!deployment.operatorAccess) {
     return projectDeploymentOperationalState(deployment).nodeReadiness.kind !==
       "unknown"
       ? "Backend details stay on the node host; this runtime reports authoritative node readiness"
@@ -81,7 +76,7 @@ export function inferenceBackendTitle(deployment: DeploymentView) {
 export function needsInferenceSetup(deployment: DeploymentView): boolean {
   // Enrollment-owned deployments are configured by their remote runtime;
   // this client cannot satisfy a credentials/readiness failure locally.
-  if (deployment.source === "enrollment") return false;
+  if (!deployment.operatorAccess) return false;
   return nodeReadinessIsInferenceFailure(
     selectedNodeReadinessDecision(deployment, null),
   );

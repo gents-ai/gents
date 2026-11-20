@@ -497,7 +497,7 @@ fn sse_tool_use_block(id: &str, name: &str, start_input: &str, deltas: &[&str]) 
     sse
 }
 
-fn tool_call_arguments(events: &[RawStreamingChoice<ClaudeStreamResponse>]) -> Value {
+fn tool_call_arguments(events: &[RawStreamingChoice<StreamEnd>]) -> Value {
     match &events[0] {
         RawStreamingChoice::ToolCall(call) => call.arguments.clone(),
         other => panic!("expected ToolCall first, got {other:?}"),
@@ -568,7 +568,7 @@ fn sse_error_event_becomes_provider_error() {
     );
 }
 
-fn event_key(event: &RawStreamingChoice<ClaudeStreamResponse>) -> String {
+fn event_key(event: &RawStreamingChoice<StreamEnd>) -> String {
     match event {
         RawStreamingChoice::Message(text) => format!("text:{text}"),
         RawStreamingChoice::ToolCall(call) => {
@@ -687,8 +687,7 @@ async fn first_text_event_is_observable_before_the_body_is_exhausted() {
 #[tokio::test]
 async fn cancellation_drains_received_signature_without_polling_provider_again() {
     use crate::rendered_request::scope::{
-        arm, claim_pending, current_audit_sender, drain_ready_audit, scope_request, test_scope,
-        CaptureScopeKind,
+        arm, claim_pending, current_audit_sender, drain_ready_audit, test_scope, CaptureScopeKind,
     };
     use crate::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
@@ -713,8 +712,9 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
         },
         sink,
     );
-    scope_request(scope, async {
+    async { let capture_scope = scope; let capture = Some(&capture_scope);
         arm(
+            capture,
             CaptureScopeKind::Inference,
             0,
             0,
@@ -724,8 +724,8 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
             ),
         )
         .unwrap();
-        claim_pending().expect("armed provider attempt");
-        let sender = current_audit_sender().expect("exact attempt sender");
+        claim_pending(capture).expect("armed provider attempt");
+        let sender = current_audit_sender(capture).expect("exact attempt sender");
         let polls = Arc::new(AtomicUsize::new(0));
         let body_polls = Arc::clone(&polls);
         let mut first = Some(Bytes::from_static(
@@ -746,7 +746,7 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
         ));
         assert!(stream.next().now_or_never().is_none());
         let before_drain = polls.load(Ordering::SeqCst);
-        let received = drain_ready_audit().await;
+        let received = drain_ready_audit(capture).await;
         assert_eq!(polls.load(Ordering::SeqCst), before_drain);
         assert_eq!(received.len(), 2);
         assert!(matches!(received[0].event, ClaudeAuditEvent::BlockStart { index: 0, .. }));
@@ -755,7 +755,7 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
             ClaudeAuditEvent::Signature { index: 0, fragment } if fragment == "partial-sig"
         ));
         drop(stream);
-    })
+    }
     .await;
 }
 
@@ -795,7 +795,7 @@ fn claude_sse_dispatch_cases_drive_the_stream_state() {
         }
     }
 
-    fn emitted(event: &RawStreamingChoice<ClaudeStreamResponse>) -> sse::SseEmitted {
+    fn emitted(event: &RawStreamingChoice<StreamEnd>) -> sse::SseEmitted {
         let base = |kind: &str| sse::SseEmitted {
             kind: kind.into(),
             text: None,
@@ -1086,13 +1086,16 @@ async fn transport_429_usage_cap_reports_reset_time() {
     .await;
     let bearer = crate::clients::claude_subscription::StaticBearer::new("access");
     let err = stream_messages_at(
+        &Default::default(),
         &url,
         "claude-sonnet-5",
         &echo_request(),
-        &test_account(),
+        MessagesAccount {
+            context: &test_account(),
+            bearer: &bearer,
+            usage: None,
+        },
         RapidHashSet::new(),
-        &bearer,
-        None,
     )
     .await
     .err()
@@ -1140,13 +1143,16 @@ where
             )
             .await;
             let _ = stream_messages_at(
+                &Default::default(),
                 &url,
                 "claude-sonnet-5",
                 request,
-                account,
+                MessagesAccount {
+                    context: account,
+                    bearer,
+                    usage: None,
+                },
                 RapidHashSet::new(),
-                bearer,
-                None,
             )
             .await;
             handle.await.expect("request")
@@ -1402,25 +1408,27 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
             .await;
             let bearer = crate::clients::claude_subscription::StaticBearer::new("access-TEST");
             let _ = stream_messages_at(
+                &Default::default(),
                 &url,
                 "claude-sonnet-5",
                 &echo_request(),
-                &test_account(),
+                MessagesAccount {
+                    context: &test_account(),
+                    bearer: &bearer,
+                    usage: Some(crate::usage_observation::UsageReporter::new(
+                        cache.clone(),
+                        node.clone(),
+                        account.clone(),
+                    )),
+                },
                 RapidHashSet::new(),
-                &bearer,
-                Some(crate::usage_observation::UsageReporter::new(
-                    cache.clone(),
-                    node.clone(),
-                    account.clone(),
-                )),
             )
             .await;
 
-            let stored = crate::clients::provider_http::tests::stored_usage_eventually(
+            let stored = crate::clients::provider_http::tests::stored_usage_when_recorded(
                 &cache, &node, &account,
             )
-            .await
-            .expect("usage recorded");
+            .await;
             let window = &stored.report.windows[0];
             assert_eq!((window.label.as_str(), window.used_pct), ("5h", 25.0));
         });

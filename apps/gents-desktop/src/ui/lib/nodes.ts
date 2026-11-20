@@ -7,17 +7,9 @@ export type NodeDid = string;
 export const nodeDidOf = (node: { nodeDid: string }): NodeDid => node.nodeDid;
 export const nodeOfSession = (session: SessionSummary): NodeDid => session.nodeDid;
 
-export type NodeLike = Pick<NodeView, "nodeDid" | "source">;
+export type NodeLike = Pick<NodeView, "nodeDid" | "local">;
 export const isWorkingNode = (node: NodeLike, homeDid: string | null | undefined) =>
   isLocalNode(node, homeDid);
-
-export const joinedPeerId = (
-  node: NodeLike & Pick<NodeView, "peerId">,
-  homeDid: string | null | undefined,
-): string | null =>
-  node.source === "enrollment" && !isLocalNode(node, homeDid) && node.peerId
-    ? node.peerId
-    : null;
 
 export const workingNode = <N extends NodeLike>(
   nodes: readonly N[],

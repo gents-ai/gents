@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use chrono::{Duration as ChronoDuration, Utc};
 use gents::{DocumentRuntimeOptions, Gents};
 use gents_store::config_client::ConfigAccess;
@@ -7,8 +5,9 @@ use gents_store::graphql::escape_graphql_string;
 use gents_tools::surface::ToolCeiling;
 
 use crate::support::fixtures::bind_managed_agent_backend;
+use crate::support::live_inference::rows_when;
 use crate::support::snapshots::{
-    fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot, SnapshotReader,
+    is_routed_ready_after, wait_for_runtime_snapshot_as, SnapshotReader,
 };
 use crate::support::{managed_agent_fixture, test_db, ManagedAgentFixture};
 
@@ -72,31 +71,75 @@ fn schedule_trigger(
     })
 }
 
+/// The interval Trigger is seeded due at once, and a day passes before it is
+/// due again; the cron Trigger is seeded at its next yearly run.
 async fn create_scheduled_task(
     access: &ConfigAccess,
     owner: &str,
-    schedule_id: &str,
+    interval_schedule_id: &str,
+    cron_schedule_id: &str,
     task_id: &str,
     agent_did: &str,
     prompt_template: &str,
 ) {
+    use gents_store::collection::Collection;
     apply_documents(
         access,
         vec![
             (
-                gents_store::collection::Collection::Task,
+                Collection::Task,
                 serde_json::json!({"node_did":owner,"task_id":task_id,"display_name":task_id,"agent_did":agent_did,"prompt_template":prompt_template}),
             ),
             (
-                gents_store::collection::Collection::Schedule,
-                serde_json::json!({"node_did":owner,"schedule_id":schedule_id,"cadence":{"kind":"interval","interval_secs":60}}),
+                Collection::Schedule,
+                serde_json::json!({"node_did":owner,"schedule_id":interval_schedule_id,"cadence":{"kind":"interval","interval_secs":86_400}}),
             ),
             (
-                gents_store::collection::Collection::Trigger,
-                schedule_trigger(owner, schedule_id, task_id, true),
+                Collection::Trigger,
+                schedule_trigger(owner, interval_schedule_id, task_id, true),
+            ),
+            (
+                Collection::Schedule,
+                serde_json::json!({"node_did":owner,"schedule_id":cron_schedule_id,"cadence":{"kind":"cron","expression":"0 0 1 1 *","timezone":"UTC"}}),
+            ),
+            (
+                Collection::Trigger,
+                schedule_trigger(owner, cron_schedule_id, task_id, true),
             ),
         ],
     )
+    .await;
+}
+
+fn node_runtime(db: &crate::support::TestDb) -> ConfigAccess {
+    ConfigAccess::local_as(
+        db.node.clone(),
+        db.node_identity.did().parse().expect("runtime DID"),
+    )
+}
+
+/// Waits until the interval Trigger's seeded fire is recorded and the cron
+/// Trigger's cursor is seeded: no fire admitted so far is still in flight,
+/// and no seed write can land over a cursor the test writes later.
+async fn await_seeded(
+    db: &crate::support::TestDb,
+    owner: &str,
+    interval_trigger_id: &str,
+    cron_trigger_id: &str,
+) {
+    let query = format!(
+        r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _in: ["{}", "{}"] }} }}, limit: 3) {{ trigger_id next_run_at last_status fire_count }} }}"#,
+        escape_graphql_string(owner),
+        escape_graphql_string(interval_trigger_id),
+        escape_graphql_string(cron_trigger_id),
+    );
+    rows_when(&node_runtime(db), "Trigger", &query, |data| {
+        let rows = data["Trigger"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+        let row = |id: &str| rows.iter().find(|row| row["trigger_id"] == id);
+        row(interval_trigger_id).is_some_and(|row| {
+            row["last_status"] == "fired" && row["fire_count"].as_i64() == Some(1)
+        }) && row(cron_trigger_id).is_some_and(|row| row["next_run_at"].is_string())
+    })
     .await;
 }
 
@@ -140,11 +183,7 @@ async fn set_trigger_cursor(
         escape_graphql_string(trigger_id),
         escape_graphql_string(next_run_at),
     );
-    let runtime = ConfigAccess::local_as(
-        db.node.clone(),
-        db.node_identity.did().parse().expect("runtime DID"),
-    );
-    let response = runtime
+    let response = node_runtime(db)
         .write("test.schedule_trigger_cursor", &mutation)
         .await
         .unwrap();
@@ -173,29 +212,6 @@ async fn create_event_trigger(
     ]).await;
 }
 
-async fn wait_for_runtime_snapshot<F>(
-    access: &ConfigAccess,
-    node_did: &str,
-    predicate: F,
-) -> RuntimeSnapshot
-where
-    F: Fn(&RuntimeSnapshot) -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut changes = access.subscribe_changes("NodeRuntime").await;
-    loop {
-        let snapshot = fetch_runtime_snapshot_as(access, node_did).await;
-        if snapshot.as_ref().is_some_and(&predicate) {
-            return snapshot.unwrap();
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {node_did}; last snapshot: {snapshot:?}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
-    }
-}
-
 /// Scheduled requests belong to the Agent that runs them.
 fn agent_reader(db: &crate::support::TestDb, fixture: &ManagedAgentFixture) -> ConfigAccess {
     ConfigAccess::local_managed_agent(
@@ -206,20 +222,21 @@ fn agent_reader(db: &crate::support::TestDb, fixture: &ManagedAgentFixture) -> C
     .expect("working Agent reader")
 }
 
-async fn fetch_schedule_agent_requests(
-    access: &ConfigAccess,
-    owner: &str,
-    trigger_id: &str,
-) -> Vec<serde_json::Value> {
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, caused_by_trigger_id: {{ _eq: "{}" }}, caused_by_trigger_kind: {{ _eq: "schedule" }} }}, limit: 2) {{ content agent_did execution_origin caused_by_trigger_id caused_by_trigger_kind }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(trigger_id),
-        ))
-        .await
-        .unwrap();
-    response["data"]["AgentRequest"].as_array().unwrap().clone()
+fn schedule_requests_query(owner: &str, trigger_id: &str) -> String {
+    format!(
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, caused_by_trigger_id: {{ _eq: "{}" }}, caused_by_trigger_kind: {{ _eq: "schedule" }} }}, limit: 3) {{ request_id }} }}"#,
+        escape_graphql_string(owner),
+        escape_graphql_string(trigger_id),
+    )
+}
+
+async fn schedule_request_count(access: &ConfigAccess, owner: &str, trigger_id: &str) -> usize {
+    access
+        .read_data(&schedule_requests_query(owner, trigger_id))
+        .await["AgentRequest"]
+        .as_array()
+        .expect("AgentRequest rows")
+        .len()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -252,7 +269,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -267,13 +284,14 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         &fixture.access,
         &node_did,
         "schedule-reconcile-alpha",
+        "schedule-reconcile-witness",
         "task-reconcile-alpha",
         &default_agent_did,
         "alpha prompt",
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
@@ -289,6 +307,22 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         reconciled.active_generation
     );
 
+    // The fire admitted under the enabling generation commits before the
+    // disable, so the count below is final for that generation.
+    await_seeded(
+        &db,
+        &node_did,
+        "schedule-reconcile-alpha",
+        "schedule-reconcile-witness",
+    )
+    .await;
+    let reader = agent_reader(&db, &fixture);
+    assert_eq!(
+        schedule_request_count(&reader, &node_did, "schedule-reconcile-alpha").await,
+        1,
+        "an enabled interval Trigger fires once when first seen"
+    );
+
     set_schedule_trigger_enabled(
         &fixture.access,
         &node_did,
@@ -297,7 +331,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         false,
     )
     .await;
-    let disabled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let disabled = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, reconciled.active_generation)
     })
     .await;
@@ -308,43 +342,24 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     );
     let due = (Utc::now() - ChronoDuration::seconds(60)).to_rfc3339();
     set_trigger_cursor(&db, &node_did, "schedule-reconcile-alpha", &due).await;
+    set_trigger_cursor(&db, &node_did, "schedule-reconcile-witness", &due).await;
 
-    let mut changes = agent_reader(&db, &fixture)
-        .subscribe_changes("AgentRequest")
-        .await;
-    let requests_after_reconcile = fetch_schedule_agent_requests(
-        &agent_reader(&db, &fixture),
-        &node_did,
-        "schedule-reconcile-alpha",
+    // The schedule source dispatches one intent at a time, so the witness
+    // fire commits after every intent loaded from the disabled cursor.
+    rows_when(
+        &reader,
+        "AgentRequest",
+        &schedule_requests_query(&node_did, "schedule-reconcile-witness"),
+        |data| {
+            data["AgentRequest"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())
+        },
     )
-    .await
-    .len();
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(1_500);
-    while tokio::time::timeout_at(deadline, changes.recv())
-        .await
-        .is_ok()
-    {
-        assert_eq!(
-            fetch_schedule_agent_requests(
-                &agent_reader(&db, &fixture),
-                &node_did,
-                "schedule-reconcile-alpha"
-            )
-            .await
-            .len(),
-            requests_after_reconcile,
-            "a disabled Trigger must stop firing after its generation is active"
-        );
-    }
+    .await;
     assert_eq!(
-        fetch_schedule_agent_requests(
-            &agent_reader(&db, &fixture),
-            &node_did,
-            "schedule-reconcile-alpha"
-        )
-        .await
-        .len(),
-        requests_after_reconcile,
+        schedule_request_count(&reader, &node_did, "schedule-reconcile-alpha").await,
+        1,
         "a disabled Trigger must stop firing after its generation is active"
     );
 
@@ -382,7 +397,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -411,7 +426,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;

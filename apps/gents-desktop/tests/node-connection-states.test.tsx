@@ -48,7 +48,7 @@ const forge = (runtimeConnection: string, withData: boolean) =>
   node({
     nodeDid: FORGE,
     label: "Forge",
-    source: "enrollment",
+    local: false,
 
     dialSucceeded: true,
     runtimeConnection,

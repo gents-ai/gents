@@ -11,14 +11,42 @@ pub(in crate::p2p_reconcile) struct TestNode {
     pub(super) _tempdir: tempfile::TempDir,
 }
 
+struct NoToolSources;
+
+pub(super) fn no_tool_sources() -> Arc<dyn gents_store::local::ToolSourcePolicy> {
+    Arc::new(NoToolSources)
+}
+
+impl gents_store::local::ToolSourcePolicy for NoToolSources {
+    fn node_operation_sources(
+        &self,
+        _tools: &serde_json::Value,
+        _surfaces: &[serde_json::Value],
+    ) -> anyhow::Result<Vec<gents_store::local::ProjectedOperationSource>> {
+        Ok(Vec::new())
+    }
+
+    fn plugin_refs(
+        &self,
+        _tools: &serde_json::Value,
+    ) -> anyhow::Result<Vec<gents_store::local::ProjectedPluginRef>> {
+        Ok(Vec::new())
+    }
+
+    fn selected_tools(&self, _node: &str, _context: &serde_json::Value) -> Option<String> {
+        None
+    }
+}
+
 async fn p2p_node_with_identity(node_identity_did: Option<&str>) -> TestNode {
-    p2p_node_with_options(node_identity_did, None, None).await
+    p2p_node_with_options(node_identity_did, None, None, None).await
 }
 
 async fn p2p_node_with_options(
     node_identity_did: Option<&str>,
     http_address: Option<std::net::SocketAddr>,
     signing_key: Option<defra_node::SigningKey>,
+    projector: Option<std::sync::Arc<dyn NodeIdentity>>,
 ) -> TestNode {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut builder = EmbeddedNode::builder()
@@ -44,6 +72,12 @@ async fn p2p_node_with_options(
     }
     if let Some(address) = http_address {
         builder = builder.with_http(defra_node::HttpConfig::with_addr(address));
+    }
+    if let Some(identity) = projector {
+        builder = builder.with_document_projector(
+            gents_store::local::document_projector(identity, no_tool_sources())
+                .expect("document projector"),
+        );
     }
     let node = Arc::new(builder.build().await.expect("embedded p2p node"));
     TestNode {
@@ -102,6 +136,7 @@ pub(super) async fn runtime_test_node_with_signing_key(
         Some(identity.did()),
         None,
         Some(defra_node::SigningKey::Ed25519(key)),
+        None,
     )
     .await;
     ensure_runtime_schemas(&test.node)
@@ -119,6 +154,21 @@ pub(super) async fn signed_p2p_node_without_schemas(
         Some(identity.did()),
         Some(address),
         Some(defra_node::SigningKey::Ed25519(key)),
+        None,
+    )
+    .await
+}
+
+pub(super) async fn signed_p2p_node_with_projector(
+    identity: Arc<dyn NodeIdentity>,
+    key: Vec<u8>,
+    address: std::net::SocketAddr,
+) -> TestNode {
+    p2p_node_with_options(
+        Some(identity.did()),
+        Some(address),
+        Some(defra_node::SigningKey::Ed25519(key)),
+        Some(identity.clone()),
     )
     .await
 }
@@ -137,7 +187,7 @@ pub(in crate::p2p_reconcile) async fn runtime_http_test_node_with_schema(
         .unwrap()
         .local_addr()
         .unwrap();
-    let test = p2p_node_with_options(Some(identity.did()), Some(address), None).await;
+    let test = p2p_node_with_options(Some(identity.did()), Some(address), None, None).await;
     if let Some(schema) = initial_schema {
         test.node.add_collection(schema).await.unwrap();
     }

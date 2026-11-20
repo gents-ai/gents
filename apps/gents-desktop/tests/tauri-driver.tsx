@@ -161,7 +161,7 @@ export function renderTauriAppDriverWithBridge(
       if (firstPeerId) {
         const snapshot = await bridge.adapter.fetchDesktopSnapshot();
         const node = snapshot.client?.deployments.find(
-          (deployment) => deployment.peerId === firstPeerId,
+          (deployment) => deployment.nodeDid === firstPeerId,
         );
         expect(node, "expected selected node deployment").toBeDefined();
         configurationPath = pathFor({

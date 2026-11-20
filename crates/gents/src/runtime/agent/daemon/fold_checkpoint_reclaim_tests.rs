@@ -278,19 +278,14 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             &[],
         );
         let preamble = prompt_builder.preamble().to_string();
-        let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let model = wake_input_model(None);
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
             tool_config: Arc::new(Default::default()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(WakeInputModel {
-                provider_inputs: provider_inputs.clone(),
-                title_calls: Arc::new(AtomicUsize::new(0)),
-                title_shape_mismatches: Arc::new(AtomicUsize::new(0)),
-                successor: None,
-            }),
+            model: Arc::new(model.clone()),
             preamble,
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -343,7 +338,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 .collect::<Vec<_>>(),
             "{case}: each authored key exactly once with its admitted content"
         );
-        let inputs = provider_inputs.lock().unwrap().clone();
+        let inputs = wake_observations(&model).0.clone();
         assert_eq!(
             inputs.len(),
             1,
@@ -374,8 +369,8 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
 async fn scripted_daemon(
     node: &Arc<defra_node::Node>,
     agent_config: &Arc<ResolvedAgent>,
-    provider_inputs: &Arc<std::sync::Mutex<Vec<String>>>,
-) -> AgentDaemon<WakeInputModel> {
+    model: &ScriptedProvider,
+) -> AgentDaemon<ScriptedProvider> {
     let prompt_builder = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
         &agent_config.agent_did,
@@ -389,12 +384,7 @@ async fn scripted_daemon(
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(WakeInputModel {
-            provider_inputs: provider_inputs.clone(),
-            title_calls: Arc::new(AtomicUsize::new(0)),
-            title_shape_mismatches: Arc::new(AtomicUsize::new(0)),
-            successor: None,
-        }),
+        model: Arc::new(model.clone()),
         preamble,
         loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
         prompt_builder,
@@ -513,8 +503,8 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         )
         .await;
         let queued_key = gents_session::request::lifecycle::queue::folded_input_key(&queued.doc_id);
-        let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut daemon = scripted_daemon(&node, &agent_config, &provider_inputs).await;
+        let model = wake_input_model(None);
+        let mut daemon = scripted_daemon(&node, &agent_config, &model).await;
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         daemon
             .process_request(retry.clone(), shutdown_rx.clone())
@@ -536,7 +526,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             .into_iter()
             .map(|(key, _)| key)
             .collect::<Vec<_>>();
-        let retry_input = provider_inputs.lock().unwrap()[0].clone();
+        let retry_input = wake_observations(&model).0[0].clone();
         let resume = retry_keys.is_empty();
         let answered = retry_keys.contains(&gents_protocol::output::rows::authored_message_key(
             &retry.doc_id,
@@ -555,7 +545,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
                 "{}",
                 input.name
             );
-            assert_eq!(provider_inputs.lock().unwrap().len(), 1, "{}", input.name);
+            assert_eq!(wake_observations(&model).0.len(), 1, "{}", input.name);
         } else {
             assert_eq!(
                 persisted_request_state(&client, &queued.doc_id).await,
@@ -573,7 +563,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
                 "{}",
                 input.name
             );
-            let inputs = provider_inputs.lock().unwrap().clone();
+            let inputs = wake_observations(&model).0.clone();
             assert_eq!(
                 inputs.len(),
                 2,

@@ -138,8 +138,7 @@ impl LiveBox {
             .env("GENTS_REGISTRY", "http://127.0.0.1:9")
             .env_remove("GENTS_HOME")
             .env_remove("XDG_CONFIG_HOME")
-            .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("INFERENCE_ENDPOINT");
+            .env_remove("XDG_RUNTIME_DIR");
         command
     }
 

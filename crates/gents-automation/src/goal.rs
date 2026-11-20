@@ -10,6 +10,7 @@ use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry
 mod backed_request;
 pub mod blocked_turn;
 mod claimed_publication;
+pub mod client_application;
 mod client_control;
 mod client_submission;
 pub mod continuation;
@@ -64,7 +65,8 @@ pub use observation::{
     reconcile_goal_observations_with_identities, SOURCES as GOAL_OBSERVATION_SOURCES,
 };
 pub use operator_resume::{
-    resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
+    resume_goal_on_account, resume_goal_request, AccountMove, GoalResumeOnReceipt,
+    GoalResumeReceipt,
 };
 pub use readiness_gate::{
     gate_claimed_goal_continuation, gate_goal_continuation, goal_agent_observation,
@@ -99,11 +101,11 @@ pub use controller::{
 };
 pub use creation::create_goal_for_request_from_access;
 pub(crate) use creation::load_goal_creation_claim_for_key_in_txn;
-use creation::stage_goal_and_claim;
 pub use creation::{
     create_goal_for_session_from_access, replacement_goal_identity, CreateGoalForSessionError,
     CreateGoalForSessionOutcome, GoalCreationIdentity,
 };
+use creation::{stage_goal_and_claim, GoalStaging};
 pub use document::{snapshot, GoalDocument};
 use gents_protocol::goal::{deterministic_goal_creation_key, deterministic_goal_id, GOAL_FIELDS};
 pub(crate) use load::sort_goals_canonical;

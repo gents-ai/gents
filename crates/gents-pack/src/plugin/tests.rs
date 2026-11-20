@@ -415,6 +415,7 @@ fn for_plugin_raises_the_default_to_declared_limits() {
         memory_mib: Some(512),
         wall_clock_secs: Some(120),
         max_output_mib: Some(4),
+        max_rounds: None,
     });
     let budget = PluginBudget::for_plugin(&wasi, &plugin);
     assert_eq!(budget.memory_bytes, 512 * 1024 * 1024);
@@ -450,6 +451,7 @@ fn a_call_over_the_default_output_cap_succeeds_once_the_declared_limit_covers_it
         memory_mib: None,
         wall_clock_secs: None,
         max_output_mib: Some(2),
+        max_rounds: None,
     });
     let runner = PluginRunner::compile(&afb, &plugin).expect("compiles");
 
@@ -727,14 +729,15 @@ fn limit_axis(limits: &mut crate::pack::PluginLimits, axis: usize) -> &mut Optio
     match axis {
         0 => &mut limits.memory_mib,
         1 => &mut limits.wall_clock_secs,
-        _ => &mut limits.max_output_mib,
+        2 => &mut limits.max_output_mib,
+        _ => &mut limits.max_rounds,
     }
 }
 
 #[test]
 fn limit_consent_follows_the_lean_model() {
     gents_lean_vocab::families::plugin_resources_limit_consent::replay(|i| {
-        let axes: Vec<bool> = (0..3)
+        let axes: Vec<bool> = (0..4)
             .map(|axis| {
                 let mut requested = crate::pack::PluginLimits::default();
                 let mut previous = crate::pack::PluginLimits::default();
@@ -767,13 +770,18 @@ fn limit_budget_follows_the_lean_model() {
                 budget.max_output_bytes = i.baseline as usize * 1024 * 1024;
                 limits.max_output_mib = Some(requested);
             }
+            256 => {
+                budget.max_rounds = i.baseline as u32;
+                limits.max_rounds = Some(requested);
+            }
             _ => panic!("unknown resource case: {i:?}"),
         }
         let effective = budget.with_declared_limits(&limits);
         match i.ceiling {
             4096 => effective.memory_bytes / (1024 * 1024),
             900 => effective.wall_clock.as_secs(),
-            _ => effective.max_output_bytes as u64 / (1024 * 1024),
+            4 => effective.max_output_bytes as u64 / (1024 * 1024),
+            _ => u64::from(effective.max_rounds),
         }
     });
 }

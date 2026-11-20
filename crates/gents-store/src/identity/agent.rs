@@ -71,7 +71,7 @@ pub async fn provision_agent_identity_authorized(
                     .filter(Filter::eq(fields::NODE_DID, node_did))
                     .limit(2)
                     .render();
-                let response = txn.run(&rendered).await?;
+                let response = txn.run_for_use(&rendered, "Node").await?;
                 let Some([row]) = response["data"]["Node"].as_array().map(Vec::as_slice) else {
                     return Ok::<_, crate::config_client::ConfigClientError>(None);
                 };
@@ -118,7 +118,8 @@ pub enum AgentAdmissionObservationError {
 /// Agent as the runtime reads it. It decides nothing: agent admission decides
 /// from these facts and DefraDB authorizes every write. A grant counts as held
 /// only when DefraDB answers `Allowed`; a denied or unavailable answer, or a
-/// document the runtime cannot find, is not held.
+/// Node or Agent the runtime may not use (`Identity.Household.runtimeMayUse`),
+/// is not held, though the hosting runtime still reads it.
 pub async fn observe_agent_admission(
     node: &Arc<defra_node::Node>,
     node_did: &str,
@@ -149,11 +150,12 @@ pub async fn observe_agent_admission(
                         .collect::<Vec<_>>()
                 };
                 let nodes = txn
-                    .run(
+                    .run_for_use(
                         &Query::select(Selection::doc_id())
                             .filter(Filter::eq(node_fields::NODE_DID, node_did))
                             .limit(2)
                             .render(),
+                        "Node",
                     )
                     .await?;
                 let catalog = match query::rows(&nodes, "Node") {
@@ -180,7 +182,7 @@ pub async fn observe_agent_admission(
                 let mut configures = Vec::new();
                 if !targets.is_empty() {
                     let agents = txn
-                        .run(
+                        .run_for_use(
                             &Query::select(Selection::doc_id().field(agent_fields::AGENT_DID))
                                 .filter(Filter::eq(agent_fields::NODE_DID, node_did).and(
                                     Filter::any_of(
@@ -189,6 +191,7 @@ pub async fn observe_agent_admission(
                                     ),
                                 ))
                                 .render(),
+                            "Agent",
                         )
                         .await?;
                     let found = query::rows(&agents, "Agent")

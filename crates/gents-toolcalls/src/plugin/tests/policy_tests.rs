@@ -80,7 +80,7 @@ impl PolicyFixture {
         crate::test_support::grant_modeled_direct_sets(
             &self.db.node,
             self.db.node_identity.did(),
-            "default-agent",
+            gents_store::identity::Recipient::DefaultAgent,
             &self.agent_did,
         )
         .await;
@@ -162,7 +162,7 @@ async fn run(tool: &dyn ToolDyn, argv: Value) -> std::result::Result<Value, Valu
     match tool
         .call(
             argv.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     {
@@ -296,22 +296,22 @@ async fn engineer_grant_of_admin_class_permission_is_refused_even_when_held() {
 async fn engineer_revokes_held_permission_and_receipt_states_access_honestly() {
     let fixture = PolicyFixture::new("policy-revoke-held").await;
     let sibling = fixture.install_sibling("Reviewer").await;
-    // The policy delegate set holds get-collection.
-    fixture.grant_engineer_sets(&[]).await;
+    fixture
+        .grant_engineer_sets(&[NodePermission::DocumentDelete])
+        .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
-    run(tool, grant_node(&sibling, "get-collection"))
+    run(tool, grant_node(&sibling, "delete-document"))
         .await
         .expect("grant succeeds before the revoke");
 
-    let receipt = run(tool, revoke_node(&sibling, "get-collection"))
+    let receipt = run(tool, revoke_node(&sibling, "delete-document"))
         .await
         .expect("a held permission under delete-nac-relation is revoked");
     assert_eq!(
         receipt["answer"].as_str().unwrap(),
-        format!("Revoked node permission get-collection from {sibling}.")
+        format!("Revoked node permission delete-document from {sibling}.")
     );
-    // The sibling's baseline does not include get-collection, so no path remains.
     assert_eq!(
         receipt["effective_access"].as_str().unwrap(),
         "The subject no longer holds it through any path."
@@ -327,7 +327,7 @@ async fn engineer_revokes_held_permission_and_receipt_states_access_honestly() {
 
     let view = run(tool, policy_get(&sibling)).await.unwrap();
     assert!(
-        !permission_names(&view).contains(&"get-collection".to_owned()),
+        !permission_names(&view).contains(&"delete-document".to_owned()),
         "{view}"
     );
 }
@@ -391,14 +391,18 @@ async fn explain_reports_missing_add_nac_relation_when_permission_is_held() {
     let fixture = PolicyFixture::new("policy-explain-no-operation").await;
     let sibling = fixture.install_sibling("Reviewer").await;
     fixture
-        .grant_engineer(&[NodePermission::NacStatus, NodePermission::CollectionGet])
+        .grant_engineer(&[
+            NodePermission::NacStatus,
+            NodePermission::CollectionGet,
+            NodePermission::DocumentDelete,
+        ])
         .await;
     let tools = fixture.tools(&["policy"], false);
     let tool = config(&tools);
 
     let explained = run(
         tool,
-        json!({"argv": ["policy", "explain", "--subject", sibling, "--permission", "get-collection"]}),
+        json!({"argv": ["policy", "explain", "--subject", sibling, "--permission", "delete-document"]}),
     )
     .await
     .unwrap();
@@ -579,5 +583,91 @@ async fn policy_revoke_of_own_lockout_permissions_is_refused_under_no_lockout() 
     assert_eq!(
         receipt["answer"].as_str().unwrap(),
         "Revoked node permission delete-document from you."
+    );
+}
+
+/// Lean `SelfConfig.catalog_refusal_words_name_the_node` and
+/// `catalog_is_not_self_granted`: the refusal's words are words the policy
+/// tool answers for the Node, and its next call confirms what the Agent holds.
+#[tokio::test]
+async fn the_catalog_refusal_names_what_the_policy_tool_answers() {
+    let fixture = PolicyFixture::new("policy-catalog-words").await;
+    fixture.grant_engineer_sets(&[]).await;
+    let tools = fixture.tools(&["agent", "policy"], false);
+    let tool = config(&tools);
+    let [permission, administrator] = gents_protocol::operations::agent::CATALOG_REFUSAL_WORDS;
+    let check = |word: &str| json!({"argv": ["policy", "check", "--permission", word]});
+
+    let refusal = run(
+        tool,
+        json!({"argv": ["agent", "default", fixture.agent_did]}),
+    )
+    .await
+    .expect_err("an Agent without the catalog cannot choose the default");
+    let message = refusal["error"].as_str().unwrap();
+    for word in [permission, administrator] {
+        assert!(message.contains(word), "{message}");
+    }
+    assert!(
+        message.contains(&format!(
+            "policy grant --subject {} --permission {administrator}",
+            fixture.agent_did
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains("gents config agent grant-node-admin"),
+        "{message}"
+    );
+    assert_eq!(refusal["recovery"]["next_call"], check(permission));
+
+    let lacking = run(tool, check(permission))
+        .await
+        .expect("the refusal's next call is answered");
+    assert!(
+        lacking["answer"].as_str().unwrap().starts_with(&format!(
+            "no: you do not hold permission {permission} on Node document"
+        )),
+        "{lacking}"
+    );
+    assert!(
+        lacking["how_to_proceed"]
+            .as_str()
+            .unwrap()
+            .contains(administrator),
+        "{lacking}"
+    );
+    for relation in [administrator, "agent_manager"] {
+        let answered = match run(tool, check(relation)).await {
+            Ok(answer) | Err(answer) => answer.to_string(),
+        };
+        assert!(!answered.contains("unknown permission"), "{answered}");
+    }
+    let view = run(tool, json!({"argv": ["policy", "get"]})).await.unwrap();
+    assert!(
+        view["node_document_permissions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"permission": permission, "held": false})),
+        "{view}"
+    );
+
+    fixture
+        .user_access
+        .transact_write("test.policy.grant_node_administration", |txn| {
+            let node_did = fixture.db.node_identity.did();
+            let agent_did = &fixture.agent_did;
+            Box::pin(async move {
+                gents_documents::grant_node_administration(txn, node_did, agent_did).await
+            })
+        })
+        .await
+        .unwrap();
+    let held = run(tool, check(permission)).await.unwrap();
+    assert!(
+        held["answer"].as_str().unwrap().starts_with(&format!(
+            "yes: you hold permission {permission} on Node document"
+        )),
+        "{held}"
     );
 }

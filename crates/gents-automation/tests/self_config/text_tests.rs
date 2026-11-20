@@ -403,7 +403,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
     let agent = fixture.agent_did();
     let backend = format!("{agent}:backend");
     fixture.grant_agent_schema().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let root = fixture.admitted_workspace_root().await;
     let index = call_config_tool(&tools, vec!["help".into()]).await.unwrap();
     assert!(index.len() < 2_000, "help index is {} chars", index.len());
@@ -468,7 +468,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
                     let preview = Tool::call(
                         &schema_tool,
                         serde_json::from_value(args).unwrap(),
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     )
                     .await
                     .unwrap();
@@ -476,7 +476,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
                     let applied = Tool::call(
                         &schema_tool,
                         serde_json::from_value(preview["next_call"]["args"].clone()).unwrap(),
-                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        &gents_loop::tool::ToolCallEnvelope::default(),
                     )
                     .await
                     .unwrap();
@@ -525,7 +525,7 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
     let help = tool
         .call(
             json!({"argv":["help","profile"]}).to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -534,7 +534,7 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
     let receipt = tool
         .call(
             json!({"argv":["profile","preview"],"set":{"display_name":"Mine"}}).to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -553,7 +553,7 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
     assert!(receipt.trim_end().ends_with('}') && serde_json::from_str::<Value>(&receipt).is_ok());
 
     let error = match tool
-        .call(json!({"argv":["profile","preview"],"options":{"agent":"nope"},"set":{"display_name":"x"}}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
+        .call(json!({"argv":["profile","preview"],"options":{"agent":"nope"},"set":{"display_name":"x"}}).to_string(), &gents_loop::tool::ToolCallEnvelope::default())
         .await
     {
         Err(gents_loop::tool::ToolError::ToolCallError(error)) => error.to_string(),

@@ -380,7 +380,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), agent.did())
             .with_client_signing_capability(agent.client_signing_capability()?)?;
     let rejected = reqwest::Client::new().post(endpoint.url())
-        .header(reqwest::header::AUTHORIZATION, endpoint.authorization()?.unwrap())
+        .header(reqwest::header::AUTHORIZATION, endpoint.runtime_authorization().await?.unwrap())
         .json(&serde_json::json!({"query": format!(
             r#"mutation {{ update_PeerPairingApplied(docID: "{}", input: {{replicator_addresses: ["forged"]}}) {{_docID}} }}"#,
             gents_store::graphql::escape_graphql_string(&doc))}))

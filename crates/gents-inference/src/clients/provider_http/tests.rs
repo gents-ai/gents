@@ -91,7 +91,7 @@ async fn credential_client_does_not_follow_redirects() {
         .unwrap();
     let client = ProviderHttpClient::new(ProviderHttpClient::credential_client().unwrap());
     let error = client
-        .send::<Bytes, Bytes>(request)
+        .send(&Default::default(), request)
         .await
         .err()
         .expect("redirect rejected");
@@ -113,7 +113,7 @@ async fn streaming_429_keeps_anthropic_unified_reset() {
     )
     .await;
     let error = ProviderHttpClient::default()
-        .send_streaming(post(&url))
+        .send_streaming(&Default::default(), post(&url))
         .await
         .err()
         .expect("429");
@@ -143,7 +143,7 @@ async fn buffered_429_honors_short_retry_after() {
     )
     .await;
     let error = ProviderHttpClient::default()
-        .send::<Bytes, Bytes>(post(&url))
+        .send(&Default::default(), post(&url))
         .await
         .err()
         .expect("429");
@@ -162,7 +162,7 @@ async fn buffered_429_honors_short_retry_after() {
 async fn success_passes_the_body_through() {
     let url = one_shot_server("200 OK", &[], r#"{"ok":true}"#).await;
     let response = ProviderHttpClient::default()
-        .send::<Bytes, Bytes>(post(&url))
+        .send(&Default::default(), post(&url))
         .await
         .expect("200");
     assert_eq!(
@@ -182,7 +182,7 @@ async fn codex_usage_limit_survives_rig_responses_stream() {
         r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_at":1790354400}}"#,
     )
     .await;
-    let client = crate::clients::inference_http::build_openai_responses_client(
+    let client = crate::llm::rig_compat::providers::build_openai_responses_client(
         "test-key",
         &format!("{url}/v1"),
         ProviderHttpClient::default(),
@@ -224,7 +224,7 @@ async fn overloaded_529_with_overage_rejected_stays_transient() {
     )
     .await;
     let error = ProviderHttpClient::default()
-        .send_streaming(post(&url))
+        .send_streaming(&Default::default(), post(&url))
         .await
         .err()
         .expect("529");
@@ -237,18 +237,13 @@ async fn overloaded_529_with_overage_rejected_stays_transient() {
 }
 
 async fn openrouter_stream_error(url: &str) -> rig::completion::CompletionError {
-    let client: rig::providers::openrouter::Client<
-        crate::rendered_request::RenderedRequestCapturingHttpClient<ProviderHttpClient>,
-    > = rig::providers::openrouter::Client::builder()
-        .api_key("test-key")
-        .base_url(url)
-        .http_client(
-            crate::rendered_request::RenderedRequestCapturingHttpClient::<
-                ProviderHttpClient,
-            >::default(),
-        )
-        .build()
-        .expect("client");
+    let client = crate::llm::rig_compat::providers::build_openrouter_client(
+        "test-key",
+        url,
+        crate::rendered_request::RenderedRequestCapturingHttpClient::<ProviderHttpClient>::default(
+        ),
+    )
+    .expect("client");
     let model = client.completion_model("test/model");
     let request = model.completion_request("hi").build();
     match model.stream(request).await {
@@ -336,22 +331,48 @@ async fn usage_client(
     )
 }
 
-pub(crate) async fn stored_usage_eventually(
+/// Resolves with the first `Some` that `read` returns, re-running it after
+/// each observation `cache` records and failing with `what` once none has been
+/// recorded for the suite's `STALL_CEILING`. The subscription opens before the
+/// first read, so a record landing between two reads is never missed
+/// (TLA+ `UsageRecordObservation`).
+pub(crate) async fn when_usage_recorded<T, F>(
+    cache: &crate::usage_observation::UsageCache,
+    what: &str,
+    mut read: F,
+) -> T
+where
+    F: AsyncFnMut() -> Option<T>,
+{
+    use gents_store::test_support::STALL_CEILING;
+    let mut records = cache.subscribe_records();
+    loop {
+        let seen = *records.borrow_and_update();
+        if let Some(value) = read().await {
+            return value;
+        }
+        match tokio::time::timeout(STALL_CEILING, records.changed()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => panic!("{what}: the usage cache closed after {seen} records"),
+            Err(_) => {
+                panic!("{what}: no usage recorded for {STALL_CEILING:?} after {seen} records")
+            }
+        }
+    }
+}
+
+pub(crate) async fn stored_usage_when_recorded(
     cache: &crate::usage_observation::UsageCache,
     node: &std::sync::Arc<defra_node::Node>,
     account: &crate::usage_observation::UsageAccount,
-) -> Option<crate::usage_observation::UsageObservation> {
+) -> crate::usage_observation::UsageObservation {
     let access = gents_store::config_client::ConfigAccess::local(node.clone());
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let stored = crate::usage_observation::load_usage(cache, &access, account)
+    when_usage_recorded(cache, &format!("usage for {account:?}"), async || {
+        crate::usage_observation::load_usage(cache, &access, account)
             .await
-            .expect("load usage");
-        if stored.is_some() || tokio::time::Instant::now() >= deadline {
-            return stored;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+            .expect("load usage")
+    })
+    .await
 }
 
 const CODEX_USAGE_HEADERS: &[(&str, &str)] = &[
@@ -364,11 +385,12 @@ async fn usage_capture_success_send_records_header_windows() {
     let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
     let (db, account, client) = usage_client(&cache, "backend-usage-send").await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
-    client.send::<Bytes, Bytes>(post(&url)).await.expect("200");
-
-    let stored = stored_usage_eventually(&cache, &db.node, &account)
+    client
+        .send(&Default::default(), post(&url))
         .await
-        .expect("usage recorded");
+        .expect("200");
+
+    let stored = stored_usage_when_recorded(&cache, &db.node, &account).await;
     let window = &stored.report.windows[0];
     assert_eq!((window.label.as_str(), window.used_pct), ("primary", 12.0));
     assert_eq!(
@@ -382,13 +404,14 @@ async fn usage_capture_streaming_success_records_header_windows() {
     let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
     let (db, account, client) = usage_client(&cache, "backend-usage-stream").await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, "data: {}\n\n").await;
-    let response = client.send_streaming(post(&url)).await.expect("200");
+    let response = client
+        .send_streaming(&Default::default(), post(&url))
+        .await
+        .expect("200");
     let mut body = response.into_body();
     while body.next().await.is_some() {}
 
-    let stored = stored_usage_eventually(&cache, &db.node, &account)
-        .await
-        .expect("usage recorded");
+    let stored = stored_usage_when_recorded(&cache, &db.node, &account).await;
     assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }
 
@@ -405,7 +428,11 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
         r#"{"error":{"type":"usage_limit_reached"}}"#,
     )
     .await;
-    let error = client.send_streaming(post(&url)).await.err().expect("429");
+    let error = client
+        .send_streaming(&Default::default(), post(&url))
+        .await
+        .err()
+        .expect("429");
     assert!(
         error
             .to_string()
@@ -413,9 +440,7 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
         "{error}"
     );
 
-    let stored = stored_usage_eventually(&cache, &db.node, &account)
-        .await
-        .expect("usage recorded");
+    let stored = stored_usage_when_recorded(&cache, &db.node, &account).await;
     let window = &stored.report.windows[0];
     assert_eq!(window.used_pct, 100.0);
     assert_eq!(window.source, gents_loop::account_usage::UsageSource::Error);
@@ -443,16 +468,14 @@ async fn usage_capture_requires_no_persistent_schema() {
     let client = ProviderHttpClient::with_usage(ReqwestClient::new(), reporter);
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
     let response = client
-        .send::<Bytes, Bytes>(post(&url))
+        .send(&Default::default(), post(&url))
         .await
         .expect("the call succeeds");
     assert_eq!(
         response.into_body().await.expect("body"),
         Bytes::from_static(br#"{"ok":true}"#)
     );
-    let stored = stored_usage_eventually(&cache, &node, &account)
-        .await
-        .expect("usage recorded without schemas");
+    let stored = stored_usage_when_recorded(&cache, &node, &account).await;
     assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }
 

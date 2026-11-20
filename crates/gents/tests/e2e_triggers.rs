@@ -1,4 +1,4 @@
-mod support;
+use gents::support;
 
 /// The embedded P2P transport is process-global: scenarios contend when libtest
 /// runs them concurrently, and event-source reconciliation boots the transport

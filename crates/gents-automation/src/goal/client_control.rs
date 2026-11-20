@@ -73,6 +73,14 @@ pub(crate) async fn attach_client_goal_graphs(
     let Some(evidence) = command.native_evidence.as_ref() else {
         return Ok(Err("goal creation has no native graph evidence".into()));
     };
+    if replacement.is_some() {
+        if let Err(refusal) = txn.admit_stored_user_write(
+            &command.requester_did,
+            gents_store::config_client::user_write::WriteKind::Delete,
+        ) {
+            return Ok(Err(refused(refusal)));
+        }
+    }
     if txn.managed_agent_signer().is_none()
         || txn.actor_did() != Some(command.agent_did.as_str())
         || request.admission.signer_did != command.requester_did
@@ -96,6 +104,11 @@ pub(crate) async fn attach_client_goal_graphs(
             ) => return Ok(Err("invalid native goal request evidence".into())),
             Err(error) => return Err(error.into()),
         };
+    if let Err(refusal) =
+        txn.admit_stored_user_create(request, graph.doc_id(), &evidence.request_credentials)?
+    {
+        return Ok(Err(refused(refusal)));
+    }
     let deletion = match (replacement, evidence.replacement_delete.as_ref()) {
         (None, None) => None,
         (Some((prior, _)), Some(evidence)) => {
@@ -153,6 +166,11 @@ pub(crate) async fn attach_client_goal_graphs(
     Ok(Ok(()))
 }
 
+fn refused(refusal: gents_store::config_client::user_write::UserWriteRefusal) -> String {
+    tracing::info!(%refusal, "goal control refused before any write");
+    gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.into()
+}
+
 /// Preflight performs no document writes. Once staging begins, every error
 /// aborts the command transaction, including its receipt.
 pub(crate) async fn prepare_goal_control(
@@ -208,10 +226,12 @@ pub(crate) async fn prepare_goal_control(
         let admission = match crate::operations::goal::admit_start_in_txn(
             txn,
             actor,
-            &command.node_did,
-            &command.session_id,
-            objective,
-            *token_budget,
+            crate::operations::goal::GoalStart {
+                node_did: &command.node_did,
+                session_id: &command.session_id,
+                objective,
+                token_budget: *token_budget,
+            },
             command.expected.as_ref(),
             None,
         )
@@ -261,10 +281,7 @@ pub(crate) async fn prepare_goal_control(
             .unwrap_or_else(|| deterministic_goal_id(&command.node_did, &command.session_id));
         if let Err(refusal) = crate::operations::goal::check_first_request(
             request,
-            &command.node_did,
-            &command.session_id,
-            &session.session.agent_did,
-            session.session.requester_did.as_deref(),
+            &session.session,
             &command.requester_did,
             &expected_goal_id,
             Some(&format!("session-goal:{}", command.command_id)),
@@ -384,13 +401,15 @@ pub(crate) async fn stage_goal_control(
             );
             gents_session::session::ensure_session_in_txn(
                 txn,
-                &request.session_id,
-                &request.node_did,
-                &request.agent_did,
-                Some(&request.requester_did),
-                request.input.initial_title.clone(),
-                None,
-                &request.created_at,
+                gents_session::session::NewAgentSession {
+                    session_id: &request.session_id,
+                    node_did: &request.node_did,
+                    agent_did: &request.agent_did,
+                    requester_did: Some(&request.requester_did),
+                    title: request.input.initial_title.clone(),
+                    provenance: None,
+                    created_at: &request.created_at,
+                },
             )
             .await?;
             if let Some((prior, _)) = &replacement {
@@ -415,10 +434,12 @@ pub(crate) async fn stage_goal_control(
             }
             let submitted = stage_goal_backed_request_with_identity_in_txn(
                 txn,
-                &request.node_did,
-                &request.session_id,
-                &objective,
-                token_budget,
+                crate::operations::goal::GoalStart {
+                    node_did: &request.node_did,
+                    session_id: &request.session_id,
+                    objective: &objective,
+                    token_budget,
+                },
                 &request,
                 replacement.as_ref().map(|(_, identity)| identity),
                 client_graphs.as_ref().map(|graphs| &graphs.request),

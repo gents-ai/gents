@@ -69,7 +69,8 @@ pub(super) async fn ensure_agent(
         })?
         .agent
         .inference_profile_id;
-    let identity_binding = gents_desktop_core::agent_identity::provision(graphql, node_did).await?;
+    let identity_binding =
+        gents_store::identity::provision_agent_identity_remote(graphql, node_did).await?;
     let yolo = identity_binding.agent_did.clone();
     let made = gents::operations::agent::create(
         &access,

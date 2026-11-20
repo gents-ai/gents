@@ -1,7 +1,5 @@
 use super::*;
-use crate::rendered_request::scope::{
-    ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
-};
+use crate::rendered_request::scope::{arming_sink, test_scope, CaptureScopeKind};
 use crate::rendered_request::transport::RenderedRequestCapturingHttpClient;
 use bytes::Bytes;
 use futures::StreamExt;
@@ -108,12 +106,18 @@ async fn owned_loop_uses_each_turns_wire_finish_reason_for_tool_errors() {
             "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".into(),
         ].into())),
     };
-    let client = rig::providers::openai::CompletionsClient::builder()
-        .api_key("test")
-        .base_url("https://provider.invalid/v1")
-        .http_client(RenderedRequestCapturingHttpClient::new(wire.clone()))
-        .build()
-        .unwrap();
+    let transport = RenderedRequestCapturingHttpClient::new(wire.clone());
+    let client = crate::rig_compat::call::CallClient::new(move |call| {
+        rig::providers::openai::CompletionsClient::builder()
+            .api_key("test")
+            .base_url("https://provider.invalid/v1")
+            .http_client(crate::rig_compat::http::Lifted::new(
+                transport.clone(),
+                call.clone(),
+            ))
+            .build()
+    })
+    .unwrap();
     let calls = Arc::new(Mutex::new(Vec::new()));
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
         calls: calls.clone(),
@@ -121,29 +125,34 @@ async fn owned_loop_uses_each_turns_wire_finish_reason_for_tool_errors() {
     })]);
     let hook = RecordingHook::default();
     let mut config = test_loop_config();
-    config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
-    scope_request(capture_scope(), async {
-        let stream = crate::loop_stream::run_loop_stream(
-            client.completion_model("test-model"),
-            Some(hook.clone()),
-            TaggedMessage::unassociated(Message::user("echo")),
-            Vec::new(),
-            tools,
-            config,
-        );
-        futures::pin_mut!(stream);
-        while let Some(item) = stream.next().await {
-            use crate::loop_stream::{FinishOrIntake, LoopStreamItem};
-            match item.unwrap() {
-                LoopStreamItem::AuthoredInputReady { reply, .. }
-                | LoopStreamItem::SteeringBoundary { reply } => reply.send(Ok(Vec::new())).unwrap(),
-                LoopStreamItem::FinishOrIntake { reply, .. } => {
-                    reply.send(Ok(FinishOrIntake::Finished)).unwrap()
+    config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
+    {
+        config.provider_call.capture = Some(capture_scope());
+        async {
+            let stream = crate::loop_stream::run_loop_stream(
+                client.completion_model("test-model"),
+                Some(hook.clone()),
+                TaggedMessage::unassociated(Message::user("echo")),
+                Vec::new(),
+                tools,
+                config,
+            );
+            futures::pin_mut!(stream);
+            while let Some(item) = stream.next().await {
+                use crate::loop_stream::{FinishOrIntake, LoopStreamItem};
+                match item.unwrap() {
+                    LoopStreamItem::AuthoredInputReady { reply, .. }
+                    | LoopStreamItem::SteeringBoundary { reply } => {
+                        reply.send(Ok(Vec::new())).unwrap()
+                    }
+                    LoopStreamItem::FinishOrIntake { reply, .. } => {
+                        reply.send(Ok(FinishOrIntake::Finished)).unwrap()
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
-    })
+    }
     .await;
     let outcomes = hook
         .calls()
@@ -183,11 +192,12 @@ async fn late_token_limit_from_superseded_attempt_does_not_change_retry() {
     use crate::rendered_request::scope::{arm, attempt_activity};
     use crate::rendered_request::{AssemblyBuildPath, AssemblyTrace};
 
-    scope_request(capture_scope(), async {
+    async {
+        let capture = Some(capture_scope());
         let trace =
             || AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new());
-        arm(CaptureScopeKind::Inference, 0, 0, trace());
-        let old = attempt_activity(0, 0).unwrap();
+        arm(capture.as_ref(), CaptureScopeKind::Inference, 0, 0, trace());
+        let old = attempt_activity(capture.as_ref(), 0, 0).unwrap();
         let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter([Ok(
             Bytes::from_static(b"data: {\"choices\":[{\"finish_reason\":\"length\"}]}\n\n"),
         )]));
@@ -197,28 +207,28 @@ async fn late_token_limit_from_superseded_attempt_does_not_change_retry() {
             Some(ProviderStreamProtocol::ChatCompletions),
             Some(old.clone()),
         );
-        arm(CaptureScopeKind::Inference, 0, 1, trace());
-        let retry = attempt_activity(0, 1).unwrap();
+        arm(capture.as_ref(), CaptureScopeKind::Inference, 0, 1, trace());
+        let retry = attempt_activity(capture.as_ref(), 0, 1).unwrap();
         assert!(!retry.token_limit_reached());
         for chunk in stale.into_body().collect::<Vec<_>>().await {
             chunk.unwrap();
         }
         assert!(old.token_limit_reached());
         assert!(!retry.token_limit_reached());
-        assert!(attempt_activity(0, 0).is_none());
-    })
+        assert!(attempt_activity(capture.as_ref(), 0, 0).is_none());
+    }
     .await;
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct ResponsesArgs {
     text: String,
-    #[allow(dead_code)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<ResponsesMode>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 enum ResponsesMode {
     Normal,
 }
@@ -252,7 +262,10 @@ impl Tool for ResponsesTool {
         args: Self::Args,
         _context: &crate::tool::ToolCallEnvelope,
     ) -> Result<String, Self::Error> {
-        self.0.lock().unwrap().push(args.text.clone());
+        self.0
+            .lock()
+            .unwrap()
+            .push(serde_json::to_string(&args).unwrap());
         Ok(args.text.to_uppercase())
     }
 }
@@ -349,12 +362,18 @@ async fn responses_outcomes(turns: Vec<String>) -> (Vec<String>, Vec<String>, Op
     let wire = ProviderWire {
         bodies: Arc::new(Mutex::new(turns.into())),
     };
-    let client = rig::providers::openai::Client::builder()
-        .api_key("test")
-        .base_url("https://provider.invalid/v1")
-        .http_client(RenderedRequestCapturingHttpClient::new(wire))
-        .build()
-        .unwrap();
+    let transport = RenderedRequestCapturingHttpClient::new(wire);
+    let client = crate::rig_compat::call::CallClient::new(move |call| {
+        rig::providers::openai::Client::builder()
+            .api_key("test")
+            .base_url("https://provider.invalid/v1")
+            .http_client(crate::rig_compat::http::Lifted::new(
+                transport.clone(),
+                call.clone(),
+            ))
+            .build()
+    })
+    .unwrap();
     let calls = Arc::new(Mutex::new(Vec::new()));
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(ResponsesTool(calls.clone()))]);
     let hook = RecordingHook::default();
@@ -365,38 +384,43 @@ async fn responses_outcomes(turns: Vec<String>) -> (Vec<String>, Vec<String>, Op
         OpenAiWireApi::Responses,
         "test-model",
     ));
-    config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
+    config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
     let mut accepted_turns = 0;
     let mut final_answers = 0;
-    let error = scope_request(capture_scope(), async {
-        let stream = crate::loop_stream::run_loop_stream(
-            client.completion_model("test-model"),
-            Some(hook.clone()),
-            TaggedMessage::unassociated(Message::user("echo")),
-            Vec::new(),
-            tools,
-            config,
-        );
-        futures::pin_mut!(stream);
-        while let Some(item) = stream.next().await {
-            use crate::loop_stream::{FinishOrIntake, LoopStreamItem};
-            let item = match item {
-                Ok(item) => item,
-                Err(error) => return Some(error.to_string()),
-            };
-            match item {
-                LoopStreamItem::AuthoredInputReady { reply, .. }
-                | LoopStreamItem::SteeringBoundary { reply } => reply.send(Ok(Vec::new())).unwrap(),
-                LoopStreamItem::FinishOrIntake { reply, .. } => {
-                    reply.send(Ok(FinishOrIntake::Finished)).unwrap()
+    let error = {
+        config.provider_call.capture = Some(capture_scope());
+        async {
+            let stream = crate::loop_stream::run_loop_stream(
+                client.completion_model("test-model"),
+                Some(hook.clone()),
+                TaggedMessage::unassociated(Message::user("echo")),
+                Vec::new(),
+                tools,
+                config,
+            );
+            futures::pin_mut!(stream);
+            while let Some(item) = stream.next().await {
+                use crate::loop_stream::{FinishOrIntake, LoopStreamItem};
+                let item = match item {
+                    Ok(item) => item,
+                    Err(error) => return Some(error.to_string()),
+                };
+                match item {
+                    LoopStreamItem::AuthoredInputReady { reply, .. }
+                    | LoopStreamItem::SteeringBoundary { reply } => {
+                        reply.send(Ok(Vec::new())).unwrap()
+                    }
+                    LoopStreamItem::FinishOrIntake { reply, .. } => {
+                        reply.send(Ok(FinishOrIntake::Finished)).unwrap()
+                    }
+                    LoopStreamItem::ProviderTurnReady { .. } => accepted_turns += 1,
+                    LoopStreamItem::Final { .. } => final_answers += 1,
+                    _ => {}
                 }
-                LoopStreamItem::ProviderTurnReady { .. } => accepted_turns += 1,
-                LoopStreamItem::Final { .. } => final_answers += 1,
-                _ => {}
             }
+            None
         }
-        None
-    })
+    }
     .await;
     if error.is_some() {
         assert_eq!(accepted_turns, 0);
@@ -465,7 +489,7 @@ async fn responses_token_limit_does_not_change_valid_calls_or_later_turns() {
     ])
     .await;
     assert!(error.is_none(), "{error:?}");
-    assert_eq!(calls, ["ok"]);
+    assert_eq!(calls, [r#"{"text":"ok"}"#]);
     assert_eq!(outcomes.len(), 2);
     assert!(outcomes[0].contains("OK"));
     let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(

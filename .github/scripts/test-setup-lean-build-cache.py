@@ -42,6 +42,21 @@ class LeanBuildCacheTests(unittest.TestCase):
         self.assertIn("Reusing", result.stdout)
         self.assertTrue((self.cache / "kept").exists())
 
+    def test_locked_package_checkout_is_preserved_and_next_cache_is_reused(self):
+        self.assert_linked(self.setup())
+        lock = self.cache / "packages/mathlib/.git/index.lock"
+        lock.parent.mkdir(parents=True)
+        lock.write_bytes(b"pending index")
+        result = self.setup()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        alternate = self.lake.resolve()
+        self.assertNotEqual(alternate, self.cache)
+        (alternate / "kept").write_text("olean")
+        self.assertEqual(self.setup().returncode, 0)
+        self.assertEqual(self.lake.resolve(), alternate)
+        self.assertTrue((self.lake / "kept").is_file())
+        self.assertEqual(lock.read_bytes(), b"pending index")
+
     def test_a_stray_build_directory_is_replaced(self):
         (self.lake / "build").mkdir(parents=True)
         (self.lake / "build/stale.olean").write_text("stale")

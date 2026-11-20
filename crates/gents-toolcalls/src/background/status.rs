@@ -440,6 +440,9 @@ pub fn supports_foreground_backgrounding(name: &str) -> bool {
 
 /// Requests a handoff of one exact native invocation. The runtime publishes
 /// its background receipt only after assuming responsibility for completion.
+/// The count here is checked against the host ceiling because the caller has
+/// no Agent configuration; the runtime checks the Agent's Tools
+/// `host.max_background_tool_calls` when it adopts the handoff.
 pub async fn request_foreground_backgrounding(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
@@ -539,6 +542,25 @@ pub async fn request_foreground_backgrounding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_process_control_scopes_authorize_through_the_scope_owner() {
+        gents_lean_vocab::families::contracts_r6_process_control::replay(|i| {
+            let caller = ProcessControlScope {
+                request_id: i.caller.request_id.clone(),
+                session_id: i.caller.session_id.clone(),
+                node_did: i.caller.node_did.clone(),
+                requester_did: i.caller.requester_did.clone(),
+            };
+            gents_lean_vocab::families::contracts_r6_process_control::ProcessControlOutput {
+                legal: caller.authorizes(
+                    &i.owner.session_id,
+                    &i.owner.node_did,
+                    i.owner.requester_did.as_deref(),
+                ),
+            }
+        });
+    }
 
     #[test]
     fn read_tool_output_row_decodes_missing_and_malformed_timestamps() {

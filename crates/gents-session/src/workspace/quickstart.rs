@@ -43,7 +43,12 @@ async fn publish_repository_and_resolve_agents(
     operator: &ConfigAccess,
     repository: &RepositoryPlacementRef,
     selected: &WorkspaceProvisioningSelection,
-) -> Result<(String, String, Vec<super::WorkspaceReaderBinding>)> {
+) -> Result<(
+    String,
+    String,
+    Vec<super::WorkspaceReaderBinding>,
+    gents_store::config_client::owed::OwedAccessTicket,
+)> {
     let host_path = repository
         .host_path
         .to_str()
@@ -155,7 +160,12 @@ async fn publish_repository_and_resolve_agents(
                         agent_doc_id: Some(doc.clone()),
                     })
                     .collect();
-                Ok::<_, anyhow::Error>((targets[1].clone(), targets[2].clone(), readers))
+                Ok::<_, anyhow::Error>((
+                    targets[1].clone(),
+                    targets[2].clone(),
+                    readers,
+                    txn.owed_access_ticket()?,
+                ))
             })
         })
         .await
@@ -198,8 +208,9 @@ pub async fn provision_read_only_workspace(
         host_path: repository_path.clone(),
         enabled: true,
     };
-    let (writer_doc, integrator_doc, readers) =
+    let (writer_doc, integrator_doc, readers, granted) =
         publish_repository_and_resolve_agents(operator, &repository, selected).await?;
+    granted.require_settled().await?;
     let visible =
         super::runtime::load_repository_with_access(agent, &repository_id, &selected.node_did)
             .await?;
@@ -224,24 +235,24 @@ pub async fn provision_read_only_workspace(
         adapter: WorkspaceAdapterKind::GitWorktree,
         clone_artifacts: None,
     };
-    let invocation = format!("graph-workspace-{workspace_id}");
+    let provenance = super::WorkspaceProvenance {
+        owner_node_did: selected.node_did.clone(),
+        writer_principal: selected.writer_agent_did.clone(),
+        integrator_principal: selected.integrator_agent_did.clone(),
+        caused_by_invocation_id: format!("graph-workspace-{workspace_id}"),
+        caused_by_correlation: workspace_id.clone(),
+        route: Default::default(),
+    };
     let reservation = {
         let action = action.clone();
         let repository = repository.clone();
-        let selection = selected.clone();
-        let invocation = invocation.clone();
-        let correlation = workspace_id.clone();
+        let provenance = provenance.clone();
         tokio::task::spawn_blocking(move || {
             let mut reservation = super::prepare_workspace_reservation(
                 &action,
                 &repository,
                 Some(&repository.host_path),
-                &selection.node_did,
-                &selection.writer_agent_did,
-                &selection.integrator_agent_did,
-                &invocation,
-                &correlation,
-                &Default::default(),
+                &provenance,
             )?;
             reservation.seal_hash = Some(super::adapter::base_tree_hash(
                 &repository.host_path,
@@ -289,23 +300,16 @@ pub async fn provision_read_only_workspace(
     let (documents, created) = {
         let action = action.clone();
         let repository = repository.clone();
-        let selection = selected.clone();
-        let invocation = invocation.clone();
-        let correlation = workspace_id.clone();
+        let provenance = provenance.clone();
         let caps = capabilities.clone();
         tokio::task::spawn_blocking(move || {
             let mut documents = documents;
             let result = {
                 let mut context = HostExecutorContext {
-                    owner_node_did: selection.node_did,
+                    provenance,
                     ceiling: Some(&repository.host_path),
                     repository: repository.clone(),
                     capabilities: caps,
-                    writer_principal: selection.writer_agent_did,
-                    integrator_principal: selection.integrator_agent_did,
-                    caused_by_invocation_id: invocation,
-                    caused_by_correlation: correlation,
-                    route: Default::default(),
                     documents: &mut documents,
                 };
                 execute_create_workspace_plan(
@@ -329,22 +333,14 @@ pub async fn provision_read_only_workspace(
     };
     let (documents, frozen) = {
         let repository = repository.clone();
-        let selection = selected.clone();
-        let invocation = invocation.clone();
-        let correlation = workspace_id.clone();
         tokio::task::spawn_blocking(move || {
             let mut documents = documents;
             let result = {
                 let mut context = HostExecutorContext {
-                    owner_node_did: selection.node_did,
+                    provenance,
                     ceiling: Some(&repository.host_path),
                     repository: repository.clone(),
                     capabilities,
-                    writer_principal: selection.writer_agent_did,
-                    integrator_principal: selection.integrator_agent_did,
-                    caused_by_invocation_id: invocation,
-                    caused_by_correlation: correlation,
-                    route: Default::default(),
                     documents: &mut documents,
                 };
                 execute_freeze_workspace_base_plan(

@@ -22,7 +22,11 @@ impl ToolDyn for SchemaArgumentProbe {
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         self.admitted
             .lock()
             .unwrap()

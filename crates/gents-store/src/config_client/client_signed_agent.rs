@@ -105,26 +105,58 @@ impl ClientSigningCapability {
         &self.did
     }
 
-    /// Sign `payload` with this held key, off the runtime workers.
     pub(crate) async fn sign(&self, payload: Vec<u8>) -> Result<Vec<u8>> {
+        crate::identity::NodeIdentity::sign(self, &payload)
+            .await
+            .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::identity::NodeIdentity for ClientSigningCapability {
+    fn did(&self) -> &str {
+        &self.did
+    }
+
+    async fn sign(
+        &self,
+        payload: &[u8],
+    ) -> std::result::Result<Vec<u8>, crate::identity::IdentityError> {
         use identity::FullIdentity as _;
         let actor = self.clone();
+        let payload = payload.to_vec();
         tokio::task::spawn_blocking(move || {
             let identity = identity::RawIdentity::from_bytes(
                 crypto::KeyType::Ed25519,
                 &actor.config.private_key_bytes,
             )
             .map_err(crate::identity::IdentityError::LoadNodeSigning)?;
-            identity.sign(&payload).map_err(|source| {
-                crate::identity::IdentityError::SignPayload {
+            identity
+                .sign(&payload)
+                .map_err(|source| crate::identity::IdentityError::SignPayload {
                     did: actor.did().to_owned(),
                     source,
-                }
-                .into()
-            })
+                })
         })
         .await
-        .map_err(ConfigClientError::ClientAgentGraphJoin)?
+        .map_err(crate::identity::IdentityError::JoinRemoteSigning)?
+    }
+
+    async fn verify(
+        &self,
+        did: &str,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> std::result::Result<bool, crate::identity::IdentityError> {
+        crate::identity::verify_did_signature(did, payload, signature)
+    }
+
+    fn service_account(&self) -> Option<&crate::identity::ServiceAccount> {
+        None
+    }
+
+    fn client_signing_capability(&self) -> Result<ClientSigningCapability> {
+        Ok(self.clone())
     }
 }
 
@@ -349,7 +381,8 @@ pub(super) async fn execute(
     }
     url.set_path(&format!("{}/client-sign", url.path()));
     let authorization = endpoint
-        .authorization()?
+        .runtime_authorization()
+        .await?
         .ok_or(ConfigClientError::ClientAgentSignerRequired)?;
     let request = defra_http::client_signed_create::websocket_request(url.as_str(), &authorization)
         .map_err(ConfigClientError::ClientAgentSigning)?;
@@ -431,7 +464,8 @@ pub(super) async fn execute_update(
     }
     url.set_path(&format!("{}/client-sign", url.path()));
     let authorization = endpoint
-        .authorization()?
+        .runtime_authorization()
+        .await?
         .ok_or(ConfigClientError::ClientAgentSignerRequired)?;
     let request = defra_http::client_signed_create::websocket_request(url.as_str(), &authorization)
         .map_err(ConfigClientError::ClientAgentSigning)?;
@@ -493,7 +527,8 @@ pub(super) async fn execute_delete(
     }
     url.set_path(&format!("{}/client-sign", url.path()));
     let authorization = endpoint
-        .authorization()?
+        .runtime_authorization()
+        .await?
         .ok_or(ConfigClientError::ClientAgentSignerRequired)?;
     let request = defra_http::client_signed_create::websocket_request(url.as_str(), &authorization)
         .map_err(ConfigClientError::ClientAgentSigning)?;

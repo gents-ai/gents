@@ -14,8 +14,7 @@ use crate::support::agent_requests::{submit_user_request, RequestActors};
 use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_ceiling, live_target, wait_for_request_terminal,
-    wait_for_rows,
+    bind_target, boot_live_agent_with_ceiling, live_target, rows_when, wait_for_request_terminal,
 };
 use crate::support::snapshots::{
     fetch_message_snapshots_for_session_as, fetch_tool_call_snapshots_for_session, SnapshotReader,
@@ -94,11 +93,10 @@ impl Recovery {
             escape_graphql_string(request),
             escape_graphql_string(state)
         );
-        wait_for_rows(
+        rows_when(
             &self.actors.fixture.access,
             "AgentToolCall",
             &query,
-            WAIT,
             |rows| {
                 rows["AgentToolCall"]
                     .as_array()
@@ -231,7 +229,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         json!({"tool_name":"bash", "args":{"command":"printf", "args":["durable recovery result"]}})).await;
     let call = recovery.call("notification", "completed").await;
     assert_eq!(
-        wait_for_request_terminal(&recovery.actors.fixture.access, "notification", WAIT).await,
+        wait_for_request_terminal(&recovery.actors.fixture.access, "notification").await,
         "completed"
     );
     recovery.shutdown().await;
@@ -321,7 +319,7 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
     .await
     .unwrap();
     assert_eq!(
-        wait_for_request_terminal(&recovery.actors.fixture.access, "interrupted-tool", WAIT).await,
+        wait_for_request_terminal(&recovery.actors.fixture.access, "interrupted-tool").await,
         "interrupted"
     );
     recovery.recover_tools().await;

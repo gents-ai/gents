@@ -29,7 +29,7 @@ async fn goal_tool_uses_its_owner_when_composed() {
             None,
             "script",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -40,7 +40,7 @@ async fn goal_tool_uses_its_owner_when_composed() {
             1,
             gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -50,7 +50,7 @@ async fn goal_tool_uses_its_owner_when_composed() {
             None,
             &child,
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await,
         ToolCallHookAction::Skip { .. }
@@ -77,7 +77,7 @@ async fn a_stopped_invocation_times_out_the_child_it_left_running() {
             None,
             "script",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -88,7 +88,7 @@ async fn a_stopped_invocation_times_out_the_child_it_left_running() {
             1,
             "stall",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -98,7 +98,7 @@ async fn a_stopped_invocation_times_out_the_child_it_left_running() {
             2,
             "stall",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -108,7 +108,7 @@ async fn a_stopped_invocation_times_out_the_child_it_left_running() {
             None,
             &running,
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents::{DocumentRuntimeOptions, Gents};
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
@@ -22,6 +21,7 @@ use crate::support::interrupt::BootedAgent;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
 };
+use gents_store::test_support::STALL_CEILING;
 
 use crate::support::{test_db, TestDb};
 
@@ -266,6 +266,17 @@ async fn child_of(
         .find(|row| row.agent_did.as_deref() == Some(child_did))
 }
 
+/// What the chain has done before its child terminalizes, as the parent reads
+/// it: request states, tool-call states and transcript rows. A lease renewal
+/// changes none of these, so an owner that renews but makes no progress still
+/// reaches the hang ceiling (`WallClockBound`, `MCWallClockBoundStalledOwner`).
+const CHAIN_PROGRESS: &str = r#"{ AgentRequest { _docID lifecycle_state } AgentToolCall { _docID lifecycle_state } AgentMessage { _docID } }"#;
+
+/// Waits for the child request to terminalize, failing only once the chain
+/// has made no progress for [`STALL_CEILING`]. The chain is two parent turns,
+/// five child turns with their tool calls and the sessions' title audits, all
+/// through one backend permit; a fixed window failed it whenever the host ran
+/// it slower than the window (`MCWallClockBoundFixedWindow`).
 async fn wait_for_terminal_child(
     db: &TestDb,
     access: &ConfigAccess,
@@ -274,11 +285,14 @@ async fn wait_for_terminal_child(
     child_did: &str,
     runtime: &AcceptedTurnRuntime,
 ) -> ChildRequestRow {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut changes =
-        gents_store::subscription_source::subscribe_collections(&db.node, ["AgentRequest"])
-            .unwrap();
+    let mut changes = gents_store::subscription_source::subscribe_collections(
+        &db.node,
+        ["AgentRequest", "AgentToolCall", "AgentMessage"],
+    )
+    .unwrap();
     let parent = ConfigAccess::local_as(db.node.clone(), parent_did.parse().unwrap());
+    let mut progress = None;
+    let mut progressed_at = tokio::time::Instant::now();
     loop {
         if let Some(child) = child_of(&parent, parent_request_id, child_did).await {
             if matches!(
@@ -343,7 +357,16 @@ async fn wait_for_terminal_child(
                 return child;
             }
         }
-        if tokio::time::Instant::now() >= deadline {
+        let observed = parent
+            .execute(CHAIN_PROGRESS)
+            .await
+            .expect("read chain progress as the parent agent");
+        if progress.as_ref() != Some(&observed) {
+            progress = Some(observed);
+            progressed_at = tokio::time::Instant::now();
+        }
+        let ceiling = progressed_at + STALL_CEILING;
+        if tokio::time::Instant::now() >= ceiling {
             let query = r#"{ AgentRequest { _docID request_id agent_did requester_did session_id lifecycle_state failure_reason terminal_output relationships_pending caused_by_parent_request_id } AgentToolCall { _docID request_id agent_did creator_did parent_linked tool_name tool_call_id lifecycle_state tool_failure_class terminal_output } AgentSession { _docID session_id requester_did agent_did relationships_pending } AgentMessage { _docID request_doc_id session_id agent_did role blocks parent_linked } }"#;
             let child = ConfigAccess::local_as(db.node.clone(), child_did.parse().unwrap());
             let snapshots = [
@@ -352,11 +375,11 @@ async fn wait_for_terminal_child(
                 ("child agent", child.execute(query).await),
             ];
             panic!(
-                "timed out waiting for a terminal child of {parent_request_id}; actor-scoped rows: {snapshots:?}; provider bodies: {:?}",
+                "no progress toward a terminal child of {parent_request_id} for {STALL_CEILING:?}; actor-scoped rows: {snapshots:?}; provider bodies: {:?}",
                 runtime.backend.observed_completion_bodies()
             );
         }
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        let _ = tokio::time::timeout_at(ceiling, changes.recv()).await;
     }
 }
 
@@ -518,12 +541,7 @@ async fn agent_new_is_refused_once_its_configured_target_is_withdrawn() {
         true,
     )
     .await;
-    crate::support::live_inference::wait_for_request_terminal(
-        &access,
-        REQUEST_ID,
-        Duration::from_secs(30),
-    )
-    .await;
+    crate::support::live_inference::wait_for_request_terminal(&access, REQUEST_ID).await;
     let child = ConfigAccess::local_as(db.node.clone(), child_did.parse().unwrap());
     for (viewer, view) in [("user", &access), ("child agent", &child)] {
         let opened = child_of(view, REQUEST_ID, &child_did).await;

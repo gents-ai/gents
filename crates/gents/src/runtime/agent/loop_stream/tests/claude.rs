@@ -345,11 +345,12 @@ async fn run_claude_fixture_turns(
 
     let model =
         ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")))
+            .lifted()
             .completion_model("claude-sonnet-5");
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.on_rendered_request =
-        Some(gents_inference::rendered_request::scope::ambient_arming_sink(scope_kind));
+        Some(gents_inference::rendered_request::scope::arming_sink(scope_kind));
     config.provider_input_counter =
         Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
             gents_inference::backends::provider::BackendProviderKind::ClaudeCliSubscription,
@@ -395,6 +396,7 @@ async fn run_claude_fixture_turns(
     )
     .expect("DefraDB rendered-request capture scope");
 
+    config.provider_call.capture = Some(capture_scope);
     let stream = run_loop_stream(
         model,
         Some(hook.clone()),
@@ -403,14 +405,7 @@ async fn run_claude_fixture_turns(
         tools,
         config,
     );
-    let collected = collect_owned_scripted_stream_with_capture_scope(
-        stream,
-        &hook,
-        &writer,
-        &mut lifecycle,
-        gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
-        Some(capture_scope),
-    )
+    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle, gents_loop::provider_input::ProviderInputProfile::ClaudeMessages)
     .await;
     ClaudeFixtureRun {
         node,
@@ -462,7 +457,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 panic!("expected the AnthropicApiKey client");
             };
 
-            let mut config = owned_config(2);
+            let mut config = owned_config_for(2, &lifecycle);
             config.provider_input_counter =
                 Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
                     gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey,
@@ -471,7 +466,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 ));
             let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
             config.on_rendered_request =
-                Some(gents_inference::rendered_request::scope::ambient_arming_sink(scope_kind));
+                Some(gents_inference::rendered_request::scope::arming_sink(scope_kind));
             let request_commit_cid = lifecycle
                 .request_commit_cid()
                 .expect("claimed request commit CID")
@@ -500,6 +495,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 Some(&capture_factory),
             )
             .expect("DefraDB rendered-request capture scope");
+            config.provider_call.capture = Some(capture_scope);
             let stream = run_loop_stream(
                 client.completion_model("claude-sonnet-5"),
                 Some(hook.clone()),
@@ -508,14 +504,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 Arc::new(Vec::new()),
                 config,
             );
-            let collected = collect_owned_scripted_stream_with_capture_scope(
-                stream,
-                &hook,
-                &writer,
-                &mut lifecycle,
-                gents_loop::provider_input::ProviderInputProfile::ClaudeMessages,
-                Some(capture_scope),
-            )
+            let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle, gents_loop::provider_input::ProviderInputProfile::ClaudeMessages)
             .await;
             assert_eq!(collected.error, None);
             assert_eq!(collected.final_text.as_deref(), Some("done"));

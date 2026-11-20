@@ -5,19 +5,6 @@ namespace Conformance.FileReviewRouteContracts
 
 open Lean
 
-structure SubscriptionInput where
-  collection : String
-  deriving ToJson
-
-structure SubscriptionOutput where
-  replicated : Bool
-  deriving ToJson
-
-@[conformance_family]
-def subscription : Family SubscriptionInput SubscriptionOutput where
-  inputs := ScopeTemplates.transcriptCollections.map fun collection => { collection }
-  model := fun i => { replicated := Identity.collectionReplicates i.collection }
-
 deriving instance ToJson for ScopeTemplates.RouteDirection, ScopeTemplates.FilterClause,
   ScopeTemplates.CollectionPredicate
 

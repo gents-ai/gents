@@ -122,7 +122,7 @@ pub async fn invoke(
             None,
             id,
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {

@@ -141,7 +141,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         )
         .await
         .unwrap();
-    gents_store::identity::node_p2p(&receiver)
+    gents_p2p::node_access::operations(&receiver)
         .unwrap()
         .sync_documents(
             "PeerRegistry",
@@ -161,7 +161,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         public_probe["data"]["PeerRegistry"][0]["peer_id"],
         "mailbox-public-probe"
     );
-    let pull = gents_store::identity::node_p2p(&receiver)
+    let pull = gents_p2p::node_access::operations(&receiver)
         .unwrap()
         .sync_documents(
             "MailboxItem",

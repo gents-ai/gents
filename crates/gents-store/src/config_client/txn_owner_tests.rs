@@ -685,13 +685,17 @@ async fn cancelled_after_begin_trace(steps: usize) -> Vec<NativeObservation> {
                 let native_operations = Arc::new(super::NativeOperationTracker::default());
                 *lock(&tracker) = Some(Arc::clone(&native_operations));
                 let (rollback_on_drop, handle) = super::begin_embedded_owned(
-                    node.clone(),
-                    Arc::clone(&gate),
-                    false,
-                    operation,
-                    Some(write_guard),
-                    Arc::clone(&native_operations),
-                    rollback_scheduled,
+                    super::rollback::EmbeddedOwnerHandles {
+                        node: node.clone(),
+                        native_gate: Arc::clone(&gate),
+                        native_operations: Arc::clone(&native_operations),
+                        cancellation_rollback_scheduled: rollback_scheduled,
+                    },
+                    super::rollback::EmbeddedBegin {
+                        read_only: false,
+                        operation,
+                        write_guard: Some(write_guard),
+                    },
                     move |handle| async move {
                         *lock(&registered) = Some(handle);
                         registered_notify.notify_one();
@@ -717,10 +721,13 @@ async fn cancelled_after_begin_trace(steps: usize) -> Vec<NativeObservation> {
                         crate::config_client::txn::OwnerStagedRevocations::Send,
                     ),
                     agent_proof: None,
+                    client_authorization: None,
                     planned_replay_authorized: std::sync::atomic::AtomicBool::new(false),
                     publication_observer: None,
                     pack_approval: None,
                     loopback_node: None,
+                    presented_delegation: None,
+                    stored_creates: Default::default(),
                     owed_deliveries: std::sync::Mutex::new(Vec::new()),
                     rerun_notes: Vec::new(),
                 })

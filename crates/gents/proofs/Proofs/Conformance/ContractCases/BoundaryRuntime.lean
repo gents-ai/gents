@@ -89,25 +89,4 @@ def nativeFilesystemBoundaryCases : List NativeFilesystemBoundaryCase :=
   , nativeFilesystemBoundaryCase "grep"
   ]
 
-def managedExecToolBoundaryCase
-    (toolName workClass : String) : ManagedExecToolBoundaryCase :=
-  { name := toolName ++ "_routes_through_managed_exec_process_tree_boundary"
-  , toolName := toolName
-  , workClass := workClass
-  , boundary := "managedExecProcessGroupBoundary"
-  , killScope := "processTree"
-  , timeoutRequiresKill := true
-  , cancelRequiresKill := true
-  , descendantsInTerminationScope := true
-  , captureDrainBounded := true
-  }
-
-def managedExecToolBoundaryCases : List ManagedExecToolBoundaryCase :=
-  [ managedExecToolBoundaryCase "list_files" "filesystemTraversal"
-  , managedExecToolBoundaryCase "glob" "filesystemTraversal"
-  , managedExecToolBoundaryCase "grep" "filesystemTraversal"
-  , managedExecToolBoundaryCase "bash" "shellCommand"
-  , managedExecToolBoundaryCase "bash_unrestricted" "shellCommand"
-  ]
-
 end Conformance.ContractCases

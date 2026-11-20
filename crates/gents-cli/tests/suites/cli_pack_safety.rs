@@ -363,8 +363,8 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
         .iter()
         .any(|op| op == "delete"));
     use gents_store::identity::NodeIdentity as _;
-    let user = gents_desktop_core::client::PrincipalIdentity::load_existing(
-        &gents_desktop_core::client::DesktopPaths::from_root(user_home.join("cli")),
+    let user = gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+        &gents_store::client_journal::paths::DesktopPaths::from_root(user_home.join("cli")),
     )?;
     anyhow::ensure!(
         user.did() != owner,

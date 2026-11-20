@@ -1298,22 +1298,9 @@ mod tests {
     async fn service_health_publication_preserves_native_ownership_and_revocation(
     ) -> anyhow::Result<()> {
         use anyhow::Context;
-        use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
         use gents_store::config_client::{GraphqlEndpoint, NodePermission};
         use gents_store::identity::NodeIdentity;
 
-        let model = lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "operations-parent-publication")
-            .context("missing operations model")?;
-        let expected: Vec<_> = model
-            .actions
-            .iter()
-            .filter_map(|action| match action {
-                LeanIdentityAction::Check { expected, .. } => Some(*expected),
-                _ => None,
-            })
-            .collect();
         let dir = tempfile::tempdir()?;
         let user =
             gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
@@ -1437,47 +1424,63 @@ mod tests {
                 .is_ok()
             })
         };
-        let actual = [
-            visible(&user_view),
+        let mut observed = std::collections::BTreeMap::<String, bool>::new();
+        observed.insert("user/read/true".to_owned(), visible(&user_view));
+        observed.insert(
+            "user/update/true".to_owned(),
             affected(
                 user_access
                     .write("test.health.denied", &update)
                     .await
                     .map_err(Into::into),
             ),
+        );
+        observed.insert(
+            "runtime/update/true".to_owned(),
             affected(
                 runtime_access
                     .write("test.health.update", &update)
                     .await
                     .map_err(Into::into),
             ),
+        );
+        observed.insert(
+            "agent/read/true".to_owned(),
             visible(&access(&agent)?.execute(query).await?),
+        );
+        observed.insert(
+            "sibling/read/true".to_owned(),
             visible(&access(&sibling)?.execute(query).await?),
+        );
+        observed.insert(
+            "outsider/update/true".to_owned(),
             affected(
                 access(&outsider)?
                     .write("test.health.outsider", &update)
                     .await
                     .map_err(Into::into),
             ),
-        ];
-        assert_eq!(
-            actual,
-            [
-                expected[2],
-                expected[4],
-                expected[5],
-                expected[6],
-                expected[7],
-                expected[8]
-            ]
         );
         runtime_access
             .delete_resource_relationship("ToolServiceHealthState", doc, "parent", "nodes", &parent)
             .await?;
         let republished = super::upsert_persisted_health_state(&context, None, &entry, now).await;
-        assert_eq!(republished.is_ok(), expected[10]);
+        observed.insert("runtime/update/false".to_owned(), republished.is_ok());
         republished?;
-        assert_eq!(visible(&user_access.execute(query).await?), expected[9]);
+        observed.insert(
+            "user/read/false".to_owned(),
+            visible(&user_access.execute(query).await?),
+        );
+        for case in gents_lean_vocab::families::household_operations_health_access::cases() {
+            let key = format!(
+                "{}/{}/{}",
+                case.input.role, case.input.permission, case.input.parented
+            );
+            let actual = *observed
+                .get(&key)
+                .with_context(|| format!("scenario never observed {:?}", case.input))?;
+            case.check(actual);
+        }
         assert!(super::load_persisted_service_ids(&context)
             .await?
             .contains("service"));

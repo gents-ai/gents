@@ -16,7 +16,7 @@ async fn wait_for_connected_peer(node: &EmbeddedNode) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let mut changes = node.subscribe(&[gents::defra_node::EventName::PeerConnection]);
     loop {
-        let peers = gents_store::identity::node_p2p(node)
+        let peers = gents_p2p::node_access::operations(node)
             .expect("p2p enabled")
             .connected_peers()
             .await
@@ -32,7 +32,7 @@ async fn wait_for_connected_peer(node: &EmbeddedNode) {
 }
 
 async fn listen_address(node: &EmbeddedNode) -> String {
-    let p2p = gents_store::identity::node_p2p(node).expect("p2p enabled");
+    let p2p = gents_p2p::node_access::operations(node).expect("p2p enabled");
     let addresses = tokio::time::timeout(Duration::from_secs(10), p2p.listen_addresses())
         .await
         .expect("P2P listen-address request timed out")
@@ -48,7 +48,7 @@ async fn listen_address(node: &EmbeddedNode) -> String {
 async fn connect_discovery_peer(owner: &EmbeddedNode, peer: &EmbeddedNode) {
     let peer_addr = listen_address(peer).await;
     // Transport administration runs as the Node's own identity.
-    gents_store::identity::node_p2p(owner)
+    gents_p2p::node_access::operations(owner)
         .expect("owner p2p")
         .connect_peer(&peer_addr)
         .await
@@ -182,10 +182,8 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
         submit_start.elapsed()
     );
 
-    let owner_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
-        let state =
-            wait_for_request_terminal(&actors.fixture.access, request_id, owner_deadline).await;
+        let state = wait_for_request_terminal(&actors.fixture.access, request_id).await;
         assert_eq!(
             state, "completed",
             "owner wave {request_id} must complete against target {}, got {state}",
@@ -196,7 +194,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
 
     for db in [topo.peer_a(), topo.peer_b()] {
         assert!(
-            !gents_store::identity::node_p2p(&db.node)
+            !gents_p2p::node_access::operations(&db.node)
                 .expect("peer p2p")
                 .connected_peers()
                 .await

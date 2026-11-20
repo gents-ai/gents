@@ -12,7 +12,7 @@ import { deferred } from "./deferred";
 
 function snapshot(label: string): DesktopClientSnapshot {
   return {
-    bootstrap: { clientStateExists: false, savedPeers: [] },
+    bootstrap: { clientStateExists: false, savedRuntimes: [] },
     client: null,
     label,
   } as unknown as DesktopClientSnapshot;
