@@ -250,6 +250,10 @@ impl AgentRequestRow {
             .is_some_and(RequestLifecycleState::is_terminal)
     }
 
+    pub fn is_interrupted(&self) -> bool {
+        self.lifecycle_state == Some(RequestLifecycleState::Interrupted)
+    }
+
     pub fn is_claimable(&self) -> bool {
         self.lifecycle_state
             .is_some_and(RequestLifecycleState::is_claimable)
