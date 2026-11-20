@@ -9,4 +9,7 @@ pub(crate) struct ShellArgs {
     /// As on `init`: tests pass `file` so they never write login-keychain items.
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
+    /// As on `init`: the pack registry setup's core pack installs use.
+    #[arg(long, hide = true)]
+    pub(crate) registry: Option<String>,
 }

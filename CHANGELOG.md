@@ -6,6 +6,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: `GENTS_REGISTRY` is no longer read. `gents server --registry URL`
+  chooses the registry an Agent's `config pack` commands resolve and search
+  from; a tool call still names none. `gents init`, bare `gents` setup,
+  `gents config pack starter`, `pack prune` and `automation job promote` gain
+  `--registry`, as every other pack and plugin command has. Without the flag
+  the public registry is used (#1764).
 - Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
   background calls one request holds at once: Bash runs, remote service calls
   and plugin jobs together. The refusal reports the configured limit.

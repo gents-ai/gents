@@ -133,6 +133,7 @@ impl PolicyFixture {
             process_ceiling: Default::default(),
             selected_plugins: Vec::new(),
             ceiling_plugins: None,
+            registry_url: None,
         };
         build_self_config_tools_with_runtime(
             Arc::default(),

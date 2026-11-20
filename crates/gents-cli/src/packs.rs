@@ -143,13 +143,13 @@ pub async fn enable_core_packs_from(
         .iter()
         .map(|pack| owner::core_pack(&home, pack))
         .collect::<Result<Vec<_>>>()?;
-    owner::enable(&home, archives, &packs).await
+    owner::enable(&home, archives, &packs, None).await
 }
 
 /// Installs each core pack `home` lacks from `archives`, as `init
 /// --engineer` leaves it. Returns `{installed, not_installed}`.
 pub async fn install_core_packs_from(home: PathBuf, archives: &[(&str, &[u8])]) -> Result<Value> {
-    crate::commands::init::default_packs::install_missing(&home, archives).await
+    crate::commands::init::default_packs::install_missing(&home, archives, None).await
 }
 
 /// Wires the installed `plugin` into `agent`'s Tools and Context (or with
@@ -187,6 +187,7 @@ pub async fn promote(
         selector,
         name,
         agent,
+        registry: None,
         output: OutputFormat::Json,
     }))
     .await

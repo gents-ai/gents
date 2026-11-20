@@ -287,6 +287,7 @@ impl GentsBuilder {
             p2p_intervals: Default::default(),
             p2p_network_id: gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned(),
             system_log: false,
+            registry_url: None,
             backend_health: self.backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: self.process_state_observer,

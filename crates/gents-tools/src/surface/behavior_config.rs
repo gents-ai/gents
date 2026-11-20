@@ -394,6 +394,7 @@ impl AgentToolSurfaceConfig {
                     EndpointScope::All => None,
                     scope => Some(scope.keys().into_iter().collect()),
                 },
+                registry_url: None,
             },
             agent_policy,
             ceiling_policy,

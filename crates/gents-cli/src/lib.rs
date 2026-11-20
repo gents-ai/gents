@@ -338,6 +338,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                 commands::start::StartArgs {
                     home: cli.home,
                     store_key_custody: cli.store_key_custody,
+                    registry: cli.registry,
                     agent: cli.agent,
                     print: cli.print,
                     steer: cli.steer,

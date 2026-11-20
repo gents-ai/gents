@@ -891,6 +891,7 @@ async fn serve_foreground(
                 p2p_intervals: p2p_intervals(&args),
                 p2p_network_id: args.p2p_network_id.clone(),
                 system_log: args.system_log,
+                registry_url: args.registry.clone(),
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,
