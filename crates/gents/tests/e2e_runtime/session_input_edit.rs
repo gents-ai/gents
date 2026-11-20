@@ -1,7 +1,7 @@
 use gents::runtime::agent::session_commands::run_session_command_reconciler;
 use gents_lean_vocab::families::fold_queue_contracts_input_edit_endpoint as endpoint;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{
@@ -291,10 +291,12 @@ impl EndpointEdits {
             let mut create = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 request_id.clone(),
-                self.node_did(),
-                self.user.did(),
-                &self.agent_did,
-                session_id,
+                RequestScope::new(
+                    self.node_did(),
+                    self.user.did(),
+                    &self.agent_did,
+                    session_id,
+                ),
                 format!("message {id}"),
                 &entry.execution_origin,
                 (chrono::Utc::now() - chrono::Duration::minutes(1)
@@ -1010,10 +1012,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     let mut original = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "reopen-original",
-        &did,
-        user.did(),
-        agent.did(),
-        session,
+        RequestScope::new(&did, user.did(), agent.did(), session),
         "original durable message",
         "interactive",
         "2026-10-10T00:00:00Z",

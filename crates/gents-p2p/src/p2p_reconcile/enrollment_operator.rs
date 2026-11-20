@@ -10,9 +10,6 @@ use gents_store::identity::NodeIdentity;
 
 use super::EnrollmentProjection;
 
-#[cfg(test)]
-const OPERATOR_NONCE_RETENTION_SECONDS: i64 = 5 * 60;
-
 /// Consume one signed operator nonce before any protected read or decision.
 pub async fn consume_operator_nonce(
     node: &Arc<EmbeddedNode>,
@@ -319,7 +316,7 @@ mod tests {
                 .await
                 .expect("nonce test node"),
         );
-        gents_store::schema::migration::ensure_all_runtime_migrations(node.clone())
+        gents_store::schema::catalog::ensure_runtime_owned(node.clone())
             .await
             .expect("nonce schema");
         node
@@ -365,7 +362,10 @@ mod tests {
             &node,
             "did:key:admin",
             "nonce-new",
-            first + chrono::Duration::seconds(OPERATOR_NONCE_RETENTION_SECONDS + 1),
+            first
+                + chrono::Duration::seconds(
+                    gents_store::config_client::NONCE_RETENTION_SECONDS + 1,
+                ),
         )
         .await
         .unwrap();

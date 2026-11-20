@@ -180,8 +180,9 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             .unwrap();
         }
         let records = tempfile::tempdir().unwrap();
-        let registry = crate::call::hook::BackgroundExecutionRegistry::default()
-            .with_process_records(records.path().to_path_buf());
+        let registry =
+            crate::call::hook::background_executions::BackgroundExecutionRegistry::default()
+                .with_process_records(records.path().to_path_buf());
         let process = crate::call::hook::tests::process_records::process_for_generated_outcome(
             &registry,
             admission.tool.tool_call_id(),
@@ -302,7 +303,8 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
                 .contains("tool owner request is missing or ambiguous"),
             "{name}: unexpected missing-owner guard: {error:#}"
         );
-        let registry = crate::call::hook::BackgroundExecutionRegistry::default();
+        let registry =
+            crate::call::hook::background_executions::BackgroundExecutionRegistry::default();
         let first = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.node_did,

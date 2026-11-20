@@ -1,7 +1,9 @@
 use super::*;
 use gents_documents::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
 use gents_loop::tool::Tool;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+};
 use gents_protocol::row::AgentRequestRow;
 use gents_store::identity::NodeIdentity;
 use gents_tools::builtin::defra_write::{BoundedWriteParams, BoundedWriteTool};
@@ -42,10 +44,12 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     let mut parent = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "resumed-event-parent",
-        identity.did(),
-        agent.did(),
-        agent.did(),
-        "resumed-event-session",
+        RequestScope::new(
+            identity.did(),
+            agent.did(),
+            agent.did(),
+            "resumed-event-session",
+        ),
         "Original correlated work",
         "interactive",
         "2020-01-01T00:00:00Z",

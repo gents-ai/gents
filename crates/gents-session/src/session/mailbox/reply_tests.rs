@@ -39,7 +39,9 @@ async fn persisted_request(
     content: &str,
     question_reply: Option<&gents_protocol::mailbox_question::MailboxQuestionReply>,
 ) -> AgentRequest {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+    };
     let context = defra_core::RequestContext::default()
         .with_identity(Some(tests::root_identity().did().to_owned()));
     for permission in [
@@ -53,10 +55,12 @@ async fn persisted_request(
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         id,
-        tests::root_identity().did(),
-        identity.did(),
-        tests::agent_identity().did(),
-        "session-1",
+        RequestScope::new(
+            tests::root_identity().did(),
+            identity.did(),
+            tests::agent_identity().did(),
+            "session-1",
+        ),
         content,
         "interactive",
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

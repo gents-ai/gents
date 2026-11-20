@@ -1,16 +1,15 @@
 use defra_node::Node as EmbeddedNode;
 
-use crate::engine::{
+use super::{
     manages_client_journal, manages_file_images, manages_identity, manages_mailbox, node_context,
+    Catalog, SchemaError,
 };
-use crate::error::{Error, Result};
-use crate::registry::Registry;
 
 pub struct NodePolicy {
     pub definition: &'static str,
     pub id: &'static str,
-    manages: fn(&Registry<'_>) -> bool,
-    mismatch: fn() -> Error,
+    manages: fn(&Catalog<'_>) -> bool,
+    mismatch: fn() -> SchemaError,
 }
 
 /// Every access policy the node adds under counter 0 as its owner, in a fixed
@@ -22,34 +21,38 @@ pub const NODE_POLICIES: [NodePolicy; 4] = [
         definition: gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
         id: gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
         manages: manages_identity,
-        mismatch: || Error::IdentityPolicyMismatch,
+        mismatch: || SchemaError::IdentityPolicyMismatch,
     },
     NodePolicy {
         definition: gents_protocol::schemas::MAILBOX_POLICY,
         id: gents_protocol::schemas::MAILBOX_POLICY_ID,
         manages: manages_mailbox,
-        mismatch: || Error::IdentityPolicyMismatch,
+        mismatch: || SchemaError::IdentityPolicyMismatch,
     },
     NodePolicy {
         definition: gents_protocol::schemas::CLIENT_JOURNAL_POLICY,
         id: gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID,
         manages: manages_client_journal,
-        mismatch: || Error::IdentityPolicyMismatch,
+        mismatch: || SchemaError::IdentityPolicyMismatch,
     },
     NodePolicy {
         definition: gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
         id: gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
         manages: manages_file_images,
-        mismatch: || Error::FileImagePolicyMismatch,
+        mismatch: || SchemaError::FileImagePolicyMismatch,
     },
 ];
 
-pub(crate) async fn register(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+pub(super) async fn register(
+    node: &EmbeddedNode,
+    catalog: &Catalog<'_>,
+) -> Result<(), SchemaError> {
     for policy in &NODE_POLICIES {
-        if !(policy.manages)(registry) {
+        if !(policy.manages)(catalog) {
             continue;
         }
-        node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
+        node.node_identity_did()
+            .ok_or(SchemaError::MissingNodeIdentity)?;
         let added = node
             .add_dac_policy_with_counter_as(&node_context(node), policy.definition, 0)
             .await?;

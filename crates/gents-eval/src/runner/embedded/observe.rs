@@ -675,10 +675,12 @@ mod tests {
         let create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "req-evidence",
-            &did,
-            user.did(),
-            &binding.agent_did,
-            "s-evidence",
+            gents_protocol::request_admission::RequestScope::new(
+                &did,
+                user.did(),
+                &binding.agent_did,
+                "s-evidence",
+            ),
             "x",
             "interactive",
             "2026-01-01T00:00:00Z".to_owned(),

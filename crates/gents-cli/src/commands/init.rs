@@ -456,7 +456,7 @@ pub(crate) async fn init_home_with_core_packs(
         )?,
     );
     let result: Result<Value> = async {
-        gents_store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
+        gents_store::schema::catalog::ensure_runtime_owned(init_node.clone()).await?;
         gents_store::local::store_key::upgrade::finish(&data_dir)?;
         stage("migrations_complete");
         owner_staged.serve(&init_node, initialized_identity.identity.clone());

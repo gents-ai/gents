@@ -211,7 +211,8 @@ struct GoalBackgroundHandoff {
     runtime: crate::support::accepted_turn::AcceptedTurnRuntime,
     agent_identity: Arc<dyn NodeIdentity>,
     parent_doc_id: String,
-    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    background_executions:
+        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     process_tool_call_id: String,
     release: tokio::net::TcpStream,
 }

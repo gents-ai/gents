@@ -346,14 +346,8 @@ async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<gents::defra_node::CollectionVersion>, _>>()?;
-    gents_store::schema::migration::check_migration_compatibility(&versions)?;
-    let lineage = gents_store::schema::migration::non_canonical_store_lineages(&versions)?;
-    for mismatch in &lineage {
-        eprintln!("warning: {mismatch}");
-    }
-    let mut metadata = metadata(true);
-    metadata["non_canonical_lineages"] = serde_json::json!(lineage);
-    Ok(metadata)
+    gents_store::schema::catalog::check_lineages(&versions)?;
+    Ok(metadata(true))
 }
 
 fn metadata(schema_checked: bool) -> serde_json::Value {

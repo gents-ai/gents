@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::fixtures::*;
 use super::*;
+use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
 #[path = "tests/background_shutdown.rs"]

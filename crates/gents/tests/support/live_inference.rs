@@ -601,15 +601,12 @@ impl LiveUser {
     /// as a client does to attach a Goal to a new session.
     pub async fn reserve_session(&self, agent_did: &str, session_id: &str) -> String {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         let request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("{session_id}:reservation"),
-            &self.node_did,
-            self.user.did(),
-            agent_did,
-            session_id,
+            RequestScope::new(&self.node_did, self.user.did(), agent_did, session_id),
             "",
             "interactive",
             crate::support::agent_requests::canonical_now(),

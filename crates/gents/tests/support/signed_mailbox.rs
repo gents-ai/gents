@@ -11,7 +11,7 @@ use gents_documents::{
 };
 use gents_documents::{DatastoreTools, SurfaceToolDecl, Tools};
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_session::request::lifecycle::{reserve_goal_session, submit_client_request};
 use gents_store::config_client::GraphqlEndpoint;
@@ -62,10 +62,12 @@ impl SignedMailboxTurn {
         AgentRequestCreate::base(
             RequestPurpose::Normal,
             request_id,
-            &self.node_did,
-            self.user.did(),
-            self.agent.did(),
-            session_id,
+            RequestScope::new(
+                &self.node_did,
+                self.user.did(),
+                self.agent.did(),
+                session_id,
+            ),
             content,
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -247,10 +249,7 @@ pub async fn prepare_signed_mailbox_turn(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        &node_did,
-        user.did(),
-        agent.did(),
-        session_id,
+        RequestScope::new(&node_did, user.did(), agent.did(), session_id),
         prompt,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

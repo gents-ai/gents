@@ -37,6 +37,13 @@ source consistency checks, not a separate runtime compatibility version.
   "Runtime update failed" to the submitting session; read
   `gents runtime service update-status` instead. Update plans and receipts no
   longer carry `session_id` or `request_id` (#3922).
+- Breaking: no home is converted in place. A home from a development build
+  between v1.0.0-rc1 and v1.0.0-rc2 whose `Task`, `RepositoryPlacement`,
+  `ToolServiceRegistry`, `CallbackResult`, `IsolatedWorkspace`,
+  `WorkspaceReceipt`, `PackInstallation` or `Trigger` predates its current
+  fields, including one rc2 upgraded, is refused as an older home (exit code
+  65) and left unchanged; start a new home. The schema-migration engine
+  (`gents-migration`) is removed.
 - Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
   background calls one request holds at once: Bash runs, remote service calls
   and plugin jobs together. The refusal reports the configured limit.

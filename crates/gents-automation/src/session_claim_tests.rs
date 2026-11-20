@@ -825,7 +825,7 @@ async fn signed_background_claim_fixture(
     session: &str,
 ) -> (AgentRequest, String) {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
     let access = root_access(node);
@@ -839,10 +839,7 @@ async fn signed_background_claim_fixture(
     let mut parent = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "snapshot-parent",
-        &node_did,
-        &agent_did,
-        &agent_did,
-        session,
+        RequestScope::new(&node_did, &agent_did, &agent_did, session),
         "Prior work",
         "interactive",
         "2026-10-21T00:00:00Z",
@@ -856,10 +853,7 @@ async fn signed_background_claim_fixture(
     let mut wake = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "snapshot-wake",
-        &node_did,
-        &agent_did,
-        &agent_did,
-        session,
+        RequestScope::new(&node_did, &agent_did, &agent_did, session),
         "Review background results",
         "scheduled",
         "2026-10-21T00:00:01Z",

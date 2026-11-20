@@ -80,9 +80,9 @@ pub(in crate::runtime::agent) async fn run_agent(
     external_shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     agent.backend_admission.validate(&agent.node).await?;
-    gents_store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
+    gents_store::schema::catalog::ensure_runtime_owned(agent.node.clone())
         .await
-        .context("ensure runtime schema migrations")?;
+        .context("ensure runtime schemas")?;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start(
         agent.node.clone(),
         agent.node_did().to_string(),
@@ -124,9 +124,9 @@ pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
     retry_delay: std::time::Duration,
     slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
-    gents_store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
+    gents_store::schema::catalog::ensure_runtime_owned(agent.node.clone())
         .await
-        .context("ensure runtime schema migrations")?;
+        .context("ensure runtime schemas")?;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         agent.node.clone(),
         agent.node_did().to_string(),

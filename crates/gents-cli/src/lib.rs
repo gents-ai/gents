@@ -742,7 +742,7 @@ async fn resolve_config_access_inner(
     )?
     .with_client_signed_writes_through(endpoint.clone())?;
     let local_endpoint = local_http.then_some(endpoint);
-    gents_store::schema::migration::ensure_all_runtime_migrations(migration_node)
+    gents_store::schema::catalog::ensure_runtime_owned(migration_node)
         .await
         .map_err(|error| {
             gents_store::local::storage_backend::classify_store_error(error, &data_dir)

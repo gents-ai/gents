@@ -21,8 +21,8 @@ use gents_inference::resolved::{
     DEFAULT_TITLE_TIMEOUT_SECS,
 };
 use gents_store::identity::{NodeIdentity, RuntimeNode};
-use gents_store::schema::migration;
-use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::FailurePolicy;
 use gents_tools::mcp::health::HealthCheckerOptions;
 use gents_tools::mcp::pool::McpPool;
 use gents_tools::surface::{
@@ -107,7 +107,7 @@ where
         ),
         background_tool_registry: gents_toolcalls::call::hook::BackgroundToolRegistry::default(),
         background_execution_registry:
-            gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
         startup_barrier: Arc::new(runtime::StartupBarrier::ready_for_test()),
         runtime_status,
         slot_generation: 1,
@@ -274,7 +274,7 @@ impl Gents {
             .clone()
             .context("fresh backend protection provenance is required")?;
         backend_admission.validate(&node).await?;
-        migration::ensure_all_runtime_migrations(node.clone()).await?;
+        gents_store::schema::catalog::ensure_runtime_owned(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let plugin_models = gents_pack::plugin::model_binding::AccessModels(
             gents_store::config_client::ConfigAccess::local(node.clone()),

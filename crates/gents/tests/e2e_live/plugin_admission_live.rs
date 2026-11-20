@@ -14,7 +14,7 @@ use gents_toolcalls::background::job::view::{load_job_view, JobKey};
 use gents_toolcalls::call::control::{
     cancel_background_tool_call, CancelBackgroundToolCallOutcome,
 };
-use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 

@@ -1648,7 +1648,9 @@ mod tests {
 
     use super::AgentRequestAdmissionVerifier;
     use gents_p2p::p2p_reconcile::enrollment_authority_channel;
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+    };
     use gents_store::identity::{KeyIdentity, NodeIdentity};
 
     #[test]
@@ -1777,10 +1779,12 @@ mod tests {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "receipt-child",
-            identity.did(),
-            identity.did(),
-            agent.did(),
-            "receipt-session",
+            RequestScope::new(
+                identity.did(),
+                identity.did(),
+                agent.did(),
+                "receipt-session",
+            ),
             "original continuation",
             "scheduled",
             "2020-01-01T00:00:00Z",
@@ -2045,10 +2049,12 @@ mod tests {
             let mut create = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
-                self.runtime.did(),
-                self.runtime.did(),
-                agent_did,
-                session_id,
+                RequestScope::new(
+                    self.runtime.did(),
+                    self.runtime.did(),
+                    agent_did,
+                    session_id,
+                ),
                 "run the disallowed skill",
                 "interactive",
                 "2026-09-01T00:00:00Z",
@@ -2088,10 +2094,7 @@ mod tests {
             let mut create = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
-                self.runtime.did(),
-                agent_did,
-                agent_did,
-                session_id,
+                RequestScope::new(self.runtime.did(), agent_did, agent_did, session_id),
                 content,
                 "interactive",
                 "2026-09-01T00:00:00Z",

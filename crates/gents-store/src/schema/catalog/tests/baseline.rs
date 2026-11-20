@@ -1,18 +1,16 @@
-use gents_protocol::schemas;
 use std::collections::BTreeSet;
 
-use gents_migration::{
-    ensure_migrations, ensure_migrations_dynamic, ensure_migrations_with_registry,
-    BaselineCollectionOwned, CollectionExpectation, DynamicRegistry, Error, MigrationStep,
-    Registry, CLIENT_AUTHORED_COLLECTIONS,
-};
+use gents_protocol::schemas;
 
-use crate::common;
-use common::fresh_node;
+use super::common::{self, fresh_node};
+use crate::schema::catalog::{
+    ensure, ensure_runtime, validate_existing_schema, BaselineCollection, Catalog, SchemaError,
+    BASELINE, RUNTIME_CATALOG,
+};
 
 #[test]
 fn default_baseline_matches_ordered_protocol_catalog() {
-    let actual = gents_migration::DEFAULT_BASELINE
+    let actual = BASELINE
         .iter()
         .map(|entry| (entry.name, entry.sdl))
         .collect::<Vec<_>>();
@@ -29,24 +27,11 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         .collect::<Vec<_>>();
 
     assert_eq!(actual, expected, "baseline must use the canonical live SDL");
-    assert!(gents_migration::DEFAULT_STEPS.is_empty());
-    let stepped_client_collections = gents_migration::DEFAULT_STEPS
-        .iter()
-        .filter_map(MigrationStep::collection)
-        .filter(|collection| CLIENT_AUTHORED_COLLECTIONS.contains(collection))
-        .collect::<BTreeSet<_>>();
-    assert!(
-        stepped_client_collections.is_empty(),
-        "client-authored collections gained migration steps: {stepped_client_collections:?} — \
-         do not freeze-and-chain these; fold the change into the live SDL and re-pin the \
-         baseline to the fresh-apply CID (see CLIENT_AUTHORED_COLLECTIONS in registry.rs, \
-         #1123/#1125)"
-    );
 }
 
 #[test]
 fn default_baseline_covers_every_protocol_collection_once() {
-    let baseline_names = gents_migration::DEFAULT_BASELINE
+    let baseline_names = BASELINE
         .iter()
         .map(|entry| entry.name)
         .collect::<BTreeSet<_>>();
@@ -57,28 +42,28 @@ fn default_baseline_covers_every_protocol_collection_once() {
         .collect::<BTreeSet<_>>();
 
     assert_eq!(
-        gents_migration::DEFAULT_BASELINE.len(),
+        BASELINE.len(),
         baseline_names.len(),
-        "migration baseline must not contain duplicate collections"
+        "baseline must not contain duplicate collections"
     );
     assert!(
-        gents_migration::DEFAULT_BASELINE
+        BASELINE
             .iter()
             .all(|entry| entry.expected_version.is_some()),
-        "production migration baseline must pin every root version"
+        "production baseline must pin every root version"
     );
     assert_eq!(
         baseline_names, protocol_names,
-        "migration baseline must cover the full protocol schema catalog"
+        "baseline must cover the full protocol schema catalog"
     );
 }
 
 #[tokio::test]
 async fn fresh_node_runtime_baseline_is_diagnostics_only() {
     let node = fresh_node().await;
-    ensure_migrations(node.as_ref())
+    ensure_runtime(node.as_ref())
         .await
-        .expect("ensure migrations");
+        .expect("ensure the runtime schema");
     let runtime = node
         .get_collection(gents_protocol::schemas::NODE_RUNTIME_NAME)
         .expect("get NodeRuntime")
@@ -104,40 +89,14 @@ async fn fresh_node_runtime_baseline_is_diagnostics_only() {
 }
 
 #[tokio::test]
-async fn ensure_migrations_registers_baseline_and_is_idempotent() {
+async fn ensure_registers_the_baseline_on_its_roots_and_is_idempotent() {
     let node = fresh_node().await;
-    let report1 = ensure_migrations(node.as_ref())
+    ensure_runtime(node.as_ref()).await.expect("first ensure");
+    let first = node
+        .get_all_collection_versions()
         .await
-        .expect("first ensure");
-    assert!(
-        report1.baseline_registered + report1.baseline_already_present
-            >= gents_migration::DEFAULT_BASELINE.len(),
-        "expected full baseline coverage, got {report1:?}"
-    );
-    assert_eq!(report1.steps_applied, gents_migration::DEFAULT_STEPS.len());
-    if gents_migration::DEFAULT_STEPS.is_empty() {
-        assert_eq!(
-            report1.materialization.collections_attempted, 0,
-            "a chain-free baseline has no old document versions to materialize"
-        );
-    }
-
-    let report2 = ensure_migrations(node.as_ref())
-        .await
-        .expect("second ensure");
-    assert_eq!(report2.steps_applied, 0);
-    assert_eq!(
-        report2.steps_already_current,
-        gents_migration::DEFAULT_STEPS.len()
-    );
-    assert!(
-        report2.baseline_already_present >= gents_migration::DEFAULT_BASELINE.len()
-            || report2.baseline_registered + report2.baseline_already_present
-                >= gents_migration::DEFAULT_BASELINE.len(),
-        "re-run should be cheap/idempotent: {report2:?}"
-    );
-
-    for entry in gents_migration::DEFAULT_BASELINE.iter() {
+        .expect("versions after first ensure");
+    for entry in BASELINE.iter() {
         let cv = node
             .get_collection(entry.name)
             .expect("get_collection")
@@ -148,15 +107,48 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
             "{} should not be placeholder",
             entry.name
         );
+        assert_eq!(Some(cv.version_id.as_str()), entry.expected_version);
     }
+    for index in RUNTIME_CATALOG.ordinary_indexes {
+        let collection = node
+            .get_collection(index.collection)
+            .expect("get_collection")
+            .expect("indexed collection");
+        let reconciled = collection
+            .indexes
+            .iter()
+            .find(|existing| existing.name == index.name)
+            .unwrap_or_else(|| panic!("missing ordinary index {}", index.name));
+        assert_eq!(
+            reconciled
+                .fields
+                .iter()
+                .map(|field| (field.name.as_str(), field.descending))
+                .collect::<Vec<_>>(),
+            index
+                .fields
+                .iter()
+                .map(|field| (field.name, field.descending))
+                .collect::<Vec<_>>(),
+            "{}",
+            index.name
+        );
+    }
+
+    ensure_runtime(node.as_ref()).await.expect("second ensure");
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::to_value(node.get_all_collection_versions().await.unwrap()).unwrap(),
+        "a second ensure changes nothing"
+    );
 
     node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
-async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
+async fn agent_request_on_its_root_keeps_its_rows_and_ensure_is_idempotent() {
     let node = fresh_node().await;
-    let baseline = gents_migration::DEFAULT_BASELINE
+    let baseline = BASELINE
         .iter()
         .find(|entry| entry.name == gents_protocol::schemas::AGENT_REQUEST_NAME)
         .expect("AgentRequest baseline");
@@ -179,9 +171,9 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
         response.errors
     );
 
-    ensure_migrations(node.as_ref())
+    ensure_runtime(node.as_ref())
         .await
-        .expect("apply production migrations");
+        .expect("ensure the runtime schema");
 
     let cv = node
         .get_collection(gents_protocol::schemas::AGENT_REQUEST_NAME)
@@ -211,14 +203,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     assert_eq!(rows[0]["request_id"], "existing-request");
     assert_eq!(rows[0]["content"], "hello");
 
-    let rerun = ensure_migrations(node.as_ref())
-        .await
-        .expect("re-run ensure_migrations");
-    assert_eq!(rerun.steps_applied, 0, "re-run applied steps: {rerun:?}");
-    assert_eq!(
-        rerun.steps_already_current,
-        gents_migration::DEFAULT_STEPS.len()
-    );
+    ensure_runtime(node.as_ref()).await.expect("re-run ensure");
     let cv = node
         .get_collection(gents_protocol::schemas::AGENT_REQUEST_NAME)
         .expect("get_collection")
@@ -235,7 +220,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
 #[tokio::test]
 async fn goal_creation_claim_baseline_enforces_uniqueness() {
     let node = fresh_node().await;
-    ensure_migrations(node.as_ref()).await.expect("baseline");
+    ensure_runtime(node.as_ref()).await.expect("baseline");
     let first = node
         .execute(
             r#"mutation { create_GoalCreationClaim(input: {
@@ -294,7 +279,7 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
 #[tokio::test]
 async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
     let node = fresh_node().await;
-    for entry in gents_migration::DEFAULT_BASELINE.iter() {
+    for entry in BASELINE.iter() {
         if entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME {
             continue;
         }
@@ -318,9 +303,9 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         "fixture must start without RenderedRequest"
     );
 
-    ensure_migrations(node.as_ref())
+    ensure_runtime(node.as_ref())
         .await
-        .expect("upgrade an existing store");
+        .expect("ensure an existing store");
 
     let rendered = node
         .get_collection(gents_protocol::schemas::RENDERED_REQUEST_NAME)
@@ -328,7 +313,7 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         .expect("RenderedRequest present after upgrade");
     assert!(rendered.is_active);
     assert!(!rendered.is_placeholder);
-    let pin = gents_migration::DEFAULT_BASELINE
+    let pin = BASELINE
         .iter()
         .find(|entry| entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME)
         .and_then(|entry| entry.expected_version)
@@ -420,18 +405,16 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
 #[tokio::test]
 async fn multi_version_lineage_is_rejected() {
     let node = fresh_node().await;
-    ensure_migrations(node.as_ref()).await.expect("baseline");
+    ensure_runtime(node.as_ref()).await.expect("baseline");
 
     let patch = r#"[{"op":"add","path":"/AgentRequest/Fields/-","value":{"Name":"__foreign_test_field","Kind":"String"}}]"#;
-    common::patch_collection(&node, "AgentRequest", patch).await;
+    common::patch_collection(&node, patch).await;
 
-    let err = ensure_migrations(node.as_ref())
+    let err = ensure_runtime(node.as_ref())
         .await
         .expect_err("foreign multi-version DAG must fail");
-    assert!(err.is_foreign_version(), "unexpected error: {err}");
-    assert!(!err.is_unknown_lineage());
     match err {
-        Error::ForeignVersion { collection, .. } => assert_eq!(collection, "AgentRequest"),
+        SchemaError::ForeignVersion { collection, .. } => assert_eq!(collection, "AgentRequest"),
         other => panic!("unexpected error: {other}"),
     }
 
@@ -462,21 +445,20 @@ async fn single_version_unknown_root_is_rejected() {
     node.add_collection(FOREIGN_SDL)
         .await
         .expect("register foreign root");
-    let registry = DynamicRegistry {
-        baseline: vec![BaselineCollectionOwned {
-            name: "PinnedFixture".into(),
-            sdl: EXPECTED_SDL.into(),
-            expected_version: Some(expected_root),
-            expected_state: CollectionExpectation::dag_only(),
+    let catalog = Catalog {
+        baseline: &[BaselineCollection {
+            name: "PinnedFixture",
+            sdl: EXPECTED_SDL,
+            expected_version: Some(&expected_root),
         }],
-        steps: vec![],
+        ordinary_indexes: &[],
     };
 
-    let err = ensure_migrations_dynamic(node.as_ref(), &registry)
+    let err = ensure(node.as_ref(), &catalog)
         .await
         .expect_err("single unknown root must fail closed");
     assert!(
-        matches!(err, Error::UnknownLineage { ref collection, .. } if collection == "PinnedFixture"),
+        matches!(err, SchemaError::UnknownLineage { ref collection, .. } if collection == "PinnedFixture"),
         "unexpected error: {err}"
     );
 
@@ -501,11 +483,11 @@ async fn fresh_backend_collections_reject_a_foreign_single_root() {
             .await
             .expect("register foreign root");
 
-        let err = ensure_migrations(node.as_ref())
+        let err = ensure_runtime(node.as_ref())
             .await
             .expect_err("a foreign root must fail closed");
         assert!(
-            matches!(err, Error::UnknownLineage { ref collection, .. } if collection == name),
+            matches!(err, SchemaError::UnknownLineage { ref collection, .. } if collection == name),
             "unexpected error for {name}: {err}"
         );
 
@@ -542,28 +524,29 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
         .get_all_collection_versions()
         .await
         .expect("versions before");
-    let registry = DynamicRegistry {
-        baseline: vec![
-            BaselineCollectionOwned {
-                name: "PinnedFixture".into(),
-                sdl: EXPECTED_SDL.into(),
-                expected_version: Some(expected_root),
-                expected_state: CollectionExpectation::dag_only(),
+    let catalog = Catalog {
+        baseline: &[
+            BaselineCollection {
+                name: "PinnedFixture",
+                sdl: EXPECTED_SDL,
+                expected_version: Some(&expected_root),
             },
-            BaselineCollectionOwned {
-                name: "AddedFixture".into(),
-                sdl: ADDED_SDL.into(),
+            BaselineCollection {
+                name: "AddedFixture",
+                sdl: ADDED_SDL,
                 expected_version: None,
-                expected_state: CollectionExpectation::dag_only(),
             },
         ],
-        steps: vec![],
+        ordinary_indexes: &[],
     };
 
-    let err = ensure_migrations_dynamic(node.as_ref(), &registry)
+    let err = ensure(node.as_ref(), &catalog)
         .await
         .expect_err("an older lineage must fail closed");
-    assert!(err.is_unknown_lineage(), "unexpected error: {err}");
+    assert!(
+        matches!(err, SchemaError::UnknownLineage { .. }),
+        "unexpected error: {err}"
+    );
     assert!(
         node.get_collection("AddedFixture")
             .expect("load added collection")
@@ -597,7 +580,7 @@ async fn retained_file_images_require_a_native_owner_before_schema_install() {
         .build()
         .await
         .unwrap();
-    let error = ensure_migrations(&node).await.unwrap_err();
+    let error = ensure_runtime(&node).await.unwrap_err();
     assert!(
         error
             .to_string()
@@ -624,7 +607,7 @@ async fn unprotected_file_images_are_rejected_without_changing_retained_data() {
     let before = node
         .execute("{ ToolFileChange { _docID tool_call_doc_id } }")
         .await;
-    let error = ensure_migrations(&node).await.unwrap_err();
+    let error = ensure_runtime(&node).await.unwrap_err();
     assert!(
         error.to_string().contains("incompatible document policy"),
         "{error}"
@@ -654,19 +637,16 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
         .build()
         .await
         .unwrap();
-    let baseline = gents_migration::DEFAULT_BASELINE
+    let baseline = BASELINE
         .iter()
         .copied()
         .filter(|entry| entry.name != gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
         .collect::<Vec<_>>();
-    let registry = Registry {
+    let catalog = Catalog {
         baseline: &baseline,
-        steps: gents_migration::DEFAULT_STEPS,
-        ordinary_indexes: gents_migration::DEFAULT_REGISTRY.ordinary_indexes,
+        ordinary_indexes: RUNTIME_CATALOG.ordinary_indexes,
     };
-    ensure_migrations_with_registry(&node, &registry)
-        .await
-        .unwrap();
+    ensure(&node, &catalog).await.unwrap();
     let created = node
         .execute(
             r#"mutation { create_AgentToolCall(input: {
@@ -706,12 +686,11 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
         .build()
         .await
         .unwrap();
-    let report = ensure_migrations(&node).await.unwrap();
-    assert_eq!(report.baseline_registered, 1);
-    assert!(node
+    ensure_runtime(&node).await.unwrap();
+    let file_changes = node
         .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
         .unwrap()
-        .is_some());
+        .expect("the missing baseline collection is registered");
     for (name, version) in versions {
         assert_eq!(
             node.get_collection(name).unwrap().unwrap().version_id,
@@ -722,9 +701,12 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
     let after = node.execute(query).await;
     assert!(!after.has_errors(), "{:?}", after.errors);
     assert_eq!(after.data, before.data);
+    ensure_runtime(&node).await.unwrap();
     assert_eq!(
-        ensure_migrations(&node).await.unwrap().baseline_registered,
-        0
+        node.get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+            .unwrap()
+            .unwrap(),
+        file_changes
     );
     node.shutdown().await.expect("shut down test node");
 }
@@ -732,7 +714,7 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
 #[tokio::test]
 async fn removed_node_memory_is_not_registered_or_deleted() {
     let node = fresh_node().await;
-    ensure_migrations(&node).await.unwrap();
+    ensure_runtime(&node).await.unwrap();
     assert!(node.get_collection("NodeMemory").unwrap().is_none());
 
     node.add_collection("type NodeMemory { marker: String }")
@@ -742,131 +724,11 @@ async fn removed_node_memory_is_not_registered_or_deleted() {
         .execute(r#"mutation { create_NodeMemory(input: {marker: "preserved"}) { _docID } }"#)
         .await;
     assert!(!created.has_errors(), "{created:?}");
-    ensure_migrations(&node).await.unwrap();
+    ensure_runtime(&node).await.unwrap();
     let result = node.execute("{ NodeMemory { marker } }").await;
     assert!(!result.has_errors(), "{result:?}");
     assert_eq!(result.data.unwrap()["NodeMemory"][0]["marker"], "preserved");
     node.shutdown().await.expect("shut down test node");
-}
-
-/// Native workflow documents gain immutable handoff route columns,
-/// configuration gains declared reader policy and pack installations gain
-/// their recorded source and install values; an existing store keeps its
-/// collection, field positions and rows, and its existing rows read nulls.
-#[tokio::test]
-async fn added_route_and_reader_columns_preserve_existing_rows() {
-    const ROUTE: &[(&str, bool)] = &[
-        ("handoff_id", true),
-        ("reply_session_id", true),
-        ("attempt", true),
-    ];
-    for (name, sdl, create, added) in [
-        (
-            schemas::CALLBACK_RESULT_NAME,
-            schemas::CALLBACK_RESULT,
-            r#"mutation {create_CallbackResult(input: {result_id: "retained", owner_node_did: "owner", invocation_id: "inv"}) {_docID}}"#,
-            ROUTE,
-        ),
-        (
-            schemas::ISOLATED_WORKSPACE_NAME,
-            schemas::ISOLATED_WORKSPACE,
-            r#"mutation {create_IsolatedWorkspace(input: {workspace_id: "retained", owner_node_did: "owner"}) {_docID}}"#,
-            ROUTE,
-        ),
-        (
-            schemas::WORKSPACE_RECEIPT_NAME,
-            schemas::WORKSPACE_RECEIPT,
-            r#"mutation {create_WorkspaceReceipt(input: {receipt_id: "retained", workspace_id: "ws"}) {_docID}}"#,
-            ROUTE,
-        ),
-        (
-            schemas::TASK_NAME,
-            schemas::TASK,
-            r#"mutation {create_Task(input: {task_id: "retained", node_did: "owner"}) {_docID}}"#,
-            &[("outcome_readers", false)][..],
-        ),
-        (
-            schemas::REPOSITORY_PLACEMENT_NAME,
-            schemas::REPOSITORY_PLACEMENT,
-            r#"mutation {create_RepositoryPlacement(input: {repository_id: "retained", node_did: "owner"}) {_docID}}"#,
-            &[("readers", false)][..],
-        ),
-        (
-            schemas::PACK_INSTALLATION_NAME,
-            schemas::PACK_INSTALLATION,
-            r#"mutation {create_PackInstallation(input: {node_did: "owner", coordinate: "acme/retained"}) {_docID}}"#,
-            &[
-                ("source", false),
-                ("source_history", false),
-                ("variables", false),
-            ][..],
-        ),
-        (
-            schemas::TRIGGER_NAME,
-            schemas::TRIGGER,
-            r#"mutation {create_Trigger(input: {trigger_id: "retained", node_did: "owner"}) {_docID}}"#,
-            &[("create_session", false), ("max_fires_per_hour", false)][..],
-        ),
-    ] {
-        let node = fresh_node().await;
-        let old = sdl
-            .lines()
-            .filter(|line| {
-                !added
-                    .iter()
-                    .any(|(field, _)| line.trim_start().starts_with(&format!("{field}:")))
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        node.add_collection(&old).await.unwrap();
-        let before = node.get_collection(name).unwrap().unwrap();
-        let created = node.execute(create).await;
-        assert!(!created.has_errors(), "{name}: {created:?}");
-        let query = format!("{{{name} {{_docID}}}}");
-        let retained = node.execute(&query).await;
-        ensure_migrations(&node).await.unwrap();
-        let after = node.get_collection(name).unwrap().unwrap();
-        assert_eq!(after.collection_id, before.collection_id, "{name}");
-        for field in &before.fields {
-            assert_eq!(
-                after
-                    .fields
-                    .iter()
-                    .find(|next| next.name == field.name)
-                    .unwrap()
-                    .id,
-                field.id,
-                "{name}.{}",
-                field.name
-            );
-        }
-        for (field, immutable) in added {
-            assert!(
-                after
-                    .fields
-                    .iter()
-                    .any(|next| next.name == *field && next.immutable == *immutable),
-                "{name}.{field}"
-            );
-        }
-        assert_eq!(node.execute(&query).await.data, retained.data, "{name}");
-        let selection = added
-            .iter()
-            .map(|(field, _)| *field)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let values = node.execute(&format!("{{{name} {{{selection}}}}}")).await;
-        let row = values.data.unwrap()[name][0].clone();
-        for (field, _) in added {
-            assert!(row[*field].is_null(), "{name}.{field}: {row}");
-        }
-        assert_eq!(
-            ensure_migrations(&node).await.unwrap().steps_applied,
-            0,
-            "{name}"
-        );
-        node.shutdown().await.expect("shut down test node");
-    }
 }
 
 /// `AgentMessage` is client-authored, so a fresh store and a retained store share its current
@@ -875,9 +737,13 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
 #[tokio::test]
 async fn agent_message_keeps_its_current_schema_and_rows() {
     assert!(!schemas::AGENT_MESSAGE.contains("native_request_id"));
-    let canonical = gents_migration::canonical_versions().unwrap()["AgentMessage"].clone();
+    let canonical = BASELINE
+        .iter()
+        .find(|entry| entry.name == "AgentMessage")
+        .and_then(|entry| entry.expected_version)
+        .unwrap();
     let fresh = fresh_node().await;
-    ensure_migrations(fresh.as_ref()).await.unwrap();
+    ensure_runtime(fresh.as_ref()).await.unwrap();
     let fresh_id = fresh
         .get_collection("AgentMessage")
         .unwrap()
@@ -903,8 +769,7 @@ async fn agent_message_keeps_its_current_schema_and_rows() {
         .await;
     assert!(!created.has_errors(), "seed legacy message: {created:?}");
 
-    let first = ensure_migrations(node.as_ref()).await.unwrap();
-    assert!(first.warnings.is_empty(), "{first:?}");
+    ensure_runtime(node.as_ref()).await.unwrap();
     let after = node.get_collection("AgentMessage").unwrap().unwrap();
     assert_eq!(after.version_id, canonical);
     for field in &legacy.fields {
@@ -922,8 +787,14 @@ async fn agent_message_keeps_its_current_schema_and_rows() {
     assert!(!read.has_errors(), "{read:?}");
     let rows = &read.data.as_ref().unwrap()["AgentMessage"];
     assert_eq!(rows[0]["native_id"], "msg_1");
-    let second = ensure_migrations(node.as_ref()).await.unwrap();
-    assert_eq!(second.steps_applied, 0);
+    ensure_runtime(node.as_ref()).await.unwrap();
+    assert_eq!(
+        node.get_collection("AgentMessage")
+            .unwrap()
+            .unwrap()
+            .version_id,
+        canonical
+    );
     fresh.shutdown().await.expect("shut down test node");
     node.shutdown().await.expect("shut down test node");
 }
@@ -935,15 +806,15 @@ async fn runtime_locality_rejects_branchable_metadata_even_when_schema_cid_match
     assert_ne!(sdl, schemas::AGENT);
     node.add_collection(&sdl).await.unwrap();
     let before = node.get_collection(schemas::AGENT_NAME).unwrap().unwrap();
-    let expected = gents_migration::DEFAULT_BASELINE
+    let expected = BASELINE
         .iter()
         .find(|entry| entry.name == schemas::AGENT_NAME)
         .unwrap();
     assert_eq!(before.version_id, expected.expected_version.unwrap());
     assert!(before.is_branchable);
-    let error = ensure_migrations(&node).await.unwrap_err();
+    let error = ensure_runtime(&node).await.unwrap_err();
     assert!(
-        matches!(error, Error::RuntimeLocalityMismatch { collection } if collection == schemas::AGENT_NAME)
+        matches!(error, SchemaError::RuntimeLocalityMismatch { collection } if collection == schemas::AGENT_NAME)
     );
     assert!(node.get_collection(schemas::NODE_NAME).unwrap().is_none());
     let after = node.get_collection(schemas::AGENT_NAME).unwrap().unwrap();
@@ -954,16 +825,14 @@ async fn runtime_locality_rejects_branchable_metadata_even_when_schema_cid_match
 #[tokio::test]
 async fn existing_schema_from_another_version_is_refused_by_type_without_writing() {
     let node = fresh_node().await;
-    gents_migration::validate_existing_schema(&node)
+    validate_existing_schema(&node)
         .await
         .expect("an empty store is this build's to take");
     let branchable = schemas::AGENT.replace("type Agent ", "type Agent @branchable ");
     node.add_collection(&branchable).await.unwrap();
-    let error = gents_migration::validate_existing_schema(&node)
-        .await
-        .unwrap_err();
+    let error = validate_existing_schema(&node).await.unwrap_err();
     assert!(
-        matches!(error, Error::RuntimeLocalityMismatch { ref collection } if collection == schemas::AGENT_NAME),
+        matches!(error, SchemaError::RuntimeLocalityMismatch { ref collection } if collection == schemas::AGENT_NAME),
         "{error}"
     );
     assert!(node.get_collection(schemas::NODE_NAME).unwrap().is_none());
@@ -978,11 +847,9 @@ async fn existing_schema_from_another_version_is_refused_by_type_without_writing
     node.add_collection(&schemas::PENDING_CHAT_SUBMISSION.replace(&directive, ""))
         .await
         .unwrap();
-    let error = gents_migration::validate_existing_schema(&node)
-        .await
-        .unwrap_err();
+    let error = validate_existing_schema(&node).await.unwrap_err();
     assert!(
-        matches!(error, Error::IncompatibleIdentityPolicy { ref collection } if collection == schemas::PENDING_CHAT_SUBMISSION_NAME),
+        matches!(error, SchemaError::IncompatibleIdentityPolicy { ref collection } if collection == schemas::PENDING_CHAT_SUBMISSION_NAME),
         "{error}"
     );
     assert!(node.get_collection(schemas::NODE_NAME).unwrap().is_none());
@@ -992,10 +859,8 @@ async fn existing_schema_from_another_version_is_refused_by_type_without_writing
 #[tokio::test]
 async fn existing_schema_this_build_wrote_is_accepted() {
     let node = fresh_node().await;
-    ensure_migrations(&node).await.unwrap();
-    gents_migration::validate_existing_schema(&node)
-        .await
-        .unwrap();
+    ensure_runtime(&node).await.unwrap();
+    validate_existing_schema(&node).await.unwrap();
     node.shutdown().await.unwrap();
 }
 
@@ -1014,9 +879,9 @@ async fn unbound_client_journal_is_rejected_without_changing_data() {
     let before = node
         .execute("{ PendingChatSubmission { _docID request_id payload } }")
         .await;
-    let error = ensure_migrations(&node).await.unwrap_err();
+    let error = ensure_runtime(&node).await.unwrap_err();
     assert!(
-        matches!(error, Error::IncompatibleIdentityPolicy { ref collection } if collection == schemas::PENDING_CHAT_SUBMISSION_NAME)
+        matches!(error, SchemaError::IncompatibleIdentityPolicy { ref collection } if collection == schemas::PENDING_CHAT_SUBMISSION_NAME)
     );
     let after = node
         .execute("{ PendingChatSubmission { _docID request_id payload } }")
@@ -1041,9 +906,9 @@ async fn unbound_mailbox_is_rejected_without_changing_data() {
     assert!(!created.has_errors(), "{:?}", created.errors);
     let query = "{ MailboxItem { _docID item_key title } }";
     let before = node.execute(query).await;
-    let error = ensure_migrations(&node).await.unwrap_err();
+    let error = ensure_runtime(&node).await.unwrap_err();
     assert!(
-        matches!(error, Error::IncompatibleIdentityPolicy { ref collection } if collection == schemas::MAILBOX_ITEM_NAME)
+        matches!(error, SchemaError::IncompatibleIdentityPolicy { ref collection } if collection == schemas::MAILBOX_ITEM_NAME)
     );
     let after = node.execute(query).await;
     assert!(!after.has_errors(), "{:?}", after.errors);
@@ -1080,7 +945,7 @@ async fn a_store_holding_the_earlier_household_policy_refuses_the_restricted_one
         earlier_id,
         gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
     );
-    let error = ensure_migrations(&node)
+    let error = ensure_runtime(&node)
         .await
         .expect_err("the restricted policy does not replace the earlier one");
     let error = format!("{error:#}");
@@ -1089,4 +954,49 @@ async fn a_store_holding_the_earlier_household_policy_refuses_the_restricted_one
         "{error}"
     );
     std::mem::forget(dir);
+}
+
+#[tokio::test]
+async fn canonical_catalog_pins_for_authoring() {
+    let node = fresh_node().await;
+    let catalog = gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
+        .iter()
+        .copied()
+        .zip(gents_protocol::schemas::RUNTIME_ALL.iter().copied())
+        .chain(
+            gents_protocol::schemas::ALL_COLLECTION_NAMES
+                .iter()
+                .copied()
+                .zip(gents_protocol::schemas::ALL.iter().copied()),
+        )
+        .collect::<Vec<_>>();
+    for (name, sdl) in &catalog {
+        node.add_collection(sdl)
+            .await
+            .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
+    }
+
+    let mut mismatches = Vec::new();
+    for (name, _) in catalog {
+        let cv = node
+            .get_collection(name)
+            .expect("get")
+            .unwrap_or_else(|| panic!("missing {name}"));
+        let expected = BASELINE
+            .iter()
+            .find(|entry| entry.name == name)
+            .and_then(|entry| entry.expected_version);
+        if expected != Some(cv.version_id.as_str()) {
+            mismatches.push(format!(
+                "{name}: expected {expected:?}, computed {}",
+                cv.version_id
+            ));
+        }
+    }
+    node.shutdown().await.expect("shut down test node");
+    assert!(
+        mismatches.is_empty(),
+        "baseline root pins are stale or missing:\n{}",
+        mismatches.join("\n")
+    );
 }

@@ -337,10 +337,12 @@ pub fn build_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         purpose,
         identity.request_id,
-        identity.node_did,
-        identity.requester_did.unwrap_or(acting_agent),
-        identity.agent_did,
-        identity.session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.node_did,
+            identity.requester_did.unwrap_or(acting_agent),
+            identity.agent_did,
+            identity.session_id,
+        ),
         identity.content,
         identity.execution_origin.as_str(),
         identity.created_at,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::RequestInput;
 
@@ -223,10 +223,12 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
     let mut parent_create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         parent_request_id,
-        target,
-        parent_agent.did(),
-        parent_agent.did(),
-        &parent.session_id,
+        RequestScope::new(
+            target,
+            parent_agent.did(),
+            parent_agent.did(),
+            &parent.session_id,
+        ),
         &case.request.content,
         "interactive",
         &case.request.created_at,
@@ -266,10 +268,12 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
     let mut create = AgentRequestCreate::base(
         native_purpose(&case.request.purpose),
         &case.request.request_id,
-        target,
-        requester,
-        request_agent.did(),
-        &case.request.session_id,
+        RequestScope::new(
+            target,
+            requester,
+            request_agent.did(),
+            &case.request.session_id,
+        ),
         &case.request.content,
         "interactive",
         &case.request.created_at,
