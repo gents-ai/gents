@@ -15,8 +15,8 @@ use gents_store::graphql::{
 };
 
 use gents_session::workspace::{
-    IsolatedWorkspaceDoc, MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceDocuments,
-    WorkspacePlacementDoc,
+    read_isolated_workspace_doc, read_workspace_placement_doc, IsolatedWorkspaceDoc,
+    MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceDocuments, WorkspacePlacementDoc,
 };
 
 pub(crate) const SUCCEEDED_REPAIR_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
@@ -24,41 +24,6 @@ pub(crate) const SUCCEEDED_REPAIR_LIMIT: u32 = 256;
 
 const INVOCATION_FIELDS: &str = "invocation_id owner_node_did agent_did callback_id configuration_generation claimed_callback origin input idempotency_key caused_by_correlation lifecycle_state attempts action_plan action_journal error claimed_at created_at";
 const RESULT_FIELDS: &str = "result_id invocation_id binding_id owner_node_did agent_did workspace_id work_unit_id caused_by_correlation created_at";
-
-const ISOLATED_WORKSPACE_FIELDS: &str = r#"
-    workspace_id
-    work_unit_id
-    repository_id
-    base_sha
-    branch
-    creation_policy
-    adapter
-    owner_node_did
-    writer_principal
-    integrator_principal
-    instruction_manifest
-    path_capability
-    seal_hash
-    lifecycle_state
-    caused_by_invocation_id
-    caused_by_correlation
-    handoff_id
-    reply_session_id
-    attempt
-"#;
-
-const PLACEMENT_FIELDS: &str = r#"
-    workspace_id
-    owner_node_did
-    host_path
-    repository_placement_id
-    adapter
-    adapter_version
-    dirty_base
-    dirty_base_summary
-    provisioning_state
-    observed_tree_hash
-"#;
 
 pub use gents_documents::{
     CallbackBinding as CallbackBindingDoc, CallbackModule as CallbackModuleDoc,
@@ -1192,24 +1157,7 @@ pub(crate) async fn load_isolated_workspace(
         !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),
         "callback workspace actor mismatch"
     );
-    use gents_protocol::document_query::{
-        fields::isolated_workspace as fields, Filter, Query, Selection,
-    };
-    let rendered = Query::select(Selection::owned(ISOLATED_WORKSPACE_FIELDS))
-        .filter(
-            Filter::eq(fields::WORKSPACE_ID, workspace_id)
-                .and(Filter::eq(fields::OWNER_NODE_DID, owner)),
-        )
-        .limit(2)
-        .render();
-    let response = access.read(&rendered).await?;
-    let mut found: Vec<IsolatedWorkspaceDoc> =
-        serde_json::from_value(response["data"]["IsolatedWorkspace"].clone())?;
-    anyhow::ensure!(
-        found.len() <= 1,
-        "ambiguous node-scoped callback/workspace document"
-    );
-    Ok(found.pop())
+    read_isolated_workspace_doc(access, workspace_id, owner).await
 }
 
 pub(crate) async fn load_workspace_placement(
@@ -1222,22 +1170,5 @@ pub(crate) async fn load_workspace_placement(
         !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),
         "callback workspace actor mismatch"
     );
-    use gents_protocol::document_query::{
-        fields::workspace_placement as fields, Filter, Query, Selection,
-    };
-    let rendered = Query::select(Selection::owned(PLACEMENT_FIELDS))
-        .filter(
-            Filter::eq(fields::WORKSPACE_ID, workspace_id)
-                .and(Filter::eq(fields::OWNER_NODE_DID, owner)),
-        )
-        .limit(2)
-        .render();
-    let response = access.read(&rendered).await?;
-    let mut found: Vec<WorkspacePlacementDoc> =
-        serde_json::from_value(response["data"]["WorkspacePlacement"].clone())?;
-    anyhow::ensure!(
-        found.len() <= 1,
-        "ambiguous node-scoped callback/workspace document"
-    );
-    Ok(found.pop())
+    read_workspace_placement_doc(access, workspace_id, owner).await
 }
