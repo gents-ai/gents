@@ -27,6 +27,7 @@ vi.mock("../src/lib/shellPlatform", async (actual) => ({
   ...(await actual<typeof import("../src/lib/shellPlatform")>()),
   supportsLocalManagedServer: () => shell.localHome,
 }));
+vi.mock("@/contrib/bundled", () => ({ discoverBundledUxPlugins: () => undefined }));
 vi.mock("@/contrib/runtime-door", async (actual) => ({
   ...(await actual<typeof import("../src/ui/contrib/runtime-door")>()),
   rescanRuntimeUxPluginsSoon: shell.rescan,
@@ -44,7 +45,7 @@ afterEach(() => {
 function mountHost() {
   const app = testApp();
   function Host() {
-    useUxHost(app, () => () => undefined);
+    useUxHost(app, async () => () => undefined);
     return null;
   }
   return renderRouted(app, { name: "agents" }, () => <Host />);
