@@ -7,6 +7,7 @@ use gents_protocol::job::{
 };
 use gents_protocol::mailbox_question::{MailboxQuestion, MailboxQuestionAnswer};
 use gents_protocol::operations::mailbox::MailboxReply;
+use gents_protocol::tool_call::ToolCallState;
 use gents_session::session::mailbox::MailboxItem;
 use gents_shell::source::{Answer, BackgroundCall, Job, JobEnd, Prompt, PromptKind};
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
@@ -69,7 +70,10 @@ pub(super) async fn jobs(
 pub(super) async fn background(
     access: &ConfigAccess,
 ) -> anyhow::Result<Vec<BackgroundToolCallRow>> {
-    load_background_tool_calls(access, None, None, &["pending", "running"]).await
+    let nonterminal: Vec<&str> = ToolCallState::nonterminal()
+        .map(ToolCallState::as_str)
+        .collect();
+    load_background_tool_calls(access, None, None, &nonterminal).await
 }
 
 pub(super) fn job(view: &JobView) -> Job {

@@ -6,7 +6,7 @@ use gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION;
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::config_client::session_children::output_segment_bound_variables;
 use gents_store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use gents_store::graphql::created_doc_id;

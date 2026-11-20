@@ -1,7 +1,9 @@
 use super::*;
+use crate::call::lifecycle::completion_delivery::{owes_completion_delivery, CompletionDelivery};
 use gents_protocol::background_completion::{
     background_completion_notification_message_key, BACKGROUND_COMPLETION_WAKE_PROMPT,
 };
+use gents_protocol::tool_call::ToolCallState;
 use gents_session::request::lifecycle::queue::BackgroundCompletionNotification;
 use gents_tools::rendering::tool_completion_presentation;
 
@@ -310,18 +312,18 @@ async fn mark_background_tool_completion_side_effects_done(
         .get("status")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if status == "completed" {
+    if matches!(
+        CompletionDelivery::parse(status),
+        Some(CompletionDelivery::Delivered)
+    ) {
         return Ok(());
     }
     let lifecycle_state = row
         .get("lifecycle_state")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if !(status == "completionPending" || status.starts_with("completionPending:"))
-        || !matches!(
-            lifecycle_state,
-            "completed" | "failed" | "timedOut" | "cancelled"
-        )
+    if !ToolCallState::from_persisted(lifecycle_state)
+        .is_some_and(|state| owes_completion_delivery(state, Some(status)))
     {
         anyhow::bail!(
             "background completion tool row {tool_call_doc_id} is not awaiting terminal side effects"
@@ -329,6 +331,7 @@ async fn mark_background_tool_completion_side_effects_done(
     }
     let escaped_doc_id = escape_graphql_string(doc_id);
     let escaped_status = escape_graphql_string(status);
+    let delivered = CompletionDelivery::Delivered.render();
     let datetime_fields = agent_tool_call_datetime_update_fragment(access, doc_id, &[]).await?;
     let mutation = format!(
         r#"mutation {{
@@ -337,7 +340,7 @@ async fn mark_background_tool_completion_side_effects_done(
                     _docID: {{ _eq: "{escaped_doc_id}" }},
                     status: {{ _eq: "{escaped_status}" }}
                 }},
-                input: {{ status: "completed"{datetime_fields} }}
+                input: {{ status: "{delivered}"{datetime_fields} }}
             ) {{ _docID }}
         }}"#
     );

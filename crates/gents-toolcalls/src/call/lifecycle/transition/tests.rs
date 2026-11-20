@@ -4,7 +4,7 @@ use super::super::admission_fixture::{
 use super::super::ToolCallLifecycle;
 use super::super::{AwaitMode, ToolRowKind};
 use super::IllegalToolCallTransition;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 
 async fn published_job_row(name: &str) -> PublishedAdmission {
     use gents_store::identity::NodeIdentity;

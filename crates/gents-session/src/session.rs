@@ -11,7 +11,6 @@ pub mod mailbox;
 pub mod message;
 pub mod origin;
 pub mod plugin_effect_rows;
-pub mod tool_call_state;
 pub mod tool_output_rows;
 pub mod tool_presentation;
 pub use archive::set_session_archived_on;

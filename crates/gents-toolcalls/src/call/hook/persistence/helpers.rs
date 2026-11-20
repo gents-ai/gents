@@ -57,13 +57,14 @@ where
     R: gents_store::config_client::ConfigRead,
 {
     let escaped_request_doc_id = gents_store::graphql::escape_graphql_string(request_doc_id);
+    let nonterminal = gents_protocol::tool_call::ToolCallState::nonterminal_graphql_list();
     let query = format!(
         r#"{{
             AgentToolCall(
                 filter: {{
                     request_doc_id: {{ _eq: "{escaped_request_doc_id}" }},
                     await_mode: {{ _eq: "background" }},
-                    lifecycle_state: {{ _in: ["running", "pending"] }}
+                    lifecycle_state: {{ _in: {nonterminal} }}
                 }}
             ) {{
                 lifecycle_state spawned_by_tool_call_doc_id

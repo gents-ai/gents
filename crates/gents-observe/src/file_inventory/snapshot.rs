@@ -7,7 +7,7 @@ use gents_protocol::file_inventory::{
     FileInventoryBinding, FileInventoryCoverage, FileInventoryCursor, FileInventoryEntry,
     FileInventoryPage, FILE_INVENTORY_PAGE_LIMIT,
 };
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_session::tool_call::query::result::load_tool_call_read_in_txn;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::graphql::required_rows;

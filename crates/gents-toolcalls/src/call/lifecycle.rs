@@ -21,13 +21,14 @@ impl InterruptDisposition {
     }
 }
 
-use gents_protocol::tool_call::AwaitMode;
+use completion_delivery::CompletionDelivery;
+use gents_protocol::tool_call::{AwaitMode, CancelCause, ToolCallState};
 use gents_session::session::plugin_effect_rows::PluginEffectBinding;
-use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
 
+pub mod completion_delivery;
 pub mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -377,12 +378,13 @@ impl ToolCallLifecycle {
         if (self.is_background_tool_bridge() || self.is_spawned_background())
             && self.state != ToolCallState::Pending
         {
-            completion_reason
-                .map(|reason| format!("completionPending:{reason}"))
-                .unwrap_or_else(|| "completionPending".to_string())
+            CompletionDelivery::Pending {
+                reason: completion_reason,
+            }
         } else {
-            "completed".to_string()
+            CompletionDelivery::Delivered
         }
+        .render()
     }
 
     pub fn actor(&self) -> &identity::Did {

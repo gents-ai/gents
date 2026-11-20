@@ -322,11 +322,10 @@ async fn ensure_session_executions_settled_in_txn(
         blocker,
     };
     let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
+    let terminal = gents_protocol::tool_call::ToolCallState::terminal_graphql_list();
     let unsettled = session_tool_call_exists_in_txn(
         txn,
-        &format!(
-            r#"filter: {{ {scope}, lifecycle_state: {{ _nin: ["completed", "failed", "timedOut", "cancelled"] }} }}"#
-        ),
+        &format!(r#"filter: {{ {scope}, lifecycle_state: {{ _nin: {terminal} }} }}"#),
     )
     .await?;
     if unsettled {

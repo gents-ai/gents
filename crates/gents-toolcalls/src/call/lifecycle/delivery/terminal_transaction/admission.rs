@@ -4,7 +4,7 @@ use super::super::background_receipt::{
 use super::Terminalization;
 use anyhow::{Context, Result};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::graphql::escape_graphql_string;
 
 pub(super) async fn validate_accepted_invocation(

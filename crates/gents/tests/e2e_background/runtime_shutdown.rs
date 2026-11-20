@@ -6,7 +6,7 @@ use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::live_inference::{rows_when, wait_for_request_terminal};
 use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
-use gents_session::session::tool_call_state::CancelCause;
+use gents_protocol::tool_call::CancelCause;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::test_support::STALL_CEILING;
 use serde::Deserialize;

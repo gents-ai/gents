@@ -17,7 +17,7 @@ use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::graphql::escape_graphql_string;
 
 use super::{AwaitMode, FailureClass, SelectedToolIdentity, ToolCallLifecycle};
-use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
+use gents_protocol::tool_call::{CancelCause, ToolCallState};
 
 fn decode_selected_tool_identity(
     service_id: Option<String>,

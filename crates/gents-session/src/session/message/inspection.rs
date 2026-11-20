@@ -151,7 +151,8 @@ fn request_summary(row: &AgentRequestRow) -> Value {
 }
 
 async fn tools_in_flight(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value> {
-    let response = txn.execute(&format!("{{AgentToolCall(filter: {{{scope}, lifecycle_state: {{_in: [\"pending\", \"running\"]}}}}, order: {{started_at: ASC}}, limit: {}) {{tool_call_key tool_name lifecycle_state started_at}}}}", STATUS_LIMIT + 1)).await?;
+    let nonterminal = gents_protocol::tool_call::ToolCallState::nonterminal_graphql_list();
+    let response = txn.execute(&format!("{{AgentToolCall(filter: {{{scope}, lifecycle_state: {{_in: {nonterminal}}}}}, order: {{started_at: ASC}}, limit: {}) {{tool_call_key tool_name lifecycle_state started_at}}}}", STATUS_LIMIT + 1)).await?;
     let rows = rows(&response, "AgentToolCall")?;
     let now = chrono::Utc::now();
     let tools = rows.iter().take(STATUS_LIMIT).map(|row| {

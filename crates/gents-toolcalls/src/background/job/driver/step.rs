@@ -32,7 +32,7 @@ use gents_pack::plugin::GuestTrap;
 use gents_protocol::job::keys::job_session_id;
 use gents_protocol::request_lifecycle::SessionMessageCause;
 use gents_protocol::session::SessionScope;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 /// What one `run_step` did.

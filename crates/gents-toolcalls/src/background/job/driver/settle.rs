@@ -8,7 +8,7 @@ use gents_protocol::job::{
 use super::super::admit::{PolicyDenialDetail, Refusal};
 use crate::call::lifecycle::{PluginJobTerminal, ToolCallLifecycle};
 use crate::plugin::job_calls::job_state;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::config_client::ConfigApplyTxn;
 
 /// How a job row ends: the guest's terminal output, a host refusal, or a control.

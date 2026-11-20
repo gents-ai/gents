@@ -23,7 +23,7 @@ use crate::background::status::{
 use crate::call::lifecycle::CausedRequestTerminal;
 use defra_node::Node as EmbeddedNode;
 use gents_loop::live_output::LiveToolOutputRegistry;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::graphql_string_list_literal;
 
