@@ -79,7 +79,6 @@ fn artifact_description_does_not_initialize_a_store_or_audio_device() {
     let home = root.path().join("unopened");
     let output = Command::new(env!("CARGO_BIN_EXE_gents-media-host"))
         .arg("--describe")
-        .env("GENTS_DESKTOP_HOME", &home)
         .output()
         .unwrap();
     assert!(output.status.success());

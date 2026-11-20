@@ -2404,6 +2404,7 @@ pub(super) fn home_serving(
                     tool_root: None,
                     store_encryption: None,
                     document_acp: Default::default(),
+                    client_identity: None,
                 },
             )
             .unwrap();

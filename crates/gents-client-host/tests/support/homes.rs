@@ -19,19 +19,22 @@ impl ProcessHomes {
         Self { root }
     }
 
-    /// The desktop home whose `cli` child holds the CLI client identity that
-    /// `init` creates and later CLI commands sign with.
-    pub fn cli_identity(&self) -> DesktopPaths {
-        DesktopPaths::from_root(self.root.join("desktop").join("cli"))
+    /// The desktop home `init` is given with `--desktop-home`, so the CLI
+    /// client identity it creates lives in its `cli` child and the home it sets
+    /// up records that folder; later commands given the home sign with it. An
+    /// explicit argument, unlike `HOME`, moves it on every platform.
+    pub fn desktop_home(&self) -> PathBuf {
+        self.root.join("desktop")
     }
 
-    pub fn env(&self) -> [(&'static str, PathBuf); 4] {
+    /// The CLI client identity `init` creates under [`Self::desktop_home`].
+    pub fn cli_identity(&self) -> DesktopPaths {
+        DesktopPaths::from_root(self.desktop_home().join("cli"))
+    }
+
+    pub fn env(&self) -> [(&'static str, PathBuf); 3] {
         let user = self.root.join("user");
         [
-            (
-                gents_store::client_journal::paths::DESKTOP_HOME_ENV,
-                self.root.join("desktop"),
-            ),
             ("XDG_DATA_HOME", user.join(".local").join("share")),
             ("XDG_CONFIG_HOME", user.join(".config")),
             ("HOME", user),

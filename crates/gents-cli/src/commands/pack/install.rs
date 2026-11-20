@@ -128,6 +128,7 @@ async fn install_documents_pack_inner(
                 ..request.clone()
             };
             let approvals = super::wire::record_approvals(
+                &request.home,
                 owner,
                 std::iter::once(pack).chain(&dependencies),
                 &request.dependency_variables,
@@ -464,6 +465,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                         .into_iter()
                         .collect::<Result<Vec<_>>>()?;
                 let approvals = super::wire::record_approvals(
+                    &home,
                     owner,
                     std::iter::once(&pack).chain(&dependencies),
                     &args.dependency_variables,

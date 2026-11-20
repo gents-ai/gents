@@ -43,7 +43,7 @@ make desktop-native-build                    # distributable bundle
 
 Use `make desktop-native-build` rather than a raw `tauri build`: it builds and
 stages the target-suffixed CLI sidecar that the bundle's `externalBin` requires.
-Set `GENTS_DESKTOP_HOME` to an empty directory to exercise first-run setup
+Launch the app with `--desktop-home` naming an empty directory to exercise first-run setup
 without touching your own node.
 
 `AGENTS.md` holds the working rules for changes; the

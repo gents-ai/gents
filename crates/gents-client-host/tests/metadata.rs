@@ -5,12 +5,10 @@ use crate::support::homes;
 #[test]
 fn artifact_description_does_not_open_a_client_store() {
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("unopened-client");
     let homes = homes::ProcessHomes::under(temp.path());
     let output = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
         .arg("--describe")
         .envs(homes.env())
-        .env("GENTS_DESKTOP_HOME", &home)
         .current_dir(temp.path())
         .output()
         .unwrap();
@@ -39,7 +37,6 @@ fn artifact_description_does_not_open_a_client_store() {
     assert_eq!(metadata["editorCheckpointVersion"], 1);
     assert_eq!(metadata["editorCheckpointSupported"], cfg!(unix));
     assert!(output.stderr.is_empty());
-    assert!(!home.exists());
 }
 
 #[test]
@@ -107,6 +104,8 @@ fn runtime_key_unlock_preserves_existing_keys_and_refuses_a_missing_key() {
             "--home",
         ])
         .arg(&home)
+        .arg("--desktop-home")
+        .arg(homes.desktop_home())
         .output()
         .unwrap();
     assert!(

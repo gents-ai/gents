@@ -120,27 +120,15 @@ pub fn node_principal_endpoint(graphql: &str) -> gents_store::config_client::Gra
     endpoint_for(graphql, node_principals())
 }
 
-/// Mirrors the CLI's client-key discovery for a process run with
-/// `HOME=user_home` and `envs`.
+/// Mirrors the CLI's default client-key folder for a process run with
+/// `HOME=user_home` and `envs`, for a home whose settings record none.
 pub fn cli_client_paths(
     user_home: &Path,
     envs: &[(&str, &str)],
 ) -> gents_store::client_journal::paths::DesktopPaths {
-    let desktop_root = envs
-        .iter()
-        .rev()
-        .find(|(name, _)| *name == gents_store::client_journal::paths::DESKTOP_HOME_ENV)
-        .map(|(_, value)| std::path::PathBuf::from(value))
-        .or_else(|| {
-            std::env::var_os(gents_store::client_journal::paths::DESKTOP_HOME_ENV)
-                .filter(|value| !value.is_empty())
-                .map(std::path::PathBuf::from)
-        })
-        .unwrap_or_else(|| {
-            user_data_local_dir(user_home, envs)
-                .join("gents")
-                .join("desktop")
-        });
+    let desktop_root = user_data_local_dir(user_home, envs)
+        .join("gents")
+        .join("desktop");
     gents_store::client_journal::paths::DesktopPaths::from_root(desktop_root.join("cli"))
 }
 

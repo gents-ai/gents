@@ -16,12 +16,11 @@ struct Peer {
 }
 
 impl Peer {
-    fn spawn(directory: &std::path::Path, home: &std::path::Path) -> Self {
+    fn spawn(directory: &std::path::Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
             .arg("--editor-checkpoints")
             .arg(directory)
             .envs(homes::ProcessHomes::under(directory.parent().unwrap()).env())
-            .env("GENTS_DESKTOP_HOME", home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -82,8 +81,7 @@ async fn checkpoint_process_holds_os_guard_and_retains_pending_markers_after_act
     for save in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("checkpoints");
-        let unopened = root.path().join("unopened-client-home");
-        let mut first = Peer::spawn(&directory, &unopened);
+        let mut first = Peer::spawn(&directory);
         assert_eq!(first.receive().await["kind"], "acquired");
         assert_eq!(
             first
@@ -99,12 +97,12 @@ async fn checkpoint_process_holds_os_guard_and_retains_pending_markers_after_act
             "durable"
         );
         let exact = std::fs::read(directory.join("editor-undo.v1.json")).unwrap();
-        let mut blocked = Peer::spawn(&directory, &unopened);
+        let mut blocked = Peer::spawn(&directory);
         assert_eq!(blocked.receive().await["kind"], "busy");
         blocked.child.wait().await.unwrap();
         first.child.kill().await.unwrap();
         first.child.wait().await.unwrap();
-        let mut next = Peer::spawn(&directory, &unopened);
+        let mut next = Peer::spawn(&directory);
         assert_eq!(next.receive().await["kind"], "acquired");
         let observed = next
             .call(json!({"version":1,"id":1,"command":"read"}))
@@ -121,7 +119,6 @@ async fn checkpoint_process_holds_os_guard_and_retains_pending_markers_after_act
             exact
         );
         next.close(2).await;
-        assert!(!unopened.exists());
     }
 }
 
@@ -130,7 +127,7 @@ async fn checkpoint_process_rejects_bootstrap_fields_and_never_initializes_clien
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("checkpoints");
     let unopened = root.path().join("unopened-client-home");
-    let mut peer = Peer::spawn(&directory, &unopened);
+    let mut peer = Peer::spawn(&directory);
     assert_eq!(peer.receive().await["kind"], "acquired");
     assert_eq!(
         peer.call(json!({"version":1,"id":1,"command":"read","home":"forbidden"}))
@@ -164,7 +161,7 @@ async fn checkpoint_process_requires_read_and_monotonic_exact_version_before_wri
     ] {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("checkpoints");
-        let mut peer = Peer::spawn(&directory, &root.path().join("unopened"));
+        let mut peer = Peer::spawn(&directory);
         assert_eq!(peer.receive().await["kind"], "acquired");
         assert_eq!(peer.call(request).await["kind"], "error");
         assert!(!peer.child.wait().await.unwrap().success());

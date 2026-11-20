@@ -63,6 +63,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             wire: Vec::new(),
         };
         crate::commands::pack::wire::record_approvals(
+            &home,
             owner,
             std::iter::once(&source).chain(&dependencies),
             &[],

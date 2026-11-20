@@ -30,7 +30,7 @@ pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
                     endpoint,
                     &owner,
                     &request,
-                    &approvals()?,
+                    &approvals(&home)?,
                 )
                 .await?,
             )
@@ -63,6 +63,7 @@ pub(crate) async fn approve(args: PackApproveArgs) -> Result<()> {
     )
     .await?;
     let approval = record_approvals(
+        &home,
         &owner,
         [&pack],
         &args.dependency_variables,
@@ -76,12 +77,13 @@ pub(crate) async fn approve(args: PackApproveArgs) -> Result<()> {
 }
 
 pub(crate) async fn record_approvals<'a>(
+    home: &std::path::Path,
     owner: &str,
     packs: impl IntoIterator<Item = &'a ResolvedPack>,
     variables: &[String],
     bind_agents: &[String],
 ) -> Result<Vec<PackApproval>> {
-    let approvals = approvals()?;
+    let approvals = approvals(home)?;
     let supplied = gents_pack::pack::install_flow::supplied_variables(variables, bind_agents)?;
     let mut recorded = Vec::new();
     for pack in packs {
@@ -92,9 +94,10 @@ pub(crate) async fn record_approvals<'a>(
     Ok(recorded)
 }
 
-fn approvals() -> Result<Approvals> {
+/// The approvals the client identity administering `home` recorded.
+fn approvals(home: &std::path::Path) -> Result<Approvals> {
     Ok(Approvals::under(
-        gents_service::home_state::cli_identity_paths()?.root(),
+        gents_service::home_state::cli_identity_paths(home)?.root(),
     ))
 }
 
