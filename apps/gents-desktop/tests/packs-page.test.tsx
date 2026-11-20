@@ -649,7 +649,6 @@ describe("the Packs page", () => {
   });
 
   it("lists a pack's versions without Install on a node it can't install on", async () => {
-    withFlags({ packs: true });
     const app = testApp({
       api: {
         installPack: async () => {

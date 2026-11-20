@@ -24,7 +24,7 @@ import {
   takenOut,
 } from "../src/ui/screens/packs/removal";
 import { resetDefaultPacks } from "../src/ui/screens/packs/useDefaultPacks";
-import { renderIn, testApp, withFlags } from "./app-fixture";
+import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 vi.mock("sonner", () => ({
@@ -157,7 +157,6 @@ describe("who uses a pack's tools", () => {
 
 describe("removing a pack from the Packs page", () => {
   function show(installed: InstalledPack, api: Record<string, unknown>) {
-    withFlags({ packs: true });
     rememberPacksView("installed");
     rememberPacksQuery("");
     rememberPacksAuthor(null);
