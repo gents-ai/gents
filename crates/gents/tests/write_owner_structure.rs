@@ -2250,12 +2250,9 @@ fn ambient_request_context_only_shrinks() {
 /// shrinks.
 #[rustfmt::skip]
 const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-host/src/readiness.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
-    ("crates/gents-service/src/runtime_control.rs", 1, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
-    ("crates/gents-service/src/service_update/execute.rs", 2, "sent as the runtime's Node, whose identity token the edge admits on every home and no change of audience refuses"),
-    ("crates/gents-store/src/config_client/client_authentication.rs", 1, "authorize_runtime, an authorizer that reads the runtime's authentication first; its callers are counted"),
-    ("crates/gents-store/src/config_client/graphql.rs", 2, "a transaction's commit and discard: its transaction recovers as a unit (resendUnit) and a refused commit is told"),
-    ("crates/gents-store/src/config_client/mod.rs", 1, "authorize_in_transaction, the one authorizer of requests inside a transaction"),
+    ("crates/gents-store/src/config_client/client_authentication.rs", 1, "correct by design: the body of the authorizer authorize_runtime, whose callers are counted"),
+    ("crates/gents-store/src/config_client/graphql.rs", 2, "correct by design: a transaction's commit and discard are never sent alone again; the transaction reruns as a unit and a refused commit is told (Identity.HeldAudience.resendUnit, a_refused_commit_is_never_run_again)"),
+    ("crates/gents-store/src/config_client/mod.rs", 1, "correct by design: the body of the authorizer authorize_in_transaction, whose callers recover as a unit (resendUnit)"),
 ];
 
 /// What authorizes a request as the endpoint's principal.
@@ -2451,8 +2448,7 @@ fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
 /// list only shrinks.
 #[rustfmt::skip]
 const STATUS_REPORT_READERS: &[(&str, usize, &str)] = &[
-    ("crates/gents-protocol/src/delegation_audience.rs", 1, "the status field's reader, called only by the signer"),
-    ("crates/gents-protocol/src/home_attestation.rs", 2, "what the home signs, and the report of a signed statement"),
+    ("crates/gents-protocol/src/home_attestation.rs", 2, "correct by design: the home reading its own status into the statement it signs (HomeStatement::of_status), and the report of a statement whose signature was checked (HomeStatement::reported)"),
 ];
 
 /// What reads a report from a status, and the report itself.
