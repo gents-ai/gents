@@ -506,6 +506,18 @@ async fn run_inner(
             &received.root,
             &received.dependencies,
         );
+        gents_pack::pack::command_authority::require_command_task_grant(
+            &access,
+            &state.node_did,
+            &format!(
+                "{}/{}",
+                received.root.manifest().metadata.namespace,
+                received.root.manifest().name
+            ),
+            &prepared,
+            received.request.grant_authority,
+        )
+        .await?;
         // The client grants after this install, from the rows of its plan.
         let planned = gents_tools::surface::planned_root_agents(
             &access,

@@ -39,7 +39,7 @@ pub fn review_task_is_eligible(task: &Task, node: &str, task_id: &str, agent: &s
         prompt_template,
         enabled,
         hooks,
-        command,
+        command: _,
         emit_outcome,
         outcome_readers: _,
         goal_objective_template,
@@ -57,7 +57,6 @@ pub fn review_task_is_eligible(task: &Task, node: &str, task_id: &str, agent: &s
         && !prompt_template.trim().is_empty()
         && *enabled
         && hooks.is_empty()
-        && command.is_none()
         && !*emit_outcome
         && goal_objective_template.is_none()
         && goal_token_budget.is_none()

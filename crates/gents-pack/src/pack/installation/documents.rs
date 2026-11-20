@@ -1552,9 +1552,21 @@ pub async fn install_prepared_document_pack(
 ) -> Result<InstallReport> {
     let InstallTarget {
         access,
+        owner,
         plugin_home,
-        ..
     } = *target;
+    crate::pack::command_authority::require_command_task_grant(
+        access,
+        owner,
+        &format!(
+            "{}/{}",
+            archive.manifest().metadata.namespace,
+            archive.manifest().name
+        ),
+        prepared,
+        grant_authority,
+    )
+    .await?;
     anyhow::ensure!(
         document_ux_install_allowed(
             !archive.manifest().metadata.ux.is_empty(),

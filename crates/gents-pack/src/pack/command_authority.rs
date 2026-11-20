@@ -8,9 +8,43 @@ use gents_documents::{PackConfig, Task};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 
+use crate::pack::PreparedDocumentPackInstall;
+
+/// Refuses, before anything is written, an install of `prepared` without the
+/// grant when it brings a command Task the node does not already run under the
+/// same `task_id`. Every install route calls it: the operator's local and
+/// hosted installs and an Agent's self-config install, whose grant is the
+/// pack authority it holds.
+pub async fn require_command_task_grant(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+    prepared: &PreparedDocumentPackInstall,
+    grant_authority: bool,
+) -> Result<()> {
+    if grant_authority {
+        return Ok(());
+    }
+    let configs = std::iter::once(&prepared.config)
+        .chain(
+            prepared
+                .dependencies
+                .iter()
+                .map(|dependency| &dependency.config),
+        )
+        .collect::<Vec<_>>();
+    let unapproved = unapproved_command_tasks(access, owner, &configs).await?;
+    anyhow::ensure!(
+        unapproved.is_empty(),
+        "{coordinate} ships command Tasks ({}) that run host commands on this node each time their Triggers fire, with no agent in between. Nothing was installed. Install it with --grant-authority to allow that",
+        unapproved.join(", ")
+    );
+    Ok(())
+}
+
 /// The command Tasks among `configs` whose command the node does not already
 /// run under the same `task_id`: each needs the operator's grant.
-pub async fn unapproved_command_tasks(
+async fn unapproved_command_tasks(
     access: &ConfigAccess,
     owner: &str,
     configs: &[&PackConfig],
@@ -47,12 +81,4 @@ pub async fn unapproved_command_tasks(
             })
         })
         .await
-}
-
-/// The refusal an install without the grant reports, writing nothing.
-pub fn refusal(coordinate: &str, tasks: &[String]) -> anyhow::Error {
-    anyhow::anyhow!(
-        "{coordinate} ships command Tasks ({}) that run host commands on this node each time their Triggers fire, with no agent in between. Nothing was installed. Install it with --grant-authority to allow that",
-        tasks.join(", ")
-    )
 }

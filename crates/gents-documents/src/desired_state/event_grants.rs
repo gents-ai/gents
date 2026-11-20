@@ -350,6 +350,15 @@ pub(crate) async fn grant_changes(txn: &ConfigApplyTxn<'_>, captured: Capture) -
         )
         .await?;
         let Some(selected) = current.selected.as_ref() else {
+            if let Some(before) = prior_selection {
+                txn.change_configuration_reader(
+                    gents_protocol::owner_staged::SelectedConfiguration::Trigger,
+                    &current.doc_id,
+                    &identity::Did::new(&before.agent)?,
+                    false,
+                )
+                .await?;
+            }
             continue;
         };
         let agent_changed = prior_selection.is_none_or(|before| before.agent != selected.agent);

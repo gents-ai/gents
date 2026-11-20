@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use rapidhash::RapidHashMap;
 use tokio::sync::watch;
 
-use gents_documents::task_delivery::TriggerKind;
+use gents_documents::task_delivery::{validate_command_delivery, TriggerKind};
 use gents_documents::{
     CommandRun, CommandRunState, ConcurrencyMode, TaskCommand, TaskHook, TaskHookPhase,
 };
@@ -181,40 +181,32 @@ impl TriggerEngine {
         command: TaskCommand,
     ) -> FireResult {
         let snapshot = self.snapshot_rx.borrow().clone();
-        if intent.trigger_kind == TriggerKind::Event {
-            return reject(
-                intent,
-                FireResult::Rejected {
-                    error:
-                        "a command Task runs from a schedule or manual fire, not an event Trigger"
-                            .into(),
-                },
-            );
-        }
         let schedule = match intent.trigger_id.as_deref() {
-            Some(trigger_id) => match snapshot.active_schedules().get(trigger_id) {
-                Some(schedule) => Some(schedule.clone()),
-                None => {
-                    return reject(
-                        intent,
-                        FireResult::Skipped {
-                            reason: "trigger disabled".into(),
-                        },
-                    )
+            Some(trigger_id) if intent.trigger_kind != TriggerKind::Event => {
+                match snapshot.active_schedules().get(trigger_id) {
+                    Some(schedule) => Some(schedule.clone()),
+                    None => {
+                        return reject(
+                            intent,
+                            FireResult::Skipped {
+                                reason: "trigger disabled".into(),
+                            },
+                        )
+                    }
                 }
-            },
-            None => None,
+            }
+            _ => None,
         };
-        if schedule
-            .as_ref()
-            .is_some_and(|schedule| schedule.session_id_template.is_some())
-        {
+        if let Err(error) = validate_command_delivery(
+            intent.trigger_kind,
+            schedule
+                .as_ref()
+                .is_some_and(|schedule| schedule.session_id_template.is_some()),
+        ) {
             return reject(
                 intent,
                 FireResult::Rejected {
-                    error:
-                        "a command Task has no session; remove the Trigger's session_id_template"
-                            .into(),
+                    error: error.to_string(),
                 },
             );
         }
@@ -253,8 +245,13 @@ impl TriggerEngine {
                 return reject(intent, FireResult::Duplicate { request_id });
             }
             let admitted = window.len();
-            let running = runs.running.entry(key.clone()).or_default();
-            let superseded = match admit_command(intent.concurrency, !running.is_empty()) {
+            let admission = admit_command(
+                intent.concurrency,
+                runs.running
+                    .get(&key)
+                    .is_some_and(|running| !running.is_empty()),
+            );
+            match admission {
                 CommandAdmission::RefuseQueued => {
                     drop(runs);
                     return reject(
@@ -273,15 +270,8 @@ impl TriggerEngine {
                         },
                     );
                 }
-                CommandAdmission::SupersedeThenStart => running
-                    .iter()
-                    .map(|run| {
-                        run.cancellation.interrupt();
-                        run.done.clone()
-                    })
-                    .collect::<Vec<_>>(),
-                CommandAdmission::Start => Vec::new(),
-            };
+                CommandAdmission::SupersedeThenStart | CommandAdmission::Start => {}
+            }
             if let Some(schedule) = &schedule {
                 if super::durable::fire_budget_exhausted(schedule.max_fires_per_hour, admitted) {
                     drop(runs);
@@ -306,14 +296,25 @@ impl TriggerEngine {
                     fire_key: intent.durable_fire_key.clone(),
                     run_id: run_id.clone(),
                 });
-            runs.running
-                .entry(key.clone())
-                .or_default()
-                .push(RunningCommand {
-                    run_id: run_id.clone(),
-                    cancellation: cancellation.clone(),
-                    done: done_rx,
-                });
+            let running = runs.running.entry(key.clone()).or_default();
+            // Interrupted only once this fire is admitted, so a refused fire
+            // leaves the run it would have superseded going.
+            let superseded = if admission == CommandAdmission::SupersedeThenStart {
+                running
+                    .iter()
+                    .map(|run| {
+                        run.cancellation.interrupt();
+                        run.done.clone()
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            running.push(RunningCommand {
+                run_id: run_id.clone(),
+                cancellation: cancellation.clone(),
+                done: done_rx,
+            });
             superseded
         };
         tracing::info!(

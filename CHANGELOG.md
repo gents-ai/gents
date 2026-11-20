@@ -11,14 +11,17 @@ source consistency checks, not a separate runtime compatibility version.
   both, or neither, is refused). Each fire of its schedule Trigger runs the
   command on the node, in the operator's tool root, through the task-hook
   runner (120 s default timeout, capped output), with no AgentRequest and no
-  model turn. `max_fires_per_hour` and the Trigger's concurrency hold:
-  `serial` skips a fire while the command runs, `latest_only` interrupts it,
-  `queued_serial` is refused. Each run's state, exit status and output tail
-  land in the Trigger's new `last_run`, which `gents automation task show`
-  lists. Event Triggers and `gents automation task run` do not run command
-  Tasks yet: an event source reads documents as the Task's agent, and a
-  manual run writes a request for one. A pack that ships a command Task, or
-  changes one's command, installs only with `--grant-authority` (#3951).
+  model turn. The default fire budget and the Trigger's concurrency hold:
+  `serial` skips a fire while the command runs, `latest_only` interrupts it.
+  Each run's state, exit status and output tail land in the Trigger's new
+  `last_run`, which `gents automation task show` lists. Event Triggers and
+  `gents automation task run` do not run command Tasks yet: an event source
+  reads documents as the Task's agent, and a manual run writes a request for
+  one. Publication refuses a command Task's Trigger with an event source or a
+  `session_id_template` (and so `queued_serial`). A pack that ships a command
+  Task, or changes one's command, installs only under the operator's grant:
+  `--grant-authority`, on the local and the hosted install alike, or the pack
+  authority an installing Agent holds (#3951).
 - Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
   background calls one request holds at once: Bash runs, remote service calls
   and plugin jobs together. The refusal reports the configured limit.

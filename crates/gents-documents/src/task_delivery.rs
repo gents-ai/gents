@@ -47,11 +47,32 @@ pub fn validate_task_delivery_options(
     Ok(())
 }
 
+/// Lean `Triggers.CommandRun.deliveryAllowed`: what a command Task's fire
+/// refuses, so publication refuses a Trigger every fire of which would.
+pub fn validate_command_delivery(kind: TriggerKind, target_existing: bool) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        kind != TriggerKind::Event,
+        "a command Task runs from a schedule or manual fire, not an event Trigger"
+    );
+    anyhow::ensure!(
+        !target_existing,
+        "a command Task has no session; remove the Trigger's session_id_template"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod conformance {
-    use super::{validate_task_delivery_options, TriggerKind};
+    use super::{validate_command_delivery, validate_task_delivery_options, TriggerKind};
     use crate::ConcurrencyMode;
     use gents_lean_vocab::families::trigger_delivery_delivery_options as family;
+
+    #[test]
+    fn command_delivery_matches_the_lean_owner() {
+        gents_lean_vocab::families::triggers_command_run_delivery_allowed::replay(|i| {
+            validate_command_delivery(i.kind, i.target_existing).is_ok()
+        });
+    }
 
     #[test]
     fn delivery_options_match_the_lean_owner() {

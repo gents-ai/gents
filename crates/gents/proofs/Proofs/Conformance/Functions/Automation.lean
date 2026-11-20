@@ -60,6 +60,7 @@ attribute [conformance_function]
   Triggers.ManualRun.scheduleDecision
   Triggers.ManualRun.sessionTitle
   Triggers.CommandRun.admit
+  Triggers.CommandRun.deliveryAllowed
   GoalAutomation.ReadinessGate.publishes
   GoalAutomation.Operations.startDecision
   GoalAutomation.Operations.setDecision

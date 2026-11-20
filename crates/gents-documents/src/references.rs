@@ -464,6 +464,24 @@ impl ConfigReferences {
                         .get(&(Collection::Task, doc.task_id.clone()))
                         .context("trigger task missing")?,
                 )?;
+                if task.command.is_some() {
+                    let kind = match &doc.source {
+                        TriggerSource::Schedule { .. } => {
+                            crate::task_delivery::TriggerKind::Schedule
+                        }
+                        TriggerSource::Event { .. } => crate::task_delivery::TriggerKind::Event,
+                    };
+                    crate::task_delivery::validate_command_delivery(
+                        kind,
+                        doc.session_id_template.is_some(),
+                    )
+                    .with_context(|| {
+                        format!(
+                            "trigger {} fires command Task {}",
+                            doc.trigger_id, task.task_id
+                        )
+                    })?;
+                }
                 let forbidden: &[&str] = match &doc.source {
                     TriggerSource::Schedule { .. } => {
                         // The fire-time owner, so publication refuses exactly

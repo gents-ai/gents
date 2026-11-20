@@ -443,26 +443,19 @@ pub async fn install_documents_pack_resolved_inner(
         Err(refusal) => return Err(refusal),
     };
     ResolvedPack::record_graph_sources(&mut prepared, pack, &dependencies);
-    if !args.preview && !args.grant_authority {
-        let configs = std::iter::once(&prepared.config)
-            .chain(
-                prepared
-                    .dependencies
-                    .iter()
-                    .map(|dependency| &dependency.config),
-            )
-            .collect::<Vec<_>>();
-        let unapproved =
-            crate::pack::command_authority::unapproved_command_tasks(access, owner, &configs)
-                .await?;
-        if !unapproved.is_empty() {
-            let coordinate = format!(
+    if !args.preview {
+        crate::pack::command_authority::require_command_task_grant(
+            access,
+            owner,
+            &format!(
                 "{}/{}",
                 pack.manifest().metadata.namespace,
                 pack.manifest().name
-            );
-            return Err(crate::pack::command_authority::refusal(&coordinate, &unapproved).into());
-        }
+            ),
+            &prepared,
+            args.grant_authority,
+        )
+        .await?;
     }
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();

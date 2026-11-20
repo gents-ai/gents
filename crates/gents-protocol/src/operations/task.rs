@@ -23,6 +23,17 @@ pub enum TaskPresence {
     Enabled,
 }
 
+impl TaskPresence {
+    /// A document's presence from its `enabled` field, `None` when it is absent.
+    pub fn of(enabled: Option<bool>) -> Self {
+        match enabled {
+            None => Self::Missing,
+            Some(false) => Self::Disabled,
+            Some(true) => Self::Enabled,
+        }
+    }
+}
+
 /// Lean `Triggers.ManualRun.RunDecision`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

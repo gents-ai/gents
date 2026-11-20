@@ -29,6 +29,20 @@ def admit (concurrency : ConcurrencyMode) (running : Bool) : Admission :=
   | .serial, false => .start
   | .latestOnly, false => .start
 
+/-- A command Task's fire has no Agent and no session: an event source reads
+documents as the Task's Agent, and a session key names the session a fire
+delivers to. Publication refuses a Trigger every fire of which this refuses
+(#2080). -/
+def deliveryAllowed (kind : TriggerKind) (targetExisting : Bool) : Bool :=
+  kind != .event && !targetExisting
+
+/-- A published schedule of a command Task is never `queued_serial`: that mode
+needs the session key a command Task refuses. -/
+theorem published_schedule_never_queued (emit target : Bool)
+    (options : deliveryOptionsAllowed .schedule emit .queuedSerial target = true)
+    (command : deliveryAllowed .schedule target = true) : False := by
+  cases emit <;> cases target <;> simp_all [deliveryOptionsAllowed, deliveryAllowed]
+
 /-- A `serial` Trigger never runs two of its commands at once. -/
 theorem serial_never_overlaps :
     admit .serial true = .skipBusy := rfl

@@ -1,14 +1,12 @@
 use std::path::PathBuf;
 
 use gents_documents::{CommandRun, CommandRunState, TaskCommand};
+use gents_store::test_support::STALL_CEILING;
 
 use super::*;
 use crate::triggers::engine::command::{admit_command, CommandHost};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// The suite-wide bound on how long a run may go without a new record.
-const STALL_CEILING: Duration = Duration::from_secs(30);
 
 /// Records every run write and budget stop, waking waiters on each.
 struct SpyCommandHost {
@@ -418,6 +416,38 @@ async fn a_command_trigger_past_its_fire_budget_stops_without_running() {
 }
 
 #[tokio::test]
+async fn a_latest_only_fire_past_its_budget_leaves_the_running_command_going() {
+    let fixture = command_fixture(
+        command_task(&["sleep", "1"], None),
+        ConcurrencyMode::LatestOnly,
+        1,
+    );
+    let first = started(
+        fixture
+            .engine
+            .dispatch(schedule_fire(&fixture, "schedule:tick:1"))
+            .await,
+    );
+    match fixture
+        .engine
+        .dispatch(schedule_fire(&fixture, "schedule:tick:2"))
+        .await
+    {
+        FireResult::BudgetExhausted { .. } => {}
+        other => panic!("the second fire in the hour exceeds a budget of one, got {other:?}"),
+    }
+    let runs = fixture
+        .host
+        .runs_when(|runs| SpyCommandHost::finished(runs, &first))
+        .await;
+    assert_eq!(
+        record_of(&runs, &first).state,
+        CommandRunState::Succeeded,
+        "a fire the budget refused supersedes nothing: {runs:#?}"
+    );
+}
+
+#[tokio::test]
 async fn an_event_fire_of_a_command_task_is_refused() {
     let fixture = command_fixture(
         command_task(&["true"], None),
@@ -479,10 +509,8 @@ async fn a_schedule_fires_a_command_task_with_no_agent_request_e2e() {
         trigger_doc_id,
         schedule_doc_id,
         schedule_id: "every-minute".into(),
-        task_id: "tick".into(),
         task,
         cadence: ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
     let snapshot = snapshot_with_agent_and_schedules(
@@ -520,21 +548,19 @@ async fn a_schedule_fires_a_command_task_with_no_agent_request_e2e() {
     let engine_handle = tokio::spawn(async move { engine.run(vec![source], engine_cancel).await });
 
     let query = r#"{ Trigger(filter: { trigger_id: { _eq: "tick-trigger" } }) { last_status fire_count last_run } }"#;
-    let started = std::time::Instant::now();
-    let trigger = loop {
-        let response = node.execute(query).await;
-        let rows = gents_store::graphql::rows::<serde_json::Value>(&response, "Trigger").unwrap();
-        let last_run = rows[0]["last_run"].clone();
-        if last_run["finished_at"].is_string() && rows[0]["fire_count"] == 1 {
-            break rows[0].clone();
-        }
-        assert!(
-            started.elapsed() < STALL_CEILING,
-            "the scheduled command never finished; last Trigger row: {}",
-            rows[0]
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    let trigger = gents_store::test_support::read_when_changed(
+        &node,
+        &["Trigger"],
+        "the scheduled command finishes and its fire is counted",
+        async || {
+            let response = node.execute(query).await;
+            let rows =
+                gents_store::graphql::rows::<serde_json::Value>(&response, "Trigger").unwrap();
+            (rows[0]["last_run"]["finished_at"].is_string() && rows[0]["fire_count"] == 1)
+                .then(|| rows[0].clone())
+        },
+    )
+    .await;
     cancel.cancel();
     let _ = engine_handle.await;
 
@@ -549,6 +575,21 @@ async fn a_schedule_fires_a_command_task_with_no_agent_request_e2e() {
         "ran\n",
         "the command ran in the node's tool root"
     );
+    let explanation = client
+        .transact_readonly("trigger.explain", |txn| {
+            let owner = owner.as_str();
+            Box::pin(gents_documents::trigger_explain::explain_trigger_in_txn(
+                txn,
+                owner,
+                "tick-trigger",
+                None,
+            ))
+        })
+        .await
+        .expect("trigger explain reads a command Task's Trigger");
+    let steps = explanation.metadata["steps"].as_array().unwrap();
+    let task_step = steps.iter().find(|step| step["name"] == "task").unwrap();
+    assert_eq!(task_step["status"], "passed", "{steps:#?}");
     for access in [&client, &agent_access(&node, &behavior)] {
         let requests = access.execute("{ AgentRequest { _docID } }").await.unwrap();
         assert_eq!(

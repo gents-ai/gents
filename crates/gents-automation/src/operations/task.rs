@@ -83,14 +83,9 @@ pub async fn runnable(
         })
         .await
         .map_err(passthrough)?;
-    let presence = |enabled: Option<bool>| match enabled {
-        None => TaskPresence::Missing,
-        Some(false) => TaskPresence::Disabled,
-        Some(true) => TaskPresence::Enabled,
-    };
     let decision = run_decision(
-        presence(task.as_ref().map(|(_, task)| task.enabled)),
-        presence(agent.as_ref().map(|agent| agent.enabled)),
+        TaskPresence::of(task.as_ref().map(|(_, task)| task.enabled)),
+        TaskPresence::of(agent.as_ref().map(|agent| agent.enabled)),
         task.as_ref()
             .is_some_and(|(_, task)| task.command.is_some()),
     );
