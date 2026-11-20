@@ -440,14 +440,12 @@ impl HealthCheckerRuntime {
     }
 }
 
-/// The host and subnet a service's endpoint is resolved against.
 #[derive(Clone, Copy)]
 pub struct LocalNetwork<'a> {
     pub hostname: &'a str,
     pub subnet: Option<&'a str>,
 }
 
-/// What one health cycle probes with and records into.
 #[derive(Clone, Copy)]
 pub struct HealthCycleScope<'a> {
     pub mcp_pool: &'a McpPool,

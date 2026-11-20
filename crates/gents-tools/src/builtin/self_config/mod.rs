@@ -260,8 +260,6 @@ pub async fn build_runtime_self_config_tools(
     ))
 }
 
-/// What the config tool runs against: the Node, the Agent's identity, and the
-/// runtime's own identity where it observes the physical Node.
 pub struct SelfConfigRuntime {
     pub usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
     pub node: Arc<EmbeddedNode>,
