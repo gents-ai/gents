@@ -7,8 +7,9 @@ use crate::native::{CommandPolicyDenial, NativeExecutables};
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_pack::pack::rooted_paths::{ensure_within, normalize_for_creation};
 
-/// The configured tool root and base, and the call whose workspace root and
-/// working directory override them while it is served.
+/// The configured tool root and base, the call whose workspace root and
+/// working directory override them while it is served, and the executables
+/// its native filesystem runners start.
 #[derive(Clone)]
 pub struct ToolContext {
     root: Arc<PathBuf>,
