@@ -111,7 +111,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
             None,
             "meta-background-panic",
             args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     let ToolCallHookAction::Skip { reason } = action else {

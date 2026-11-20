@@ -1,7 +1,8 @@
 use super::*;
 use crate::snapshot::tests::push_canonical_text_message;
 use crate::types::RenderedTimelineItem;
-use gents_desktop_core::client::{ClientStoreRows, RequestPromptFact, RequestPromptOwnership};
+use gents_observe::client_projection::query::{RequestPromptFact, RequestPromptOwnership};
+use gents_observe::client_projection::store::ClientStoreRows;
 use gents_protocol::message::{DocumentSourceKind, Message, UserContent};
 use gents_protocol::output::{
     MediaBlock, MediaData, MediaKind, MediaType, MessageBlock, MessageRole, PayloadRef, SegmentRun,

@@ -17,13 +17,12 @@ function remoteSnapshot(chatSafe: boolean): DesktopClientSnapshot {
       ...bootstrap,
       initConfigStatus: "absent",
       initNodeDid: null,
-      savedPeers: [
+      savedRuntimes: [
         {
-          peerId: "peer-remote",
           label: "Remote",
           nodeDid: "did:key:z6MkRemote",
-          addr: "/ip4/203.0.113.7/tcp/9000",
-          source: "enrollment",
+
+          local: false,
           graphql: null,
         },
       ],
@@ -31,9 +30,9 @@ function remoteSnapshot(chatSafe: boolean): DesktopClientSnapshot {
     client: {
       deployments: [
         node({
-          source: "enrollment",
+          local: false,
           chatSafe,
-          dialSucceeded: false,
+
           graphql: null,
           nodeConfig: null,
           agentConfigs: [],
@@ -41,7 +40,7 @@ function remoteSnapshot(chatSafe: boolean): DesktopClientSnapshot {
           inferenceBackends: [],
         }),
       ],
-      enrollmentRequests: [],
+      accessRequests: [],
       operatorConfigAuthoritativeNodeDids: [],
     },
   } as unknown as DesktopClientSnapshot;
@@ -61,7 +60,7 @@ describe("first-run mobile reentry", () => {
 
   it("holds pending enrollment in setup until explicitly completed", () => {
     const pending = remoteSnapshot(false);
-    pending.bootstrap.savedPeers = [];
+    pending.bootstrap.savedRuntimes = [];
     pending.client!.deployments = [];
     const app = testApp({ snapshot: pending });
     const { result } = renderHook(() => useFirstRun(1, true), {
@@ -108,7 +107,7 @@ describe("first-run mobile reentry", () => {
   it("keeps absent local-home setup on a desktop without a saved enrollment", () => {
     vi.mocked(supportsLocalManagedServer).mockReturnValue(true);
     const snapshot = remoteSnapshot(true);
-    snapshot.bootstrap.savedPeers = [];
+    snapshot.bootstrap.savedRuntimes = [];
     const app = testApp({ snapshot });
     const { result } = renderHook(() => useFirstRun(1, true), {
       wrapper: withApp(app),

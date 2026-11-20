@@ -7,10 +7,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::client_protocol::RequestLifecycleState;
-use gents_protocol::operations::request::{RequestOperationError, RequestRef, RequestWaitInput};
+use gents_protocol::operations::request::{RequestRef, RequestWaitInput};
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ClientSigningCapability;
 use gents_store::config_client::ConfigAccess;
-use gents_store::identity::RegisteredIdentity;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -18,11 +18,8 @@ use crate::operation_failure::OperationFailure;
 use crate::require_non_empty;
 
 /// The CLI's client identity, which signs the requests it sends.
-pub(crate) fn client_signer(access: &ConfigAccess) -> Result<RegisteredIdentity> {
-    let did = access
-        .actor_did()
-        .ok_or_else(|| OperationFailure::from(RequestOperationError::IdentityRequired))?;
-    Ok(RegisteredIdentity::from_registered_did(did, None)?)
+pub(crate) fn client_signer(access: &ConfigAccess) -> Result<ClientSigningCapability> {
+    Ok(access.client_signer()?)
 }
 
 pub(crate) fn request_ref(node_did: &str, request_id: &str) -> RequestRef {

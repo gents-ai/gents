@@ -1,6 +1,6 @@
 ---- MODULE WallClockBound ----
 \* lean: none
-\* crates: gents-store, gents-toolcalls, gents-inference, gents-automation
+\* crates: gents, gents-store, gents-toolcalls, gents-inference, gents-automation
 (***************************************************************************)
 (* A wall-clock bound racing an owner's progress in a test (#3840).        *)
 (*                                                                          *)
@@ -38,6 +38,12 @@
 (* lack of progress. `MCWallClockBoundSlowHost`: the ceiling is a premise   *)
 (* about the host; a host that delays a runnable step past it fails a      *)
 (* correct owner.                                                           *)
+(*                                                                          *)
+(* The `gents` e2e `session_message_turn_limit` chain is a FixedWindow      *)
+(* instance: eight provider turns and their tool calls through one backend  *)
+(* permit inside a 30 s window, about 6 s alone and past 30 s under a full  *)
+(* suite. Its observer waits on progress rows instead, which a lease        *)
+(* renewal does not change, so a renewing owner that stalls still fails.    *)
 (***************************************************************************)
 EXTENDS Naturals
 

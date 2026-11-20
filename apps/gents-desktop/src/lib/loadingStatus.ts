@@ -24,8 +24,8 @@ export function shouldAutoStartDesktopClient(
   }
   return (
     snapshot.bootstrap.clientStateExists ||
-    snapshot.bootstrap.savedPeers.some(
-      (peer) => peer.source !== "local-standard" || localServerAvailable !== false,
+    snapshot.bootstrap.savedRuntimes.some(
+      (peer) => !peer.local || localServerAvailable !== false,
     )
   );
 }
@@ -187,7 +187,7 @@ export function selectionMatches(
 }
 
 export type SessionLoadingLayer =
-  "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
+  "localDatabase" | "sessionSync" | "sync" | "runtime" | "inference";
 
 export type SessionLoadingAction =
   "retryLocal" | "reloadSession" | "configureInference";
@@ -313,8 +313,8 @@ function sessionStatusFromOperational(
 ): SessionLoadingStatus {
   return {
     layer:
-      operational.layer === "p2p" || operational.layer === "route"
-        ? "p2p"
+      operational.layer === "route"
+        ? "runtime"
         : operational.layer === "sync"
           ? "sync"
           : operational.layer === "inference"

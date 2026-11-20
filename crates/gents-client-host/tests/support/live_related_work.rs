@@ -44,7 +44,8 @@ impl RelatedWork {
         .enumerate()
         {
             workers.push(Worker {
-                binding: gents_desktop_core::agent_identity::provision(endpoint, node).await?,
+                binding: gents_store::identity::provision_agent_identity_remote(endpoint, node)
+                    .await?,
                 target: format!("live-related-worker-{index}"),
                 title: title.to_owned(),
                 prompt: prompt.to_owned(),

@@ -213,6 +213,7 @@ impl ToolCallLifecycle {
             txn,
             request_doc_id,
             slot,
+            self.background_limit(),
             "",
         )
         .await?;

@@ -1,11 +1,8 @@
 use super::port::{matching_external_server, user_status_signer};
-use crate::local_pairing::{
-    ensure_managed_runtime_pairing, retry_managed_pairing, ManagedPairingTarget, PairingFailure,
-    MANAGED_PAIRING_ATTEMPTS, MANAGED_PAIRING_RETRY_DELAY,
-};
+use crate::client_runtime::ClientRuntime;
+use crate::local_pairing::{ensure_managed_runtime_pairing, ManagedPairingTarget, PairingFailure};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::ManagedServerStatus;
-use gents_desktop_core::client::ClientCore;
 use std::sync::Arc;
 
 pub(super) async fn pairing_is_ready(state: &DesktopAppState, node_did: Option<&str>) -> bool {
@@ -19,7 +16,7 @@ pub(super) async fn pairing_is_ready(state: &DesktopAppState, node_did: Option<&
 
 pub(in crate::tauri_commands) async fn start_running_managed_pairing(
     state: &DesktopAppState,
-    core: Arc<ClientCore>,
+    core: Arc<ClientRuntime>,
 ) {
     let Some(node_home) = state.policy.node_home.clone() else {
         tracing::warn!("managed pairing requires a local node home");
@@ -27,7 +24,7 @@ pub(in crate::tauri_commands) async fn start_running_managed_pairing(
     };
     let target = match matching_external_server(
         &node_home,
-        user_status_signer(state, &node_home).await.as_ref(),
+        user_status_signer(state).await.as_ref(),
     )
     .await
     {
@@ -43,7 +40,7 @@ pub(in crate::tauri_commands) async fn start_running_managed_pairing(
     };
     let Some(target) = target else { return };
     if let Err(error) = core
-        .refresh_local_standard_peer(&node_home, &target.node_name)
+        .refresh_local_runtime(&node_home, &target.node_name)
         .await
     {
         tracing::warn!(
@@ -57,22 +54,19 @@ pub(in crate::tauri_commands) async fn start_running_managed_pairing(
 
 pub(super) async fn enroll_managed_runtime(
     state: &DesktopAppState,
-    core: Arc<ClientCore>,
+    core: Arc<ClientRuntime>,
 ) -> Result<(), PairingFailure> {
     let node_home = state.policy.node_home.clone().ok_or_else(|| {
         PairingFailure::Permanent("managed enrollment requires a local node home".into())
     })?;
-    let status = matching_external_server(
-        &node_home,
-        user_status_signer(state, &node_home).await.as_ref(),
-    )
-    .await
-    .map_err(|error| PairingFailure::Transient(error.to_string()))?
-    .ok_or_else(|| PairingFailure::Permanent("managed runtime is not running".into()))?;
+    let status = matching_external_server(&node_home, user_status_signer(state).await.as_ref())
+        .await
+        .map_err(|error| PairingFailure::Transient(error.to_string()))?
+        .ok_or_else(|| PairingFailure::Permanent("managed runtime is not running".into()))?;
     let target = pairing_target(&status).ok_or_else(|| {
         PairingFailure::Permanent("managed runtime has no enrollment endpoint".into())
     })?;
-    core.refresh_local_standard_peer(&node_home, &target.node_name)
+    core.refresh_local_runtime(&node_home, &target.node_name)
         .await
         .map_err(|error| PairingFailure::Transient(error.to_string()))?;
     let cancel = Arc::new(tokio_util::sync::CancellationToken::new());
@@ -89,13 +83,9 @@ pub(super) async fn enroll_managed_runtime(
         ));
     }
     let task = tauri::async_runtime::spawn(async move {
-        let result = retry_managed_pairing(
-            &task_cancel,
-            MANAGED_PAIRING_ATTEMPTS,
-            MANAGED_PAIRING_RETRY_DELAY,
-            || ensure_managed_runtime_pairing(Arc::clone(&core), &node_home, &target, &task_cancel),
-        )
-        .await;
+        let result =
+            ensure_managed_runtime_pairing(Arc::clone(&core), &node_home, &target, &task_cancel)
+                .await;
         let _ = result_tx.send(result);
     });
     managed.pairing_cancel = Some(Arc::clone(&cancel));

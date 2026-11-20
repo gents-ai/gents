@@ -11,7 +11,7 @@ use gents_session::workspace::*;
 use gents_store::identity::NodeIdentity;
 use gents_tools::{native::CommandExecutionMode, native::CommandNetworkMode, surface::ToolCeiling};
 use serde_json::{json, Value};
-use std::{path::Path, process::Command, sync::Arc, time::Duration};
+use std::{path::Path, process::Command, sync::Arc};
 
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -232,8 +232,7 @@ async fn live_compiler_keeps_sealed_sources_unchanged() {
     let handle = tokio::spawn(agent.run(rx));
     let booted = BootedAgent::new(tx, handle, did.clone());
     wait_for_runtime_ready(&db.node, &did).await;
-    let terminal =
-        wait_for_request_terminal(&access, "artifact-live-request", Duration::from_secs(600)).await;
+    let terminal = wait_for_request_terminal(&access, "artifact-live-request").await;
     let evidence = access.execute(r#"{
         AgentRequest(filter: { request_id: { _eq: "artifact-live-request" } }) { _docID request_id lifecycle_state failure_reason terminal_output execution_generation workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash }
         AgentToolCall(filter: { request_id: { _eq: "artifact-live-request" } }) { tool_call_id tool_name lifecycle_state request_doc_id }

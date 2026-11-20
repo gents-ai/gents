@@ -188,24 +188,39 @@ impl Drop for RollbackOnDrop {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "ownership handles moved into the transaction owner task"
-)]
+pub(super) struct EmbeddedOwnerHandles {
+    pub(super) node: Arc<EmbeddedNode>,
+    pub(super) native_gate: Arc<MutationWriteGate>,
+    pub(super) native_operations: Arc<NativeOperationTracker>,
+    pub(super) cancellation_rollback_scheduled: Arc<AtomicBool>,
+}
+
+pub(super) struct EmbeddedBegin {
+    pub(super) read_only: bool,
+    pub(super) operation: WriteOperation,
+    pub(super) write_guard: Option<MutationWriteGuard>,
+}
+
 pub(super) async fn begin_embedded_owned<F, Fut>(
-    node: Arc<EmbeddedNode>,
-    native_gate: Arc<MutationWriteGate>,
-    read_only: bool,
-    operation: WriteOperation,
-    write_guard: Option<MutationWriteGuard>,
-    native_operations: Arc<NativeOperationTracker>,
-    cancellation_rollback_scheduled: Arc<AtomicBool>,
+    handles: EmbeddedOwnerHandles,
+    begin: EmbeddedBegin,
     after_begin: F,
 ) -> Result<(RollbackOnDrop, TransactionHandle)>
 where
     F: FnOnce(TransactionHandle) -> Fut,
     Fut: Future<Output = ()>,
 {
+    let EmbeddedOwnerHandles {
+        node,
+        native_gate,
+        native_operations,
+        cancellation_rollback_scheduled,
+    } = handles;
+    let EmbeddedBegin {
+        read_only,
+        operation,
+        write_guard,
+    } = begin;
     let (registered, registration) = tokio::sync::oneshot::channel();
     let owner_node = Arc::clone(&node);
     let mut native_owner: BoxFuture<'static, Result<()>> = Box::pin(async move {

@@ -57,6 +57,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
         for actor in [agent.did(), foreign.did()] {
             for permission in [
                 NodePermission::DocumentRead,
+                NodePermission::CollectionGet,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,
                 NodePermission::DacRelationDelete,

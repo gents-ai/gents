@@ -257,17 +257,10 @@ pub async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &st
         node.clone(),
         identity::Did::new(local).unwrap(),
     );
-    for permission in [
-        gents_store::config_client::NodePermission::DocumentRead,
-        gents_store::config_client::NodePermission::DocumentUpdate,
-        gents_store::config_client::NodePermission::DacRelationAdd,
-        gents_store::config_client::NodePermission::DacRelationDelete,
-    ] {
-        access
-            .grant_node_permission(&identity::Did::new(&agent).unwrap(), permission)
-            .await
-            .unwrap();
-    }
+    gents_store::identity::GrantSet::AgentBaseline
+        .grant(&access, &identity::Did::new(&agent).unwrap())
+        .await
+        .unwrap();
     access.transact_write("test.callback.seed_agent", |txn| {
         let agent = &agent;
         let runtime = node.node_identity_did();

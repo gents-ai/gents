@@ -1,0 +1,4 @@
+---- MODULE MCRetryBackoffLeaseFenced ----
+EXTENDS RetryBackoffLease
+
+====

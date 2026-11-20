@@ -1,13 +1,13 @@
+use crate::client_runtime::ClientRuntime;
 use anyhow::Result;
-use gents_desktop_core::client::ClientCore;
-use gents_desktop_core::tool_service::{test_tool_service, ToolServiceTarget};
+use gents::client_tools::{test_tool_service, ToolServiceTarget};
 
 use super::super::types::{
     ToolServiceSaveRequest, ToolServiceTestRequest, ToolServiceTestResult, ToolServiceToolView,
 };
 
 pub async fn save_tool_service_config(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: ToolServiceSaveRequest,
 ) -> Result<()> {
     core.save_tool_service_registry(&request.document).await

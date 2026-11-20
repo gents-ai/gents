@@ -58,14 +58,7 @@ pub struct ManagedExecRequest {
 
 impl ManagedExecRequest {
     fn recorder(&self) -> Option<super::ownership::ProcessRecorder> {
-        let ambient = super::ownership::current_process_recorder();
-        if self.process_recorder.is_some() && ambient.is_some() {
-            super::ownership::debug_assert_same_recorder(
-                self.process_recorder.as_ref(),
-                ambient.as_ref(),
-            );
-        }
-        self.process_recorder.clone().or(ambient)
+        self.process_recorder.clone()
     }
 }
 

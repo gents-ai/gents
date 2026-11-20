@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::time::Duration;
 
 use gents::DocumentRuntimeOptions;
 use gents_protocol::goal_status::GoalStatus;
@@ -17,8 +16,8 @@ use serde_json::{json, Value};
 
 use crate::support::agent_requests::canonical_now;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_options, live_target, wait_for_request_terminal,
-    wait_for_rows, InferenceTarget, LiveUser,
+    bind_target, boot_live_agent_with_options, live_target, rows_when, wait_for_request_terminal,
+    InferenceTarget, LiveUser,
 };
 use crate::support::{test_db, ManagedAgentFixture};
 
@@ -242,7 +241,7 @@ pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarne
     .await
     .unwrap();
     let plan = tokio::task::spawn_blocking(move || {
-        vec![
+        [
             PlanEntry {
                 when: json!({"step":0}),
                 output: effects(
@@ -290,22 +289,16 @@ pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarne
         r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID tool_call_id lifecycle_state plugin_execution_receipt}} }}"#,
         escape_graphql_string(&request_id),
     );
-    let rows = wait_for_rows(
-        &live.access,
-        "AgentToolCall",
-        &query,
-        Duration::from_secs(120),
-        |data| {
-            data["AgentToolCall"].as_array().is_some_and(|rows| {
-                rows.iter().any(|row| {
-                    row["lifecycle_state"]
-                        .as_str()
-                        .and_then(ToolCallState::from_persisted)
-                        .is_some_and(ToolCallState::is_terminal)
-                })
+    let rows = rows_when(&live.access, "AgentToolCall", &query, |data| {
+        data["AgentToolCall"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row["lifecycle_state"]
+                    .as_str()
+                    .and_then(ToolCallState::from_persisted)
+                    .is_some_and(ToolCallState::is_terminal)
             })
-        },
-    )
+        })
+    })
     .await;
     let row = rows["AgentToolCall"]
         .as_array()
@@ -337,7 +330,7 @@ pub(super) async fn completed_live_job(name: &str, value: Value) -> LiveJobHarne
         );
     }
     assert_eq!(
-        wait_for_request_terminal(&live.access, &request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&live.access, &request_id).await,
         "completed"
     );
     LiveJobHarness {
@@ -376,8 +369,7 @@ async fn live_plugin_job_adopts_a_child_and_completes() {
         .expect("the job adopted its requested child");
     assert_eq!(child.state, JobChildState::Completed);
     assert_eq!(
-        wait_for_request_terminal(&h.live.access, &child.request_id, Duration::from_secs(120))
-            .await,
+        wait_for_request_terminal(&h.live.access, &child.request_id).await,
         "completed"
     );
     h.runtime.shutdown().await;
@@ -445,7 +437,7 @@ async fn live_waited_process_defers_goal_until_its_completion_wake() {
         format!("Call spawn_process once with exactly {arguments}. Use its returned tool_call_id to call wait_process with timeout_secs 1. When that wait returns still running, acknowledge briefly and end this turn. Do not wait again and do not call update_goal."), &root_path,
     ).await;
     assert_eq!(
-        wait_for_request_terminal(&actors.fixture.access, REQUEST, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&actors.fixture.access, REQUEST).await,
         "completed"
     );
     let calls = actors.fixture.access.execute(&format!(r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{REQUEST}"}}}}) {{_docID tool_call_id tool_name lifecycle_state await_mode}} }}"#)).await.unwrap();
@@ -476,18 +468,12 @@ async fn live_waited_process_defers_goal_until_its_completion_wake() {
         r#"{{ Goal(filter: {{goal_id: {{_eq: "{}"}}}}) {{last_continued_from_request_id status}} }}"#,
         escape_graphql_string(&goal.goal_id)
     );
-    wait_for_rows(
-        &actors.fixture.access,
-        "Goal",
-        &goal_query,
-        Duration::from_secs(30),
-        |data| {
-            data["Goal"].as_array().is_some_and(|rows| {
-                rows.iter()
-                    .any(|row| row["last_continued_from_request_id"] == REQUEST)
-            })
-        },
-    )
+    rows_when(&actors.fixture.access, "Goal", &goal_query, |data| {
+        data["Goal"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|row| row["last_continued_from_request_id"] == REQUEST)
+        })
+    })
     .await;
     let children_query = format!(
         r#"{{ AgentRequest(filter: {{caused_by_trigger_kind: {{_eq: "goal"}}, caused_by_trigger_id: {{_eq: "{}"}}}}) {{_docID request_id caused_by_parent_request_doc_id lifecycle_state}} }}"#,
@@ -513,11 +499,10 @@ async fn live_waited_process_defers_goal_until_its_completion_wake() {
     let notification_query = format!(
         r#"{{ AgentMessage(filter: {{session_id: {{_eq: "{SESSION}"}}}}) {{publication request_doc_id}} }}"#
     );
-    let delivered = wait_for_rows(
+    let delivered = rows_when(
         &actors.fixture.access,
         "AgentMessage",
         &notification_query,
-        Duration::from_secs(120),
         |data| {
             data["AgentMessage"].as_array().is_some_and(|rows| {
                 rows.iter().any(|row| {
@@ -536,11 +521,10 @@ async fn live_waited_process_defers_goal_until_its_completion_wake() {
         .unwrap()["request_doc_id"]
         .as_str()
         .unwrap();
-    let children = wait_for_rows(
+    let children = rows_when(
         &actors.fixture.access,
         "AgentRequest",
         &children_query,
-        Duration::from_secs(120),
         |data| {
             data["AgentRequest"].as_array().is_some_and(|rows| {
                 rows.iter()
@@ -558,8 +542,7 @@ async fn live_waited_process_defers_goal_until_its_completion_wake() {
     assert_eq!(
         wait_for_request_terminal(
             &actors.fixture.access,
-            child["request_id"].as_str().unwrap(),
-            Duration::from_secs(120)
+            child["request_id"].as_str().unwrap()
         )
         .await,
         "completed"

@@ -1,6 +1,6 @@
 ---- MODULE StoreHandoff ----
 \* lean: none
-\* crates: gents-store, gents-client-host, gents-desktop-core
+\* crates: gents-store, gents-client-host, gents-desktop-core, gents-desktop-bridge, gents-cli, gents-service, gents-host, gents
 \* models: StoreHandoff.decide, StoreHandoff.mayRelease, ClientInstallation.step
 (***************************************************************************)
 (* Handing one local store from the process that holds it to the next one *)
@@ -8,8 +8,9 @@
 (* that starts its successor, a desktop that quits and is reopened, a     *)
 (* runtime that a replacement or a service stop takes down, and the same  *)
 (* handoffs inside one process (a client core closed and started again, a *)
-(* listing node a pack update shuts down). The store is excluded by an OS  *)
-(* advisory lock on `<data dir>.lock` (`lock_store`), and that lock file   *)
+(* listing node a pack update shuts down, an init followed by another     *)
+(* open of its home). The store is excluded by an OS advisory lock on      *)
+(* `<data dir>.lock` (`lock_store`), and that lock file                    *)
 (* also carries what the holder last declared: its process id and, once it *)
 (* has begun to stop, that it is releasing.                                *)
 (*                                                                          *)
@@ -60,11 +61,17 @@
 (* `release_store` once the shutdown returned or dropped with the claim's  *)
 (* last owner, and it waits for the engine's directory lock when           *)
 (* `ReleaseWaitsForDirectory`; `Ack` is the retiring installation's answer *)
-(* once it let go of its core and the release notice resolved. Before the  *)
-(* fix (#3802) the claim was released only when the last owner of the     *)
-(* node's write gate dropped it (`ReleaseByShutdownOwner = FALSE`), at     *)
-(* once, with the engine's lock still held (`ReleaseWaitsForDirectory =   *)
-(* FALSE`), and `ClientCore::shutdown` awaited that release while its      *)
+(* once it let go of its core and the release notice resolved, and init's  *)
+(* return once its node and the pack installer's are gone and released    *)
+(* (gents-cli `commands/init.rs`). `Read` is `try_store`: every opener   *)
+(* that takes the store to act on it applies it through `acquire_store`   *)
+(* (init, offline commands, desktop and service resets and repairs,       *)
+(* runtime preparation, trial homes); a probe that only reports whether   *)
+(* the store is held now takes `lock_store` and is no acquirer here.      *)
+(* Before the fix (#3802) the claim was released only when the last owner *)
+(* of the node's write gate dropped it (`ReleaseByShutdownOwner = FALSE`), *)
+(* at once, with the engine's lock still held (`ReleaseWaitsForDirectory  *)
+(* = FALSE`), and `ClientCore::shutdown` awaited that release while its    *)
 (* caller still held the core (`HolderOutlivesAck`).                       *)
 (***************************************************************************)
 EXTENDS Naturals

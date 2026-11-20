@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_automation::goal::{load_canonical_goal_in_txn, seed_goal_from_access};
 use gents_protocol::goal_status::GoalStatus;
 use gents_store::graphql::escape_graphql_string;
@@ -8,10 +6,12 @@ use serde::Deserialize;
 use crate::support::agent_requests::canonical_now;
 use crate::support::builder_runtime::submit_request;
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
+    bind_target, boot_live_agent, live_target, rows_when, wait_for_assistant_answer,
+    wait_for_request_terminal,
 };
 use crate::support::snapshots::SnapshotReader;
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 #[derive(Debug, Deserialize)]
 struct GoalChildRow {
@@ -19,42 +19,30 @@ struct GoalChildRow {
     session_id: String,
 }
 
-async fn wait_for_goal_child<R>(reader: &R, goal_id: &str, timeout: Duration) -> GoalChildRow
+async fn wait_for_goal_child<R>(reader: &R, goal_id: &str) -> GoalChildRow
 where
     R: SnapshotReader,
 {
-    let deadline = tokio::time::Instant::now() + timeout;
     let goal_id = escape_graphql_string(goal_id);
-    let mut changes = reader.subscribe_changes("AgentRequest").await;
-    loop {
-        let data = reader
-            .read_data(&format!(
-                r#"{{
-                    AgentRequest(
-                        filter: {{
-                            caused_by_trigger_id: {{ _eq: "{goal_id}" }},
-                            caused_by_trigger_kind: {{ _eq: "goal" }}
-                        }},
-                        order: [{{ created_at: ASC }}],
-                        limit: 1
-                    ) {{ request_id session_id }}
-                }}"#
-            ))
-            .await;
-        if let Some(row) = data["AgentRequest"]
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    caused_by_trigger_id: {{ _eq: "{goal_id}" }},
+                    caused_by_trigger_kind: {{ _eq: "goal" }}
+                }},
+                order: [{{ created_at: ASC }}],
+                limit: 1
+            ) {{ request_id session_id }}
+        }}"#
+    );
+    let data = rows_when(reader, "AgentRequest", &query, |data| {
+        data["AgentRequest"]
             .as_array()
-            .and_then(|rows| rows.first())
-        {
-            return serde_json::from_value(row.clone()).expect("decode goal child");
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for automatic goal continuation"
-        );
-        tokio::time::timeout_at(deadline, changes.recv())
-            .await
-            .expect("goal continuation deadline");
-    }
+            .is_some_and(|rows| !rows.is_empty())
+    })
+    .await;
+    serde_json::from_value(data["AgentRequest"][0].clone()).expect("decode goal child")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -100,11 +88,11 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(reader, initial_request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(reader, initial_request_id).await,
         "completed"
     );
     assert!(
-        !wait_for_assistant_answer(reader, initial_request_id, Duration::from_secs(30))
+        !wait_for_assistant_answer(reader, initial_request_id, STALL_CEILING)
             .await
             .trim()
             .is_empty()
@@ -124,14 +112,13 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     .await
     .expect("create durable goal");
 
-    let child = wait_for_goal_child(reader, &goal.goal_id, Duration::from_secs(30)).await;
+    let child = wait_for_goal_child(reader, &goal.goal_id).await;
     assert_eq!(child.session_id, session_id);
     assert_eq!(
-        wait_for_request_terminal(reader, &child.request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(reader, &child.request_id).await,
         "completed"
     );
-    let answer =
-        wait_for_assistant_answer(reader, &child.request_id, Duration::from_secs(30)).await;
+    let answer = wait_for_assistant_answer(reader, &child.request_id, STALL_CEILING).await;
     assert!(
         !answer.trim().is_empty(),
         "real continuation response omitted completion marker: {answer:?}"

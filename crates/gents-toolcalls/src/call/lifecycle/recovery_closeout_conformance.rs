@@ -81,22 +81,62 @@ async fn generated_native_missing_parent_restart_cases_defer() {
     }
 }
 
+pub(super) fn swept(count: usize) -> u64 {
+    u64::try_from(count).expect("a sweep count fits u64")
+}
+
+pub(super) fn notice_reason(notifications: &[String]) -> Option<String> {
+    match notifications {
+        [] => None,
+        [notice] => notice
+            .split_once("<reason>")
+            .and_then(|(_, rest)| rest.split_once("</reason>"))
+            .map(|(reason, _)| reason.to_owned()),
+        many => panic!("at most one completion notice: {many:?}"),
+    }
+}
+
+pub(super) struct RecoveredRow {
+    pub(super) lifecycle_state: String,
+    pub(super) cancel_cause: Option<String>,
+    pub(super) tool_failure_class: Option<String>,
+}
+
+pub(super) async fn recovered_row(
+    access: &gents_store::config_client::ConfigAccess,
+    tool_doc_id: &str,
+) -> RecoveredRow {
+    let escaped = gents_store::graphql::escape_graphql_string(tool_doc_id);
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state cancel_cause tool_failure_class }} }}"#
+        ))
+        .await
+        .unwrap();
+    let row = &response["data"]["AgentToolCall"][0];
+    RecoveredRow {
+        lifecycle_state: row["lifecycle_state"]
+            .as_str()
+            .expect("the tool row has a lifecycle state")
+            .to_owned(),
+        cancel_cause: row["cancel_cause"].as_str().map(str::to_owned),
+        tool_failure_class: row["tool_failure_class"].as_str().map(str::to_owned),
+    }
+}
+
+async fn lifecycle_state(
+    access: &gents_store::config_client::ConfigAccess,
+    tool_doc_id: &str,
+) -> String {
+    recovered_row(access, tool_doc_id).await.lifecycle_state
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
-    let cases = gents_lean_vocab::lean_recovery_sweep_cases();
-    for name in [
-        "orphaned_background_tool_without_execution_to_cancelled",
-        "orphaned_background_tool_expired_terminal_parent_to_timed_out",
-        "orphaned_background_tool_terminal_parent_to_cancelled",
-        "orphaned_background_tool_interrupted_parent_to_cancelled",
-        "orphaned_background_tool_unowned_process_to_failed",
-        "orphaned_background_tool_exited_process_to_failed",
-        "orphaned_background_tool_session_stopped_to_cancelled",
-    ] {
-        let case = cases.iter().find(|case| case.name == name).unwrap();
-        assert_eq!(case.execution_registered, Some(false), "{name}");
-        assert_eq!(case.owner_task_deleted, Some(false), "{name}");
+    for case in gents_lean_vocab::families::recovery_sweeps_orphan_accepted::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
         let fixture_name = format!("recovery-closeout-{name}");
         let admission = published_admission(PublishedAdmissionOptions {
             name: fixture_name.clone(),
@@ -108,34 +148,30 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         .expect("publish accepted orphan background call");
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         let parent_doc_id = admission.tool.request_doc_id().unwrap().to_owned();
-        if case.parent_terminal == Some(true) {
-            update_request(
-                &admission.tool.access().unwrap(),
-                &parent_doc_id,
-                r#"lifecycle_state: "completed""#,
-            )
-            .await;
+        let access = admission.tool.access().unwrap();
+        assert_eq!(
+            lifecycle_state(&access, &tool_doc_id).await,
+            input.pre_state,
+            "{name}"
+        );
+        if input.parent_terminal {
+            update_request(&access, &parent_doc_id, r#"lifecycle_state: "completed""#).await;
         }
-        if case.parent_interrupted == Some(true) {
-            update_request(
-                &admission.tool.access().unwrap(),
-                &parent_doc_id,
-                r#"lifecycle_state: "interrupted""#,
-            )
-            .await;
+        if input.parent_interrupted {
+            update_request(&access, &parent_doc_id, r#"lifecycle_state: "interrupted""#).await;
         }
-        if case.deadline_expired == Some(true) {
+        if input.deadline_expired {
             update(
-                &admission.tool.access().unwrap(),
+                &access,
                 &tool_doc_id,
                 r#"deadline_at: "2020-01-01T00:00:00Z""#,
             )
             .await;
         }
-        if case.owner_session_stopped == Some(true) {
+        if input.owner_session_stopped {
             gents_session::session::stop_session_with_access(
                 &admission.node,
-                &admission.tool.access().unwrap(),
+                &access,
                 &admission.node_did,
                 admission.tool.session_id(),
                 admission.tool.requester_did(),
@@ -150,10 +186,10 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             &registry,
             admission.tool.tool_call_id(),
             &tool_doc_id,
-            case.process_outcome.as_deref().unwrap(),
+            &input.process_outcome,
         )
         .await;
-        let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
+        let first = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.node_did,
             &recovery_identities(&admission),
@@ -161,7 +197,6 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         )
         .await
         .unwrap();
-        assert_eq!(report.tool_calls_terminalized, 1, "{name}");
         if let Some(process) = process {
             assert_ne!(
                 process.identity.observe(),
@@ -172,55 +207,26 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         }
         assert!(registry.process_record_list().is_empty(), "{name}");
         let escaped = gents_store::graphql::escape_graphql_string(&tool_doc_id);
-        let response = admission
-            .tool
-            .access()
-            .unwrap()
+        let response = access
             .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state cancel_cause tool_failure_class }} }}"#
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state }} }}"#
             ))
             .await
             .unwrap();
-        let row = &response["data"]["AgentToolCall"][0];
-        assert_eq!(row["status"], "completed", "{name}");
         assert_eq!(
-            row["lifecycle_state"],
-            case.terminal_state.as_str(),
+            response["data"]["AgentToolCall"][0]["status"], "completed",
             "{name}"
         );
-        match case.recovery_cause.as_deref() {
-            Some("deadlineExceeded" | "parentTerminal" | "processLost") => {
-                assert_eq!(row["tool_failure_class"], "external", "{name}");
-            }
-            Some("sessionStopped") => {
-                assert_eq!(row["cancel_cause"], "userCancelled", "{name}");
-                assert!(row["tool_failure_class"].is_null(), "{name}");
-            }
-            Some("TerminalizeBackgroundedAsInterrupted" | "parentInterrupted") => {
-                assert_eq!(row["cancel_cause"], "interrupted", "{name}");
-                assert!(row["tool_failure_class"].is_null(), "{name}");
-            }
-            other => panic!("{name}: unsupported Lean recovery cause {other:?}"),
-        }
+        let row = recovered_row(&access, &tool_doc_id).await;
         let session_id = format!("session-{fixture_name}");
         let (notifications, wakes) = completion_obligations(
-            &admission.tool.access().unwrap(),
+            &access,
             &session_id,
             &admission.node_did,
             admission.tool.requester_did(),
         )
         .await;
-        if let Some(reason) = case.notification_reason.as_deref() {
-            assert_eq!(notifications.len(), 1, "{name}");
-            assert!(
-                notifications[0].contains(&format!("<reason>{reason}</reason>")),
-                "{name}"
-            );
-            assert_eq!(wakes.len(), 1, "{name}");
-        } else {
-            assert!(notifications.is_empty(), "{name}");
-            assert!(wakes.is_empty(), "{name}");
-        }
+        assert_eq!(wakes.len(), notifications.len(), "{name}");
         let second = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.node_did,
@@ -229,23 +235,30 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         )
         .await
         .unwrap();
-        assert_eq!(second.tool_calls_terminalized, 0, "{name}");
         admission
             .node
             .shutdown()
             .await
             .expect("shut down test node");
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
+        case.check(
+            gents_lean_vocab::families::recovery_sweeps_orphan_accepted::OrphanSettled {
+                terminal_state: row.lifecycle_state,
+                measure_before: swept(first.tool_calls_terminalized),
+                measure_after: swept(second.tool_calls_terminalized),
+                notification_reason: notice_reason(&notifications),
+                cancel_cause: row.cancel_cause,
+                tool_failure_class: row.tool_failure_class,
+            },
+        );
     }
 }
 
 #[tokio::test]
 async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
-    let cases = gents_lean_vocab::lean_recovery_sweep_cases();
-    for name in ["orphaned_background_tool_expired_missing_parent_deferred"] {
-        let case = cases.iter().find(|case| case.name == name).unwrap();
-        assert_eq!(case.terminal_state, "running", "{name}");
-        assert_eq!((case.measure_before, case.measure_after), (0, 0), "{name}");
+    for case in gents_lean_vocab::families::recovery_sweeps_orphan_missing_parent::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
         let admission = published_admission(PublishedAdmissionOptions {
             name: format!("recovery-closeout-{name}"),
             real_identity: true,
@@ -255,14 +268,21 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         .await
         .expect("publish accepted native background call");
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
+        let access = admission.tool.access().unwrap();
+        assert_eq!(
+            lifecycle_state(&access, &tool_doc_id).await,
+            input.pre_state,
+            "{name}"
+        );
         remove_parent(&admission.client, admission.tool.request_doc_id().unwrap()).await;
-        assert_eq!(case.deadline_expired, Some(true), "{name}");
-        update(
-            &admission.tool.access().unwrap(),
-            &tool_doc_id,
-            r#"deadline_at: "2020-01-01T00:00:00Z""#,
-        )
-        .await;
+        if input.deadline_expired {
+            update(
+                &access,
+                &tool_doc_id,
+                r#"deadline_at: "2020-01-01T00:00:00Z""#,
+            )
+            .await;
+        }
         let error = match ToolCallLifecycle::load_by_doc_id_as(
             admission.node.clone(),
             admission.tool.actor().clone(),
@@ -283,7 +303,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
             "{name}: unexpected missing-owner guard: {error:#}"
         );
         let registry = crate::call::hook::BackgroundExecutionRegistry::default();
-        let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
+        let first = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.node_did,
             &recovery_identities(&admission),
@@ -291,86 +311,113 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         )
         .await
         .unwrap();
-        assert_eq!(report.tool_calls_terminalized, 0, "{name}");
-        let escaped = gents_store::graphql::escape_graphql_string(&tool_doc_id);
-        let response = admission
-            .tool
-            .access()
-            .unwrap()
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
-            ))
-            .await
-            .unwrap();
-        assert_eq!(
-            response["data"]["AgentToolCall"][0]["lifecycle_state"], "running",
-            "{name}"
-        );
+        let row = recovered_row(&access, &tool_doc_id).await;
+        let second = ToolCallLifecycle::reconcile_orphaned_background_tools(
+            &admission.node,
+            &admission.node_did,
+            &recovery_identities(&admission),
+            &registry,
+        )
+        .await
+        .unwrap();
+        let (notifications, _) = completion_obligations(
+            &access,
+            admission.tool.session_id(),
+            &admission.node_did,
+            admission.tool.requester_did(),
+        )
+        .await;
         admission
             .node
             .shutdown()
             .await
             .expect("shut down test node");
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
+        case.check(
+            gents_lean_vocab::families::recovery_sweeps_orphan_missing_parent::OrphanSettled {
+                terminal_state: row.lifecycle_state,
+                measure_before: swept(first.tool_calls_terminalized),
+                measure_after: swept(second.tool_calls_terminalized),
+                notification_reason: notice_reason(&notifications),
+                cancel_cause: row.cancel_cause,
+                tool_failure_class: row.tool_failure_class,
+            },
+        );
     }
 }
+
 #[tokio::test]
 async fn generated_background_completion_recovery_uses_accepted_native_call() {
-    let cases = gents_lean_vocab::lean_recovery_sweep_cases();
-    let case = cases
-        .iter()
-        .find(|case| {
-            case.name == "terminal_background_tool_missing_completion_side_effects_to_converged"
+    for case in gents_lean_vocab::families::recovery_sweeps_background_completion::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
+        assert!(
+            input.parent_resolvable && !input.side_effects_done,
+            "{name}: the accepted call keeps its parent and owes its completion side effects"
+        );
+        let fixture_name = format!("recovery-closeout-{name}");
+        let mut admission = published_admission(PublishedAdmissionOptions {
+            name: fixture_name.clone(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            ..Default::default()
         })
-        .unwrap();
-    let fixture_name = "recovery-closeout-background-completion";
-    let mut admission = published_admission(PublishedAdmissionOptions {
-        name: fixture_name.into(),
-        real_identity: true,
-        await_mode: AwaitMode::Background,
-        ..Default::default()
-    })
-    .await
-    .expect("publish accepted background call");
-    admission
-        .tool
-        .fail_owned(
-            "seed terminal background failure",
-            crate::call::lifecycle::FailureClass::External,
-            None,
+        .await
+        .expect("publish accepted background call");
+        admission
+            .tool
+            .fail_owned(
+                "seed terminal background failure",
+                crate::call::lifecycle::FailureClass::External,
+                None,
+            )
+            .await
+            .unwrap();
+        let access = admission.tool.access().unwrap();
+        let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
+        assert_eq!(
+            lifecycle_state(&access, &tool_doc_id).await,
+            input.pre_state,
+            "{name}"
+        );
+        let first = ToolCallLifecycle::reconcile_background_completion_side_effects(
+            &admission.node,
+            &admission.node_did,
+            &recovery_identities(&admission),
         )
         .await
         .unwrap();
-    let report = ToolCallLifecycle::reconcile_background_completion_side_effects(
-        &admission.node,
-        &admission.node_did,
-        &recovery_identities(&admission),
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.side_effects_converged, 1, "{}", case.name);
-    let second = ToolCallLifecycle::reconcile_background_completion_side_effects(
-        &admission.node,
-        &admission.node_did,
-        &recovery_identities(&admission),
-    )
-    .await
-    .unwrap();
-    assert!(second.is_noop(), "{}", case.name);
-    let session_id = format!("session-{fixture_name}");
-    let (notifications, wakes) = completion_obligations(
-        &admission.tool.access().unwrap(),
-        &session_id,
-        &admission.node_did,
-        admission.tool.requester_did(),
-    )
-    .await;
-    assert_eq!(notifications.len(), 1, "{}", case.name);
-    assert_eq!(wakes.len(), 1, "{}", case.name);
-    admission
-        .node
-        .shutdown()
+        let terminal_state = lifecycle_state(&access, &tool_doc_id).await;
+        let second = ToolCallLifecycle::reconcile_background_completion_side_effects(
+            &admission.node,
+            &admission.node_did,
+            &recovery_identities(&admission),
+        )
         .await
-        .expect("shut down test node");
-    std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
+        .unwrap();
+        assert!(second.is_noop(), "{name}");
+        let session_id = format!("session-{fixture_name}");
+        let (notifications, wakes) = completion_obligations(
+            &access,
+            &session_id,
+            &admission.node_did,
+            admission.tool.requester_did(),
+        )
+        .await;
+        assert_eq!(notifications.len(), 1, "{name}");
+        assert_eq!(wakes.len(), 1, "{name}");
+        admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+        std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
+        case.check(
+            gents_lean_vocab::families::recovery_sweeps_background_completion::Swept {
+                terminal_state,
+                measure_before: swept(first.side_effects_converged),
+                measure_after: swept(second.side_effects_converged),
+            },
+        );
+    }
 }

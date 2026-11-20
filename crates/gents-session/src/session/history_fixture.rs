@@ -1,31 +1,26 @@
 use super::*;
 use gents_inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "shared test helper with call sites in modules outside session"
-)]
+/// One transcript message the fixture imports: a user text, or a tool result
+/// when `tool_call` names the tool call's document and call id.
+#[derive(Clone, Copy)]
+pub struct HistoryObservation<'a> {
+    pub request_id: &'a str,
+    pub session_id: &'a str,
+    pub node_did: &'a str,
+    pub requester_did: Option<&'a str>,
+    pub text: &'a str,
+    pub message_key_suffix: &'a str,
+    pub sequence: u32,
+    pub tool_call: Option<(&'a str, &'a str)>,
+}
+
 pub async fn import_history_observation(
     node: &std::sync::Arc<defra_node::Node>,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    text: &str,
-    message_key_suffix: &str,
-    sequence: u32,
-    tool_call: Option<(&str, &str)>,
+    observation: HistoryObservation<'_>,
 ) {
     use gents_protocol::output::rows::*;
-    let segment = history_observation_segment(
-        request_id,
-        session_id,
-        node_did,
-        requester_did,
-        text,
-        message_key_suffix,
-        tool_call,
-    );
+    let segment = history_observation_segment(observation);
     let response = node
         .execute_request(
             defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
@@ -38,13 +33,7 @@ pub async fn import_history_observation(
             .unwrap()
             .unwrap();
     let header = history_observation_header(
-        request_id,
-        session_id,
-        node_did,
-        requester_did,
-        message_key_suffix,
-        sequence,
-        tool_call,
+        observation,
         row["_docID"].as_str().unwrap(),
         &segment.created_at,
     );
@@ -61,25 +50,29 @@ pub async fn import_history_observation(
     let (_, reconstructed) = load_canonical_message_from_node(
         node,
         row["_docID"].as_str().unwrap(),
-        node_did,
-        requester_did,
+        observation.node_did,
+        observation.requester_did,
     )
     .await
     .unwrap();
-    let expected = history_observation_message(text, tool_call);
+    let expected = history_observation_message(observation.text, observation.tool_call);
     assert_eq!(reconstructed, expected);
 }
 
 fn history_observation_segment(
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    text: &str,
-    message_key_suffix: &str,
-    tool_call: Option<(&str, &str)>,
+    observation: HistoryObservation<'_>,
 ) -> gents_protocol::output::OutputSegment {
     use gents_protocol::output::*;
+    let HistoryObservation {
+        request_id,
+        session_id,
+        node_did,
+        requester_did,
+        text,
+        message_key_suffix,
+        tool_call,
+        ..
+    } = observation;
     OutputSegment {
         node_did: node_did.into(),
         requester_did: requester_did.map(str::to_owned),
@@ -125,22 +118,22 @@ fn history_observation_segment(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors the shared history observation fixture's arguments"
-)]
 fn history_observation_header(
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    message_key_suffix: &str,
-    sequence: u32,
-    tool_call: Option<(&str, &str)>,
+    observation: HistoryObservation<'_>,
     close_doc_id: &str,
     now: &str,
 ) -> gents_protocol::output::TranscriptMessage {
     use gents_protocol::output::*;
+    let HistoryObservation {
+        request_id,
+        session_id,
+        node_did,
+        requester_did,
+        message_key_suffix,
+        sequence,
+        tool_call,
+        ..
+    } = observation;
     TranscriptMessage {
         native_request_id: None,
         message_key: message_key_suffix.into(),
@@ -197,31 +190,12 @@ fn history_observation_message(text: &str, tool_call: Option<(&str, &str)>) -> M
 
 /// [`import_history_observation`] written and read back by `access`, so the
 /// rows are owned by the actor (such as the session's Agent) that reads them.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "shared test helper with call sites in modules outside session"
-)]
 pub async fn import_history_observation_as(
     access: &gents_store::config_client::ConfigAccess,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    text: &str,
-    message_key_suffix: &str,
-    sequence: u32,
-    tool_call: Option<(&str, &str)>,
+    observation: HistoryObservation<'_>,
 ) {
     use gents_protocol::output::rows::*;
-    let segment = history_observation_segment(
-        request_id,
-        session_id,
-        node_did,
-        requester_did,
-        text,
-        message_key_suffix,
-        tool_call,
-    );
+    let segment = history_observation_segment(observation);
     let header_doc = access
         .transact_write("test.history_observation", |txn| {
             let segment = &segment;
@@ -233,17 +207,7 @@ pub async fn import_history_observation_as(
                     )
                     .await?;
                 let close = gents_store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
-                let header = history_observation_header(
-                    request_id,
-                    session_id,
-                    node_did,
-                    requester_did,
-                    message_key_suffix,
-                    sequence,
-                    tool_call,
-                    &close,
-                    &segment.created_at,
-                );
+                let header = history_observation_header(observation, &close, &segment.created_at);
                 let response = txn
                     .execute_with_variables(
                         CREATE_AGENT_MESSAGE_MUTATION,
@@ -258,10 +222,18 @@ pub async fn import_history_observation_as(
         })
         .await
         .unwrap();
-    let (_, reconstructed) = load_canonical_message(access, &header_doc, node_did, requester_did)
-        .await
-        .unwrap();
-    assert_eq!(reconstructed, history_observation_message(text, tool_call));
+    let (_, reconstructed) = load_canonical_message(
+        access,
+        &header_doc,
+        observation.node_did,
+        observation.requester_did,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reconstructed,
+        history_observation_message(observation.text, observation.tool_call)
+    );
 }
 
 pub async fn publish_signed_history(

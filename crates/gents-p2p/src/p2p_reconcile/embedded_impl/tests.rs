@@ -88,7 +88,7 @@ async fn explicit_file_image_push_refuses_runtime_local_collections() {
         "file-change documents reached the P2P transport"
     );
     for node in [sender, receiver] {
-        assert!(gents_store::identity::node_p2p(node)
+        assert!(crate::node_access::operations(node)
             .unwrap()
             .get_collections()
             .await

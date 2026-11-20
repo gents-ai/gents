@@ -32,7 +32,7 @@ pub use documents::{
     workspace_binding_upsert_mutation, workspace_cleanup_docs_mutation,
     workspace_placement_upsert_mutation, workspace_receipt_create_mutation, IsolatedWorkspaceDoc,
     MemoryWorkspaceDocuments, ProvisioningObservation, WorkspaceBindingDoc, WorkspaceDocuments,
-    WorkspacePlacementDoc, WorkspaceReceiptDoc,
+    WorkspacePlacementDoc, WorkspaceProvenance, WorkspaceReceiptDoc,
 };
 pub use executor::cleanup::{execute_cleanup_workspace_plan, CleanupWorkspaceOutcome};
 pub use executor::create::execute_create_workspace_plan;

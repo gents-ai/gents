@@ -16,6 +16,7 @@ use crate::native::{
 pub struct BackgroundToolConfig {
     pub allowlist: Vec<String>,
     pub timeouts: super::BackgroundTimeouts,
+    pub limit: gents_protocol::job::BackgroundLimit,
 }
 
 impl BackgroundToolConfig {
@@ -41,6 +42,8 @@ pub struct ResolvedToolSelection {
     pub timeouts: super::ToolTimeouts,
     /// `host.files` per-call limits; unset fields keep the toolset defaults.
     pub file_limits: crate::native::FileToolLimits,
+    /// `host.max_instruction_chars`, resolved.
+    pub max_instruction_chars: usize,
     pub enable_meta_tools: bool,
     pub enable_goal_tools: bool,
     pub enable_goal_creation: bool,
@@ -48,6 +51,8 @@ pub struct ResolvedToolSelection {
     pub remote_tools: Option<gents_documents::RemoteTools>,
     pub required_mcp_service_ids: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
+    /// `host.max_background_tool_calls`, resolved.
+    pub background_limit: gents_protocol::job::BackgroundLimit,
     pub enable_session_history_tool: bool,
     pub enable_schema_tool: bool,
     pub enable_p2p_tool: bool,
@@ -82,6 +87,7 @@ impl Default for ResolvedToolSelection {
             command_output_limits: CommandOutputLimits::default(),
             timeouts: super::ToolTimeouts::default(),
             file_limits: crate::native::FileToolLimits::default(),
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_goal_creation: false,
@@ -89,6 +95,7 @@ impl Default for ResolvedToolSelection {
             remote_tools: None,
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
+            background_limit: Default::default(),
             enable_session_history_tool: true,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -219,6 +226,9 @@ impl ResolvedToolSelection {
             command_output_limits,
             timeouts: super::ToolTimeouts::from_document(tools),
             file_limits: file_limits_from_document(files),
+            max_instruction_chars: gents_documents::tool_limits::resolve_instruction_chars(
+                host.and_then(|host| host.max_instruction_chars),
+            ),
             enable_meta_tools,
             enable_goal_tools,
             enable_goal_creation,
@@ -226,6 +236,9 @@ impl ResolvedToolSelection {
             remote_tools: tools.remote.clone(),
             required_mcp_service_ids,
             backgroundable_tool_names,
+            background_limit: gents_protocol::job::BackgroundLimit::resolve(
+                host.and_then(|host| host.max_background_tool_calls),
+            ),
             enable_schema_tool: built_ins
                 .and_then(|built| built.enable_schema_tool)
                 .unwrap_or(false),

@@ -1,0 +1,3 @@
+---- MODULE MCClientAccessRecoveryGreen ----
+EXTENDS ClientAccessRecovery
+====

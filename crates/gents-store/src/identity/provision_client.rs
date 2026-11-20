@@ -14,11 +14,11 @@ pub enum RemoteAgentProvisionError {
     MissingGraphqlPath,
     #[error("{0}")]
     Authorization(#[from] ConfigClientError),
-    #[error("agent identity request failed")]
+    #[error("runtime request failed")]
     Request(#[from] reqwest::Error),
-    #[error("agent identity response exceeds limit")]
+    #[error("runtime response exceeds limit")]
     ResponseTooLarge,
-    #[error("invalid agent identity response")]
+    #[error("invalid runtime response")]
     InvalidResponse(#[source] serde_json::Error),
 }
 
@@ -57,7 +57,9 @@ pub async fn observe_admission(
     .await
 }
 
-async fn post_runtime<B, T>(
+/// POST `body` to the runtime route `route` beside `endpoint`'s GraphQL path,
+/// authorized as the endpoint authorizes its requests.
+pub(crate) async fn post_runtime<B, T>(
     endpoint: &GraphqlEndpoint,
     route: &str,
     body: &B,
@@ -83,14 +85,12 @@ where
         .ok_or(RemoteAgentProvisionError::MissingGraphqlPath)?;
     let path = format!("{base}{route}");
     url.set_path(&path);
-    let client = reqwest::Client::builder()
+    let client = gents_protocol::graphql::store_http_client_builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let mut response = endpoint
-        .authorize(client.post(url).json(body))?
-        .send()
-        .await?
+        .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(body)))
+        .await??
         .error_for_status()?;
     if response
         .content_length()

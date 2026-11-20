@@ -15,7 +15,7 @@ structure AccessInput where
 engine loaded with the generated Household policy. -/
 @[conformance_family]
 def cases : Family AccessInput Bool where
-  inputs := ["author", "user", "engineer", "runtime", "manager", "sibling"].flatMap fun actor =>
+  inputs := ["author", "user", "engineer", "runtime", "sibling"].flatMap fun actor =>
     ["read", "update", "delete"].map fun permission => { actor, permission }
   model := fun i =>
     Household.allowed 8 ApplicationPairingAccess.fixture i.actor "application_pairings" "overlay"

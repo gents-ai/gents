@@ -203,7 +203,15 @@ theorem connect_grants_nothing_more (s : State) (request desktop : String) (o : 
   split at h
   · simp only [applyDecision, grant] at h
     split at h
-    · exact Or.inl h
+    · split at h
+      · rename_i r _
+        rcases List.mem_append.mp h with old | new
+        · exact Or.inl old
+        · obtain ⟨t, mem, rfl⟩ := List.mem_map.mp new
+          have keep := (List.mem_filter.mp mem).2
+          simp only [Bool.and_eq_true] at keep
+          exact Or.inr ⟨rfl, List.contains_iff_mem.mp keep.1⟩
+      · exact Or.inl h
     · rcases List.mem_append.mp h with old | new
       · exact Or.inl old
       · obtain ⟨t, mem, rfl⟩ := List.mem_map.mp new
@@ -219,7 +227,16 @@ theorem connect_leaves_other_subjects_untouched (s : State) (request desktop : S
   split
   · simp only [applyDecision, grant]
     split
-    · rfl
+    · split
+      · unfold holds
+        apply Bool.eq_iff_iff.mpr
+        simp only [reissue, List.contains_iff_mem, List.mem_append, List.mem_map]
+        constructor
+        · rintro (old | ⟨u, _, hu⟩)
+          · exact old
+          · exact absurd (congrArg Held.subject hu).symm other
+        · exact Or.inl
+      · rfl
     · unfold holds
       apply Bool.eq_iff_iff.mpr
       simp only [List.contains_iff_mem, List.mem_append, List.mem_map]

@@ -77,8 +77,10 @@ async fn submit_edit_inner(
                 did,
                 session_id,
                 edit,
-                selected,
-                None,
+                gents_session::request::lifecycle::SteeredMessage {
+                    request_doc_id: selected,
+                    request_id: None,
+                },
             )
             .await
         }

@@ -19,6 +19,11 @@ auth: BackendAuth,
  */
 claude_platform?: ClaudePlatform | null,
 /**
+ * Wire client version sent to providers that require one (ChatGPT Codex,
+ * Grok OAuth); absent uses the built-in version of that client.
+ */
+client_version?: string | null,
+/**
  * Connection establishment only; default 10s, bounded by the operation deadline.
  */
 connect_timeout_secs?: number | null,
@@ -26,6 +31,10 @@ connect_timeout_secs?: number | null,
  * Total model-discovery request timeout; default 10s.
  */
 discovery_timeout_secs?: number | null,
+/**
+ * Total plugin model-call timeout through this backend; default 120s.
+ */
+request_timeout_secs?: number | null,
 /**
  * Shared backend capacity across profiles; absent resolves to 1.
  */

@@ -210,7 +210,7 @@ fn runtime_access(live: &Live) -> gents_store::config_client::ConfigAccess {
 
 async fn request_reply(live: &Live, prompt: &str) -> Result<String> {
     use gents::support::live_inference::{
-        terminal_assistant_answer, wait_for_request_terminal, wait_for_rows,
+        rows_when, terminal_assistant_answer, wait_for_request_terminal,
     };
     let access = runtime_access(live);
     let query = format!(
@@ -218,7 +218,7 @@ async fn request_reply(live: &Live, prompt: &str) -> Result<String> {
         escape_graphql_string(&live.node_did),
         escape_graphql_string(prompt)
     );
-    let rows = wait_for_rows(&access, "AgentRequest", &query, REPLY, |data| {
+    let rows = rows_when(&access, "AgentRequest", &query, |data| {
         data["AgentRequest"]
             .as_array()
             .is_some_and(|rows| !rows.is_empty())
@@ -228,7 +228,7 @@ async fn request_reply(live: &Live, prompt: &str) -> Result<String> {
         .as_str()
         .context("request id missing")?;
     ensure!(
-        wait_for_request_terminal(&access, request, REPLY).await == "completed",
+        wait_for_request_terminal(&access, request,).await == "completed",
         "shell request did not complete"
     );
     let answer = terminal_assistant_answer(&access, request).await;
@@ -365,7 +365,7 @@ fn configure_questions(home: &Path, node_did: &str, previous_tools: &str) -> Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn the_shell_answers_a_question_and_the_item_is_acted() -> Result<()> {
-    use gents::support::live_inference::wait_for_rows;
+    use gents::support::live_inference::rows_when;
     use gents_protocol::mailbox_question::{
         MailboxQuestion, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
     };
@@ -393,11 +393,10 @@ async fn the_shell_answers_a_question_and_the_item_is_acted() -> Result<()> {
     let shell = start_shell(&live, prompt.clone()).await?;
     request_reply(&live, &prompt).await?;
     let access = runtime_access(&live);
-    let rows = wait_for_rows(
+    let rows = rows_when(
         &access,
         "MailboxItem",
         "{ MailboxItem { _docID title status } }",
-        REPLY,
         |data| {
             data["MailboxItem"]
                 .as_array()
@@ -426,7 +425,7 @@ async fn the_shell_answers_a_question_and_the_item_is_acted() -> Result<()> {
         r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ status }} }}"#,
         escape_graphql_string(&item)
     );
-    wait_for_rows(&access, "MailboxItem", &query, REPLY, |data| {
+    rows_when(&access, "MailboxItem", &query, |data| {
         data["MailboxItem"][0]["status"] == "acted"
     })
     .await;

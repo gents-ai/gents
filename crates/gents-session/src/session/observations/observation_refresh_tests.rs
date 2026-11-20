@@ -176,8 +176,16 @@ async fn session_observation_traces_match_the_lean_model() {
                         match step.kind.as_str() {
                             "ensure" => {
                                 crate::session::ensure_session_in_txn(
-                                    txn, &session, &node, &agent_did(owner.agent),
-                                    requester.as_deref(), None, None, &at_ms(step.now),
+                                    txn,
+                                    crate::session::NewAgentSession {
+                                        session_id: &session,
+                                        node_did: &node,
+                                        agent_did: &agent_did(owner.agent),
+                                        requester_did: requester.as_deref(),
+                                        title: None,
+                                        provenance: None,
+                                        created_at: &at_ms(step.now),
+                                    },
                                 ).await?;
                             }
                             "create" => {

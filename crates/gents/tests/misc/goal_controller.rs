@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
 use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::STALL_CEILING;
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
@@ -311,7 +312,7 @@ async fn boot_goal_background_handoff_with_plans(
     let rows = response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     let parent_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
-    let (process_tool_call_id, release) = tokio::time::timeout(Duration::from_secs(5), async {
+    let (process_tool_call_id, release) = tokio::time::timeout(STALL_CEILING, async {
         let mut changes = fixture.access.subscribe_changes("AgentToolCall").await;
         let (mut release, _) = listener.accept().await.unwrap();
         let mut ready = [0_u8; 6];
@@ -431,7 +432,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             expected_usage,
         );
 
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(STALL_CEILING, async {
             let mut changes = access.subscribe_changes("AgentRequest").await;
             loop {
                 if goal_children_from_access(&access).await.len() == 1 {
@@ -439,10 +440,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
                 }
                 changes.recv().await;
             }
-            runtime
-                .backend
-                .wait_for_request(objective, Duration::from_secs(5))
-                .await;
+            runtime.backend.wait_for_request(objective).await;
         })
         .await
         .expect("Goal wrapup did not reach its provider before the deadline");
@@ -458,7 +456,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         );
         release.write_all(b"r").await.unwrap();
         let completion = tokio::time::timeout(
-            Duration::from_secs(5),
+            STALL_CEILING,
             background_executions.wait_for_completion(&process_tool_call_id),
         )
         .await;
@@ -891,7 +889,7 @@ async fn wait_for_goal_transition_as(
     reached: impl Fn(&gents_automation::goal::GoalDocument) -> bool,
 ) -> gents_automation::goal::GoalDocument {
     let mut updates = node.subscribe_updates();
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(STALL_CEILING, async {
         tokio::select! {
             _ = source.next_fire() => panic!("unexpected goal fire while waiting for {description}"),
             goal = async {

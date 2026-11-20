@@ -1,15 +1,10 @@
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
-use gents_protocol::chatgpt_oauth::{
-    token_endpoint, CLIENT_ID as CHATGPT_OAUTH_CLIENT_ID, DEFAULT_ISSUER,
-    REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
-};
+use gents_protocol::chatgpt_oauth::CLIENT_ID as CHATGPT_OAUTH_CLIENT_ID;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::auth::credential::token_endpoint::{
-    endpoint_url, BadRequest, TokenEndpoint, TransportDetail,
-};
+use crate::auth::credential::token_endpoint::{BadRequest, TokenEndpoint, TransportDetail};
 use crate::auth::credential::{OAuthAuthProblem, RefreshedTokens};
 
 const TOKEN_ENDPOINT: TokenEndpoint = TokenEndpoint {
@@ -45,17 +40,7 @@ struct RefreshResponse {
     refresh_token: Option<String>,
 }
 
-pub async fn refresh_chatgpt_token(
-    refresh_token: &str,
-    http: &reqwest::Client,
-) -> Result<RefreshedTokens, OAuthAuthProblem> {
-    let endpoint = endpoint_url(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, || {
-        token_endpoint(DEFAULT_ISSUER)
-    });
-    refresh_chatgpt_token_at(&endpoint, refresh_token, http).await
-}
-
-async fn refresh_chatgpt_token_at(
+pub(crate) async fn refresh_chatgpt_token(
     endpoint: &str,
     refresh_token: &str,
     http: &reqwest::Client,
@@ -237,8 +222,7 @@ mod tests {
             (500, r#"{"error":"invalid_grant"}"#, false),
         ] {
             let (url, server) = one_shot_token_server(status, body).await;
-            let result =
-                refresh_chatgpt_token_at(&url, "refresh-TEST", &reqwest::Client::new()).await;
+            let result = refresh_chatgpt_token(&url, "refresh-TEST", &reqwest::Client::new()).await;
             server.await.unwrap();
             assert_eq!(
                 matches!(result, Err(OAuthAuthProblem::Expired)),
@@ -258,7 +242,7 @@ mod tests {
             r#"{"access_token":"access-NEW","expires_in":"3600","scope":7}"#,
         )
         .await;
-        let result = refresh_chatgpt_token_at(&url, "refresh-OLD", &reqwest::Client::new()).await;
+        let result = refresh_chatgpt_token(&url, "refresh-OLD", &reqwest::Client::new()).await;
         server.await.unwrap();
         let refreshed = result.expect("an unread malformed field does not fail the refresh");
         assert_eq!(refreshed.access_token, "access-NEW");

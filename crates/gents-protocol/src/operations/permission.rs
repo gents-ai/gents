@@ -11,8 +11,10 @@ use super::NextCall;
 pub enum AgentPermission {
     /// `config_writer` on the Agent's own document.
     SelfConfig,
-    /// `agent_manager` on the Node: the agent catalog and nothing else.
-    Catalog,
+    /// `administrator` on the Node: the agent catalog and administration of
+    /// every Agent, configuration document and session of the Node. It is
+    /// the one grant of the catalog.
+    NodeAdministration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

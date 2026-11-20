@@ -466,7 +466,7 @@ runtime_case() {
   # seed (${ATTEMPT} makes it unique) is created until `taken` (any matching
   # row, default the first expectation) shows the engine took one.
   while ((SECONDS < deadline)); do
-    kill -0 "$pid" 2>/dev/null || { fail "$name: gents server exited: $(tail -3 "$log" | tr '\n' ' ')"; return; }
+    kill -0 "$pid" 2>/dev/null || { fail "$name: gents server exited"; cat "$log" >&2; return; }
     attempt=$((attempt + 1))
     fields="$(jq -c --arg base "$base" --arg attempt "$attempt" --arg repo "$repo" '.runtime.seed.fields
       | map_values(if type == "string"

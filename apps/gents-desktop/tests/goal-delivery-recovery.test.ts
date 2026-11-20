@@ -66,6 +66,7 @@ function fixture(
     deployments: [
       {
         nodeDid: "node",
+        runtimeConnection: "connected",
         node: { nodeDid: "node", defaultAgentDid: "agent" },
         agents: [],
         sessions: [],
@@ -480,6 +481,7 @@ it("does not recover or reauthor an old client's retained operation after an ide
   const f = fixture();
   await f.actions().setGoal("Original goal");
   const request = f.control.mock.calls[0][0];
+  f.read.mockClear();
   f.stores.client.setState({
     snapshot: { client: { clientDid: "different-client" } } as DesktopClientSnapshot,
   });

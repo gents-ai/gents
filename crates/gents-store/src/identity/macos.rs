@@ -65,7 +65,7 @@ fn register_macos_secure_enclave_identity(
             remote_signer: Some(Arc::new(signer)),
             signing_authorization: None,
         },
-    );
+    )?;
     RegisteredIdentity::from_registered_did(did, service_account)
 }
 

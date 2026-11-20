@@ -1,8 +1,5 @@
 use anyhow::Result;
-use gents_protocol::graphql::{
-    graphql_endpoint_available as shared_graphql_endpoint_available, graphql_rows_from_response,
-    GraphqlRequestOptions,
-};
+use gents_protocol::graphql::graphql_rows_from_response;
 use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;
@@ -12,15 +9,9 @@ pub(crate) use gents_store::config_client::{graphql_api_base, post_graphql};
 /// Availability probing is a single bounded request so a stale endpoint does
 /// not indefinitely delay the caller's choice of access path.
 pub(crate) async fn graphql_endpoint_available(graphql: &str) -> bool {
-    shared_graphql_endpoint_available(
-        graphql,
-        GraphqlRequestOptions {
-            timeout: std::time::Duration::from_secs(2),
-            max_attempts: 1,
-            retry_backoff: std::time::Duration::from_millis(50),
-        },
-    )
-    .await
+    gents_service::repair::serving_status(graphql)
+        .await
+        .is_some()
 }
 
 pub(crate) async fn graphql_rows(

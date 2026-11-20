@@ -362,9 +362,8 @@ mod stored_message_tests {
     /// `gents-protocol/src/output.rs`): these fields, `deny_unknown_fields`, and a
     /// `publication` that is rc0's `MessagePublication` (unchanged since, and also
     /// `deny_unknown_fields`). The blocks column is rc0's reference-table JSON, kept opaque.
-    #[derive(Deserialize)]
+    #[derive(Debug, PartialEq, Deserialize)]
     #[serde(deny_unknown_fields)]
-    #[allow(dead_code)]
     struct Rc0TranscriptMessage {
         message_key: String,
         session_id: String,
@@ -382,6 +381,24 @@ mod stored_message_tests {
         #[serde(default)]
         blocks: Option<Value>,
         created_at: String,
+    }
+
+    /// What an rc0 reader holds after decoding `row`, which this build wrote for `message`.
+    fn rc0_view(message: &TranscriptMessage, row: &Value) -> Rc0TranscriptMessage {
+        Rc0TranscriptMessage {
+            message_key: message.message_key.clone(),
+            session_id: message.session_id.clone(),
+            node_did: message.node_did.clone(),
+            requester_did: message.requester_did.clone(),
+            request_doc_id: message.request_doc_id.clone(),
+            publication: message.publication.clone(),
+            outcome: message.outcome,
+            sequence: message.sequence,
+            role: message.role,
+            native_id: message.native_id.clone(),
+            blocks: row.get("blocks").cloned(),
+            created_at: message.created_at.clone(),
+        }
     }
 
     fn row_for(message: &TranscriptMessage, persist: bool) -> Value {
@@ -411,8 +428,9 @@ mod stored_message_tests {
                 "{row}"
             );
             assert!(row.get(NATIVE_REQUEST_ID_KEY).is_none(), "{row}");
-            serde_json::from_value::<Rc0TranscriptMessage>(row.clone())
+            let rc0 = serde_json::from_value::<Rc0TranscriptMessage>(row.clone())
                 .unwrap_or_else(|error| panic!("rc0 reader refused {row}: {error}"));
+            assert_eq!(rc0, rc0_view(&written, &row));
             let back: TranscriptMessage = serde_json::from_value(row).unwrap();
             assert_eq!(back, message(None));
         }

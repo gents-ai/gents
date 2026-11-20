@@ -3,7 +3,9 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use super::documents::{IsolatedWorkspaceDoc, WorkspaceDocuments, WorkspacePlacementDoc};
+use super::documents::{
+    IsolatedWorkspaceDoc, WorkspaceDocuments, WorkspacePlacementDoc, WorkspaceProvenance,
+};
 
 pub(super) mod cleanup;
 pub mod create;
@@ -30,16 +32,10 @@ pub struct RepositoryPlacementRef {
 }
 
 pub struct HostExecutorContext<'a> {
-    pub owner_node_did: String,
+    pub provenance: WorkspaceProvenance,
     pub repository: RepositoryPlacementRef,
     pub ceiling: Option<&'a Path>,
     pub capabilities: BTreeSet<String>,
-    pub writer_principal: String,
-    pub integrator_principal: String,
-    pub caused_by_invocation_id: String,
-    pub caused_by_correlation: String,
-    /// The creating invocation's route, stamped on the workspace it creates.
-    pub route: gents_protocol::trigger_delivery::HandoffRoute,
     pub documents: &'a mut dyn WorkspaceDocuments,
 }
 

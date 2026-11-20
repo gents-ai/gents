@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use gents_fs_runner::execute_request_with_base;

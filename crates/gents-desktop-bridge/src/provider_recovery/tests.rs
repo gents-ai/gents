@@ -5,7 +5,7 @@ use std::sync::Arc;
 /// A served runtime the User configures and recovers through its signed
 /// endpoint, as `desktop_provider_recovery_*` reach it.
 struct Fixture {
-    _runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    _runtime: gents::client_test_support::ServedRuntimeHome,
     identity: Arc<dyn gents_store::identity::NodeIdentity>,
     access: ConfigAccess,
     scope: ProviderRecoveryRequest,
@@ -13,7 +13,7 @@ struct Fixture {
 
 impl Fixture {
     async fn new(reset: bool) -> Self {
-        let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start().await;
+        let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
         let identity = runtime.user().clone();
         let owner = runtime.node_did().to_owned();
         let access = runtime.user_access();

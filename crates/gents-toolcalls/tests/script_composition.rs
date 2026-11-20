@@ -33,7 +33,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
             None,
             "script",
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient()
+            &gents_loop::tool::ToolCallEnvelope::default()
         )
         .await,
         ToolCallHookAction::Continue
@@ -46,7 +46,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
             1,
             name,
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -56,7 +56,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
             None,
             &child,
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     else {

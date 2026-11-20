@@ -59,12 +59,12 @@ describe("chat folders", () => {
   });
 });
 
-const ran = (source: string) =>
+const ran = (local: boolean) =>
   shellStores({
     deployments: [
       {
         nodeDid: "node",
-        source,
+        local,
         sessions: [
           { sessionId: "worked", nodeDid: "node", cwd: "/work/ran" },
           { sessionId: "unnamed", nodeDid: "node" },
@@ -83,7 +83,7 @@ describe("the folder a session's next message runs in", () => {
   ) => sessionFolder(folders, stores.fleet.getState(), null, "node", sessionId);
 
   it("is the folder picked here, else the one a session on this computer last ran in", () => {
-    const stores = ran("local");
+    const stores = ran(true);
     expect(folderIn(stores, { worked: "/work/picked" }, "worked")).toBe("/work/picked");
     expect(folderIn(stores, {}, "worked")).toBe("/work/ran");
     expect(folderIn(stores, {}, "unnamed")).toBeNull();
@@ -92,13 +92,13 @@ describe("the folder a session's next message runs in", () => {
   });
 
   it("never takes a folder another computer's node recorded", () => {
-    expect(folderIn(ran("remote"), {}, "worked")).toBeNull();
+    expect(folderIn(ran(false), {}, "worked")).toBeNull();
   });
 });
 
 describe("branching with a chat folder", () => {
   it("keeps an explicit Agent's folder choice instead of restoring the prefix's cwd", async () => {
-    const stores = ran("local");
+    const stores = ran(true);
     stores.chat.setState({ folders: { worked: "" } });
     const actions = createChatActions({
       api: {
@@ -122,7 +122,7 @@ describe("branching with a chat folder", () => {
 describe("sending with a chat folder", () => {
   it("continues an unpicked session in the folder it last ran in", async () => {
     const sendChatMessage = vi.fn(acceptedChatReply);
-    const stores = ran("local");
+    const stores = ran(true);
     const actions = createChatActions({
       api: { sendChatMessage } as unknown as DesktopApiAdapter,
       stores,

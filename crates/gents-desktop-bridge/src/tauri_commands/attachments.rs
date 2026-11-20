@@ -1,9 +1,8 @@
-use crate::{
-    error::BridgeError,
-    state::{current_core, DesktopAppState},
-};
+use crate::state::current_core;
+use crate::state::DesktopAppState;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use gents_protocol::request_input::RequestAttachment;
+use gents_store::client_error::BridgeError;
 use std::io::Read;
 use tauri::State;
 use tauri_plugin_fs::FsExt;

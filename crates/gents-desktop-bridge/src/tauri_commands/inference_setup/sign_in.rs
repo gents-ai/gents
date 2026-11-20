@@ -3,8 +3,9 @@ use gents_inference::backends::setup::InferenceAuthMethod;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState, DesktopBridge, ProviderLoginWait};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 fn slot(
     bridge: &mut DesktopBridge,

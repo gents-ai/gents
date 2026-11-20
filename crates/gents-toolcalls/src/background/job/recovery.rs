@@ -391,7 +391,7 @@ mod tests {
         start_running, stepper, write_step_tools, Stepper,
     };
     use crate::background::job::driver::StepOutcome;
-    use crate::background::job::input::tests::{node_did, request_as};
+    use crate::background::job::input::tests::{node_did, request_as, ChildRequest};
     use crate::background::job::records::read_pin;
     use gents_protocol::job::keys::{job_session_id, job_spawn_key};
     use gents_protocol::job::JobState;
@@ -406,15 +406,17 @@ mod tests {
     ) -> String {
         request_as(
             &step.job.access,
-            row,
-            request_id,
-            &job_session_id(row, request_id, 0),
-            &job_spawn_key(row, request_id, 0),
-            "a",
-            state,
-            Some("Alpha"),
-            "2026-01-01T00:00:00Z",
-            terminalized_at,
+            &ChildRequest {
+                chain: row,
+                request_id,
+                session_id: &job_session_id(row, request_id, 0),
+                retry_key: &job_spawn_key(row, request_id, 0),
+                agent_did: "a",
+                state,
+                title: Some("Alpha"),
+                created_at: "2026-01-01T00:00:00Z",
+                terminalized_at,
+            },
         )
         .await;
         step.job
