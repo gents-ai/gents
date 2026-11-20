@@ -640,7 +640,7 @@ mod tests {
     async fn cli_and_desktop_keep_distinct_stable_identities() {
         let home = tempfile::tempdir().unwrap();
         let desktop = gents_store::client_journal::paths::DesktopPaths::from_root(home.path());
-        let cli = super::cli_identity_paths_under(&desktop);
+        let cli = desktop.cli_client();
         desktop.ensure_root_dirs().await.unwrap();
         cli.ensure_root_dirs().await.unwrap();
         let desktop_identity =
