@@ -669,7 +669,8 @@ mod tests {
             .unwrap(),
             0
         );
-        let registry = crate::call::hook::BackgroundExecutionRegistry::default();
+        let registry =
+            crate::call::hook::background_executions::BackgroundExecutionRegistry::default();
         crate::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
             &step.job.node,
             node_did(),

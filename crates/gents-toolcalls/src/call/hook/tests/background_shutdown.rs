@@ -1,3 +1,4 @@
+use super::background_executions::BackgroundShutdownReport;
 use super::*;
 
 /// Kills the test's own recorded group if an assertion unwinds before the

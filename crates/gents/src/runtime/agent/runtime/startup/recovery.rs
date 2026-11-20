@@ -3,7 +3,7 @@ pub(super) async fn log_recovery(
     node_did: &str,
     default_agent_did: &str,
     identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    executions: &gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    executions: &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
 ) {
     // The inference-call sweep is parent-gated and must run after request repair.
     let outcome =

@@ -650,7 +650,7 @@ pub struct ClaimedTarget<'a> {
 pub async fn apply_claimed(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
-    executions: &crate::call::hook::BackgroundExecutionRegistry,
+    executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     agent: &identity::Did,
     target: ClaimedTarget<'_>,
 ) -> Result<gents_protocol::process_control::ToolControlReceiptOutcome> {
@@ -722,7 +722,7 @@ pub async fn apply_claimed(
 pub async fn execute_claimed(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
-    executions: &crate::call::hook::BackgroundExecutionRegistry,
+    executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     agent: &identity::Did,
     intent: Intent,
 ) -> Result<()> {
@@ -811,7 +811,7 @@ pub async fn execute_claimed(
 pub async fn run(
     node: Arc<EmbeddedNode>,
     node_did: String,
-    executions: crate::call::hook::BackgroundExecutionRegistry,
+    executions: crate::call::hook::background_executions::BackgroundExecutionRegistry,
     mut agents: Box<dyn AgentIdentityWatch>,
     sweep_interval: std::time::Duration,
     cancel: tokio_util::sync::CancellationToken,

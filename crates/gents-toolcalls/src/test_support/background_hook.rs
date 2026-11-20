@@ -1,3 +1,4 @@
+use crate::call::hook::background_executions::BackgroundExecutionRegistry;
 use crate::call::hook::fixtures::*;
 use crate::call::hook::*;
 use gents_inference::llm::ToolCallHookAction;

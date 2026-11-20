@@ -1,3 +1,4 @@
+use crate::call::hook::background_executions::BackgroundExecutionRegistry;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 

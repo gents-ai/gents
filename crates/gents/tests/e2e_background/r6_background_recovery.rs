@@ -308,8 +308,9 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         gents_session::exec::ownership::ProcessObservation::Running,
         "the spawned process must survive its runtime's crash"
     );
-    let executions = gents_toolcalls::call::hook::BackgroundExecutionRegistry::default()
-        .with_process_records(records);
+    let executions =
+        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default()
+            .with_process_records(records);
     gents_toolcalls::call::lifecycle::ToolCallLifecycle::recover_all_with_executions(
         &node,
         &ready.node_did,

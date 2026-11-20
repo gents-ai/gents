@@ -15,9 +15,8 @@ use gents_loop::tool::ToolDyn;
 use gents_protocol::row::AgentRequest;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
-use gents_toolcalls::call::hook::{
-    BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::{BackgroundToolRegistry, FailurePolicy};
 use tracing::instrument::WithSubscriber;
 
 const TASK_ID: &str = "hook-task";

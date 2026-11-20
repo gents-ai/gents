@@ -830,7 +830,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
             execute_claimed(
                 &node,
                 &agent_access,
-                &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
                 &agent,
                 failed_claim,
             ),
@@ -901,7 +901,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         execute_claimed(
             &node,
             &agent_access,
-            &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
             &agent,
             recovered
         )
@@ -969,7 +969,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         execute_claimed(
             &node,
             &agent_access,
-            &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            &gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
             &agent,
             retained
         )
