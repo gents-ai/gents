@@ -7,6 +7,10 @@ open Lean CompletionRetry.RepeatedToolFailure
 structure Case where
   name : String
   events : List Event
+  /-- The configured `repeated_tool_failure_limit`; `none` is unset. -/
+  repeatedToolFailureLimit : Option Nat := none
+  /-- The configured `max_invalid_tool_calls`; `none` is unset. -/
+  maxInvalidToolCalls : Option Nat := none
   deriving Repr
 
 private def fail (call error : Nat) : Event := ⟨call, .ordinaryFailure, some error⟩
@@ -15,7 +19,7 @@ private def ok (call : Nat) : Event := ⟨call, .success, none⟩
 private def skipped (call : Nat) : Event := ⟨call, .skipped, none⟩
 private def invalidArgs (call : Nat) : Event := ⟨call, .invalidArguments, none⟩
 
-def cases : List Case :=
+def defaultLimitCases : List (String × List Event) :=
   [ ⟨"single_failure", [fail 0 0]⟩
   , ⟨"limit_identical_failures_dispatch", List.replicate 3 (fail 0 0)⟩
   , ⟨"next_identical_repeat_suppressed", List.replicate 4 (fail 0 0)⟩
@@ -38,11 +42,29 @@ def cases : List Case :=
   , ⟨"suppression_charges_the_invalid_allowance",
       (List.range 7).map (fun call => invalidArgs (call + 1)) ++ List.replicate 5 (fail 0 0)⟩ ]
 
+def cases : List Case :=
+  defaultLimitCases.map (fun (name, events) => { name := name, events := events }) ++
+  [ { name := "configured_one_suppresses_second", repeatedToolFailureLimit := some 1,
+      events := List.replicate 4 (fail 0 0) }
+  , { name := "configured_one_restarts_on_success", repeatedToolFailureLimit := some 1,
+      events := [fail 0 0, ok 0, fail 0 0, ok 0, fail 0 0] }
+  , { name := "configured_five_dispatches_past_default", repeatedToolFailureLimit := some 5,
+      events := List.replicate 8 (fail 0 0) }
+  , { name := "configured_allowance_ends_suppression", repeatedToolFailureLimit := some 2,
+      maxInvalidToolCalls := some 1, events := List.replicate 4 (fail 0 0) } ]
+
 deriving instance ToJson for CompletionRetry.InvalidToolProgress.Outcome, Event, Action, Ending
 
 structure Input where
   events : List Event
+  repeatedToolFailureLimit : Option Nat
+  maxInvalidToolCalls : Option Nat
   deriving ToJson
+
+/-- The guards as an execution starts them, unset limits taking the defaults. -/
+def start (repeatedToolFailureLimit maxInvalidToolCalls : Option Nat) : Composed :=
+  { invalid := { limit := maxInvalidToolCalls.getD CompletionRetry.InvalidToolProgress.defaultLimit }
+    repeats := { failureLimit := repeatedToolFailureLimit.getD defaultFailureLimit } }
 
 structure Output where
   actions : List Action
@@ -52,13 +74,17 @@ structure Output where
 
 @[conformance_family]
 def ownedLoop : Family Input Output where
-  inputs := cases.map fun c => { events := c.events }
+  inputs := cases.map fun c =>
+    { events := c.events, repeatedToolFailureLimit := c.repeatedToolFailureLimit
+      maxInvalidToolCalls := c.maxInvalidToolCalls }
   model := fun i =>
-    let (actions, ending) := run {} i.events
-    { actions, ending, invalidUsed := invalidUsed {} i.events }
+    let s := start i.repeatedToolFailureLimit i.maxInvalidToolCalls
+    let (actions, ending) := run s i.events
+    { actions, ending, invalidUsed := invalidUsed s i.events }
 
 theorem cases_cover_every_action_and_ending :
-    let runs := cases.map fun c => run {} c.events
+    let runs := cases.map fun c =>
+      run (start c.repeatedToolFailureLimit c.maxInvalidToolCalls) c.events
     [Action.dispatch, .suppress, .skip, .stop].all
         (fun a => runs.any fun r => r.1.contains a) ∧
       [some Ending.repeatedFailure, some .invalidExhausted, none].all

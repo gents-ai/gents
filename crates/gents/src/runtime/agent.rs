@@ -620,6 +620,8 @@ pub(crate) fn agent_config_from_documents(
     }
     let backend = backend_fields(&inference.backend);
     let resolved_max_turns = inference.max_turns()?;
+    let max_invalid_tool_calls = inference.max_invalid_tool_calls()?;
+    let repeated_tool_failure_limit = inference.repeated_tool_failure_limit()?;
     anyhow::ensure!(
         agent_config.node_did == principal.node_did,
         "Agent {} belongs to a different runtime node",
@@ -666,6 +668,8 @@ pub(crate) fn agent_config_from_documents(
         max_turns: resolved_max_turns.value,
         max_turns_provenance: resolved_max_turns.provenance,
         max_total_tokens,
+        max_invalid_tool_calls,
+        repeated_tool_failure_limit,
         system_prompt: context
             .and_then(|context| context.system_prompt.clone())
             .unwrap_or_default(),
