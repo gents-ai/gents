@@ -39,7 +39,7 @@ pub(crate) enum ServiceCommand {
         #[arg(
             long,
             value_name = "JSON",
-            help = "Replace custom non-secret service environment from a JSON string dictionary; {} clears it. Omit to preserve entries. PATH and GENTS_SYSTEM_LOG remain managed"
+            help = "Replace custom non-secret service environment from a JSON string dictionary; {} clears it. Omit to preserve entries. PATH remains managed"
         )]
         environment_file: Option<PathBuf>,
     },

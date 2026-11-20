@@ -61,7 +61,6 @@ fn should_prompt(args: &InitArgs) -> bool {
         && std::io::stdin().is_terminal()
         && std::io::stderr().is_terminal()
         && !has_backend_arg(args)
-        && !inference_endpoint_env_set()
 }
 
 fn has_backend_arg(args: &InitArgs) -> bool {
@@ -72,12 +71,6 @@ fn has_backend_arg(args: &InitArgs) -> bool {
         || args.api_key.is_some()
         || args.api_key_env_var.is_some()
         || args.model_name.is_some()
-}
-
-fn inference_endpoint_env_set() -> bool {
-    std::env::var("INFERENCE_ENDPOINT")
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
 }
 
 /// Asks what the desktop's inference step asks, from the catalog it reads, so a provider

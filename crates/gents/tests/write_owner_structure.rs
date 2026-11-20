@@ -2519,8 +2519,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-cli/src/commands/start.rs", 1, "GENTS_HOME: records whether the home was chosen explicitly; becomes the home owner's discovery result"),
     ("crates/gents-cli/src/commands/start/setup.rs", 1, "GENTS_HOME: home discovery when --home is absent; becomes the home owner's discovery result"),
     ("crates/gents-cli/src/desired_state/load.rs", 1, "desired-state ${VAR} interpolation: the manifest names operator-supplied variables; legitimately external"),
-    ("crates/gents-cli/src/interactive_backend.rs", 1, "INFERENCE_ENDPOINT changes which backend init selects; becomes an --endpoint flag"),
-    ("crates/gents-cli/src/resolve_helpers.rs", 1, "INFERENCE_ENDPOINT fallback during init; becomes an --endpoint flag"),
     ("crates/gents-desktop-bridge/src/host_browser.rs", 4, "BROWSER, PATH, APPDIR and APPIMAGE: platform browser discovery and the AppImage probe; legitimately external"),
     ("crates/gents-desktop-bridge/src/package_tools.rs", 6, "PATH, APPDIR, APPIMAGE and the launcher's variables: restores the host environment for host programs launched from an AppImage; legitimately external"),
     ("crates/gents-desktop-bridge/src/tauri_commands/e2e.rs", 13, "GENTS_NATIVE_E2E and GENTS_E2E_* drive the native end-to-end command (native-e2e feature); test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
@@ -2530,14 +2528,11 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-eval/src/optimization/driver.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
     ("crates/gents-eval/src/runner/embedded/executor/install.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
     ("crates/gents-eval/src/runner/freeze/pack.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
-    ("crates/gents-fs-runner/src/traversal/common.rs", 5, "GENTS_FS_RUNNER_BLOCK_* pause a traversal for race tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("crates/gents-host/src/serve.rs", 3, "the secret named by the metrics token flag (legitimately external), HOME for the default working root (platform discovery), and GENTS_TEST_STALL_AFTER_CLIENT_ACCESS: test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-host/src/serve.rs", 2, "the secret named by the metrics token flag (legitimately external) and HOME for the default working root (platform discovery)"),
     ("crates/gents-inference/src/clients/claude_messages/transport.rs", 2, "HTTPS_PROXY/https_proxy and NO_PROXY: standard proxy convention; legitimately external"),
     ("crates/gents-lean-contract/src/lib.rs", 2, "CARGO_MANIFEST_DIR and CARGO_MANIFEST_PATH: Cargo's anchor for the Lean sources in a crate that links only into tests (optional, enabled only by test-fixtures); legitimately external"),
     ("crates/gents-lean-vocab/src/family.rs", 1, "GENTS_FAMILY_MUTATION: mutation-testing switch in a crate that links only into tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("crates/gents-lean-vocab/src/lib.rs", 1, "GENTS_SNAPSHOT_MUTATION: mutation-testing switch in a crate that links only into tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("crates/gents-p2p/src/p2p_reconcile/intervals.rs", 1, "GENTS_REGISTRY_HEARTBEAT_MS and GENTS_PAIRING_SWEEP_MS: become serve flags (#1764)"),
-    ("crates/gents-p2p/src/p2p_reconcile/registry.rs", 1, "GENTS_NETWORK_ID partitions the P2P registry; becomes a serve flag"),
     ("crates/gents-pack/src/operations/pack.rs", 2, "pack variables whose declared source is the operator's environment; legitimately external"),
     ("crates/gents-pack/src/pack/install_flow.rs", 1, "pack variables whose declared source is the operator's environment; legitimately external"),
     ("crates/gents-pack/src/pack/interpolate.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
@@ -2550,13 +2545,11 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-session/src/workspace/adapter.rs", 1, "inherits the process environment for a managed git child, minus the git variables it overrides; legitimately external"),
     ("crates/gents-store/src/client_journal/paths.rs", 1, "GENTS_DESKTOP_HOME: the desktop home owner's discovery before configuration exists; legitimately external"),
     ("crates/gents-store/src/local/home.rs", 1, "GENTS_HOME: the home owner's discovery when --home is absent, before configuration exists; legitimately external"),
-    ("crates/gents-store/src/local/storage_backend.rs", 1, "GENTS_BLOCK_CACHE_MB sizes the storage block cache; becomes a serve flag"),
     ("crates/gents-tools/src/native/native_runner.rs", 1, "GENTS_FS_RUNNER: discovery of the filesystem runner executable; becomes a serve flag"),
     ("crates/gents-tools/src/ux_preview.rs", 1, "GENTS_UX_PREVIEW_ASSETS: preview renderer assets outside an installed layout; becomes a flag"),
     ("crates/gents-tools/src/ux_preview/browser.rs", 1, "PATH: platform discovery of a system browser; legitimately external"),
     ("crates/gents/examples/serve_default_agent.rs", 1, "example program configured by its environment; not shipped"),
     ("crates/gents/src/client_runtime/mod.rs", 1, "HOME: platform discovery of the user home before configuration exists; legitimately external"),
-    ("crates/gents/src/runtime/native_logging.rs", 1, "GENTS_SYSTEM_LOG: marker the launchd and systemd units set for a supervised runtime; becomes a serve flag in the unit templates (#1764)"),
 ];
 
 const ENVIRONMENT_READS: &[&str] = &["var", "var_os", "vars", "vars_os"];
@@ -5515,8 +5508,7 @@ fn error_holder_fence_reads_holdings_and_wire_names() {
 /// Every other integration test is a module of that binary: each extra target
 /// relinks the crate's whole dependency graph. This allowlist only shrinks.
 const SEPARATE_TEST_TARGETS: &[(&str, &str)] = &[
-    // Sets GENTS_PAIRING_SWEEP_MS for the process, changing the sweep cadence
-    // of every runtime started after it.
+    // Its scenarios serialise on the process-global embedded P2P transport.
     ("gents", "e2e_triggers"),
     // A source scanner that links no runtime crate; run alone while editing ratchets.
     ("gents", "write_owner_structure"),
