@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::call::lifecycle::ToolCallLifecycle;
 use gents_loop::live_output::LiveToolOutputRegistry;
-use gents_session::session::tool_call_state::CancelCause;
+use gents_protocol::tool_call::CancelCause;
 
 #[derive(Clone)]
 pub(super) enum RetainedStopReceipt {

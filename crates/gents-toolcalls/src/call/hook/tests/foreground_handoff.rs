@@ -254,7 +254,7 @@ async fn foreground_handoff_after_parent_completion(
         .unwrap();
     for filler in &mut fillers {
         filler
-            .cancel_during_run(gents_session::session::tool_call_state::CancelCause::UserCancelled)
+            .cancel_during_run(gents_protocol::tool_call::CancelCause::UserCancelled)
             .await
             .unwrap();
     }
@@ -592,11 +592,9 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
         .collect::<Vec<_>>();
     assert_eq!(refusals, vec![capacity]);
     for start in &mut starts {
-        if start.state() == gents_session::session::tool_call_state::ToolCallState::Running {
+        if start.state() == gents_protocol::tool_call::ToolCallState::Running {
             start
-                .cancel_during_run(
-                    gents_session::session::tool_call_state::CancelCause::UserCancelled,
-                )
+                .cancel_during_run(gents_protocol::tool_call::CancelCause::UserCancelled)
                 .await
                 .unwrap();
         }
