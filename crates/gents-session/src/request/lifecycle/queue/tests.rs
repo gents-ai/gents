@@ -5,7 +5,6 @@ use crate::request::lifecycle::test_support::{
 
 use crate::request::lifecycle::{extract_single_doc_id, ClaimOutcome, RequestLifecycle};
 use crate::request::streaming::DefraStreamWriter;
-use gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::time::Duration;
@@ -156,11 +155,9 @@ fn raw_queue_create_mutation(
                 failure_reason: "",
                 created_at: "{created_at}",
                 retry_count: 0,
-                max_retries: {max_retries},
                 request_hop: 0
             }}) {{ _docID }}
         }}"#,
-        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     );
     mutation
 }

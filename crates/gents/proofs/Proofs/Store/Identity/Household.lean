@@ -187,6 +187,10 @@ def policy : List ResourceDefinition :=
       permissions := [permission "read" ["working_agent", "reader"] [("parent", "session_read"), ("session", "read")],
         permission "update" ["working_agent"] [("parent", "session_admin"), ("session", "delete")],
         permission "delete" [] [("parent", "session_admin"), ("session", "delete")]] }
+  , { name := "request_retry_budgets"
+      relations := [⟨"parent", ["delivered_requests"], []⟩]
+      permissions := [permission "read" [] [("parent", "read")],
+        permission "update" [] [], permission "delete" [] []] }
   , { name := "goal_controls"
       relations := [⟨"parent", ["sessions"], []⟩, ⟨"working_agent", ["actor"], []⟩]
       permissions := [permission "read" ["working_agent"] [("parent", "read")],

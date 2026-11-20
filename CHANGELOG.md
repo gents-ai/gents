@@ -9,13 +9,18 @@ source consistency checks, not a separate runtime compatibility version.
 - Breaking: the successor budget of a request lineage (operator reissues and
   background wake redrives) is InferenceExecution `max_request_retries`
   (non-negative, default 3, zero allows none) instead of a value clients sign.
-  `AgentRequest.max_retries` is no longer signed or written by clients: a
-  request's first claim pins it from the claiming Agent's configuration, a
-  retry successor inherits its parent's pin, title and access-review requests
-  take zero, and a reclaim never rewrites it, so a configuration change reaches
-  only lineages claimed after it. A request that never reached a claim may
-  still be reissued by an operator but is not redriven automatically.
-  `ReissueReceipt.max_retries` is absent until the lineage has been claimed.
+  `AgentRequest.max_retries` is removed. A request's first claim decides the
+  budget (a retry successor inherits its parent's, title and access-review
+  requests take zero) and the request's Node records it as its own
+  `AgentRequestRetryBudget` document, signed by the Node, which only the Node
+  may update or delete; the working Agent cannot raise it, and a reclaim never
+  rewrites it, so a configuration change reaches only lineages claimed after
+  it. A request with no Node-signed budget (never claimed) may still be
+  reissued by an operator but is not redriven automatically. The desktop no
+  longer projects the budget into retry eligibility; the reissue refusal names
+  it. `ReissueReceipt.max_retries` is absent until the lineage has been
+  claimed. New policy resource `request_retry_budgets` changes the Household
+  policy ID.
 - InferenceRetryPolicy `max_rate_limit_wait_ms` (default 300,000 ms) is the
   longest provider rate-limit wait the owned loop holds; a longer wait fails
   the request as the provider's usage limit, and `backoff_ms` steps may not

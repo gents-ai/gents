@@ -706,6 +706,7 @@ impl RequestLifecycle {
             configured_max_total_tokens: None,
             configured_max_request_retries:
                 gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
+            retry_budget_pin_writer: None,
             claimed_deadline_at: None,
             background_completion_input_through_sequence: None,
             state: LocalLifecycleState::Pending,

@@ -37,7 +37,6 @@ async fn seed_agent_request_for_session(
                 created_at: "2026-07-06T00:00:00Z",
                 deadline: "2026-07-06T01:00:00Z",
                 retry_count: 0,
-                max_retries: 3,
                 request_hop: 0
             }}) {{ _docID }}
         }}"#

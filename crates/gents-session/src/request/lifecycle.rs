@@ -576,6 +576,7 @@ pub struct RequestLifecycle {
     deadline_duration_secs: u64,
     configured_max_total_tokens: Option<u64>,
     configured_max_request_retries: u64,
+    retry_budget_pin_writer: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
     claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
     background_completion_input_through_sequence: Option<u32>,
     pub state: LocalLifecycleState,
@@ -735,15 +736,21 @@ impl RequestLifecycle {
         self.configured_max_total_tokens = limit;
     }
 
-    /// The claiming Agent's resolved `InferenceExecution.max_request_retries`,
-    /// supplied by the runtime; only the first claim pins a budget from it.
-    pub fn set_configured_max_request_retries(&mut self, budget: u64) {
+    /// The claiming Agent's resolved `InferenceExecution.max_request_retries`
+    /// and the request's Node, which writes the pin the first claim decides
+    /// (`retry_budget::write_pin`); a lifecycle given neither pins nothing.
+    pub fn set_configured_max_request_retries(
+        &mut self,
+        budget: u64,
+        node: Arc<dyn gents_store::identity::NodeIdentity>,
+    ) {
         assert_eq!(
             self.state,
             LocalLifecycleState::Pending,
             "configure request retry budget before claim"
         );
         self.configured_max_request_retries = budget;
+        self.retry_budget_pin_writer = Some(node);
     }
 
     pub fn input_publication_before_deadline(

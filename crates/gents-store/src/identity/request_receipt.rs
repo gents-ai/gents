@@ -253,7 +253,6 @@ pub fn verify_auxiliary_request_shape(
             && row.retry_root_request.as_deref() == Some(row.request_id.as_str())
             && row.retry_key.is_none()
             && row.retry_count == Some(0)
-            && matches!(row.max_retries, None | Some(0))
             && row.caused_by_trigger_id.is_none()
             && row.caused_by_trigger_doc_id.is_none()
             && row.caused_by_trigger_kind.is_none()

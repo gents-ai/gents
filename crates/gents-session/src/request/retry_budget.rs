@@ -1,14 +1,30 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
+
+const PIN_COLLECTION: &str = gents_protocol::schemas::AGENT_REQUEST_RETRY_BUDGET_NAME;
+const REQUEST_RESOURCE: &str = "delivered_requests";
+const PAYLOAD_DOMAIN: &str = "gents/request-retry-budget/v1";
+
+#[derive(Debug, thiserror::Error)]
 pub enum RetryBudgetError {
     #[error("retry parent max_retries must not be negative")]
     NegativeParentPin,
+    #[error("pin writer {writer} is not the request's Node {node_did}")]
+    NotTheRequestNode { writer: String, node_did: String },
+    #[error("signing the retry budget pin: {0}")]
+    Sign(#[source] anyhow::Error),
+    #[error("writing the retry budget pin: {0}")]
+    Write(#[source] anyhow::Error),
+    #[error("reading the retry budget pin: {0}")]
+    Read(#[source] anyhow::Error),
 }
 
-/// The successor budget (`AgentRequest.max_retries`) a request's first claim
-/// pins (Lean `Request.PinnedRetryBudget.claimPin`): a retry successor of a
-/// pinned parent inherits that pin; otherwise a normal request takes the
-/// claiming Agent's configured `InferenceExecution.max_request_retries` and
-/// an auxiliary one takes zero. Only the first claim calls it, so a running
+/// The successor budget a request's first claim pins (Lean
+/// `Request.PinnedRetryBudget.claimPin`): a retry successor of a pinned
+/// parent inherits that pin; otherwise a normal request takes the claiming
+/// Agent's configured `InferenceExecution.max_request_retries` and an
+/// auxiliary one takes zero. Only the first claim calls it, so a running
 /// request keeps the budget it started with.
 pub fn claim_pin(
     normal: bool,
@@ -38,33 +54,165 @@ pub fn successor_budget_remains(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generated_claim_pins_match_the_model() {
-        use gents_lean_vocab::families::request_pinned_retry_budget_claim_pins as family;
-        family::replay(|input| {
-            let result = claim_pin(
-                input.normal,
-                input.configured,
-                input.retry_successor,
-                input.parent_pin,
-            );
-            family::Outcome {
-                accepted: result.is_ok(),
-                error: result.as_ref().err().map(ToString::to_string),
-                max_retries: result.ok(),
-            }
-        });
-    }
-
-    #[test]
-    fn generated_successor_budgets_match_the_model() {
-        use gents_lean_vocab::families::request_pinned_retry_budget_successor_budgets as family;
-        family::replay(|input| {
-            successor_budget_remains(input.automated, input.retry_count, input.max_retries)
-        });
-    }
+/// The pin a reader accepts among a request's stored pins, each given as
+/// whether its Node signature verifies and its value (Lean
+/// `Request.PinnedRetryBudget.readPin`): the smallest Node-signed value.
+pub fn read_pins(pins: impl IntoIterator<Item = (bool, i64)>) -> Option<i64> {
+    pins.into_iter()
+        .filter_map(|(signed, value)| signed.then_some(value))
+        .min()
 }
+
+fn payload(node_did: &str, request_doc_id: &str, max_retries: i64) -> Vec<u8> {
+    format!("{PAYLOAD_DOMAIN}\n{node_did}\n{request_doc_id}\n{max_retries}").into_bytes()
+}
+
+fn encode_signature(signature: Vec<u8>) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(signature)
+}
+
+fn signed_by_node(node_did: &str, request_doc_id: &str, max_retries: i64, signature: &str) -> bool {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(signature)
+        .is_ok_and(|signature| {
+            gents_store::identity::verify_did_signature(
+                node_did,
+                &payload(node_did, request_doc_id, max_retries),
+                &signature,
+            )
+            .unwrap_or(false)
+        })
+}
+
+/// Writes the pin of a claimed request as its Node (Lean
+/// `Identity.RequestRetryBudget`): the document's owner is the Node, its
+/// resource grants no one else `update` or `delete`, and its fields are
+/// `@immutable`, so the working Agent cannot change the budget it runs under.
+pub async fn write_pin(
+    node: std::sync::Arc<defra_node::Node>,
+    runtime: std::sync::Arc<dyn NodeIdentity>,
+    node_did: &str,
+    request_doc_id: &str,
+    max_retries: u64,
+) -> Result<(), RetryBudgetError> {
+    if runtime.did() != node_did {
+        return Err(RetryBudgetError::NotTheRequestNode {
+            writer: runtime.did().to_owned(),
+            node_did: node_did.to_owned(),
+        });
+    }
+    let max_retries = i64::try_from(max_retries)
+        .map_err(|error| RetryBudgetError::Write(anyhow::Error::from(error)))?;
+    let signature = encode_signature(
+        runtime
+            .sign(&payload(node_did, request_doc_id, max_retries))
+            .await
+            .map_err(|error| RetryBudgetError::Sign(anyhow::Error::from(error)))?,
+    );
+    let access = ConfigAccess::local_runtime(node, runtime)
+        .map_err(|error| RetryBudgetError::Write(anyhow::Error::from(error)))?;
+    let mutation = format!(
+        r#"mutation {{ create_{PIN_COLLECTION}(input: {{ request_doc_id: "{}", node_did: "{}", max_retries: {max_retries}, signature: "{signature}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(request_doc_id),
+        escape_graphql_string(node_did),
+    );
+    let request_doc_id = request_doc_id.to_owned();
+    access
+        .transact_write("request.retry_budget.pin", |txn| {
+            let mutation = &mutation;
+            let request_doc_id = &request_doc_id;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = gents_store::graphql::created_doc_id(&response, PIN_COLLECTION)?;
+                txn.add_resource_relationship(
+                    PIN_COLLECTION,
+                    &doc,
+                    "parent",
+                    REQUEST_RESOURCE,
+                    request_doc_id,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .map_err(|error| RetryBudgetError::Write(anyhow::Error::from(error)))
+}
+
+fn pins_query(node_did: &str, request_doc_ids: &[&str]) -> String {
+    let ids = request_doc_ids
+        .iter()
+        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"{{ {PIN_COLLECTION}(filter: {{ request_doc_id: {{ _in: [{ids}] }}, node_did: {{ _eq: "{}" }} }}) {{ request_doc_id max_retries signature }} }}"#,
+        escape_graphql_string(node_did),
+    )
+}
+
+/// Each request's accepted pin among the stored rows (`read_pins`).
+fn accepted_pins(
+    node_did: &str,
+    response: &serde_json::Value,
+) -> std::collections::BTreeMap<String, i64> {
+    let mut stored = std::collections::BTreeMap::<String, Vec<(bool, i64)>>::new();
+    for row in response
+        .pointer(&format!("/data/{PIN_COLLECTION}"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(request_doc_id), Some(value), Some(signature)) = (
+            row["request_doc_id"].as_str(),
+            row["max_retries"].as_i64(),
+            row["signature"].as_str(),
+        ) else {
+            continue;
+        };
+        stored.entry(request_doc_id.to_owned()).or_default().push((
+            signed_by_node(node_did, request_doc_id, value, signature),
+            value,
+        ));
+    }
+    stored
+        .into_iter()
+        .filter_map(|(request_doc_id, pins)| read_pins(pins).map(|pin| (request_doc_id, pin)))
+        .collect()
+}
+
+/// The pin of `request_doc_id` that `access` can read and its Node signed
+/// (`read_pins`); `None` when the request was never pinned.
+pub async fn read_pin(
+    access: &ConfigAccess,
+    node_did: &str,
+    request_doc_id: &str,
+) -> Result<Option<i64>, RetryBudgetError> {
+    let response = access
+        .execute(&pins_query(node_did, &[request_doc_id]))
+        .await
+        .map_err(|error| RetryBudgetError::Read(anyhow::Error::from(error)))?;
+    Ok(accepted_pins(node_did, &response).remove(request_doc_id))
+}
+
+/// The accepted pins of `request_doc_ids` within one transaction.
+pub async fn read_pins_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    request_doc_ids: &[&str],
+) -> Result<std::collections::BTreeMap<String, i64>, RetryBudgetError> {
+    if request_doc_ids.is_empty() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let response = txn
+        .execute(&pins_query(node_did, request_doc_ids))
+        .await
+        .map_err(|error| RetryBudgetError::Read(anyhow::Error::from(error)))?;
+    Ok(accepted_pins(node_did, &response))
+}
+
+#[cfg(test)]
+#[path = "retry_budget_tests.rs"]
+mod tests;

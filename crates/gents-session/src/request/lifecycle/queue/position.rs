@@ -210,7 +210,7 @@ mod tests {
                     agent_did: "worker", session_id: "{session_id}", content: "work",
                     lifecycle_state: "completed", backend_id: "",
                     execution_origin: "interactive", failure_reason: "",
-                    created_at: "2026-10-10T00:00:00Z", retry_count: 0, max_retries: 3
+                    created_at: "2026-10-10T00:00:00Z", retry_count: 0
                 }}) {{ _docID }} }}"#
             );
             let created =

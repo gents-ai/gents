@@ -127,7 +127,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         .expect("fixture node identity")
         .to_owned();
     let mutation = format!(
-        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "{}", agent_did: "{}", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#,
+        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "{}", agent_did: "{}", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, request_hop: 0 }}) {{ _docID }} }}"#,
         gents_store::graphql::escape_graphql_string(&request_id),
         gents_store::graphql::escape_graphql_string(&node_did),
         gents_store::graphql::escape_graphql_string(&agent_did),

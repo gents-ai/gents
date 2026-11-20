@@ -26,4 +26,10 @@ def successorBudgets : Conformance.Family BudgetInput Bool :=
     , ⟨automated, 4, some 3⟩, ⟨automated, -1, some 3⟩
     , ⟨automated, 0, some (-1)⟩ ], successorBudgetRemains⟩
 
+@[conformance_family]
+def readPinsCases : Conformance.Family ReadInput (Option Int) :=
+  ⟨[ [], [⟨true, 3⟩], [⟨false, 3⟩], [⟨false, 100⟩, ⟨true, 2⟩], [⟨true, 0⟩],
+     [⟨true, 5⟩, ⟨true, 3⟩], [⟨true, 3⟩, ⟨false, 9223372036854775807⟩],
+     [⟨false, 1⟩, ⟨false, 2⟩] ].map (⟨·⟩), readPins⟩
+
 end Request.PinnedRetryBudget

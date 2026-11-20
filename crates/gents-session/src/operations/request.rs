@@ -330,7 +330,9 @@ pub async fn reissue(
     let node_did = input.parent.node_did.trim().to_owned();
     let parent_doc_id = target::row_field("_docID", parent.doc_id.clone())?;
     let retry_count = parent.retry_count.unwrap_or(0);
-    let max_retries = parent.max_retries;
+    let max_retries = crate::request::retry_budget::read_pin(access, &node_did, &parent_doc_id)
+        .await
+        .map_err(RequestOperationError::passthrough_error)?;
     let lineage = reissue::Lineage {
         node_did,
         parent_request_id: parent.request_id.clone(),

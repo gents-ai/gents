@@ -102,7 +102,6 @@ async fn create_recovery_request(
         "execution_origin": "interactive",
         "created_at": created_at,
         "retry_count": 0,
-        "max_retries": gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         "request_hop": 0,
     }))
     .unwrap();
@@ -179,6 +178,7 @@ fn background_wake_input(session_id: &str) -> gents_protocol::request_input::Req
 /// then terminalized as its working Agent.
 async fn seed_failed_wake(
     actors: &RequestActors,
+    runtime: &std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
     session_id: &str,
     input: &gents_protocol::request_input::RequestInput,
 ) {
@@ -190,6 +190,15 @@ async fn seed_failed_wake(
     create.input = input.clone();
     create.retry_count = 1;
     let failed_doc = actors.create_signed(create).await;
+    gents_session::request::retry_budget::write_pin(
+        actors.node.clone(),
+        runtime.clone(),
+        runtime.did(),
+        &failed_doc,
+        3,
+    )
+    .await
+    .unwrap();
     actors
         .update_request(
             &failed_doc,
@@ -197,7 +206,6 @@ async fn seed_failed_wake(
                 "lifecycle_state": "failed",
                 "backend_id": BACKEND_ID,
                 "max_total_tokens": 4096,
-                "max_retries": 3,
                 "failure_reason": "backend admission failed",
                 "terminalized_at": "2026-08-12T00:00:00Z",
                 "terminal_redrive_attempts": 0,
@@ -219,7 +227,13 @@ async fn failed_background_wake_behind_a_newer_interactive_head_is_ineligible() 
     let db = test_db("lifecycle-background-wake-newer-head").await;
     let actors = RequestActors::new(&db).await;
     let session_id = "wake-redrive-session";
-    seed_failed_wake(&actors, session_id, &background_wake_input(session_id)).await;
+    seed_failed_wake(
+        &actors,
+        &db.node_identity,
+        session_id,
+        &background_wake_input(session_id),
+    )
+    .await;
     let mut newer =
         RequestSeed::new("newer-interactive", session_id, "2099-01-01T00:00:00Z").state("pending");
     newer.content = Some("newer interactive");
@@ -258,7 +272,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     let node_did = db.node_identity.did().to_string();
     let session_id = "wake-redrive-session";
     let input = background_wake_input(session_id);
-    seed_failed_wake(&actors, session_id, &input).await;
+    seed_failed_wake(&actors, &db.node_identity, session_id, &input).await;
     let access = &actors.agent_access;
     let (first, concurrent) = tokio::join!(
         RequestLifecycle::redrive_failed_background_wakeups_with_identities(
@@ -323,8 +337,6 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         Some(gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
     );
     assert_eq!(successor.retry_count, Some(2));
-    // The successor's own first claim pins the inherited budget.
-    assert_eq!(successor.max_retries, None);
     assert_eq!(successor.input.as_ref(), Some(&input));
     assert_eq!(successor.deadline, None);
     assert_eq!(successor.valid_until, None);
@@ -368,12 +380,20 @@ async fn failed_background_wake_sweep_follows_the_lean_redrive_model() {
         create.input = input;
         create.retry_count = case.input.retry_count.try_into().unwrap();
         let failed_doc = actors.create_signed(create).await;
+        gents_session::request::retry_budget::write_pin(
+            actors.node.clone(),
+            db.node_identity.clone(),
+            db.node_identity.did(),
+            &failed_doc,
+            case.input.max_retries,
+        )
+        .await
+        .unwrap();
         actors
             .update_request(
                 &failed_doc,
                 serde_json::json!({
                     "lifecycle_state": "failed",
-                    "max_retries": case.input.max_retries,
                     "failure_reason": "provider failed",
                     "terminalized_at": terminalized_at,
                 }),
@@ -665,7 +685,7 @@ async fn background_wake_retry_rows(
                     order: {{ created_at: ASC }}
                 ) {{
                     _docID request_id node_did requester_did content lifecycle_state execution_origin
-                    retry_parent_request retry_parent_request_doc_id retry_root_request retry_count max_retries
+                    retry_parent_request retry_parent_request_doc_id retry_root_request retry_count
                     admission_kind admission_signer_did admission_signature backend_id max_total_tokens
                     input deadline terminalized_at valid_until
                 }}
