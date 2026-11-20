@@ -17,9 +17,6 @@ pub enum SignedCommandStaleness {
     Expired,
 }
 
-/// The freshness window of every short-lived signed command: one issued more
-/// than the skew ahead of `now` is from the future, else one older than the
-/// maximum age has expired; both bounds are current.
 pub fn signed_command_staleness(
     issued: DateTime<Utc>,
     now: DateTime<Utc>,

@@ -169,10 +169,7 @@ const _: () = assert!(
 );
 
 /// Consume `signer_did`'s `nonce` once, as the runtime. Enrollment operator
-/// commands and owner-staged commands share this one replay fence; a nonce
-/// is retained for `NONCE_RETENTION_SECONDS`, longer than the signed-command
-/// freshness window (`gents_protocol::enrollment::signed_command_staleness`)
-/// keeps any command it fences current.
+/// commands and owner-staged commands share this one replay fence.
 pub async fn consume_signed_command_nonce(
     node: &Arc<EmbeddedNode>,
     signer_did: &str,
