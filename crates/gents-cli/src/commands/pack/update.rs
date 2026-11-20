@@ -814,6 +814,11 @@ mod tests {
             packs[0]["source"]["kind"], "local",
             "a pack installed from a path reports that it came from a file: {packs:?}"
         );
+        assert_eq!(
+            (&packs[0]["description"], &packs[0]["owner"]),
+            (&json!("A pack the fake registry serves"), &json!("fixture")),
+            "the registry's words on the pack come with the list: {packs:?}"
+        );
         assert!(
             !home.path().join("data").exists(),
             "outdated never opened a node either"

@@ -1,4 +1,4 @@
-import { readFailure } from "./review";
+import { lastingReadFailure, readFailure } from "./review";
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowLeft, ArrowRight, ChevronRight } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
@@ -366,10 +366,12 @@ export function PackPage({
   const versions = versionsOf(registry);
   const latest = text(registry?.latest) ?? versions[0]?.version ?? null;
   const version = report?.version ?? latest;
-  /* a pack that couldn't be read for its review isn't offered: its review
-     would fail the same way, and a link's pack may not be the one named */
+  /* a pack whose review would fail the same way isn't offered; a failure
+     that may pass leaves Install, whose review reads it again */
   const unreadable =
-    previewing && preview?.state === "unread" ? readFailure(preview.error) : null;
+    previewing && preview?.state === "unread"
+      ? lastingReadFailure(preview.error)
+      : null;
   const blocked = elsewhere(local, name) ?? unreadable;
   const description = text(registry?.description) ?? text(report?.description);
   const namespace = namespaceOf(pack);

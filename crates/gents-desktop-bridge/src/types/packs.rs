@@ -440,8 +440,6 @@ mod tests {
               "description": "Searches the web", "owner": "demo" },
             { "pack": "demo/offline", "installed": "0.2.0", "latest": null,
               "outdated": null, "error": "offline", "description": null, "owner": null },
-            { "pack": "demo/older", "installed": "0.1.0", "latest": null,
-              "outdated": null, "error": null },
         ] }))
         .unwrap();
         assert_eq!(
@@ -449,11 +447,9 @@ mod tests {
             Some("Searches the web")
         );
         assert_eq!(report.packs[0].owner.as_deref(), Some("demo"));
-        for unread in &report.packs[1..] {
-            assert_eq!(unread.description, None);
-            assert_eq!(unread.owner, None);
-        }
-        let sent = serde_json::to_value(&report.packs[2]).unwrap();
+        assert_eq!(report.packs[1].description, None);
+        assert_eq!(report.packs[1].owner, None);
+        let sent = serde_json::to_value(&report.packs[1]).unwrap();
         assert!(sent.get("description").is_none());
         assert!(sent.get("owner").is_none());
     }

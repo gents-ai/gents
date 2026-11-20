@@ -1,6 +1,7 @@
 /* Removing a pack whose plugins an agent's tools still select. The runtime
-   refuses to retire a plugin a Tools document selects, so Remove says who
-   uses them, takes them out of each agent's tools, then removes the pack. */
+   refuses to retire a plugin a Tools document selects, after its other
+   refusals, so Remove says who uses them and takes them out of each agent's
+   tools only when that refusal is the one that stopped it. */
 import { toast } from "sonner";
 import type { PackWireSources } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../../hooks/fleetStore";
@@ -71,9 +72,14 @@ export function removalQuestion(pack: string, uses: readonly PackUse[]): string 
   return `${question}\n\n${who.join(" ")} Removing ${name} takes them out of ${whose} tools first.`;
 }
 
-/* the runtime's refusal to retire a plugin a Tools document still selects */
+/* the runtime's refusal to retire a plugin a Tools document still selects,
+   read from its words: no typed refusal reaches the desktop */
 const STILL_SELECTED = /still selects it through Tools/;
 const SELECTING_AGENT = /agent "([^"]+)"/g;
+
+/** Whether the runtime refused the removal because an agent's tools still
+    select one of the pack's plugins. */
+export const stillSelected = (error: string) => STILL_SELECTED.test(error);
 
 /** The plain words for a removal the runtime refused because an agent's
     tools still select the pack's plugins, naming the agents as `node` does;
@@ -83,7 +89,7 @@ export function refusedRemoval(
   error: string,
   node: NodeView | null,
 ): string | null {
-  if (!STILL_SELECTED.test(error)) return null;
+  if (!stillSelected(error)) return null;
   const agents = [
     ...new Set([...error.matchAll(SELECTING_AGENT)].map((m) => m[1]!)),
   ].map((did) => agentName(did, node));
@@ -110,23 +116,22 @@ export function failedWithDetails(message: string, error: string) {
   });
 }
 
-/* the runtime's refusal to remove a pack whose documents were edited since
-   it was installed, naming them as `Collection/id` */
-const EDITED = /documents were edited since it was installed: ([^.]+)\./;
-
-/** The documents of `pack` edited since it was installed, as the runtime's
-    refusal names them, or null when the refusal is about something else. */
-export function editedDocuments(error: string): string[] | null {
-  const named = EDITED.exec(error)?.[1];
-  return named ? named.split(/,\s*/).filter(Boolean) : null;
+/** What a stopped removal already took out of agents' tools; empty when it
+    took out nothing. */
+export function takenOut(uses: readonly PackUse[]): string {
+  return uses
+    .filter((use) => use.plugins.length > 0)
+    .map(
+      ({ name, plugins }) =>
+        `${joined(plugins.map(toolName))} ${plugins.length === 1 ? "was" : "were"} taken out of ${name}'s tools.`,
+    )
+    .join(" ");
 }
 
-/** What Remove asks when some of the pack's own documents were changed
-    since it was installed: removing deletes them with the rest. */
-export function editedQuestion(pack: string, documents: readonly string[]): string {
+/** What Remove asks when the runtime refused because some of the pack's own
+    documents were changed since it was installed, in the runtime's words:
+    removing deletes them with the rest. */
+export function editedQuestion(pack: string, error: string): string {
   const name = shortName(pack);
-  const which = documents.join(", ");
-  return documents.length === 1
-    ? `${which} was changed since ${name} was installed. Removing ${name} deletes it with the rest of the pack.`
-    : `${documents.length} of ${name}'s documents were changed since it was installed: ${which}. Removing ${name} deletes them with the rest of the pack.`;
+  return `${error}\n\nOK deletes them with the rest of ${name}, Cancel keeps ${name} installed.`;
 }

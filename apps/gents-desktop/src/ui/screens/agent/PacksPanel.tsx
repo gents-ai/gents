@@ -10,6 +10,7 @@ import type {
   PackWireSources,
 } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { useWorkingNode } from "@/hooks/useClient";
 import { defaultAgentOf } from "@/lib/agents";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { ChoiceRow } from "./editors";
@@ -27,6 +28,9 @@ const NO_SOURCES: PackWireSources = { plugins: [], target_packs: [] };
 
 export function PacksPanel({ deployment }: { deployment: NodeView }) {
   const { actions } = useApp();
+  /* every pack command acts on the desktop's own node, whichever node the
+     panel is open on, so a removal asks its agents */
+  const working = useWorkingNode();
   const [installed, setInstalled] = useState<InstalledPack[] | null>(null);
   const [account, setAccount] = useState<string | null>(null);
   /* the registry pack whose page is open under its line */
@@ -202,7 +206,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
                 size="sm"
                 variant="outline"
                 disabled={busy !== null}
-                onClick={() => void remove(pack.pack, deployment)}
+                onClick={() => void remove(pack.pack, working)}
               >
                 Remove
               </Button>

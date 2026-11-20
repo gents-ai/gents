@@ -114,17 +114,25 @@ export function folderAccessOf(
   return roots && !Array.isArray(roots) ? roots : null;
 }
 
-/** Why a pack couldn't be read, in words: a pack built for an older Gents
-    names fields this one doesn't know, and a listed pack may have no
-    version yet. The installer's own words stay available as detail. */
-export function readFailure(error: string): string {
+/** Why a pack can't be installed, when reading it again would fail the same
+    way: a pack built for an older Gents names fields this one doesn't know,
+    a listed pack may have no version yet, and a link's pack may not be the
+    one it names. Null for a failure that may pass, such as an unreachable
+    registry. */
+export function lastingReadFailure(error: string): string | null {
   if (/unknown field|manifest is not valid|is not a valid pack/.test(error))
     return "This pack was made for an older version of Gents, so it can't be installed. Its publisher needs to update it.";
   if (error.includes("has no published version"))
     return "This pack has no version to install yet.";
   if (refusalOf(error) === "changed")
     return "This isn't the pack the link names: its digest is different, so it isn't offered.";
-  return "Couldn't read this pack.";
+  return null;
+}
+
+/** Why a pack couldn't be read, in words. The installer's own words stay
+    available as detail. */
+export function readFailure(error: string): string {
+  return lastingReadFailure(error) ?? "Couldn't read this pack.";
 }
 
 /** Why an install stopped, as the review asks about it: the pack needs
