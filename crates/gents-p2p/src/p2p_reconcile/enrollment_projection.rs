@@ -39,20 +39,36 @@ pub enum DesktopApprovalProjection {
     Absent,
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the projection reads each enrollment row set separately"
-)]
+#[derive(Clone, Copy)]
+pub struct DurableEnrollmentRows<'a> {
+    pub requests: &'a [EnrollmentRequestRow],
+    pub decisions: &'a [EnrollmentDecisionRow],
+    pub revisions: &'a [EnrollmentRevisionRow],
+}
+
+#[derive(Clone, Copy)]
+pub struct DesktopApprovalRows<'a> {
+    pub durable: DurableEnrollmentRows<'a>,
+    pub receipts: &'a [EnrollmentRouteReceiptRow],
+    pub pins: &'a BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Copy)]
+pub struct LocalPeer<'a> {
+    pub principal: &'a dyn NodeIdentity,
+    pub peer_id: &'a str,
+}
+
 pub async fn project_desktop_approval(
     request_row: &EnrollmentRequestRow,
-    request_rows: &[EnrollmentRequestRow],
-    decision_rows: &[EnrollmentDecisionRow],
-    revision_rows: &[EnrollmentRevisionRow],
-    receipt_rows: &[EnrollmentRouteReceiptRow],
-    pins: &BTreeMap<String, Vec<String>>,
-    principal: &dyn NodeIdentity,
-    local_peer_id: &str,
+    rows: DesktopApprovalRows<'_>,
+    local: LocalPeer<'_>,
 ) -> Result<DesktopApprovalProjection> {
+    let LocalPeer {
+        principal,
+        peer_id: local_peer_id,
+    } = local;
+    let pins = rows.pins;
     let request = request_row.to_record()?;
     anyhow::ensure!(
         request.candidate_did == principal.did() && request.candidate_peer == local_peer_id,
@@ -102,20 +118,12 @@ pub async fn project_desktop_approval(
         "persisted enrollment request signature is invalid"
     );
 
-    let mut projection = assemble_durable_enrollment_documents(
-        &offer,
-        &request,
-        admin_did,
-        request_rows,
-        decision_rows,
-        revision_rows,
-        principal,
-        local_peer_id,
-    )
-    .await?;
+    let mut projection =
+        assemble_durable_enrollment_documents(&offer, &request, admin_did, rows.durable, local)
+            .await?;
 
     let mut receipts = Vec::new();
-    for row in receipt_rows.iter().filter(|row| {
+    for row in rows.receipts.iter().filter(|row| {
         row.network_id == request.network_id
             && row.request_id == request.request_id
             && (row.member_did == principal.did() || row.member_peer == local_peer_id)
@@ -227,20 +235,22 @@ pub async fn listing_assembly_requests(
     contained
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the projection reads each enrollment row set separately"
-)]
 pub async fn assemble_durable_enrollment_documents(
     offer: &gents_protocol::enrollment::EnrollmentOfferRecord,
     request: &EnrollmentRequestRecord,
     admin_did: &str,
-    request_rows: &[EnrollmentRequestRow],
-    decision_rows: &[EnrollmentDecisionRow],
-    revision_rows: &[EnrollmentRevisionRow],
-    principal: &dyn NodeIdentity,
-    local_peer_id: &str,
+    rows: DurableEnrollmentRows<'_>,
+    local: LocalPeer<'_>,
 ) -> Result<DurableEnrollmentProjection> {
+    let DurableEnrollmentRows {
+        requests: request_rows,
+        decisions: decision_rows,
+        revisions: revision_rows,
+    } = rows;
+    let LocalPeer {
+        principal,
+        peer_id: local_peer_id,
+    } = local;
     let pure_offer = to_pure_offer(offer, true);
     let pure_request = to_pure_request(request, true, true);
     let mut documents = DurableEnrollmentDocuments::default();
