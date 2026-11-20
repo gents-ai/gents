@@ -2,14 +2,15 @@ name: Core packs
 
 # Builds the Engineer's core packs (core-packs/) once, runs each pack's suite
 # against the CLI of the same commit, and uploads the archives as the
-# `core-packs` artifact. Release workflows call this and embed exactly that
+# `core-packs` artifact. Release core packs calls this once per tag and
+# attaches the archives to the release; every release leg embeds exactly that
 # set (crates/gents-core-packs, GENTS_REQUIRE_CORE_PACKS=1), so a release
-# carries the pack builds it was tested with. Compiled plugins embed build
-# paths, so one job builds the set every platform embeds.
+# carries the pack builds it was tested with.
 
 on:
-  pull_request:
-    paths:
+  push:
+    branches: [main]
+    paths: &core-pack-inputs
       - "core-packs/**"
       - "crates/gents-core-packs/**"
       - "crates/gents-pack/**"
@@ -17,23 +18,54 @@ on:
       - "crates/gents-cli/src/commands/pack/**"
       - "crates/gents-cli/src/commands/afterburner_build.rs"
       - "Makefile"
+      - "rust-toolchain.toml"
+      - ".github/ci-runners.json"
+      - ".github/actions/rust-runner/**"
       - ".github/workflows/core-packs.yml"
+  pull_request:
+    paths: *core-pack-inputs
   workflow_dispatch:
+    inputs:
+      fresh:
+        description: Build every plugin from source, without restored plugin outputs or the shared compiler cache.
+        required: false
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      # A release embeds what this run uploads; it builds from source.
+      fresh:
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
-# One runner builds the packs for half an hour; a newer push to the same pull
-# request supersedes the build it queued behind. Release callers keep their own run.
+# A newer push to a pull request cancels its running build: a warm rerun is
+# cheap. On main a started run finishes and only the newest waiting run is
+# kept. Release callers each keep their own run.
 concurrency:
-  group: core-packs-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+  group: >-
+    core-packs-${{ (github.event_name == 'pull_request' ||
+    (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # ci.yml's trust condition (test-rust-build-space.py keeps them equal): only
+  # main's pushes and this repository's pull requests reuse a runner's kept
+  # Cargo target tree.
+  GENTS_CI_KEEP_TARGET_TREE: >-
+    ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'pull_request' &&
+    github.event.pull_request.head.repo.full_name == github.repository) }}
+  # A release compiles without the host's shared compiler cache.
+  RUSTC_WRAPPER: ${{ !inputs.fresh && 'sccache' || '' }}
   RUST_BACKTRACE: "1"
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
   build:
@@ -43,8 +75,11 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 150
-    runs-on: [self-hosted, Linux, X64, ci-docker]
-    container: rust:1-bookworm
+    # The portable role of .github/ci-runners.json: the host toolchain, its
+    # compiler cache and a kept target tree capped by the role's `target`.
+    runs-on: [self-hosted, Linux, X64, ci-portable]
+    env:
+      CORE_PACK_TOOL: .core-packs-tool/gents
     defaults:
       run:
         shell: bash
@@ -53,26 +88,77 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@1.99.1
-        with:
-          targets: wasm32-unknown-unknown,wasm32-wasip1
-
-      - name: Install build and suite dependencies
+      # The role's `jobs` divide a host's cores between the runners it registers.
+      - name: Take the role's build jobs from the runner inventory
         run: |
           set -euo pipefail
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential clang cmake git jq libclang-dev libdbus-1-dev libssl-dev \
-            nodejs pkg-config protobuf-compiler python3
+          jobs="$(python3 -c 'import json; print(json.load(open(".github/ci-runners.json"))["roles"]["portable"]["jobs"]["build"])')"
+          echo "CARGO_BUILD_JOBS=${jobs}" >> "$GITHUB_ENV"
 
+      - uses: ./.github/actions/rust-runner
+        with:
+          role: portable
+
+      # The pack suites run UI tests under Node; the portable hosts have none.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Check the pack suites' host tools
+        run: |
+          set -euo pipefail
+          missing=()
+          for tool in clang git jq node pkg-config python3 sha256sum; do
+            command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::This runner lacks: ${missing[*]}"
+            exit 1
+          fi
+
+      # Beside the empty core packs directory gate.py gives the role's other
+      # builds, so a kept tree relinks only what the change touched.
       - name: Build the CLI that builds the packs
-        run: make fast-dev-cli
+        run: |
+          set -euo pipefail
+          export GENTS_CORE_PACKS_DIR="$CARGO_TARGET_DIR/core-packs-none"
+          mkdir -p "$GENTS_CORE_PACKS_DIR" "$(dirname "$CORE_PACK_TOOL")"
+          make fast-dev-cli
+          cp "$CARGO_TARGET_DIR/fast-dev/gents" "$CORE_PACK_TOOL"
 
+      # The pack build skips a plugin whose stamp records its mirrored source
+      # digest, builder and artifact hash. The stamp does not cover the build
+      # driver, lockfile or toolchain, so they key the entry and an older entry
+      # is restored only when they match; only the artifacts and stamps are
+      # kept (the Cargo trees behind them are about 3 GiB). A restored plugin
+      # carries the build path of the checkout that compiled it, so a release
+      # (fresh) never restores one.
+      - name: Restore built plugins
+        if: ${{ !inputs.fresh }}
+        uses: actions/cache@v5
+        with:
+          path: |
+            core-packs/*/plugins/*.afb
+            core-packs/*/target/plugins/*/target/gents-build.stamp
+          key: >-
+            core-packs-plugins-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles(
+            'core-packs/rust-toolchain.toml', 'core-packs/.cargo/**', 'Cargo.lock', 'crates/gents-pack/**',
+            'crates/gents-cli/src/commands/pack/**', 'crates/gents-cli/src/commands/afterburner_build.rs') }}-${{ hashFiles('core-packs/**') }}
+          restore-keys: |
+            core-packs-plugins-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles(
+            'core-packs/rust-toolchain.toml', 'core-packs/.cargo/**', 'Cargo.lock', 'crates/gents-pack/**',
+            'crates/gents-cli/src/commands/pack/**', 'crates/gents-cli/src/commands/afterburner_build.rs') }}-
+
+      # Plugin builds and their `cargo test` keep their own target trees.
       - name: Build core packs
-        run: make core-packs CORE_PACK_TOOL=target/fast-dev/gents
+        run: |
+          unset CARGO_TARGET_DIR
+          make core-packs CORE_PACK_TOOL="$CORE_PACK_TOOL"
 
       - name: Test core packs
-        run: make core-packs-test CORE_PACK_TOOL=target/fast-dev/gents
+        run: |
+          unset CARGO_TARGET_DIR
+          make core-packs-test CORE_PACK_TOOL="$CORE_PACK_TOOL"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -82,3 +168,7 @@ jobs:
             target/core-packs/SHA256SUMS-core-packs.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Show Rust build cache stats
+        if: always() && !inputs.fresh
+        run: .github/scripts/show-sccache-stats.sh
