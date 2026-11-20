@@ -1147,6 +1147,7 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
                 tool_root: None,
                 store_encryption: None,
                 document_acp: Default::default(),
+                client_identity: None,
             },
         )
         .unwrap();
