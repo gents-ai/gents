@@ -92,16 +92,42 @@ fn production_sources(root: &Path) -> Vec<PathBuf> {
     sources
 }
 
+/// Whether an item compiles only into tests: a `#[cfg(..)]` that requires
+/// `test`, the `test-fixtures` feature or the `test-home-guard` feature, none
+/// of which reaches a shipped build (`gents_test_fixtures_stay_dev_only`,
+/// `service_isolation_stays_test_only`).
 fn cfg_test(attributes: &[syn::Attribute]) -> bool {
     attributes.iter().any(|attribute| {
         attribute.path().is_ident("cfg")
-            && attribute.meta.require_list().is_ok_and(|list| {
-                matches!(
-                    list.tokens.to_string().replace(' ', "").as_str(),
-                    "test" | "any(test,feature=\"test-fixtures\")"
-                )
-            })
+            && attribute
+                .parse_args::<syn::Meta>()
+                .is_ok_and(|predicate| predicate_requires_test(&predicate))
     })
+}
+
+fn predicate_requires_test(predicate: &syn::Meta) -> bool {
+    let operands = |list: &syn::MetaList| {
+        list.parse_args_with(
+            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        )
+        .map(|operands| operands.into_iter().collect::<Vec<_>>())
+        .unwrap_or_default()
+    };
+    match predicate {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::NameValue(pair) => {
+            pair.path.is_ident("feature")
+                && matches!(&pair.value, Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. }) if [GENTS_TEST_FIXTURES, SERVICE_ISOLATION.1].contains(&name.value().as_str()))
+        }
+        syn::Meta::List(list) if list.path.is_ident("all") => {
+            operands(list).iter().any(predicate_requires_test)
+        }
+        syn::Meta::List(list) if list.path.is_ident("any") => {
+            let operands = operands(list);
+            !operands.is_empty() && operands.iter().all(predicate_requires_test)
+        }
+        syn::Meta::List(_) => false,
+    }
 }
 
 fn path_name(call: &ExprCall) -> Option<String> {
@@ -1532,6 +1558,33 @@ fn item_cfg_test(item: &syn::Item) -> bool {
     cfg_test(attributes)
 }
 
+#[test]
+fn item_cfg_test_excludes_items_whose_cfg_requires_test() {
+    let syntax = syn::parse_file(
+        r#"
+        #[cfg(test)] fn a() {}
+        #[cfg(any(test, feature = "test-fixtures"))] fn b() {}
+        #[cfg(all(test, unix))] mod c {}
+        #[cfg(all(unix, all(target_os = "macos", test)))] fn d() {}
+        #[cfg(unix)] fn e() {}
+        #[cfg(any(test, unix))] fn f() {}
+        #[cfg(not(test))] fn g() {}
+        #[cfg(all(unix, not(test)))] fn h() {}
+        #[cfg(feature = "test-fixtures")] fn i() {}
+        #[cfg(all(feature = "test-fixtures", unix))] fn j() {}
+        #[cfg(any(feature = "test-fixtures", feature = "other"))] fn k() {}
+        #[cfg(any(test, feature = "test-home-guard"))] fn l() {}
+        fn m() {}
+        "#,
+    )
+    .expect("parse snippet");
+    let excluded = syntax.items.iter().map(item_cfg_test).collect::<Vec<_>>();
+    assert_eq!(
+        excluded,
+        [true, true, true, true, false, false, false, false, true, true, false, true, false]
+    );
+}
+
 impl<'ast> Visit<'ast> for RigPathVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if !item_cfg_test(item) {
@@ -1900,25 +1953,83 @@ struct AmbientStatic {
     documented: bool,
 }
 
-#[derive(Default)]
-struct AmbientContextVisitor {
-    statics: Vec<AmbientStatic>,
+/// Type names that make a `static` mutable or lazily initialised state
+/// shared by the whole process; any `Atomic*` name counts too.
+const PROCESS_STATE_TYPES: &[&str] = &[
+    "Mutex",
+    "RwLock",
+    "OnceLock",
+    "OnceCell",
+    "Once",
+    "LazyLock",
+    "LazyCell",
+    "Lazy",
+    "Cell",
+    "RefCell",
+    "UnsafeCell",
+    "Semaphore",
+    "Notify",
+    "ArcSwap",
+    "ArcSwapOption",
+    "DashMap",
+];
+
+fn names_process_state(ty: &syn::Type) -> bool {
+    struct TypeNames(bool);
+    impl<'ast> Visit<'ast> for TypeNames {
+        fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+            let name = segment.ident.to_string();
+            self.0 |= PROCESS_STATE_TYPES.contains(&name.as_str()) || name.starts_with("Atomic");
+            visit::visit_path_segment(self, segment);
+        }
+    }
+    let mut names = TypeNames(false);
+    names.visit_type(ty);
+    names.0
 }
 
-impl<'ast> Visit<'ast> for AmbientContextVisitor {
+/// The production statics of one file: `thread_local!`/`task_local!` statics,
+/// which hold per-thread or per-task context, and process-wide statics (a
+/// `static` item whose type is interior-mutable or lazily initialised, every
+/// `static mut`, and every `lazy_static!` static).
+#[derive(Default)]
+struct StaticVisitor {
+    ambient: Vec<AmbientStatic>,
+    process_wide: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for StaticVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if !item_cfg_test(item) {
             visit::visit_item(self, item);
         }
     }
 
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_item_static(&mut self, item: &'ast syn::ItemStatic) {
+        if matches!(item.mutability, syn::StaticMutability::Mut(_)) || names_process_state(&item.ty)
+        {
+            self.process_wide.push(item.ident.to_string());
+        }
+        visit::visit_item_static(self, item);
+    }
+
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        if invocation
+        let Some(name) = invocation
             .path
             .segments
             .last()
-            .is_some_and(|segment| segment.ident == "thread_local" || segment.ident == "task_local")
-        {
+            .map(|segment| segment.ident.to_string())
+        else {
+            return;
+        };
+        let local = name == "thread_local" || name == "task_local";
+        if local || name == "lazy_static" {
             let tokens = invocation.tokens.clone().into_iter().collect::<Vec<_>>();
             let mut documented = false;
             for (index, token) in tokens.iter().enumerate() {
@@ -1936,14 +2047,18 @@ impl<'ast> Visit<'ast> for AmbientContextVisitor {
                         let lifetime = index.checked_sub(1).is_some_and(|previous| {
                             matches!(&tokens[previous], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '\'')
                         });
-                        if !lifetime {
-                            self.statics.push(AmbientStatic {
-                                name: tokens
-                                    .get(index + 1)
-                                    .map(ToString::to_string)
-                                    .unwrap_or_default(),
-                                documented,
-                            });
+                        if lifetime {
+                            continue;
+                        }
+                        let name = tokens[index + 1..]
+                            .iter()
+                            .map(ToString::to_string)
+                            .find(|word| word != "ref" && word != "mut")
+                            .unwrap_or_default();
+                        if local {
+                            self.ambient.push(AmbientStatic { name, documented });
+                        } else {
+                            self.process_wide.push(name);
                         }
                     }
                     _ => {}
@@ -1954,11 +2069,15 @@ impl<'ast> Visit<'ast> for AmbientContextVisitor {
     }
 }
 
-fn ambient_context_sites(relative: &str, syntax: &syn::File) -> usize {
-    let mut visitor = AmbientContextVisitor::default();
+fn production_statics(syntax: &syn::File) -> StaticVisitor {
+    let mut visitor = StaticVisitor::default();
     visitor.visit_file(syntax);
     visitor
-        .statics
+}
+
+fn ambient_context_sites(relative: &str, syntax: &syn::File) -> usize {
+    production_statics(syntax)
+        .ambient
         .iter()
         .filter(|found| {
             !(found.documented
@@ -1967,6 +2086,10 @@ fn ambient_context_sites(relative: &str, syntax: &syn::File) -> usize {
                     .any(|(path, name)| *path == relative && *name == found.name))
         })
         .count()
+}
+
+fn process_static_sites(syntax: &syn::File) -> usize {
+    production_statics(syntax).process_wide.len()
 }
 
 /// Request context (identity, signing, ACP bypass, transaction handles, the
@@ -2092,30 +2215,33 @@ fn unrecovered_authorize_sites(syntax: &syn::File) -> usize {
     visitor.sites
 }
 
-#[test]
-fn client_requests_recover_a_refused_credential() {
-    let root = repo_root();
-    let actual = parse_production(&root, production_sources(&root))
-        .into_iter()
-        .map(|(relative, syntax)| (relative, unrecovered_authorize_sites(&syntax)))
-        .filter(|(_, sites)| *sites > 0)
-        .collect::<BTreeMap<_, _>>();
-    let allowed = UNRECOVERED_AUTHORIZE_ALLOWLIST
-        .iter()
-        .map(|(path, count, _)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
+/// Compares per-file site counts with a `(path, count, reason)` allowlist
+/// that only shrinks: a file missing from the list, a count above its entry
+/// and a count below it (a stale entry) each fail, and the failure lists the
+/// current sites to copy from.
+fn shrinking_allowlist(
+    ratchet: &str,
+    allowlist: &[(&str, usize, &str)],
+    actual: &BTreeMap<String, usize>,
+    sites: &str,
+    remedy: &str,
+) {
+    let mut allowed = BTreeMap::new();
     let mut violations = Vec::new();
+    for (path, count, _) in allowlist {
+        if allowed.insert(path.to_string(), *count).is_some() {
+            violations.push(format!("{path}: listed twice"));
+        }
+    }
     for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
         let found = actual.get(path).copied().unwrap_or_default();
         match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} new request(s) authorized outside `send_resolving`; send through it so a refused credential recovers"
-            )),
+            None => violations.push(format!("{path}: {found} new {sites}; {remedy}")),
             Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} requests authorized outside `send_resolving` exceed the allowlisted {limit}"
+                "{path}: {found} {sites} exceed the allowlisted {limit}"
             )),
             Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} requests authorized outside `send_resolving`; lower the allowlist entry from {limit}"
+                "{path}: {found} {sites}; lower the allowlist entry from {limit}"
             )),
             Some(_) => {}
         }
@@ -2127,8 +2253,31 @@ fn client_requests_recover_a_refused_credential() {
         .join("\n");
     assert!(
         violations.is_empty(),
-        "refused credential recovery ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        "{ratchet} ratchet failed:\n{}\n\ncurrent sites:\n{current}",
         violations.join("\n")
+    );
+}
+
+fn production_site_counts(count: impl Fn(&str, &syn::File) -> usize) -> BTreeMap<String, usize> {
+    let root = repo_root();
+    parse_production(&root, production_sources(&root))
+        .into_iter()
+        .map(|(relative, syntax)| {
+            let sites = count(&relative, &syntax);
+            (relative, sites)
+        })
+        .filter(|(_, sites)| *sites > 0)
+        .collect()
+}
+
+#[test]
+fn client_requests_recover_a_refused_credential() {
+    shrinking_allowlist(
+        "refused credential recovery",
+        UNRECOVERED_AUTHORIZE_ALLOWLIST,
+        &production_site_counts(|_, syntax| unrecovered_authorize_sites(syntax)),
+        "request(s) authorized outside `send_resolving`",
+        "send through it so a refused credential recovers",
     );
 }
 
@@ -2330,6 +2479,375 @@ fn ambient_context_skips_only_named_documented_statics() {
             "{source}"
         );
     }
+}
+
+/// Behaviour comes from configuration documents and command-line flags, never
+/// from the process environment: a variable is invisible to the store, to
+/// other clients and to the model, and differs between the shell, the service
+/// unit and the desktop that start the same runtime. This counts each
+/// production `std::env::{var, var_os, vars, vars_os}` named as a path,
+/// called or passed as a function (also through `use std::env::var`, and
+/// inside macro arguments). It does not count `env!`/`option_env!`, which
+/// Cargo resolves at compile time into a fixed property of the build, nor the
+/// platform locators `home_dir`, `temp_dir`, `current_dir`, `current_exe` and
+/// `args`, nor build scripts, which Cargo runs with its own environment.
+/// Entries name what replaces each remaining read (a flag, a document field,
+/// a test fixture) or why it is legitimately external; the list only shrinks
+/// (#1764).
+#[rustfmt::skip]
+const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("apps/fixture-host/src-tauri/src/lib.rs", 1, "FIXTURE_DOMAIN_HOME: the fixture-host test application's data directory; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("apps/gents-desktop/src-tauri/src/bin/bridge_runner/http/routes.rs", 3, "GENTS_TAURI_LIVE gates live-fixture routes of the bridge test runner; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 1, "HOME: expands a leading ~ in a user-typed path; legitimately external (platform discovery)"),
+    ("apps/gents-desktop/src-tauri/src/bridge/links.rs", 1, "APPIMAGE: AppImage probe deciding how links open from a packaged Linux build; legitimately external"),
+    ("apps/gents-desktop/src-tauri/src/bridge/mod.rs", 7, "GENTS_DESKTOP_CONSOLE_LOG becomes a desktop launch flag; GENTS_NATIVE_E2E and GENTS_E2E_* select the native end-to-end harness: test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("apps/gents-desktop/src-tauri/src/bridge/product_telemetry.rs", 2, "GENTS_UMAMI_ENDPOINT and GENTS_UMAMI_WEBSITE_ID: a fixed property of the release build; becomes option_env! or a desktop setting"),
+    ("apps/gents-desktop/src-tauri/src/browser_data.rs", 2, "GENTS_NATIVE_E2E and GENTS_E2E_WEBVIEW_STORE_ID isolate the e2e webview store; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("apps/gents-desktop/src-tauri/src/runner/live_fixture.rs", 2, "GENTS_TAURI_LIVE_RETAIN_DATA and GENTS_DESKTOP_TEST_LOG configure the live-fixture runner; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 4, "live-fixture backend selection and provider API keys; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/inference.rs", 1, "GENTS_DESKTOP_LIVE_INFERENCE selects live-fixture inference; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-chatgpt-login/src/lib.rs", 1, "CODEX_CA_CERT and SSL_CERT_FILE: standard custom CA bundle convention; legitimately external"),
+    ("crates/gents-cli/src/commands/chat/streaming.rs", 1, "NO_COLOR: standard convention disabling terminal colour; legitimately external"),
+    ("crates/gents-cli/src/commands/desktop.rs", 2, "GENTS_DESKTOP_HOME and GENTS_HOME: home discovery when --desktop-home or --home is absent; becomes a call to the home owners' discovery instead of a second reading"),
+    ("crates/gents-cli/src/commands/eval/frame.rs", 1, "NO_COLOR: standard convention disabling terminal colour; legitimately external"),
+    ("crates/gents-cli/src/commands/init.rs", 1, "HOME: platform discovery for the default tool root before any configuration exists; legitimately external"),
+    ("crates/gents-cli/src/commands/job/promote.rs", 1, "JAVY: tool discovery for the javy compiler, like PATH; becomes a --javy flag"),
+    ("crates/gents-cli/src/commands/pack/registry.rs", 1, "GENTS_REGISTRY_TOKEN: registry credential kept out of argv and shell history; legitimately external"),
+    ("crates/gents-cli/src/commands/pack/scenario/load.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-cli/src/commands/pack/scenario/setup.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-cli/src/commands/pack/wire.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-cli/src/commands/start.rs", 1, "GENTS_HOME: records whether the home was chosen explicitly; becomes the home owner's discovery result"),
+    ("crates/gents-cli/src/commands/start/setup.rs", 1, "GENTS_HOME: home discovery when --home is absent; becomes the home owner's discovery result"),
+    ("crates/gents-cli/src/desired_state/load.rs", 1, "desired-state ${VAR} interpolation: the manifest names operator-supplied variables; legitimately external"),
+    ("crates/gents-cli/src/interactive_backend.rs", 1, "INFERENCE_ENDPOINT changes which backend init selects; becomes an --endpoint flag"),
+    ("crates/gents-cli/src/resolve_helpers.rs", 1, "INFERENCE_ENDPOINT fallback during init; becomes an --endpoint flag"),
+    ("crates/gents-desktop-bridge/src/host_browser.rs", 4, "BROWSER, PATH, APPDIR and APPIMAGE: platform browser discovery and the AppImage probe; legitimately external"),
+    ("crates/gents-desktop-bridge/src/package_tools.rs", 6, "PATH, APPDIR, APPIMAGE and the launcher's variables: restores the host environment for host programs launched from an AppImage; legitimately external"),
+    ("crates/gents-desktop-bridge/src/tauri_commands/e2e.rs", 13, "GENTS_NATIVE_E2E and GENTS_E2E_* drive the native end-to-end command (native-e2e feature); test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 4, "GENTS_BIN, PATH, APPDIR and APPIMAGE: discovery of the gents executable and the AppImage probe; GENTS_BIN becomes a desktop setting, the rest are legitimately external"),
+    ("crates/gents-desktop/src/main.rs", 2, "GENTS_DESKTOP_TAURI_BIN and PATH: discovery of the desktop executable; GENTS_DESKTOP_TAURI_BIN becomes a flag"),
+    ("crates/gents-documents/src/inference_backend.rs", 1, "the variable an InferenceBackend document names as its API key source (auth kind environment); the document decides, legitimately external"),
+    ("crates/gents-eval/src/optimization/driver.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-eval/src/runner/embedded/executor/install.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-eval/src/runner/freeze/pack.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-fs-runner/src/traversal/common.rs", 5, "GENTS_FS_RUNNER_BLOCK_* pause a traversal for race tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-host/src/serve.rs", 3, "the secret named by the metrics token flag (legitimately external), HOME for the default working root (platform discovery), and GENTS_TEST_STALL_AFTER_CLIENT_ACCESS: test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-inference/src/auth/credential/token_endpoint.rs", 1, "OAuth token URL overrides point refresh at a local token server in tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-inference/src/auth/xai_login.rs", 2, "xAI OAuth device and token URL overrides for a local server in tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-inference/src/clients/chatgpt_codex.rs", 1, "GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides the wire client version the provider requires; becomes an InferenceBackend field"),
+    ("crates/gents-inference/src/clients/claude_messages/transport.rs", 2, "HTTPS_PROXY/https_proxy and NO_PROXY: standard proxy convention; legitimately external"),
+    ("crates/gents-inference/src/clients/xai_grok.rs", 1, "GENTS_XAI_GROK_CLIENT_VERSION overrides the wire client version the provider requires; becomes an InferenceBackend field"),
+    ("crates/gents-lean-contract/src/lib.rs", 2, "CARGO_MANIFEST_DIR and CARGO_MANIFEST_PATH: Cargo's anchor for the Lean sources in a crate that links only into tests (optional, enabled only by test-fixtures); legitimately external"),
+    ("crates/gents-lean-vocab/src/family.rs", 1, "GENTS_FAMILY_MUTATION: mutation-testing switch in a crate that links only into tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-lean-vocab/src/lib.rs", 1, "GENTS_SNAPSHOT_MUTATION: mutation-testing switch in a crate that links only into tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-p2p/src/p2p_reconcile/intervals.rs", 1, "GENTS_REGISTRY_HEARTBEAT_MS and GENTS_PAIRING_SWEEP_MS: become serve flags (#1764)"),
+    ("crates/gents-p2p/src/p2p_reconcile/registry.rs", 1, "GENTS_NETWORK_ID partitions the P2P registry; becomes a serve flag"),
+    ("crates/gents-pack/src/operations/pack.rs", 2, "pack variables whose declared source is the operator's environment; legitimately external"),
+    ("crates/gents-pack/src/pack/install_flow.rs", 1, "pack variables whose declared source is the operator's environment; legitimately external"),
+    ("crates/gents-pack/src/pack/interpolate.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
+    ("crates/gents-pack/src/pack/registry.rs", 1, "GENTS_REGISTRY: pack registry location override; becomes a --registry flag"),
+    ("crates/gents-pack/src/plugin/host_imports.rs", 2, "passes the variables an installed plugin's consented env access names into its sandbox; the consent document decides, legitimately external"),
+    ("crates/gents-service/src/lifecycle.rs", 2, "GENTS_CALLER_RUNTIME_HOME: caller provenance the agent command launcher sets on a shell-launched CLI; replacing it needs a transport across the shell (#1764)"),
+    ("crates/gents-service/src/native_service.rs", 7, "HOME, XDG_CONFIG_HOME, PATH, APPDIR and APPIMAGE: platform discovery of the service unit paths and the AppImage probe; legitimately external"),
+    ("crates/gents-service/src/service_update/stage.rs", 2, "GENTS_CALLER_SESSION_ID and GENTS_CALLER_REQUEST_ID: caller provenance set by the agent command launcher; replacing it needs a transport across the shell (#1764)"),
+    ("crates/gents-service/src/telemetry.rs", 1, "OTEL_EXPORTER_OTLP_* and OTEL_SERVICE_NAME: standard OpenTelemetry convention; legitimately external"),
+    ("crates/gents-session/src/workspace/adapter.rs", 1, "inherits the process environment for a managed git child, minus the git variables it overrides; legitimately external"),
+    ("crates/gents-store/src/client_journal/paths.rs", 1, "GENTS_DESKTOP_HOME: the desktop home owner's discovery before configuration exists; legitimately external"),
+    ("crates/gents-store/src/local/home.rs", 1, "GENTS_HOME: the home owner's discovery when --home is absent, before configuration exists; legitimately external"),
+    ("crates/gents-store/src/local/storage_backend.rs", 1, "GENTS_BLOCK_CACHE_MB sizes the storage block cache; becomes a serve flag"),
+    ("crates/gents-tools/src/native/native_runner.rs", 1, "GENTS_FS_RUNNER: discovery of the filesystem runner executable; becomes a serve flag"),
+    ("crates/gents-tools/src/ux_preview.rs", 1, "GENTS_UX_PREVIEW_ASSETS: preview renderer assets outside an installed layout; becomes a flag"),
+    ("crates/gents-tools/src/ux_preview/browser.rs", 1, "PATH: platform discovery of a system browser; legitimately external"),
+    ("crates/gents/examples/serve_default_agent.rs", 1, "example program configured by its environment; not shipped"),
+    ("crates/gents/src/client_runtime/mod.rs", 1, "HOME: platform discovery of the user home before configuration exists; legitimately external"),
+    ("crates/gents/src/runtime/native_logging.rs", 1, "GENTS_SYSTEM_LOG: marker the launchd and systemd units set for a supervised runtime; becomes a serve flag in the unit templates (#1764)"),
+];
+
+const ENVIRONMENT_READS: &[&str] = &["var", "var_os", "vars", "vars_os"];
+
+#[derive(Default)]
+struct EnvironmentReadVisitor {
+    qualified: usize,
+    bare: Vec<String>,
+    imported: BTreeSet<String>,
+}
+
+fn qualified_environment_read<'a>(mut segments: impl DoubleEndedIterator<Item = &'a str>) -> bool {
+    let function = segments.next_back().unwrap_or_default();
+    ENVIRONMENT_READS.contains(&function) && segments.next_back() == Some("env")
+}
+
+impl EnvironmentReadVisitor {
+    fn imports(&mut self, prefix: &mut Vec<String>, tree: &syn::UseTree) {
+        let from_env = prefix.last().is_some_and(|last| last == "env");
+        match tree {
+            syn::UseTree::Path(path) => {
+                prefix.push(path.ident.to_string());
+                self.imports(prefix, &path.tree);
+                prefix.pop();
+            }
+            syn::UseTree::Name(name) if from_env => {
+                let name = name.ident.to_string();
+                if ENVIRONMENT_READS.contains(&name.as_str()) {
+                    self.imported.insert(name);
+                }
+            }
+            syn::UseTree::Rename(rename)
+                if from_env && ENVIRONMENT_READS.contains(&rename.ident.to_string().as_str()) =>
+            {
+                self.imported.insert(rename.rename.to_string());
+            }
+            syn::UseTree::Glob(_) if from_env => {
+                self.imported
+                    .extend(ENVIRONMENT_READS.iter().map(ToString::to_string));
+            }
+            syn::UseTree::Group(group) => {
+                for tree in &group.items {
+                    self.imports(prefix, tree);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn macro_tokens(&mut self, stream: proc_macro2::TokenStream) {
+        let tokens = stream.into_iter().collect::<Vec<_>>();
+        for (index, token) in tokens.iter().enumerate() {
+            match token {
+                proc_macro2::TokenTree::Group(group) => self.macro_tokens(group.stream()),
+                proc_macro2::TokenTree::Ident(function)
+                    if ENVIRONMENT_READS.contains(&function.to_string().as_str())
+                        && index >= 3
+                        && matches!(&tokens[index - 1], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ':')
+                        && matches!(&tokens[index - 2], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ':')
+                        && matches!(&tokens[index - 3], proc_macro2::TokenTree::Ident(module) if module == "env") =>
+                {
+                    self.qualified += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for EnvironmentReadVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.imports(&mut Vec::new(), &item.tree);
+    }
+
+    fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+        let segments = expression
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        if qualified_environment_read(segments.iter().map(String::as_str)) {
+            self.qualified += 1;
+        } else if let [name] = segments.as_slice() {
+            self.bare.push(name.clone());
+        }
+        visit::visit_expr_path(self, expression);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        self.macro_tokens(invocation.tokens.clone());
+        visit::visit_macro(self, invocation);
+    }
+}
+
+fn environment_read_sites(syntax: &syn::File) -> usize {
+    let mut visitor = EnvironmentReadVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.qualified
+        + visitor
+            .bare
+            .iter()
+            .filter(|name| visitor.imported.contains(*name))
+            .count()
+}
+
+#[test]
+fn runtime_environment_reads_only_shrink() {
+    shrinking_allowlist(
+        "runtime environment read",
+        ENVIRONMENT_READ_ALLOWLIST,
+        &production_site_counts(|relative, syntax| {
+            if relative.ends_with("build.rs") {
+                0
+            } else {
+                environment_read_sites(syntax)
+            }
+        }),
+        "environment read(s)",
+        "take the value from a flag or a configuration document",
+    );
+}
+
+#[test]
+fn environment_reads_count_runtime_reads_outside_test_items() {
+    for (source, sites) in [
+        ("fn f() { let _ = std::env::var(\"A\"); }", 1),
+        (
+            "fn f() { let _ = env::var_os(\"A\"); for _ in std::env::vars() {} }",
+            2,
+        ),
+        ("fn f() { let _ = ::std::env::vars_os(); }", 1),
+        ("fn f() { let _ = names.iter().map(std::env::var); }", 1),
+        ("use std::env::var; fn f() { let _ = var(\"A\"); }", 1),
+        (
+            "fn f() { let _ = var(\"A\"); } use std::env::{self, var_os as read};",
+            0,
+        ),
+        (
+            "fn f() { let _ = read(\"A\"); } use std::env::{self, var_os as read};",
+            1,
+        ),
+        (
+            "fn f() { tracing::info!(\"{:?}\", std::env::var(\"A\")); }",
+            1,
+        ),
+        ("fn f() { let _ = var(\"A\"); }", 0),
+        ("fn f() { let _ = (env!(\"A\"), option_env!(\"B\")); }", 0),
+        (
+            "fn f() { let _ = (std::env::home_dir(), std::env::temp_dir()); }",
+            0,
+        ),
+        ("fn f() { std::env::set_var(\"A\", \"1\"); }", 0),
+        ("#[cfg(test)] fn f() { let _ = std::env::var(\"A\"); }", 0),
+        (
+            "#[cfg(all(test, unix))] mod t { fn f() { let _ = std::env::var(\"A\"); } }",
+            0,
+        ),
+        (
+            "impl S { #[cfg(test)] fn f() { let _ = std::env::var(\"A\"); } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(environment_read_sites(&syntax), sites, "{source}");
+    }
+}
+
+/// Configuration and request context travel as arguments or as fields on the
+/// owner that reaches the reader, never in process-wide mutable state: a
+/// static is shared by every node and Agent in the process, so the last
+/// writer wins for all of them, and a test that sets one leaks into every
+/// other test in its binary. This counts each production `static` item whose
+/// type is interior-mutable or lazily initialised (`PROCESS_STATE_TYPES`,
+/// `Atomic*`), every `static mut` and every `lazy_static!` static; a plain
+/// constant `static` is not counted. `thread_local!` and `task_local!` belong
+/// to `ambient_request_context_only_shrinks`, which admits none. Entries name
+/// why each remaining static is a genuine process singleton (an immutable
+/// value built once, a process-global resource) or what owner replaces it;
+/// the list only shrinks (#1764).
+#[rustfmt::skip]
+const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 2, "the desktop window's one embedded browser and its applied-generation counter: a process-global UI resource; stays"),
+    ("apps/gents-desktop/src-tauri/src/bridge/notifications.rs", 1, "count of notification permission waits in the one desktop process; stays"),
+    ("apps/gents-desktop/src-tauri/src/bridge/plugin_window/placement.rs", 1, "plugin window placements of the one desktop process; moves onto the Tauri app state"),
+    ("apps/gents-desktop/src-tauri/src/bridge/swipe.rs", 1, "sideways scroll room per desktop view; moves onto the Tauri app state"),
+    ("apps/gents-desktop/src-tauri/src/bridge/windows.rs", 1, "next window label of the one desktop process; stays"),
+    ("apps/gents-desktop/src-tauri/src/runner/live_fixture.rs", 1, "one-time tracing set-up of the bridge test runner binary; stays"),
+    ("crates/gents-automation/src/lifecycle_hooks.rs", 2, "the bundled hook registry and composition built once: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-desktop-bridge/src/runtime_setup.rs", 1, "the desktop's one Tokio runtime, built at its entry point; stays"),
+    ("crates/gents-desktop-bridge/src/snapshot/runtime.rs", 1, "starter cache shared by every snapshot read; moves onto the ClientRuntime it caches for"),
+    ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 2, "lock and attempt counter serialising installs of the one service executable a host has; process-global resource, stays"),
+    ("crates/gents-eval/src/authoring/dossier.rs", 1, "runtime collection names derived from the schema: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-host/src/http/pack_watch.rs", 1, "16 pack-watch slots per process; becomes a serve flag"),
+    ("crates/gents-host/src/http/version.rs", 1, "the build's version response: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-host/src/p2p_status.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-inference/src/admission/config.rs", 1, "per-process HMAC key for credential fingerprints, never persisted by design; stays"),
+    ("crates/gents-inference/src/auth/credential/bearer.rs", 1, "weak registry of live OAuth bearers by credential, shared across nodes; moves onto the credential resolver's owner"),
+    ("crates/gents-inference/src/clients/claude_messages/bedrock.rs", 1, "Bedrock inference-profile cache; moves onto the InferenceBackend client"),
+    ("crates/gents-inference/src/clients/claude_messages/fixtures.rs", 2, "orphaned file that no module declares, a dead copy of mod.rs's test fixtures; delete it"),
+    ("crates/gents-inference/src/clients/claude_messages/google.rs", 1, "Google access-token cache; moves onto the InferenceBackend client"),
+    ("crates/gents-inference/src/clients/claude_messages/transport.rs", 2, "shared HTTP clients built from the proxy environment, and the gzip latch; the latch moves onto the InferenceBackend client"),
+    ("crates/gents-lean-contract/src/lib.rs", 2, "the Lean process output cache and load lock in a crate that links only into tests; stays"),
+    ("crates/gents-lean-vocab/src/lib.rs", 1, "the Lean contract snapshot in a crate that links only into tests: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-migration/src/engine.rs", 1, "lock serialising migration ensure across the desktop and runtime paths of one process; stays"),
+    ("crates/gents-migration/src/registry.rs", 4, "baseline schemas and migration registry: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-p2p/src/p2p_reconcile/enrollment_store.rs", 1, "per-node enrollment decision gates keyed by node address; moves onto the node's extensions"),
+    ("crates/gents-pack/src/pack/registry.rs", 1, "one registry download at a time per process, an external premise of the registry's throttle; stays"),
+    ("crates/gents-pack/src/plugin/allowed.rs", 1, "embedded release digests: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-pack/src/plugin/allowed/protected.rs", 1, "protected plugin paths shared by every home in the process; moves onto the home's owner"),
+    ("crates/gents-pack/src/plugin/script_engine.rs", 1, "the script engine, compiled once: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-pack/src/plugin/ux/lint.rs", 10, "UX lint rules: compiled regular expressions, immutable once built; stay"),
+    ("crates/gents-pack/src/plugin/wasi_runtime.rs", 1, "the WASI async runtime, a process-global resource built once; stays"),
+    ("crates/gents-protocol/src/failure_text.rs", 5, "secret redaction patterns: compiled regular expressions, immutable once built; stay"),
+    ("crates/gents-protocol/src/graphql/transport.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-session/src/exec/process/registry.rs", 2, "registry and id counter of managed child processes, which belong to the process; stays"),
+    ("crates/gents-session/src/request/admission.rs", 1, "the default request input: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-session/src/request/lifecycle/queue/atomic_inputs.rs", 1, "background completion gates keyed by node address; move onto the node's extensions"),
+    ("crates/gents-session/src/session/output/replay_capture.rs", 1, "log rate limiter for replay capture; stays"),
+    ("crates/gents-session/src/workspace/overlay.rs", 1, "the process operator tool root installed at start-up and read by every node; becomes an argument on the session owner"),
+    ("crates/gents-store/src/config_client/common.rs", 1, "monotonic recreate-identity clock, process-local by design; stays"),
+    ("crates/gents-store/src/config_client/graphql.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-store/src/config_client/runtime_endpoints.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-store/src/config_client/subscription.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+    ("crates/gents-store/src/config_client/txn/gate.rs", 1, "mutation write gates keyed by node address; move onto the node's extensions"),
+    ("crates/gents-store/src/identity.rs", 1, "known public keys cache shared by every node; moves onto the identity owner"),
+    ("crates/gents-store/src/identity/request_receipt.rs", 1, "the default request input: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-store/src/node_extension.rs", 1, "the node extension table, the one owner of per-node attachments keyed by node address; stays"),
+    ("crates/gents-store/src/schema/journal.rs", 1, "journal baseline collections: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-store/src/service.rs", 1, "the build identifier: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-toolcalls/src/call/lifecycle/recovery.rs", 1, "rate limit of the unresolved-parent warning; stays"),
+    ("crates/gents-toolcalls/src/plugin/executor.rs", 1, "a built-in plugin declaration: an immutable value built once on first use, the same for every node and Agent; stays"),
+    ("crates/gents-toolcalls/src/plugin/model_calls.rs", 1, "model-call concurrency limiters by key shared by every node; move onto the node's extensions"),
+    ("crates/gents-tools/src/builtin/self_config/configuration_discovery/text.rs", 5, "secret redaction patterns: compiled regular expressions, immutable once built; stay"),
+    ("crates/gents-tools/src/native/command_observability.rs", 2, "process-wide command policy counters for metrics; stay"),
+    ("crates/gents-tools/src/native/native_runner.rs", 1, "whether this executable serves as its own filesystem runner, set once at the entry point; becomes a serve flag"),
+    ("crates/gents/src/client_runtime/mod.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
+];
+
+#[test]
+fn process_wide_statics_only_shrink() {
+    shrinking_allowlist(
+        "process-wide static",
+        PROCESS_STATIC_ALLOWLIST,
+        &production_site_counts(|_, syntax| process_static_sites(syntax)),
+        "process-wide static(s)",
+        "pass the value as an argument or hold it on its owner",
+    );
+}
+
+#[test]
+fn process_statics_count_interior_mutable_statics_outside_test_items() {
+    let syntax = syn::parse_file(
+        r##"
+        static A: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        static B: AtomicU64 = AtomicU64::new(0);
+        static mut C: u8 = 0;
+        fn f() { static D: OnceLock<Arc<u8>> = OnceLock::new(); }
+        static E: std::sync::LazyLock<Option<RwLock<u8>>> = std::sync::LazyLock::new(|| None);
+        lazy_static::lazy_static! { static ref F: u8 = 0; }
+        static G: &[&str] = &["Mutex"];
+        static H: u64 = 0;
+        const I: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        fn g() { let _ = r#"static J: RwLock<u8> = RwLock::new(0);"#; }
+        thread_local! { static K: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
+        #[cfg(test)]
+        static L: OnceLock<u8> = OnceLock::new();
+        #[cfg(all(test, unix))]
+        mod tests { static M: AtomicBool = AtomicBool::new(false); }
+        impl S { #[cfg(test)] fn f() { static N: OnceLock<u8> = OnceLock::new(); } }
+        "##,
+    )
+    .expect("parse snippet");
+    assert_eq!(process_static_sites(&syntax), 6);
+    assert_eq!(ambient_context_sites("src/lib.rs", &syntax), 1);
 }
 
 /// Functions that create a file in-process (`fs::write`, `fs::copy`,
