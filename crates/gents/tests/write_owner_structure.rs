@@ -2554,7 +2554,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-session/src/workspace/adapter.rs", 1, "inherits the process environment for a managed git child, minus the git variables it overrides; legitimately external"),
     ("crates/gents-store/src/client_journal/paths.rs", 1, "GENTS_DESKTOP_HOME: the desktop home owner's discovery before configuration exists; legitimately external"),
     ("crates/gents-store/src/local/home.rs", 1, "GENTS_HOME: the home owner's discovery when --home is absent, before configuration exists; legitimately external"),
-    ("crates/gents-store/src/local/storage_backend.rs", 1, "GENTS_BLOCK_CACHE_MB sizes the storage block cache; becomes a serve flag"),
     ("crates/gents-tools/src/native/native_runner.rs", 1, "GENTS_FS_RUNNER: discovery of the filesystem runner executable; becomes a serve flag"),
     ("crates/gents-tools/src/ux_preview.rs", 1, "GENTS_UX_PREVIEW_ASSETS: preview renderer assets outside an installed layout; becomes a flag"),
     ("crates/gents-tools/src/ux_preview/browser.rs", 1, "PATH: platform discovery of a system browser; legitimately external"),

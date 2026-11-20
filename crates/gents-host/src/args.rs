@@ -176,6 +176,13 @@ pub struct ServeArgs {
     pub p2p_secret_key_path: Option<PathBuf>,
     #[arg(
         long,
+        value_name = "MIB",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Store block cache size in MiB (must be > 0). Defaults to 512"
+    )]
+    pub block_cache_mb: Option<u64>,
+    #[arg(
+        long,
         value_enum,
         help = "P2P relay mode. Defaults to the home's network.json, else disabled"
     )]

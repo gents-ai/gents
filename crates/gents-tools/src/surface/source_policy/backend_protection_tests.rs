@@ -40,10 +40,14 @@ async fn create_unbound_legacy_store(
         ),
         "",
     );
-    let node = gents_store::local::store_key::persistent_builder(data, key)?
-        .with_node_identity_did(did.to_owned())
-        .build()
-        .await?;
+    let node = gents_store::local::store_key::persistent_builder(
+        data,
+        key,
+        gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )?
+    .with_node_identity_did(did.to_owned())
+    .build()
+    .await?;
     node.add_collection(&unbound).await?;
     let created = node.execute(r#"mutation { create_InferenceBackend(input:{node_did:"legacy", backend_id:"b", name:"old", provider_kind:"OpenAiCompatible", endpoint:"https://provider.example", auth:{kind:"api_key",key:"legacy-secret"}}) {_docID} }"#).await;
     anyhow::ensure!(
@@ -60,10 +64,14 @@ async fn assert_legacy_store_untouched(
     key: &StoreKey,
     did: &str,
 ) -> anyhow::Result<()> {
-    let node = gents_store::local::store_key::persistent_builder(data, key)?
-        .with_node_identity_did(did.to_owned())
-        .build()
-        .await?;
+    let node = gents_store::local::store_key::persistent_builder(
+        data,
+        key,
+        gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )?
+    .with_node_identity_did(did.to_owned())
+    .build()
+    .await?;
     let retained = node.execute("{ InferenceBackend { auth } }").await;
     anyhow::ensure!(
         !retained.has_errors(),

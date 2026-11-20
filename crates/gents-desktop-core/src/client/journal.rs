@@ -83,9 +83,12 @@ impl ClientJournal {
             let data = paths.node_data_dir().to_owned();
             let signer = identity.private_key_bytes().to_vec();
             let builder = tokio::task::spawn_blocking(move || {
-                gents_store::local::store_key::persistent_builder(&data, &key).map(|builder| {
-                    builder.with_signing_key(defra_node::SigningKey::Ed25519(signer))
-                })
+                gents_store::local::store_key::persistent_builder(
+                    &data,
+                    &key,
+                    gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+                )
+                .map(|builder| builder.with_signing_key(defra_node::SigningKey::Ed25519(signer)))
             })
             .await??;
             Ok((lease, identity, builder))

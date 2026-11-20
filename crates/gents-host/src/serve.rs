@@ -633,7 +633,8 @@ async fn serve_foreground(
                 .map(|config| config.document_acp)
                 .unwrap_or_default(),
         )
-        .await?;
+        .await?
+        .with_block_cache_bytes(block_cache_bytes(args.block_cache_mb)?);
     let effective_tool_ceiling = args
         .tool_ceiling
         .or_else(|| init_config.as_ref().map(|config| config.tool_ceiling))
@@ -1672,6 +1673,16 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
 }
 
+fn block_cache_bytes(mib: Option<u64>) -> Result<usize> {
+    let Some(mib) = mib else {
+        return Ok(gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES);
+    };
+    usize::try_from(mib)
+        .ok()
+        .and_then(|mib| mib.checked_mul(1024 * 1024))
+        .with_context(|| format!("--block-cache-mb {mib} exceeds the addressable size"))
+}
+
 #[cfg(all(test, unix))]
 mod server_key_tests {
     use super::*;
@@ -1686,6 +1697,21 @@ mod server_key_tests {
             Some(Command::Server(args)) => args,
             _ => panic!("expected `server`"),
         }
+    }
+
+    #[test]
+    fn block_cache_flag_defaults_and_refuses_zero() {
+        let unset = parse_server(&[]);
+        assert_eq!(
+            block_cache_bytes(unset.block_cache_mb).unwrap(),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES
+        );
+        let sized = parse_server(&["--block-cache-mb", "128"]);
+        assert_eq!(
+            block_cache_bytes(sized.block_cache_mb).unwrap(),
+            128 * 1024 * 1024
+        );
+        assert!(Cli::try_parse_from(["gents", "server", "--block-cache-mb", "0"]).is_err());
     }
 
     #[cfg(unix)]

@@ -461,15 +461,18 @@ impl McpFixture {
             identity_from_init(&init)?,
         ));
         let node = Arc::new(
-            gents_store::local::store_key::persistent_builder(&data, &store_key)?
-                .with_node_identity_did(node_did.clone())
-                .with_node_acp_enabled()
-                .with_http(
-                    gents::defra_node::HttpConfig::with_listener(listener)?
-                        .with_extra_routes(routes),
-                )
-                .build()
-                .await?,
+            gents_store::local::store_key::persistent_builder(
+                &data,
+                &store_key,
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )?
+            .with_node_identity_did(node_did.clone())
+            .with_node_acp_enabled()
+            .with_http(
+                gents::defra_node::HttpConfig::with_listener(listener)?.with_extra_routes(routes),
+            )
+            .build()
+            .await?,
         );
         let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             client.private_key_bytes(),

@@ -751,7 +751,9 @@ pub(crate) async fn persistent_node_builder(
     gents_store::local::storage_backend::reject_legacy_store(data_dir)?;
     let key = gents_store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
     Ok(gents_store::local::store_key::persistent_builder(
-        data_dir, &key,
+        data_dir,
+        &key,
+        gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
     )?)
 }
 

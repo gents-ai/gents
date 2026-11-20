@@ -207,10 +207,14 @@ mod legacy_backend_tests {
                 Err(_) => false,
             };
             let admitted = if initialized {
-                let node = crate::local::store_key::persistent_builder(&data, &key)?
-                    .with_node_identity_did(did)
-                    .build()
-                    .await?;
+                let node = crate::local::store_key::persistent_builder(
+                    &data,
+                    &key,
+                    crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+                )?
+                .with_node_identity_did(did)
+                .build()
+                .await?;
                 let collection = node
                     .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
                     .expect("fresh legacy schema");
