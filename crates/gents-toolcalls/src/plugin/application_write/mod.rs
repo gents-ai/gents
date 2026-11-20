@@ -197,9 +197,7 @@ impl WriteTool {
             .context("collection is required; discover fields with query argv:[fields]")?;
         gents_store::graphql::validate_collection_identifier(collection)
             .map_err(anyhow::Error::from)?;
-        let managed = gents_store::schema::migration::DEFAULT_REGISTRY
-            .managed_names()
-            .any(|name| name == collection);
+        let managed = gents_store::schema::catalog::RUNTIME_CATALOG.manages(collection);
         let protected = gents_documents::PROTECTED_DATASTORE_COLLECTIONS.contains(&collection);
         let credential = gents_protocol::schemas::is_credential_collection(collection);
         if protected {

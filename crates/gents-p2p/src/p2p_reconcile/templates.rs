@@ -358,7 +358,7 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("is not registered"), "{error:#}");
 
-        gents_store::schema::migration::ensure_all_runtime_migrations(node.clone())
+        gents_store::schema::catalog::ensure_runtime_owned(node.clone())
             .await
             .unwrap();
         let schema = read_client_replicated_schema(node).await.unwrap();

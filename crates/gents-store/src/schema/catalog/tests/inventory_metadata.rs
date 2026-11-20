@@ -3,7 +3,8 @@ use gents_protocol::schemas::{
     TOOL_FILE_INVENTORY_NAME,
 };
 
-use crate::common;
+use super::common;
+use crate::schema::catalog::{ensure_runtime, BASELINE};
 
 #[tokio::test]
 async fn inventory_metadata_has_its_pinned_fresh_schema() {
@@ -13,7 +14,7 @@ async fn inventory_metadata_has_its_pinned_fresh_schema() {
         .get_collection(TOOL_FILE_INVENTORY_NAME)
         .unwrap()
         .unwrap();
-    let entry = gents_migration::DEFAULT_BASELINE
+    let entry = BASELINE
         .iter()
         .find(|entry| entry.name == TOOL_FILE_INVENTORY_NAME)
         .unwrap();
@@ -27,7 +28,7 @@ async fn inventory_metadata_has_its_pinned_fresh_schema() {
 #[tokio::test]
 async fn inventory_metadata_collection_fallback_stays_owned_by_its_node() {
     let node = common::fresh_node().await;
-    gents_migration::ensure_migrations(&node).await.unwrap();
+    ensure_runtime(&node).await.unwrap();
     for name in [
         TOOL_FILE_INVENTORY_NAME,
         gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME,
@@ -72,7 +73,7 @@ async fn inventory_metadata_refuses_an_unprotected_collection() {
             .unwrap();
         let before = node.get_collection(name).unwrap().unwrap();
         assert!(before.policy.is_none());
-        let error = gents_migration::ensure_migrations(&node).await.unwrap_err();
+        let error = ensure_runtime(&node).await.unwrap_err();
         assert!(
             error.to_string().contains("incompatible document policy"),
             "{error:#}"
@@ -93,7 +94,7 @@ async fn inventory_reply_has_its_pinned_protected_local_schema() {
         .get_collection(FILE_INVENTORY_REPLY_NAME)
         .unwrap()
         .unwrap();
-    let entry = gents_migration::DEFAULT_BASELINE
+    let entry = BASELINE
         .iter()
         .find(|entry| entry.name == FILE_INVENTORY_REPLY_NAME)
         .unwrap();
@@ -115,10 +116,7 @@ async fn inventory_transport_has_its_pinned_fresh_schemas() {
     for (name, sdl) in [(FILE_INVENTORY_REQUEST_NAME, FILE_INVENTORY_REQUEST)] {
         node.add_collection(sdl).await.unwrap();
         let collection = node.get_collection(name).unwrap().unwrap();
-        let entry = gents_migration::DEFAULT_BASELINE
-            .iter()
-            .find(|entry| entry.name == name)
-            .unwrap();
+        let entry = BASELINE.iter().find(|entry| entry.name == name).unwrap();
         observed.push((name, collection.version_id, entry.expected_version.unwrap()));
         assert!(!is_replicated_protocol_collection(name));
     }
@@ -140,7 +138,7 @@ async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
         .get_collection(FILE_INVENTORY_PROGRESS_NAME)
         .unwrap()
         .unwrap();
-    let entry = gents_migration::DEFAULT_BASELINE
+    let entry = BASELINE
         .iter()
         .find(|entry| entry.name == FILE_INVENTORY_PROGRESS_NAME)
         .unwrap();
@@ -176,7 +174,7 @@ const RETIRED_IMAGE_DEMAND: &str = r#"type FileImageHydrationRequest @policy(id:
 }"#;
 
 #[tokio::test]
-async fn retired_image_demand_rows_survive_migration() {
+async fn retired_image_demand_rows_survive_startup() {
     let node = common::fresh_node().await;
     node.add_collection(
         &RETIRED_IMAGE_DEMAND.replace("POLICY", gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID),
@@ -199,7 +197,7 @@ async fn retired_image_demand_rows_survive_migration() {
     assert!(!created.has_errors(), "{created:?}");
     let query = "{FileImageHydrationRequest {_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail outcome_signature}}";
     let retained = node.execute(query).await.data.unwrap();
-    gents_migration::ensure_migrations(&node).await.unwrap();
+    ensure_runtime(&node).await.unwrap();
     let after = node
         .get_collection("FileImageHydrationRequest")
         .unwrap()
@@ -211,12 +209,13 @@ async fn retired_image_demand_rows_survive_migration() {
         .get_collection("FileInventoryImageRequest")
         .unwrap()
         .is_none());
+    ensure_runtime(&node).await.unwrap();
     assert_eq!(
-        gents_migration::ensure_migrations(&node)
-            .await
+        node.get_collection("FileImageHydrationRequest")
             .unwrap()
-            .steps_applied,
-        0
+            .unwrap()
+            .version_id,
+        before.version_id
     );
     node.shutdown().await.expect("shut down test node");
 }

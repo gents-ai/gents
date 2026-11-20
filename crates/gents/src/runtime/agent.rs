@@ -21,7 +21,6 @@ use gents_inference::resolved::{
     DEFAULT_TITLE_TIMEOUT_SECS,
 };
 use gents_store::identity::{NodeIdentity, RuntimeNode};
-use gents_store::schema::migration;
 use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use gents_tools::mcp::health::HealthCheckerOptions;
 use gents_tools::mcp::pool::McpPool;
@@ -279,7 +278,7 @@ impl Gents {
             .clone()
             .context("fresh backend protection provenance is required")?;
         backend_admission.validate(&node).await?;
-        migration::ensure_all_runtime_migrations(node.clone()).await?;
+        gents_store::schema::catalog::ensure_runtime_owned(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let plugin_models = gents_pack::plugin::model_binding::AccessModels(
             gents_store::config_client::ConfigAccess::local(node.clone()),

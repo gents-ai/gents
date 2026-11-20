@@ -32,9 +32,12 @@ protection and the native identity baseline is on rc2's lineage and opens in
 place. On first open rc2 registers the collections it adds (`Page`,
 `PluginSource`, `AgentRequestBackendWait`) and appends `create_session` and
 `max_fires_per_hour` to `Trigger` through a versioned upgrade step; existing
-triggers keep their rows and read both fields as unset. This is covered by the
-migration suite, which opens a store holding the previous `Trigger` schema; it
-was not rerun with a CLI built from `main`.
+triggers keep their rows and read both fields as unset.
+
+Releases after v1.0.0-rc2 convert no home. A home whose `Trigger`, `Task` or
+another collection is on a schema from before its current fields, including
+one rc2 upgraded this way, is refused like an rc1 home: exit code 65, nothing
+changed. Start a new home.
 
 ## Starting fresh
 

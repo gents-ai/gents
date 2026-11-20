@@ -310,7 +310,7 @@
       "constructors": [],
       "generated_groups": [],
       "fixture_status": "not_exported",
-      "native_owner_paths": ["crates/gents-migration/src/registry.rs"],
+      "native_owner_paths": ["crates/gents-store/src/schema/catalog.rs"],
       "consumer_paths": ["crates/gents-store/src/config_client/schema_install.rs"],
       "native_status": "pending",
       "required_cases": [

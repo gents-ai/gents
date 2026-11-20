@@ -8,10 +8,29 @@
 //! CID embeds the target collection's identity, making genesis CIDs depend on
 //! the co-registered set.
 
-use gents_migration::{ensure_migrations, CLIENT_AUTHORED_COLLECTIONS};
+use super::common::fresh_node;
+use crate::schema::catalog::{ensure_runtime, SchemaError};
 
-use crate::common;
-use common::fresh_node;
+const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
+    gents_protocol::schemas::PEER_REGISTRY_NAME,
+    gents_protocol::schemas::AGENT_REQUEST_NAME,
+    gents_protocol::schemas::AGENT_MESSAGE_NAME,
+    gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
+    gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
+    gents_protocol::schemas::AGENT_SESSION_NAME,
+    gents_protocol::schemas::COMPACTION_ENTRY_NAME,
+    gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST_NAME,
+    gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION_NAME,
+    gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
+    gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
+    gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,
+    gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
+    gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME,
+    gents_protocol::schemas::AGENT_SESSION_GOAL_RECEIPT_NAME,
+    gents_protocol::schemas::AGENT_TOOL_CONTROL_NAME,
+    gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME,
+    gents_protocol::schemas::MAILBOX_ITEM_NAME,
+];
 
 fn current_sdl(name: &str) -> &'static str {
     gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
@@ -86,9 +105,9 @@ fn client_authored_sdls_are_relation_free() {
 async fn client_authored_collections_stay_fresh_apply_compatible() {
     let server_arm = async {
         let server = fresh_node().await;
-        ensure_migrations(server.as_ref())
+        ensure_runtime(server.as_ref())
             .await
-            .expect("server ensure_migrations");
+            .expect("server ensure");
         server
     };
     let client_arm = async {
@@ -116,9 +135,8 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
         if server_cv.version_id != client_cv.version_id {
             mismatches.push(format!(
                 "{name}: server active version {} != client fresh-apply version {} — \
-                 collection gained a post-baseline migration step or its baseline pin is \
-                 stale — client-authored collections must be re-pinned to the \
-                 fresh-apply CID, never chained; see #1123/#1125",
+                 its baseline pin is stale — client-authored collections must be pinned to \
+                 the fresh-apply CID; see #1123/#1125",
                 server_cv.version_id, client_cv.version_id
             ));
         }
@@ -242,8 +260,8 @@ async fn unbound_pairing_overlay_is_rejected_without_data_changes() {
     assert!(!created.has_errors(), "{:?}", created.errors);
     let query = "{ DataPlanePairingDesired {_docID peer_id} }";
     let before = node.execute(query).await;
-    assert!(matches!(ensure_migrations(&node).await.unwrap_err(),
-        gents_migration::Error::IncompatibleIdentityPolicy { ref collection } if collection == "DataPlanePairingDesired"));
+    assert!(matches!(ensure_runtime(&node).await.unwrap_err(),
+        SchemaError::IncompatibleIdentityPolicy { ref collection } if collection == "DataPlanePairingDesired"));
     assert_eq!(node.execute(query).await.data, before.data);
     node.shutdown().await.unwrap();
 }
@@ -385,9 +403,9 @@ async fn unbound_identity_collections_are_rejected_without_data_changes() {
         assert!(!created.has_errors(), "{name}: {:?}", created.errors);
         let query = format!("{{ {name} {{ _docID {key} }} }}");
         let before = node.execute(&query).await;
-        let error = ensure_migrations(&node).await.unwrap_err();
+        let error = ensure_runtime(&node).await.unwrap_err();
         assert!(
-            matches!(error, gents_migration::Error::IncompatibleIdentityPolicy { ref collection } if collection == name),
+            matches!(error, SchemaError::IncompatibleIdentityPolicy { ref collection } if collection == name),
             "{name}: {error}"
         );
         let after = node.execute(&query).await;

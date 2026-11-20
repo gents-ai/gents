@@ -830,9 +830,7 @@ async fn serve_foreground(
     });
     let serving = async {
         wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
-        if let Err(error) =
-            gents_store::schema::migration::ensure_all_runtime_migrations(node.clone()).await
-        {
+        if let Err(error) = gents_store::schema::catalog::ensure_runtime_owned(node.clone()).await {
             return Err(gents_store::local::storage_backend::classify_store_error(
                 error, &data_dir,
             )

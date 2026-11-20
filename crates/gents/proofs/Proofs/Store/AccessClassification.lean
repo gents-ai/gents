@@ -280,7 +280,7 @@ inductive StoreWrapper where
   | agentProvisionErrorAccess
   | agentAdmissionObservationErrorAccess
   | remoteAgentProvisionErrorAuthorization
-  | runtimeMigrationErrorConfig
+  | runtimeSchemaErrorConfig
   | authoredDocumentCreateErrorPublication
   | authoredDocumentCreateErrorUnconfirmed
   | enrollmentApprovalErrorNodeRead

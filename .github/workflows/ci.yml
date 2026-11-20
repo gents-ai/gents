@@ -548,20 +548,6 @@ jobs:
       - name: Run ${{ matrix.job }}
         run: make gate-run JOB="${{ matrix.job }}"
 
-      - name: Collect migration lens diagnostics on failure
-        if: failure() && matrix.group == 'foundation'
-        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
-
-      - name: Upload migration lens diagnostics
-        if: failure() && matrix.group == 'foundation'
-        uses: actions/upload-artifact@v7
-        with:
-          name: gents-migration-lenses-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/gents-migration-lenses
-          include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 14
-
       - name: Show Rust build cache stats
         if: always()
         run: .github/scripts/show-sccache-stats.sh
@@ -684,20 +670,6 @@ jobs:
         with:
           name: gents-junit-${{ matrix.archive }}-${{ matrix.index }}-of-${{ matrix.count }}-${{ github.run_attempt }}
           path: target/nextest/ci/junit.xml
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Collect migration lens diagnostics on failure
-        if: failure()
-        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
-
-      - name: Upload migration lens diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: gents-migration-lenses-${{ github.sha }}-${{ matrix.index }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/gents-migration-lenses
-          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14
 

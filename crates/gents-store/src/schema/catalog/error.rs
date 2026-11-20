@@ -1,7 +1,8 @@
+use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub enum SchemaError {
     #[error("collection {collection} still has branchable storage; DefraDB cannot change this property in place. Use a separate fresh runtime home for this build; the existing store has not been changed")]
     RuntimeLocalityMismatch { collection: String },
 
@@ -16,7 +17,7 @@ pub enum Error {
     CollectionMissing { collection: String },
 
     #[error(
-        "unknown lineage for collection {collection}: versions [{versions}] do not match the migration baseline; export/import required (no legacy support)"
+        "unknown lineage for collection {collection}: versions [{versions}] are not this build's baseline; the store is not converted"
     )]
     UnknownLineage {
         collection: String,
@@ -39,29 +40,6 @@ pub enum Error {
         expected: String,
         actual: String,
     },
-
-    #[error("state verification failed for collection {collection} at step {step}: {detail}")]
-    StateVerification {
-        collection: String,
-        step: String,
-        detail: String,
-    },
-
-    #[error("migration step {step} failed on collection {collection}: {source}")]
-    StepFailed {
-        step: String,
-        collection: String,
-        #[source]
-        source: Box<defra_node::Error>,
-    },
-
-    #[error(
-        "migration step {step} failed on collection {collection}: PatchVersioned steps require expected_version pin"
-    )]
-    MissingVersionPin { step: String, collection: String },
-
-    #[error("eager materialization failed: {detail}")]
-    MaterializeFailed { detail: String },
 
     #[error("defra node error: {0}")]
     Node(#[source] Box<defra_node::Error>),
@@ -98,31 +76,36 @@ pub enum Error {
     ForeignFileImageOwner,
 }
 
-impl From<defra_node::Error> for Error {
+impl From<defra_node::Error> for SchemaError {
     fn from(error: defra_node::Error) -> Self {
         Self::Node(Box::new(error))
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
-
-impl Error {
+impl SchemaError {
     pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
         gents_protocol::error_chain::find_source::<Self>(error)
     }
 
-    pub fn is_unknown_lineage(&self) -> bool {
-        matches!(self, Self::UnknownLineage { .. })
-    }
-
-    pub fn is_foreign_version(&self) -> bool {
-        matches!(self, Self::ForeignVersion { .. })
-    }
-
-    pub fn is_other_version_schema(&self) -> bool {
-        matches!(
-            self,
-            Self::RuntimeLocalityMismatch { .. } | Self::IncompatibleIdentityPolicy { .. }
-        )
+    pub fn refusal(&self) -> Option<IncompatibleStoreKind> {
+        match self {
+            Self::UnknownLineage { .. } => Some(IncompatibleStoreKind::UnknownLineage),
+            Self::ForeignVersion { .. } => Some(IncompatibleStoreKind::ForeignVersion),
+            Self::RuntimeLocalityMismatch { .. } | Self::IncompatibleIdentityPolicy { .. } => {
+                Some(IncompatibleStoreKind::OtherVersionSchema)
+            }
+            Self::BaselineRegister { .. }
+            | Self::CollectionMissing { .. }
+            | Self::VersionPinMismatch { .. }
+            | Self::Node(_)
+            | Self::MissingNodeIdentity
+            | Self::FileImagePolicyMismatch
+            | Self::IncompatibleFileImagePolicy
+            | Self::IdentityPolicyMismatch
+            | Self::InvalidIdentityCollectionOwner { .. }
+            | Self::ForeignIdentityCollectionOwner { .. }
+            | Self::InvalidImageOwner { .. }
+            | Self::ForeignFileImageOwner => None,
+        }
     }
 }

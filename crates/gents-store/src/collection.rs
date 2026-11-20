@@ -238,7 +238,7 @@ mod tests {
     fn every_apply_collection_declares_the_recreate_identity_stamp() {
         for collection in Collection::ALL {
             let name = collection.graphql_type();
-            let baseline = crate::schema::migration::DEFAULT_BASELINE
+            let baseline = crate::schema::catalog::BASELINE
                 .iter()
                 .find(|entry| entry.name == name)
                 .unwrap_or_else(|| panic!("{name} has no baseline schema"));

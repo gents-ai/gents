@@ -6208,7 +6208,6 @@ dependencies = [
  "gents-lean-contract",
  "gents-lean-vocab",
  "gents-loop",
- "gents-migration",
  "gents-observe",
  "gents-p2p",
  "gents-pack",
@@ -6976,15 +6975,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gents-lens-fixture-add-label"
-version = "0.1.0"
-dependencies = [
- "lens_sdk",
- "rapidhash",
- "serde_json",
-]
-
-[[package]]
 name = "gents-login-ui"
 version = "1.0.0-rc2"
 dependencies = [
@@ -7035,29 +7025,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
-]
-
-[[package]]
-name = "gents-migration"
-version = "1.0.0-rc2"
-dependencies = [
- "crypto",
- "defra-core",
- "defra-node",
- "gents-lens-fixture-add-label",
- "gents-protocol",
- "gents-workspace-hack",
- "hex",
- "identity",
- "query",
- "rapidhash",
- "schema",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -7301,7 +7268,6 @@ dependencies = [
  "gents-lean-contract",
  "gents-lean-vocab",
  "gents-loop",
- "gents-migration",
  "gents-p2p",
  "gents-protocol",
  "gents-session",
@@ -7363,7 +7329,6 @@ dependencies = [
  "gents-lean-contract",
  "gents-lean-vocab",
  "gents-loop",
- "gents-migration",
  "gents-protocol",
  "gents-schemas",
  "gents-store",
@@ -7479,7 +7444,6 @@ dependencies = [
  "gents-lean-contract",
  "gents-lean-vocab",
  "gents-loop",
- "gents-migration",
  "gents-p2p",
  "gents-pack",
  "gents-protocol",
@@ -7528,7 +7492,6 @@ dependencies = [
  "ahash",
  "aho-corasick",
  "allocator-api2",
- "anyhow",
  "axum",
  "base64 0.23.1",
  "base64ct",
@@ -7547,7 +7510,6 @@ dependencies = [
  "const-hex",
  "core-foundation-sys",
  "cranelift-bitset 0.137.1",
- "crc32fast",
  "crossbeam-epoch",
  "crossbeam-utils",
  "crypto-common 0.1.7",
@@ -7642,7 +7604,6 @@ dependencies = [
  "reqwest 0.13.2",
  "rig-core",
  "rmcp",
- "rustc-hash",
  "rustix",
  "rustls",
  "rustls-webpki",
@@ -9783,17 +9744,6 @@ dependencies = [
  "tracing",
  "wasmtime 50.0.1",
  "workers",
-]
-
-[[package]]
-name = "lens_sdk"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "625120ee4d0acf03ce8cefd2b6223aae4907c113c3c9da96e7a91393c5578836"
-dependencies = [
- "byteorder",
- "serde",
- "serde_json",
 ]
 
 [[package]]
