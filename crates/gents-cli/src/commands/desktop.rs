@@ -75,12 +75,7 @@ async fn reset(
         std::env::var_os(gents_store::client_journal::paths::DESKTOP_HOME_ENV),
         &std::env::current_dir().context("resolving current directory")?,
     )?;
-    let explicit_home = home.or_else(|| {
-        std::env::var_os("GENTS_HOME")
-            .filter(|value| !value.is_empty())
-            .map(Into::into)
-    });
-    let home = match explicit_home {
+    let home = match home {
         Some(home) => home,
         None => gents_desktop_core::home_reset::reviewed_reset_home(&desktop)?
             .unwrap_or_else(|| gents_service::home_state::resolve_home_dir(None)),

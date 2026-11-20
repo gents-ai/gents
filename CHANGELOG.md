@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
+  node home; without it commands use the folder chosen at setup, then `~/.gents`
+  (Lean `HomeResolution`). The macOS uninstall script takes `--home DIR` and
+  otherwise removes the folder chosen at setup (#1764).
 - Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
   background calls one request holds at once: Bash runs, remote service calls
   and plugin jobs together. The refusal reports the configured limit.

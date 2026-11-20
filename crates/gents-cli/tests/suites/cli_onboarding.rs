@@ -11,7 +11,6 @@ use std::process::{Command, Output};
 fn run_gents(user_home: &Path, args: &[&str]) -> Result<Output> {
     Command::new(cli_bin())
         .env("HOME", user_home)
-        .env_remove("GENTS_HOME")
         .env_remove("XDG_CONFIG_HOME")
         .env("RUST_LOG", "error")
         .args(args)
@@ -224,7 +223,6 @@ fn print_on_a_broken_default_folder_leaves_it_and_names_how_to_repair() -> Resul
 
     let output = Command::new(cli_bin())
         .env("HOME", user_home.path())
-        .env("GENTS_HOME", &home)
         .env_remove("XDG_CONFIG_HOME")
         .env("RUST_LOG", "error")
         .args(["-p", "hi"])
@@ -271,7 +269,6 @@ const CLIENT_COMMANDS: &[&[&str]] = &[
 #[derive(Clone, Copy, Debug)]
 enum HomeSelection {
     Flag,
-    Env,
     Remembered,
     Fallback,
 }
@@ -305,7 +302,6 @@ impl ClientIdentityFixture {
         process
             .env("HOME", self.user_home.path())
             .env("GENTS_DESKTOP_HOME", self.identities.path())
-            .env_remove("GENTS_HOME")
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_DATA_HOME")
             .env("RUST_LOG", "error")
@@ -313,9 +309,6 @@ impl ClientIdentityFixture {
         match selection {
             HomeSelection::Flag => {
                 process.arg("--home").arg(selected);
-            }
-            HomeSelection::Env => {
-                process.env("GENTS_HOME", selected);
             }
             HomeSelection::Remembered => {
                 let remembered = remembered_home_path(self.user_home.path());
@@ -356,7 +349,6 @@ fn a_set_up_home_never_gets_a_new_client_identity_however_it_is_selected() -> Re
     let mut wrong = Vec::new();
     for selection in [
         HomeSelection::Flag,
-        HomeSelection::Env,
         HomeSelection::Remembered,
         HomeSelection::Fallback,
     ] {
@@ -452,7 +444,7 @@ async fn observe_identity(case: &IdentityCase, command: &[&str]) -> Result<&'sta
     let home = fixture.selected_home(case.selection);
     place(&home, case.selected.0, case.selected.1)?;
     let other = match case.selection {
-        HomeSelection::Flag | HomeSelection::Env => {
+        HomeSelection::Flag => {
             let remembered = remembered_home_path(fixture.user_home.path());
             fs::create_dir_all(
                 remembered
@@ -517,7 +509,6 @@ async fn every_client_command_decides_its_identity_by_the_selected_home() -> Res
         .map(|case| IdentityCase {
             selection: match case.input.selection.as_str() {
                 "flag" => HomeSelection::Flag,
-                "env" => HomeSelection::Env,
                 "remembered" => HomeSelection::Remembered,
                 "fallback" => HomeSelection::Fallback,
                 other => panic!("unknown home selection {other}"),
@@ -566,7 +557,6 @@ fn first_run_step(user_home: &Path, home: &Path, step: &str, graphql: &str) -> R
             "--nocapture",
         ])
         .env("HOME", user_home)
-        .env_remove("GENTS_HOME")
         .env(
             gents_store::client_journal::paths::DESKTOP_HOME_ENV,
             user_home.join("selected-desktop"),

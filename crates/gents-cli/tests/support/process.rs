@@ -273,9 +273,6 @@ pub(crate) fn served_home_dir(
     {
         return PathBuf::from(home);
     }
-    if let Some((_, home)) = envs.iter().find(|(name, _)| *name == "GENTS_HOME") {
-        return PathBuf::from(home);
-    }
     home_dir.join(".gents")
 }
 

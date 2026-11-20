@@ -6,13 +6,15 @@ use std::path::Path;
 /// read or replace the operator's runtime, desktop client or CLI identity.
 /// Test builds are this crate's unit tests and any build enabling
 /// `test-home-guard`, which the workspace's dev-dependencies do, so the
-/// binaries those tests spawn are guarded too. A redirected `HOME` inside the
-/// temporary directory moves these locations there and is accepted.
+/// binaries those tests spawn are guarded too. A home a test passes as `flag`
+/// inside the temporary directory is accepted on every platform; a default
+/// that follows `HOME` is accepted only where the platform derives it from
+/// `HOME`, which Windows does not, so a test passes its homes explicitly.
 #[cfg(any(test, feature = "test-home-guard"))]
-pub fn refuse_real_gents_home(resolved: &Path, variable: &str) {
+pub fn refuse_real_gents_home(resolved: &Path, flag: &str) {
     if let Some(real) = real_home_containing(resolved, &std::env::temp_dir(), real_gents_homes()) {
         panic!(
-            "test build resolved {} inside the operator's real Gents state {}; give this process throwaway homes (set {variable} and HOME to temporary directories)",
+            "test build resolved {} inside the operator's real Gents state {}; give this process throwaway homes (pass {flag} a temporary directory)",
             resolved.display(),
             real.display()
         );
@@ -39,7 +41,7 @@ fn real_home_containing(
 
 #[cfg(not(any(test, feature = "test-home-guard")))]
 #[inline(always)]
-pub fn refuse_real_gents_home(_resolved: &Path, _variable: &str) {}
+pub fn refuse_real_gents_home(_resolved: &Path, _flag: &str) {}
 
 #[cfg(any(test, feature = "test-home-guard"))]
 fn real_gents_homes() -> impl Iterator<Item = std::path::PathBuf> {

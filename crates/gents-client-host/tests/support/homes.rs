@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use gents_store::client_journal::paths::DesktopPaths;
 
-/// Throwaway user, runtime and desktop homes under a test's own directory for
+/// Throwaway user and desktop homes under a test's own directory for
 /// every host and CLI process it spawns. Without them the runtime CLI resolves
 /// its client identity, default homes and service definitions from the
 /// operator's account, which test builds refuse.
@@ -13,7 +13,7 @@ pub struct ProcessHomes {
 impl ProcessHomes {
     pub fn under(directory: &Path) -> Self {
         let root = directory.join("process-homes");
-        for home in ["user", "runtime", "desktop"] {
+        for home in ["user", "desktop"] {
             std::fs::create_dir_all(root.join(home)).expect("creating a throwaway process home");
         }
         Self { root }
@@ -25,10 +25,9 @@ impl ProcessHomes {
         DesktopPaths::from_root(self.root.join("desktop").join("cli"))
     }
 
-    pub fn env(&self) -> [(&'static str, PathBuf); 5] {
+    pub fn env(&self) -> [(&'static str, PathBuf); 4] {
         let user = self.root.join("user");
         [
-            ("GENTS_HOME", self.root.join("runtime")),
             (
                 gents_store::client_journal::paths::DESKTOP_HOME_ENV,
                 self.root.join("desktop"),

@@ -13,7 +13,11 @@ fn env_or(name: &str, default: &str) -> String {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
-    let home_dir = PathBuf::from(env_or("GENTS_HOME", "./var/gents-home"));
+    let home_dir = PathBuf::from(
+        std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "./var/gents-home".to_owned()),
+    );
     let node_name = env_or("GENTS_NAME", "demo");
     let home = if home_dir.join("node.key").exists() {
         EmbeddedHome::open_retained(&home_dir).await?
