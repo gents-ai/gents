@@ -99,6 +99,11 @@ jobs:
         with:
           role: portable
 
+      # The pack suites run UI tests under Node; the portable hosts have none.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Check the pack suites' host tools
         run: |
           set -euo pipefail
