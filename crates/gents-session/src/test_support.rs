@@ -572,21 +572,6 @@ pub async fn serve_client_node(
     (db, runtime)
 }
 
-/// Grants the user the `OperatorUser` set as the runtime admin, as
-/// `signed_test_node` does. Without it, seeding the user's client-signed
-/// Node and Agent ends in an incomplete signing conversation.
-pub async fn grant_operator_user(
-    node: &Arc<defra_node::Node>,
-    runtime: &dyn NodeIdentity,
-    user: &KeyIdentity,
-) {
-    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(&admin, &identity::Did::new(user.did()).unwrap())
-        .await
-        .unwrap();
-}
-
 pub async fn sequenced_history_on(
     access: &gents_store::config_client::ConfigAccess,
     session_id: &str,

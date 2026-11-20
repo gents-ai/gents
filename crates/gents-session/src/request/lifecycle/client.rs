@@ -1478,9 +1478,10 @@ pub async fn reconcile_client_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{grant_operator_user, seed_owned_agent, serve_client_node};
+    use crate::test_support::{seed_owned_agent, serve_client_node};
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_store::identity::{KeyIdentity, NodeIdentity};
+    use gents_store::test_support::grant_operator_user;
     use std::sync::Arc;
 
     use crate::test_support::assert_block_signer;
