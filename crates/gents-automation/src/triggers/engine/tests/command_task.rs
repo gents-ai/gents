@@ -550,14 +550,18 @@ async fn a_schedule_fires_a_command_task_with_no_agent_request_e2e() {
     let query = r#"{ Trigger(filter: { trigger_id: { _eq: "tick-trigger" } }) { last_status fire_count last_run } }"#;
     let trigger = gents_store::test_support::read_when_changed(
         &node,
-        &["Trigger"],
+        "Trigger",
         "the scheduled command finishes and its fire is counted",
         async || {
             let response = node.execute(query).await;
             let rows =
                 gents_store::graphql::rows::<serde_json::Value>(&response, "Trigger").unwrap();
-            (rows[0]["last_run"]["finished_at"].is_string() && rows[0]["fire_count"] == 1)
-                .then(|| rows[0].clone())
+            let row = rows[0].clone();
+            if row["last_run"]["finished_at"].is_string() && row["fire_count"] == 1 {
+                Ok(row)
+            } else {
+                Err(row)
+            }
         },
     )
     .await;
