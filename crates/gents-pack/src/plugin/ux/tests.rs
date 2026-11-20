@@ -152,7 +152,7 @@ fn a_pack_plugin_lists_its_declared_data_surfaces_and_a_dev_plugin_none() {
         surface: "board".into(),
         tools: vec!["list_tasks".into(), "add_task".into()],
     }];
-    install_record(home.path(), "acme/board", vec![plugin], vec![]);
+    install_record(home.path(), "acme/board", vec![plugin.clone()], vec![]);
     dev_plugin(home.path(), "loose", "export default {}", None);
 
     let listed = list(home.path()).unwrap();
