@@ -16,7 +16,7 @@ use super::metrics::{
 };
 use super::status::{status_handler, STATUS_PROBE_BUDGET};
 use super::*;
-use crate::http::prometheus::MetricsRuntimeRow;
+use crate::http::prometheus::store::MetricsRuntimeRow;
 
 fn desktop_endpoint(
     url: impl Into<String>,

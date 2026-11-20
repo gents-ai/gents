@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
-use super::{push_metric_prelude, push_metric_sample};
+use super::exposition::{push_metric_prelude, push_metric_sample};
 
 /// A store walk touches every file, and stores with leaked compaction output
 /// hold hundreds of thousands of them; refresh at most this often.
