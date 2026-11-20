@@ -9,7 +9,7 @@ use crate::local::storage_backend::{incompatible_store, incompatible_store_kind}
 use crate::local::store_key::{home_key_file, StoreKeyError};
 
 /// Written by a node that opened and validated its store with this build's
-/// collections, policies and migrations. Its content is [`fingerprint`]; a
+/// collections and policies. Its content is [`fingerprint`]; a
 /// store whose stamp matches is not checked again.
 pub const COMPATIBILITY_STAMP: &str = ".gents-store-compatibility";
 
@@ -48,12 +48,10 @@ pub enum StoreCompatibilityError {
     },
 }
 
-/// The collections, migrations and access policies this build serves. Any
-/// change to them changes the fingerprint, and the next start checks the
-/// store again.
+/// The collections and access policies this build serves. Any change to them
+/// changes the fingerprint, and the next start checks the store again.
 pub fn fingerprint() -> String {
     use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
-    let registry = &*gents_migration::DEFAULT_REGISTRY;
     let ids = HomePolicyIds::shared();
     let mut digest = Sha256::new();
     for policy in [
@@ -65,16 +63,12 @@ pub fn fingerprint() -> String {
         digest.update(ids.id(policy).as_bytes());
         digest.update([0]);
     }
-    for collection in registry.baseline {
+    for collection in crate::schema::catalog::BASELINE.iter() {
         digest.update(collection.name.as_bytes());
         digest.update([0]);
         digest.update(ids.render(collection.sdl).as_bytes());
         digest.update([0]);
         digest.update(collection.expected_version.unwrap_or_default().as_bytes());
-        digest.update([0]);
-    }
-    for step in registry.steps {
-        digest.update(step.id().as_bytes());
         digest.update([0]);
     }
     digest
@@ -211,7 +205,7 @@ pub(crate) async fn check_copy(
             path: data.clone(),
             source: Box::new(error),
         }),
-        Ok(()) => match gents_migration::validate_existing_schema(&node).await {
+        Ok(()) => match crate::schema::catalog::validate_existing_schema(&node).await {
             Ok(()) => Ok(None),
             Err(source) => match incompatible_store(&source, &data) {
                 Some(store) => Ok(Some(store.kind)),

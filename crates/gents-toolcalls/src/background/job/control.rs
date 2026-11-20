@@ -1061,7 +1061,7 @@ mod tests {
                 &admission.node,
                 &node_did,
                 &[signer],
-                &crate::call::hook::BackgroundExecutionRegistry::default(),
+                &crate::call::hook::background_executions::BackgroundExecutionRegistry::default(),
             )
             .await
             .unwrap();

@@ -567,15 +567,19 @@ pub async fn capture_body(
     }
     let rendered = super::build_rendered_completion_request(
         &context,
-        &pending.capture_scope,
         source,
-        provider_endpoint,
-        provider_route_path_sha256,
-        pending.turn_index,
-        pending.attempt,
-        pending.assembly_trace,
+        super::ProviderRoute {
+            endpoint: provider_endpoint,
+            route_path_sha256: provider_route_path_sha256,
+        },
+        super::RenderedAttempt {
+            capture_scope: pending.capture_scope.clone(),
+            turn_index: pending.turn_index,
+            attempt: pending.attempt,
+            assembly_trace: pending.assembly_trace,
+            admission_join,
+        },
         components,
-        admission_join,
     )
     .map_err(CaptureBodyError::BuildFact)?;
 

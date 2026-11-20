@@ -10,6 +10,9 @@ use std::sync::{Arc, OnceLock, Weak};
 
 use chrono::{SecondsFormat, Utc};
 use defra_node::Node as EmbeddedNode;
+use gents_protocol::enrollment::{
+    SIGNED_COMMAND_MAX_AGE_SECS, SIGNED_COMMAND_MAX_FUTURE_SKEW_SECS,
+};
 use gents_protocol::owner_staged::{
     OwnerStagedChange, OwnerStagedCommand, OwnerStagedRefusal, OWNER_STAGED_COMMAND_VERSION,
     OWNER_STAGED_PATH,
@@ -160,11 +163,13 @@ pub enum SignedCommandNonceError {
     Persist(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
-const NONCE_RETENTION_SECONDS: i64 = 5 * 60;
+pub const NONCE_RETENTION_SECONDS: i64 = 5 * 60;
+const _: () = assert!(
+    NONCE_RETENTION_SECONDS > SIGNED_COMMAND_MAX_AGE_SECS + SIGNED_COMMAND_MAX_FUTURE_SKEW_SECS
+);
 
 /// Consume `signer_did`'s `nonce` once, as the runtime. Enrollment operator
-/// commands and owner-staged commands share this one replay fence; a nonce
-/// is retained for longer than any command it fences stays current.
+/// commands and owner-staged commands share this one replay fence.
 pub async fn consume_signed_command_nonce(
     node: &Arc<EmbeddedNode>,
     signer_did: &str,

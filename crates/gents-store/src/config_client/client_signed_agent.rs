@@ -218,6 +218,7 @@ pub(super) fn trusted_delete_schema(collection: &str) -> Option<&'static str> {
         gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION_NAME,
         gents_protocol::schemas::GOAL_NAME,
         gents_protocol::schemas::GOAL_CREATION_CLAIM_NAME,
+        gents_protocol::schemas::EVENT_SOURCE_CURSOR_NAME,
     ]
     .contains(&collection)
         && !crate::collection::Collection::ALL

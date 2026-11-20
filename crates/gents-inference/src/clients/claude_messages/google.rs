@@ -4,22 +4,19 @@
 //! (`{iss, scope, aud, exp, iat}`, header `{alg}`) exchanged with the
 //! `jwt-bearer` grant, and an authorized user file trades its refresh token.
 //! Both go to `https://oauth2.googleapis.com/token` with the cloud-platform
-//! scope. Access tokens are cached process-wide per credential, one exchange
-//! in flight, and refreshed five minutes before they expire (the library's
+//! scope. Each token source caches its access token, one exchange in
+//! flight, and refreshed five minutes before they expire (the library's
 //! eager refresh). The secrets never print and never reach an error message.
 
 use std::fmt;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
-use kovan_map::HopscotchMap;
-use rapidhash::fast::RandomState;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
 
 use crate::auth::credential::BearerSource;
@@ -37,8 +34,6 @@ const EAGER_REFRESH: Duration = Duration::from_secs(300);
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Largest token response read.
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
-/// Credentials whose tokens are remembered before the cache starts over.
-const TOKEN_CACHE_CAP: usize = 64;
 
 /// Why Google credentials cannot produce a token.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -84,8 +79,6 @@ pub(crate) struct GoogleCredentials {
     grant: Grant,
     /// `quota_project_id`: Vertex sends it as `x-goog-user-project`.
     quota_project: Option<String>,
-    /// The cache key: a digest of the stored JSON, never the JSON itself.
-    fingerprint: [u8; 32],
 }
 
 impl fmt::Debug for GoogleCredentials {
@@ -179,7 +172,6 @@ impl GoogleCredentials {
         Ok(Self {
             grant,
             quota_project: file.quota_project_id.filter(|id| !id.is_empty()),
-            fingerprint: Sha256::digest(json.as_bytes()).into(),
         })
     }
 
@@ -258,11 +250,8 @@ struct Token {
     replace_at: Instant,
 }
 
-type TokenCache =
-    HopscotchMap<[u8; 32], Arc<OnceCell<Result<Token, GoogleCredentialError>>>, RandomState>;
-
-static TOKENS: LazyLock<TokenCache> =
-    LazyLock::new(|| HopscotchMap::with_hasher(RandomState::new()));
+/// One exchange's outcome, shared by every request that waits on it.
+type TokenSlot = Arc<OnceCell<Result<Token, GoogleCredentialError>>>;
 
 #[derive(Deserialize)]
 struct TokenResponse {
@@ -338,6 +327,8 @@ pub(crate) struct GoogleTokenSource {
     credentials: Arc<GoogleCredentials>,
     http: reqwest::Client,
     token_url: String,
+    /// The current exchange; a failed or stale one is replaced by a fresh slot.
+    token: Mutex<TokenSlot>,
 }
 
 impl fmt::Debug for GoogleTokenSource {
@@ -359,31 +350,23 @@ impl GoogleTokenSource {
             credentials,
             http: reqwest::Client::new(),
             token_url: token_url.to_owned(),
+            token: Mutex::default(),
         }
     }
 
     /// The current access token, exchanging once when none is fresh. A failed
     /// exchange is not remembered: the next request tries again.
     pub(crate) async fn access_token(&self) -> Result<String, GoogleCredentialError> {
-        let key = self.credentials.fingerprint;
-        let slot = match TOKENS.get(&key) {
-            Some(slot)
-                if slot.get().is_none_or(|token| {
-                    token
-                        .as_ref()
-                        .is_ok_and(|token| Instant::now() < token.replace_at)
-                }) =>
-            {
-                slot
+        let slot = {
+            let mut current = self.token.lock().unwrap_or_else(PoisonError::into_inner);
+            if current.get().is_some_and(|token| {
+                !token
+                    .as_ref()
+                    .is_ok_and(|token| Instant::now() < token.replace_at)
+            }) {
+                *current = TokenSlot::default();
             }
-            stale => {
-                if stale.is_none() && TOKENS.len() >= TOKEN_CACHE_CAP {
-                    TOKENS.clear();
-                }
-                let fresh = Arc::new(OnceCell::new());
-                TOKENS.insert(key, fresh.clone());
-                fresh
-            }
+            current.clone()
         };
         slot.get_or_init(|| exchange(&self.http, &self.token_url, &self.credentials))
             .await
@@ -394,7 +377,7 @@ impl GoogleTokenSource {
 
     /// Drops the cached token so the next request exchanges again.
     pub(crate) fn invalidate(&self) {
-        TOKENS.remove(&self.credentials.fingerprint);
+        *self.token.lock().unwrap_or_else(PoisonError::into_inner) = TokenSlot::default();
     }
 }
 

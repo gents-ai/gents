@@ -10,9 +10,6 @@ use gents_protocol::schemas::{
 /// adding any collection whose policy binding names one of these policies.
 /// Each policy is registered with counter 0, so its ID is the one
 /// [`HomePolicyIds::shared`] gives it; a mismatched id is an error.
-///
-/// Mirrors the production installer, `gents-migration`'s private
-/// `node_policies::register`.
 pub async fn install_identity_acp_policies(node: &defra_node::Node) -> Result<()> {
     let runtime = node
         .node_identity_did()

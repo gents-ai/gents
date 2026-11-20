@@ -205,6 +205,7 @@ pub(crate) async fn init_home_with_core_packs(
     mut args: InitArgs,
     core_packs: default_packs::Archives<'_>,
 ) -> Result<Value> {
+    let registry = args.registry.clone();
     let started = Instant::now();
     let stage = |name: &'static str| {
         tracing::info!(
@@ -214,6 +215,7 @@ pub(crate) async fn init_home_with_core_packs(
         );
     };
     let home_dir = resolve_home_dir(args.home.as_deref());
+    let client_identity = InitClientIdentity::choose(&home_dir, args.desktop_home.clone())?;
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
     admit_document_acp(
@@ -249,7 +251,9 @@ pub(crate) async fn init_home_with_core_packs(
                 .clone()
                 .unwrap_or_else(|| default_key_path(&home_dir, &args.node_name))
         });
-        let owner = gents_service::home_state::client_identity_for(&home_dir).await?;
+        let owner =
+            gents_service::home_state::client_identity_in(&home_dir, &client_identity.paths)
+                .await?;
         let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
             home: &home_dir,
             node_name: &args.node_name,
@@ -263,6 +267,7 @@ pub(crate) async fn init_home_with_core_packs(
             store_key_custody: gents_host::args::store_key_custody(args.store_key_custody),
             store_lock: &store_lock,
             owner: owner.did(),
+            client_identity: client_identity.recorded.clone(),
         })
         .await?;
         let output = json!({
@@ -317,10 +322,11 @@ pub(crate) async fn init_home_with_core_packs(
         None
     };
 
+    let client_identity_record = client_identity.recorded.clone();
     let client_identity = if fresh_store {
-        gents_service::home_state::client_identity_for_new_node().await?
+        gents_service::home_state::client_identity_for_new_node(&client_identity.paths).await?
     } else {
-        gents_service::home_state::client_identity_for(&home_dir).await?
+        gents_service::home_state::client_identity_in(&home_dir, &client_identity.paths).await?
     };
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: &home_dir,
@@ -360,6 +366,7 @@ pub(crate) async fn init_home_with_core_packs(
             .map(|path| path.to_string_lossy().to_string()),
         store_encryption: None,
         document_acp,
+        client_identity: client_identity_record,
     };
     let store_key = initialize_home_store(
         &home_dir,
@@ -449,7 +456,7 @@ pub(crate) async fn init_home_with_core_packs(
         )?,
     );
     let result: Result<Value> = async {
-        gents_store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
+        gents_store::schema::catalog::ensure_runtime_owned(init_node.clone()).await?;
         gents_store::local::store_key::upgrade::finish(&data_dir)?;
         stage("migrations_complete");
         owner_staged.serve(&init_node, initialized_identity.identity.clone());
@@ -597,7 +604,8 @@ pub(crate) async fn init_home_with_core_packs(
             .as_str()
             .context("init reports no default agent")?
             .to_owned();
-        output["default_packs"] = default_packs::install(&home_dir, &engineer, core_packs).await;
+        output["default_packs"] =
+            default_packs::install(&home_dir, &engineer, core_packs, registry.as_deref()).await;
         default_packs::record_installed(&home_dir)?;
     }
     Ok(output)
@@ -919,6 +927,44 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
     /// The init User: the client key that a fresh store's one-shot
     /// bootstrap makes the node's native admin.
     pub(crate) owner: &'a str,
+    /// The folder holding `owner`'s key, recorded when it is not the default.
+    pub(crate) client_identity: Option<String>,
+}
+
+/// The CLI client identity `init` sets a home up with: `--desktop-home`'s
+/// `cli` folder, recorded in the home so every later command given that home
+/// signs with it; else what the home already records, else the default.
+struct InitClientIdentity {
+    paths: gents_store::client_journal::paths::DesktopPaths,
+    recorded: Option<String>,
+}
+
+impl InitClientIdentity {
+    fn choose(home: &Path, desktop_home: Option<PathBuf>) -> Result<Self> {
+        let recorded = gents_store::local::home::recorded_client_identity(home);
+        let Some(desktop_home) = desktop_home else {
+            return Ok(Self {
+                paths: gents_service::home_state::cli_identity_paths(home)?,
+                recorded: recorded.map(|path| path.to_string_lossy().into_owned()),
+            });
+        };
+        let paths = gents_store::client_journal::paths::DesktopPaths::from_root(crate::absolutize(
+            desktop_home,
+        )?)
+        .cli_client();
+        if let Some(recorded) = recorded.filter(|recorded| recorded != paths.root()) {
+            anyhow::bail!(
+                "{} is administered by the client identity in {}, not {}; pass the --desktop-home it was set up with, or none. Nothing was changed.",
+                home.display(),
+                recorded.display(),
+                paths.root().display()
+            );
+        }
+        Ok(Self {
+            recorded: Some(paths.root().to_string_lossy().into_owned()),
+            paths,
+        })
+    }
 }
 
 struct HomeIdentityOptions<'a> {
@@ -1009,6 +1055,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         tool_root: tool_root.clone(),
         store_encryption: None,
         document_acp,
+        client_identity: options.client_identity.clone(),
     };
     let store_key = initialize_home_store(
         options.home,
@@ -2038,6 +2085,7 @@ mod tests {
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             store_lock: &lock,
             owner: owner.did(),
+            client_identity: None,
         };
         assert!(write_identity_only_home_metadata(options()).await.is_err());
         assert!(!home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
@@ -2066,6 +2114,7 @@ mod tests {
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             store_lock: &lock,
             owner: owner.did(),
+            client_identity: None,
         })
         .await
         .unwrap();
@@ -2819,7 +2868,7 @@ mod tests {
             gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
         let client =
             gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
-                &gents_service::home_state::cli_identity_paths().unwrap(),
+                &gents_service::home_state::cli_identity_paths(&home).unwrap(),
             )
             .await
             .unwrap();
@@ -3180,6 +3229,7 @@ mod tests {
                 tool_root: None,
                 store_encryption: None,
                 document_acp,
+                client_identity: None,
             },
         )
         .unwrap();
@@ -3292,6 +3342,8 @@ mod tests {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             no_default_packs: true,
+            registry: None,
+            desktop_home: None,
         }
     }
 }

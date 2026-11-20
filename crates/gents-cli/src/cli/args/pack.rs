@@ -13,10 +13,7 @@ pub(crate) struct PackShowArgs {
     pub(crate) package: String,
     #[arg(long, help = "Home whose pack store holds local packs")]
     pub(crate) home: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
     #[arg(
         long,
@@ -180,10 +177,7 @@ pub(crate) struct PackDiffArgs {
     pub(crate) b: String,
     #[arg(long, help = "Home whose pack store holds local packs")]
     pub(crate) home: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
 }
 

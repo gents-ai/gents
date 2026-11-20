@@ -1,5 +1,6 @@
 use crate::client_runtime::ClientRuntime;
 use anyhow::{ensure, Context, Result};
+use gents_protocol::authored_submission::AuthoredGoal;
 use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
 
 use crate::types::{
@@ -221,32 +222,24 @@ pub(super) async fn control_goal_with_reference(
         ..Default::default()
     };
     let starts_goal = matches!(operation, GoalOperation::Create { .. });
-    let receipt = if let Some(command_id) = &command_id {
-        core.control_session_goal_correlated(
-            command_id,
-            &request.node_did,
-            &session_id,
-            request.session_doc_id,
-            request.expected,
-            operation,
-            request.agent_did.as_deref(),
-            input,
+    let receipt = core
+        .control_session_goal_correlated(
+            AuthoredGoal {
+                node_did: request.node_did.clone(),
+                command_id: command_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                session_id: session_id.clone(),
+                session_doc_id: request.session_doc_id,
+                expected: request.expected,
+                operation,
+                agent_did: request.agent_did,
+                input,
+            },
             resume.as_ref().map(|submission| &submission.reference),
         )
         .await
-    } else {
-        core.control_session_goal(
-            &request.node_did,
-            &session_id,
-            request.session_doc_id,
-            request.expected,
-            operation,
-            request.agent_did.as_deref(),
-            input,
-        )
-        .await
-    }
-    .map_err(BridgeError::classify_transport_error)?;
+        .map_err(BridgeError::classify_transport_error)?;
     if let Some(command_id) = command_id {
         let retained = core
             .recover_goal_submission(&request.node_did, &command_id)

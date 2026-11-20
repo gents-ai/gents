@@ -324,10 +324,12 @@ async fn runtime_seal_case(unowned: bool) {
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "runtime-capability-writer",
-        did,
-        did,
-        agent.did(),
-        "runtime-capability-session",
+        gents_protocol::request_admission::RequestScope::new(
+            did,
+            did,
+            agent.did(),
+            "runtime-capability-session",
+        ),
         "Apply the owned patch",
         "interactive",
         &timestamp,

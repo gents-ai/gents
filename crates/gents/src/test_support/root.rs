@@ -1,5 +1,5 @@
-use gents_documents::test_support::{bootstrap_signed_test_node, set_test_default_agent_as};
-use gents_inference::test_support::install_test_agent_binding_with_access;
+use gents_documents::test_support::enroll_test_user;
+use gents_inference::test_support::embedded::install_user_default_agent;
 
 #[cfg(test)]
 const CAPTURED_EVENT_TARGETS: &[&str] = &[
@@ -74,8 +74,7 @@ pub(crate) async fn signed_test_node_without_agent_from_db(
     gents_store::identity::KeyIdentity,
     gents_store::config_client::ConfigAccess,
 ) {
-    use gents_store::config_client::ConfigAccess;
-    use gents_store::identity::{GrantSet, NodeIdentity};
+    use gents_store::identity::NodeIdentity;
 
     let fixture_name = name.to_owned();
     let user = tokio::task::spawn_blocking(move || {
@@ -85,14 +84,8 @@ pub(crate) async fn signed_test_node_without_agent_from_db(
     .unwrap();
     let runtime = db.node_identity.as_ref();
     assert_ne!(runtime.did(), user.did());
-    let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
-    let user_did = identity::Did::new(user.did()).unwrap();
-    GrantSet::OperatorUser
-        .grant(&admin, &user_did)
-        .await
-        .unwrap();
     let access = db.client_access(&user);
-    bootstrap_signed_test_node(&access, runtime.did()).await;
+    enroll_test_user(&db.node, runtime, &user, &access).await;
     (db, user, access)
 }
 
@@ -105,22 +98,8 @@ pub async fn signed_test_node_from_db(
     gents_store::config_client::ConfigAccess,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    use gents_store::identity::NodeIdentity;
-
     let (db, user, access) = signed_test_node_without_agent_from_db(db, name).await;
-    let runtime = db.node_identity.as_ref();
-    let user_did = identity::Did::new(user.did()).unwrap();
     let binding =
-        gents_store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
-            .await
-            .unwrap();
-    install_test_agent_binding_with_access(
-        runtime.did(),
-        "Default fixture agent",
-        &binding,
-        &access,
-    )
-    .await;
-    set_test_default_agent_as(&access, runtime.did(), &binding.agent_did).await;
+        install_user_default_agent(&db.node, db.node_identity.as_ref(), &user, &access).await;
     (db, user, access, binding)
 }

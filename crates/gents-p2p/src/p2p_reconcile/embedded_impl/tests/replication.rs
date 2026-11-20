@@ -267,6 +267,16 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         1,
         "signed genesis must retain its actual creator on the receiver"
     );
+    assert_eq!(
+        gents_store::provenance::document_signers(&receiver_author, &doc).await?,
+        gents_store::provenance::DocumentSigners {
+            created: Some(candidate.did().to_owned()),
+            latest: Some(candidate.did().to_owned()),
+            writers: std::collections::BTreeSet::from([candidate.did().to_owned()]),
+            unsigned: false,
+        },
+        "the receiver must name the writer from the synced signature"
+    );
     let offer_b = issuer.mint().await?;
     let request_b = crate::p2p_reconcile::enrollment_candidate::sign_enrollment_request(
         &candidate,

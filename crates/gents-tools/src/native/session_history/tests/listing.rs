@@ -39,10 +39,12 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
         let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
-            identity.did(),
-            identity.did(),
-            "shared-agent",
-            session_id,
+            gents_protocol::request_admission::RequestScope::new(
+                identity.did(),
+                identity.did(),
+                "shared-agent",
+                session_id,
+            ),
             "sessions current caller fixture",
             "interactive",
             "2026-09-01T00:00:00Z",

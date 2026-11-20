@@ -5,7 +5,7 @@ use std::time::Duration;
 use gents_documents::{TaskHook, TaskHookPhase};
 use gents_session::request::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_toolcalls::call::task_hooks::{
     recover_task_hook_records, HookCommandResult, RecordedHookAttempt, TaskHookRecord,
     TaskHookRecordStore,
@@ -82,6 +82,7 @@ impl Fixture {
                 deadline_duration_secs: 60,
                 execution_origin: ExecutionOrigin::Interactive,
                 backend_id: "task-hook-recovery".into(),
+                operator_tool_root: None,
             },
             TriggerLineage::default(),
             Some(self.agent_identity.clone()),

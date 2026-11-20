@@ -378,7 +378,7 @@ fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
                 } else {
                     DocumentSourceKind::Url("https://example.com/a.png".into())
                 },
-                media_type: Some(ImageMediaType::PNG),
+                media_type: Some(ImageMediaType::Png),
                 detail: None,
                 additional_params: None,
             })

@@ -136,7 +136,7 @@ pub(crate) async fn kill(
     }
     if lifecycle
         .cancel_during_run_owned(
-            gents_session::session::tool_call_state::CancelCause::UserCancelled,
+            gents_protocol::tool_call::CancelCause::UserCancelled,
             "explicit_cancel",
         )
         .await?

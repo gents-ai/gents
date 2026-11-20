@@ -1,6 +1,6 @@
 use super::*;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -54,10 +54,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
     let reservation = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "reservation",
-        identity.did(),
-        user.did(),
-        &binding.agent_did,
-        "session",
+        RequestScope::new(identity.did(), user.did(), &binding.agent_did, "session"),
         "reserve",
         "interactive",
         "2026-10-25T00:00:00Z",
@@ -108,10 +105,12 @@ async fn goal_provenance_cases() -> GoalProvenance {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("request-{index}"),
-            identity.did(),
-            if index == 12 { guest.did() } else { user.did() },
-            &binding.agent_did,
-            "session",
+            RequestScope::new(
+                identity.did(),
+                if index == 12 { guest.did() } else { user.did() },
+                &binding.agent_did,
+                "session",
+            ),
             "Review the changes",
             "interactive",
             "2026-10-25T00:00:00Z",
@@ -420,12 +419,14 @@ async fn goal_provenance_cases() -> GoalProvenance {
         ] {
             push_canonical_text_message_for_node(
                 &mut rows,
-                &format!("authored:{doc}:{suffix}"),
-                "session",
-                Some(&doc),
-                sequence,
-                role,
-                "Review the changes",
+                CanonicalText {
+                    doc_id: &format!("authored:{doc}:{suffix}"),
+                    session_id: "session",
+                    request_doc_id: Some(&doc),
+                    sequence,
+                    role,
+                    text: "Review the changes",
+                },
                 identity.did(),
                 Some(if index == 12 { guest.did() } else { user.did() }),
             );

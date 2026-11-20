@@ -4,39 +4,15 @@ use defra_node::Node as EmbeddedNode;
 
 use super::*;
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::{fixture_agent, fixture_agent_access, fixture_root};
 
 const FIXTURE_CLOSE: &[MailboxCloseCollection] = &[MailboxCloseCollection {
     collection: "MailboxFixture",
     correlation_field: "mailbox_item_key",
 }];
 
-pub(super) fn root_identity() -> gents_store::identity::KeyIdentity {
-    let home = tempfile::tempdir().unwrap();
-    crate::request::lifecycle::test_support::pin_fixed_signing_identity(home.path())
-}
-
-pub(super) fn agent_identity() -> Arc<dyn NodeIdentity> {
-    let root = root_identity();
-    let nonce = "b".repeat(64);
-    let binding = gents_protocol::agent_identity::AgentIdentityBinding {
-        agent_did: gents_store::identity::derive_agent_identity(&root, &nonce)
-            .unwrap()
-            .did()
-            .to_owned(),
-        creation_nonce: nonce,
-    };
-    gents_store::identity::resolve_agent_identity(&root, &binding).unwrap()
-}
-
-pub(super) fn agent_access(node: &Arc<EmbeddedNode>) -> gents_store::config_client::ConfigAccess {
-    let agent = agent_identity();
-    gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap()
-}
+pub(super) const AGENT_NONCE: &str =
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 pub(super) fn fixture_recipient(label: &str) -> String {
     if !label.starts_with("did:test:") {
@@ -82,7 +58,7 @@ pub(super) async fn load_as_creator(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,
 ) -> Result<Option<MailboxItem>> {
-    load_mailbox_item_with_access(&agent_access(node), doc_id).await
+    load_mailbox_item_with_access(&fixture_agent_access(node, AGENT_NONCE), doc_id).await
 }
 
 pub(super) async fn list_as_creator(
@@ -96,7 +72,7 @@ pub(super) async fn list_as_creator(
         _ => MailboxListScope::All,
     };
     let items = crate::operations::mailbox::list(
-        &agent_access(node),
+        &fixture_agent_access(node, AGENT_NONCE),
         &MailboxListInput {
             scope,
             requester_did: Some(fixture_recipient(requester)),
@@ -114,7 +90,10 @@ pub(super) async fn dismiss_as_creator(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,
 ) -> Result<MailboxItem> {
-    Ok(crate::operations::mailbox::dismiss(&agent_access(node), doc_id).await?)
+    Ok(
+        crate::operations::mailbox::dismiss(&fixture_agent_access(node, AGENT_NONCE), doc_id)
+            .await?,
+    )
 }
 
 pub(super) async fn stamp_create(
@@ -124,7 +103,7 @@ pub(super) async fn stamp_create(
 ) -> Result<MailboxItem> {
     stamp_create_with_access(
         node,
-        &agent_access(node),
+        &fixture_agent_access(node, AGENT_NONCE),
         context,
         args,
         MAILBOX_CLOSE_COLLECTIONS,
@@ -139,10 +118,17 @@ pub(super) async fn stamp_create_with_close_collections(
     collections: &[MailboxCloseCollection],
 ) -> Result<MailboxItem> {
     anyhow::ensure!(
-        context.node_did == root_identity().did(),
+        context.node_did == fixture_root().did(),
         "foreign-node mailbox observations require replication from their owning node"
     );
-    stamp_create_with_access(node, &agent_access(node), context, args, collections).await
+    stamp_create_with_access(
+        node,
+        &fixture_agent_access(node, AGENT_NONCE),
+        context,
+        args,
+        collections,
+    )
+    .await
 }
 
 /// A foreign node label exercises the page predicate; transport provenance is
@@ -154,9 +140,9 @@ async fn seed_foreign_mailbox_row(
 ) -> String {
     let source = escape_graphql_string(source);
     let deadline = escape_graphql_string(deadline);
-    let agent = escape_graphql_string(agent_identity().did());
+    let agent = escape_graphql_string(fixture_agent(AGENT_NONCE).did());
     let now = Utc::now().to_rfc3339();
-    let response = agent_access(node).write("test.mailbox.foreign_label", &format!(r#"mutation {{ create_MailboxItem(input: {{
+    let response = fixture_agent_access(node, AGENT_NONCE).write("test.mailbox.foreign_label", &format!(r#"mutation {{ create_MailboxItem(input: {{
         item_key: "session:{source}:ask:1", requester_did: "did:test:owner", node_did: "did:test:foreign",
         status: "open", kind: "ask", action: "write_document", title: "fixture", source_kind: "session",
         source_id: "{source}", target_node_did: "did:test:foreign", target_agent_did: "{agent}",
@@ -166,7 +152,7 @@ async fn seed_foreign_mailbox_row(
 }
 
 pub(super) async fn test_node() -> Arc<EmbeddedNode> {
-    let root = root_identity();
+    let root = fixture_root();
     let db = gents_inference::test_support::test_db_as(
         "mailbox",
         root.did(),
@@ -178,7 +164,7 @@ pub(super) async fn test_node() -> Arc<EmbeddedNode> {
         node.clone(),
         identity::Did::new(root.did()).unwrap(),
     );
-    let agent = identity::Did::new(agent_identity().did()).unwrap();
+    let agent = identity::Did::new(fixture_agent(AGENT_NONCE).did()).unwrap();
     for permission in [
         gents_store::config_client::NodePermission::DocumentRead,
         gents_store::config_client::NodePermission::DocumentUpdate,
@@ -206,8 +192,8 @@ pub(super) async fn test_node() -> Arc<EmbeddedNode> {
 pub(super) fn context(owner: &str) -> MailboxStampContext {
     MailboxStampContext {
         requester_did: fixture_recipient(owner),
-        node_did: root_identity().did().into(),
-        agent_did: agent_identity().did().into(),
+        node_did: fixture_root().did().into(),
+        agent_did: fixture_agent(AGENT_NONCE).did().into(),
         session_id: Some("session-1".into()),
     }
 }
@@ -294,9 +280,9 @@ async fn stamping_is_owner_scoped_idempotent_and_never_reopens() {
     );
     let duplicate_open = duplicate_open
         .replace("did:test:owner-a", &fixture_recipient("did:test:owner-a"))
-        .replace("did:test:agent", root_identity().did())
-        .replace("operator", agent_identity().did());
-    agent_access(&node)
+        .replace("did:test:agent", fixture_root().did())
+        .replace("operator", fixture_agent(AGENT_NONCE).did());
+    fixture_agent_access(&node, AGENT_NONCE)
         .write("test.mailbox.duplicate", &duplicate_open)
         .await
         .unwrap();
@@ -521,16 +507,16 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     );
     let event_child = event_child
         .replace("did:test:owner", &fixture_recipient("did:test:owner"))
-        .replace("did:test:agent", root_identity().did())
-        .replace("operator", agent_identity().did());
-    agent_access(&node)
+        .replace("did:test:agent", fixture_root().did())
+        .replace("operator", fixture_agent(AGENT_NONCE).did());
+    fixture_agent_access(&node, AGENT_NONCE)
         .write("test.mailbox.event_child", &event_child)
         .await
         .unwrap();
     let observer_report = sweep_open_mailbox_items_with_close_collections(
         &node,
-        root_identity().did(),
-        &[agent_identity()],
+        fixture_root().did(),
+        &[fixture_agent(AGENT_NONCE)],
         None,
         FIXTURE_CLOSE,
     )
@@ -566,16 +552,16 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     );
     let create_request = create_request
         .replace("did:test:owner", &fixture_recipient("did:test:owner"))
-        .replace("did:test:agent", root_identity().did())
-        .replace("operator", agent_identity().did());
-    agent_access(&node)
+        .replace("did:test:agent", fixture_root().did())
+        .replace("operator", fixture_agent(AGENT_NONCE).did());
+    fixture_agent_access(&node, AGENT_NONCE)
         .write("test.mailbox.unsigned_reply", &create_request)
         .await
         .unwrap();
     let report = sweep_open_mailbox_items_with_close_collections(
         &node,
-        root_identity().did(),
-        &[agent_identity()],
+        fixture_root().did(),
+        &[fixture_agent(AGENT_NONCE)],
         None,
         FIXTURE_CLOSE,
     )
@@ -605,16 +591,16 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     );
     let unrelated_request = unrelated_request
         .replace("did:test:owner", &fixture_recipient("did:test:owner"))
-        .replace("did:test:agent", root_identity().did())
-        .replace("operator", agent_identity().did());
-    agent_access(&node)
+        .replace("did:test:agent", fixture_root().did())
+        .replace("operator", fixture_agent(AGENT_NONCE).did());
+    fixture_agent_access(&node, AGENT_NONCE)
         .write("test.mailbox.unrelated_request", &unrelated_request)
         .await
         .unwrap();
     let request_only = sweep_open_mailbox_items_with_close_collections(
         &node,
-        root_identity().did(),
-        &[agent_identity()],
+        fixture_root().did(),
+        &[fixture_agent(AGENT_NONCE)],
         None,
         FIXTURE_CLOSE,
     )
@@ -638,8 +624,8 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     assert!(!node.execute(&fixture).await.has_errors());
     let report = sweep_open_mailbox_items_with_close_collections(
         &node,
-        root_identity().did(),
-        &[agent_identity()],
+        fixture_root().did(),
+        &[fixture_agent(AGENT_NONCE)],
         None,
         FIXTURE_CLOSE,
     )
@@ -674,9 +660,9 @@ async fn poisoned_rows_follow_the_lean_sweep_model() {
                         created_at: "{now}", updated_at: "{now}"
                     }}) {{ _docID }} }}"#
                 )
-                .replace("did:test:agent", root_identity().did())
-                .replace("operator", agent_identity().did());
-                let response = agent_access(&node)
+                .replace("did:test:agent", fixture_root().did())
+                .replace("operator", fixture_agent(AGENT_NONCE).did());
+                let response = fixture_agent_access(&node, AGENT_NONCE)
                     .write("test.mailbox.undecodable", &undecodable)
                     .await
                     .unwrap();
@@ -691,9 +677,9 @@ async fn poisoned_rows_follow_the_lean_sweep_model() {
                         target_agent_did: "operator", created_at: "{now}", updated_at: "{now}"
                     }}) {{ _docID }} }}"#
                 )
-                .replace("did:test:agent", root_identity().did())
-                .replace("operator", agent_identity().did());
-                let response = agent_access(&node)
+                .replace("did:test:agent", fixture_root().did())
+                .replace("operator", fixture_agent(AGENT_NONCE).did());
+                let response = fixture_agent_access(&node, AGENT_NONCE)
                     .write("test.mailbox.hostile", &hostile)
                     .await
                     .unwrap();
@@ -714,8 +700,8 @@ async fn poisoned_rows_follow_the_lean_sweep_model() {
 
         let report = sweep_open_mailbox_items_with_close_collections(
             &node,
-            root_identity().did(),
-            &[agent_identity()],
+            fixture_root().did(),
+            &[fixture_agent(AGENT_NONCE)],
             None,
             FIXTURE_CLOSE,
         )
@@ -725,7 +711,7 @@ async fn poisoned_rows_follow_the_lean_sweep_model() {
         let mut open_rows = Vec::new();
         let mut expired_rows = Vec::new();
         for doc_id in &doc_ids {
-            let response = agent_access(&node)
+            let response = fixture_agent_access(&node, AGENT_NONCE)
                 .execute(&format!(
                     "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ status }} }}",
                     escape_graphql_string(doc_id)
@@ -817,7 +803,7 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
             .await
             .unwrap();
             assert!(transition_open_item(
-                &agent_access(&node),
+                &fixture_agent_access(&node, AGENT_NONCE),
                 &closed,
                 MailboxStatus::Acted,
                 None
@@ -827,13 +813,13 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
 
             seed_foreign_mailbox_row(&node, &format!("000-foreign-{index:04}"), &future).await;
         }
-        let response = agent_access(&node)
+        let response = fixture_agent_access(&node, AGENT_NONCE)
             .execute(&format!(
                 r#"{{ MailboxItem(filter: {{ _and: [
                 {{ node_did: {{ _eq: "{}" }} }},
                 {{ status: {{ _eq: "open" }} }}
             ] }}, order: {{ item_key: ASC }}) {{ _docID item_key }} }}"#,
-                escape_graphql_string(root_identity().did())
+                escape_graphql_string(fixture_root().did())
             ))
             .await
             .unwrap();
@@ -914,11 +900,11 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
                     );
                 }
                 let page_query = open_mailbox_page_query(
-                    root_identity().did(),
-                    agent_identity().did(),
+                    fixture_root().did(),
+                    fixture_agent(AGENT_NONCE).did(),
                     Some(current_cursor),
                 );
-                let planned = agent_access(&node)
+                let planned = fixture_agent_access(&node, AGENT_NONCE)
                     .execute(&format!("query @explain(type: simple) {page_query}"))
                     .await
                     .unwrap();
@@ -928,7 +914,7 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
                         .contains("MailboxItem_node_status_item_key"),
                     "mailbox page must select its registered compound index: {plan}"
                 );
-                let explain = agent_access(&node)
+                let explain = fixture_agent_access(&node, AGENT_NONCE)
                     .execute(&format!("query @explain(type: execute) {page_query}"))
                     .await
                     .unwrap();
@@ -951,8 +937,8 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
             let turn_started = Instant::now();
             let page = sweep_open_mailbox_items_with_clock(
                 &node,
-                root_identity().did(),
-                &[agent_identity()],
+                fixture_root().did(),
+                &[fixture_agent(AGENT_NONCE)],
                 cursor.as_deref(),
                 FIXTURE_CLOSE,
                 || turn_started,

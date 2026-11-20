@@ -4,6 +4,7 @@ use gents_inference::llm::ToolCallHookAction;
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 

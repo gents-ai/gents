@@ -30,6 +30,7 @@ async fn a_scaffolded_plugin_builds_and_passes_its_cases_inside_the_sandbox() {
         &root,
         &dir,
         true,
+        None,
     )
     .await
     .unwrap_or_else(|error| panic!("{error:#}"));

@@ -149,10 +149,12 @@ async fn fixture(name: &str) -> Fixture {
     let create = gents_protocol::request_admission::AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        runtime.did(),
-        user.did(),
-        parent.agent_did.clone(),
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            runtime.did(),
+            user.did(),
+            parent.agent_did.clone(),
+            session_id,
+        ),
         "start child",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -1238,10 +1240,12 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             let mut forged = gents_protocol::request_admission::AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 "forged-source",
-                fixture.runtime.did(),
-                fixture.parent.did(),
-                fixture.child.did(),
-                &first.session_id,
+                gents_protocol::request_admission::RequestScope::new(
+                    fixture.runtime.did(),
+                    fixture.parent.did(),
+                    fixture.child.did(),
+                    &first.session_id,
+                ),
                 "forged source",
                 "interactive",
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

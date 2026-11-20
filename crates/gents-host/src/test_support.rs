@@ -181,44 +181,12 @@ pub async fn publish_test_node(node: &std::sync::Arc<defra_node::Node>) -> Strin
 /// [`publish_test_node`] for a fixture that names its Node's DID; the DID
 /// must be the node's runtime.
 pub async fn publish_test_node_as(node: &std::sync::Arc<defra_node::Node>, node_did: &str) {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    use gents_store::config_client::ConfigAccess;
-
     assert_eq!(
         node.node_identity_did(),
         Some(node_did),
         "the fixture Node is published by its own runtime"
     );
-    if gents_documents::load_node(node, node_did)
-        .await
-        .unwrap()
-        .is_some()
-    {
-        return;
-    }
-    let value = serde_json::json!({"node_did": node_did});
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents_store::collection::Collection::Node,
-        add: value.clone(),
-        update: value,
-    }])
-    .unwrap();
-    ConfigAccess::local_as(node.clone(), ::identity::Did::new(node_did).unwrap())
-        .transact_write("test.publish_node", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-                .map(|_| ())
-            })
-        })
-        .await
-        .unwrap();
+    gents_documents::test_support::ensure_test_node(node, node_did).await;
 }
 
 /// A fixture node served over its own DefraDB HTTP endpoint with node ACP, so
@@ -398,10 +366,6 @@ impl ClientHome {
     }
 
     async fn in_directory(directory: tempfile::TempDir, user_owns_nac: bool) -> Self {
-        use gents_documents::apply_desired_state_plan;
-        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        use gents_store::identity::NodeIdentity as _;
-
         let user_dir = tempfile::tempdir().unwrap();
         let user = gents_store::identity::KeyIdentity::load_or_create(
             user_dir.path().join("user.key"),
@@ -418,38 +382,14 @@ impl ClientHome {
         let home = gents::runtime::embedded::EmbeddedHome::in_tempdir(directory, None)
             .await
             .unwrap();
-        gents_store::identity::GrantSet::OperatorUser
-            .grant(
-                &gents_store::config_client::ConfigAccess::local_as(
-                    home.node.clone(),
-                    ::identity::Did::new(home.did()).unwrap(),
-                ),
-                &::identity::Did::new(user.did()).unwrap(),
-            )
-            .await
-            .unwrap();
         let access = user_access(home.graphql_endpoint().unwrap(), &user);
-        let node = serde_json::json!({"node_did": home.did()});
-        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: gents_store::collection::Collection::Node,
-            add: node.clone(),
-            update: node,
-        }])
-        .unwrap();
-        access
-            .transact_write("test.client_home.node", |txn| {
-                let plan = &plan;
-                Box::pin(async move {
-                    apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &gents_inference::resolved::ProviderProfilePolicy,
-                    )
-                    .await
-                })
-            })
-            .await
-            .unwrap();
+        gents_documents::test_support::enroll_test_user(
+            &home.node,
+            home.identity.as_ref(),
+            &user,
+            &access,
+        )
+        .await;
         Self {
             home,
             user,
@@ -892,6 +832,10 @@ impl crate::serve::ServeClient for TestServeClient {
 
     fn version(&self) -> crate::http::version::VersionResponse {
         crate::http::version::version_response()
+    }
+
+    fn host_executable(&self) -> Option<std::path::PathBuf> {
+        None
     }
 
     async fn bound_root_agents(

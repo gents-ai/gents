@@ -63,8 +63,8 @@ async fn reads_document(
 
 async fn holds_the_node_policies(node: &defra_node::Node, owner: &str) -> anyhow::Result<()> {
     let context = defra_core::RequestContext::default().with_identity(Some(owner.to_owned()));
-    let ids = gents_protocol::schemas::HomePolicyIds::shared();
-    for policy in gents_protocol::schemas::BuiltInPolicy::ALL {
+    let ids = HomePolicyIds::shared();
+    for policy in BuiltInPolicy::ALL {
         assert_eq!(
             node.add_dac_policy_with_counter_as(&context, policy.definition(), 0)
                 .await?,
@@ -99,7 +99,7 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
         .clone();
     assert!(node.vera_acp().is_some());
     holds_the_node_policies(&node, owner.as_str()).await?;
-    for entry in gents_migration::DEFAULT_BASELINE.iter() {
+    for entry in gents_store::schema::catalog::BASELINE.iter() {
         assert!(node.get_collection(entry.name)?.is_some(), "{}", entry.name);
     }
     node.document_acp()
