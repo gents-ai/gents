@@ -9,7 +9,9 @@ use super::gate::mutation_write_gate;
 use super::native::NativeOperationTracker;
 #[cfg(test)]
 use super::rollback::RollbackDropCleanupPause;
-use super::rollback::{begin_embedded_owned, begin_http_owned, RollbackOnDrop};
+use super::rollback::{
+    begin_embedded_owned, begin_http_owned, EmbeddedBegin, EmbeddedOwnerHandles, RollbackOnDrop,
+};
 use super::{ConfigClientError, GraphqlEndpoint, Result};
 use crate::config_client::write_telemetry::WriteOperation;
 use crate::config_client::AgentPublicationObserver;
@@ -73,6 +75,42 @@ pub(super) enum EmbeddedTransactionPurpose {
 }
 
 impl<'a> ConfigApplyTxn<'a> {
+    /// What lets the caller wait, once this transaction committed, for the
+    /// access changes it owes (`Identity.OwedRegistration.dependentStep`).
+    pub fn owed_access_ticket(&self) -> Result<crate::config_client::owed::OwedAccessTicket> {
+        use crate::config_client::owed::OwedAccessTicket;
+        match &self.backend {
+            TxnBackend::Embedded {
+                node,
+                handle,
+                identity,
+                ..
+            } => Ok(OwedAccessTicket::Embedded {
+                node: node.clone(),
+                handle: handle.clone(),
+                actor: identity.as_ref().map(ToString::to_string),
+            }),
+            TxnBackend::Http { endpoint, id, .. } => match &self.loopback_node {
+                Some(node) => Ok(OwedAccessTicket::Embedded {
+                    node: node.clone(),
+                    handle: id
+                        .parse()
+                        .map_err(|_| ConfigClientError::OwedAwaitTransaction)?,
+                    actor: endpoint.principal_did().map(str::to_owned),
+                }),
+                None if !endpoint.reports_external_provider() => Ok(OwedAccessTicket::NothingOwed),
+                None => Ok(OwedAccessTicket::Http {
+                    endpoint: (*endpoint).clone(),
+                    node_did: endpoint
+                        .runtime_node_did()
+                        .ok_or(ConfigClientError::OwedAwaitTransaction)?
+                        .to_owned(),
+                    transaction: id.clone(),
+                }),
+            },
+        }
+    }
+
     /// The node's handle of this embedded transaction, which names what it
     /// owes the document ACP provider once it commits.
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -264,13 +302,17 @@ impl<'a> ConfigApplyTxn<'a> {
             | EmbeddedTransactionPurpose::ReadOnly => Arc::new(NativeOperationTracker::default()),
         };
         let (rollback_on_drop, handle) = begin_embedded_owned(
-            Arc::clone(node),
-            native_gate,
-            read_only,
-            operation,
-            write_guard,
-            Arc::clone(&native_operations),
-            cancellation_rollback_scheduled,
+            EmbeddedOwnerHandles {
+                node: Arc::clone(node),
+                native_gate,
+                native_operations: Arc::clone(&native_operations),
+                cancellation_rollback_scheduled,
+            },
+            EmbeddedBegin {
+                read_only,
+                operation,
+                write_guard,
+            },
             |_| std::future::ready(()),
         )
         .await?;
