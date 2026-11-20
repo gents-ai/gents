@@ -939,7 +939,7 @@ async fn a_client_waits_over_http_for_its_own_access_changes_on_a_vera_home() ->
                     gents_protocol::schemas::NODE,
                 )
                 .await?;
-                Ok::<_, ConfigClientError>(txn.owed_access_ticket()?)
+                txn.owed_access_ticket()
             })
         })
         .await?;
