@@ -107,10 +107,9 @@ fn archive_moves_the_home_and_client_state_to_a_sibling_backup_and_spares_other_
         );
     }
     for retained in [
-        "peers.json",
+        "connections.json",
         "principal.json",
         "principal.ed25519.key",
-        "node.iroh.key",
     ] {
         assert!(
             desktop.root().join(retained).exists(),
@@ -314,13 +313,12 @@ async fn client_start_archives_state_paired_with_a_missing_home() {
     let (temp, state) = orchestration_state();
     let desktop = state.policy.desktop_paths.clone();
     write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN");
-    write(desktop.peer_directory_path(), "{}");
+    write(desktop.runtime_directory_path(), r#"{"connections":[]}"#);
     write(desktop.identity_key_path(), "existing User key");
     write(
         desktop.principal_metadata_path(),
         r#"{"did":"did:key:existing","public_key_bytes":[1,2,3]}"#,
     );
-    write(desktop.iroh_secret_key_path(), "existing client p2p key");
     write(
         desktop.store_encryption_path(),
         r#"{"version":1,"custody":"macos-keychain","keychain_label":"existing-client-store"}"#,
@@ -344,16 +342,12 @@ async fn client_start_archives_state_paired_with_a_missing_home() {
         .expect("orphaned state is archived");
     assert!(reset.join("desktop/node/MANIFEST").is_file());
     assert!(!desktop.node_data_dir().exists());
-    assert!(desktop.peer_directory_path().exists());
+    assert!(desktop.runtime_directory_path().exists());
     assert_eq!(
         std::fs::read_to_string(desktop.identity_key_path()).unwrap(),
         "existing User key"
     );
     assert!(desktop.principal_metadata_path().is_file());
-    assert_eq!(
-        std::fs::read_to_string(desktop.iroh_secret_key_path()).unwrap(),
-        "existing client p2p key"
-    );
     assert!(desktop.store_encryption_path().is_file());
     assert!(!desktop.root().join(MANAGED_SERVER_CONFIG).exists());
     assert!(
@@ -365,34 +359,32 @@ async fn client_start_archives_state_paired_with_a_missing_home() {
     );
 }
 
-fn saved_peer(peer_id: &str, node_did: &str, local_node_home: Option<&Path>) -> serde_json::Value {
+fn saved_peer(_label: &str, node_did: &str, local_node_home: Option<&Path>) -> serde_json::Value {
     serde_json::json!({
-        "peer_id": peer_id,
         "label": "Forge",
-        "addr": "endpoint",
         "node_did": node_did,
-        "source": "enrollment",
         "graphql": "http://127.0.0.1:21919/api/v0/graphql",
         "local_node_home": local_node_home.map(|home| home.to_string_lossy()),
-        "created_at": "2026-11-12T02:33:54Z",
-        "updated_at": "2026-11-12T02:35:09Z"
+        "access_request": null, "access_state": null
     })
 }
 
 fn write_peers(state: &DesktopAppState, peers: &[serde_json::Value]) {
     write(
-        state.policy.desktop_paths.peer_directory_path(),
-        &serde_json::json!({ "peers": peers }).to_string(),
+        state.policy.desktop_paths.runtime_directory_path(),
+        &serde_json::json!({ "connections": peers }).to_string(),
     );
 }
 
 async fn saved_peer_ids(state: &DesktopAppState) -> Vec<String> {
-    gents_desktop_core::client::load_peer_records(state.policy.desktop_paths.peer_directory_path())
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|peer| peer.peer_id)
-        .collect()
+    gents_store::client_journal::runtime_directory::load_runtime_connections(
+        state.policy.desktop_paths.runtime_directory_path(),
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|connection| connection.node_did)
+    .collect()
 }
 
 fn write_reviewed_for_gone_home(state: &DesktopAppState) {
@@ -430,16 +422,7 @@ async fn client_start_retires_the_local_peer_of_a_missing_home_and_keeps_remotes
 
     assert!(retired.local_node_lost);
     assert_eq!(retired.local_peers, 1);
-    assert_eq!(saved_peer_ids(&state).await, ["studio"]);
-    let archive = retired
-        .archive
-        .expect("orphaned state is archived")
-        .join("desktop/local-peers.json");
-    let archived: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(archive).unwrap()).unwrap();
-    assert_eq!(archived[0]["peer_id"], "old-local");
-    assert_eq!(archived.as_array().unwrap().len(), 1);
-    assert!(!desktop.retired_local_peers_path().exists());
+    assert_eq!(saved_peer_ids(&state).await, ["did:key:studio"]);
 }
 
 #[tokio::test]
@@ -454,57 +437,6 @@ async fn a_local_peer_left_after_an_earlier_archive_is_retired_on_the_next_launc
     let retired = retire_orphaned_client_state(&state).await.unwrap();
 
     assert!(retired.archive.is_none());
-    assert_eq!(retired.local_peers, 1);
-    assert!(saved_peer_ids(&state).await.is_empty());
-    assert!(state
-        .policy
-        .desktop_paths
-        .retired_local_peers_path()
-        .is_file());
-}
-
-#[tokio::test]
-async fn a_failed_peer_step_moves_nothing_and_the_next_launch_retries() {
-    let (_temp, state) = orchestration_state();
-    let desktop = state.policy.desktop_paths.clone();
-    let home = state.policy.node_home.clone().unwrap();
-    write_peers(
-        &state,
-        &[saved_peer("old-local", "did:key:gone", Some(&home))],
-    );
-    write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN");
-    write_reviewed_for_gone_home(&state);
-    let obstacle = desktop.retired_local_peers_path();
-    std::fs::create_dir_all(&obstacle).unwrap();
-
-    assert!(retire_orphaned_client_state(&state).await.is_err());
-    assert_eq!(saved_peer_ids(&state).await, ["old-local"]);
-    assert!(desktop.root().join(MANAGED_SERVER_CONFIG).is_file());
-    assert!(desktop.node_data_dir().join("MANIFEST").is_file());
-
-    std::fs::remove_dir(&obstacle).unwrap();
-    let retired = retire_orphaned_client_state(&state).await.unwrap();
-    assert_eq!(retired.local_peers, 1);
-    assert!(retired.archive.is_some());
-    assert!(saved_peer_ids(&state).await.is_empty());
-    assert!(!desktop.root().join(MANAGED_SERVER_CONFIG).exists());
-}
-
-#[tokio::test]
-async fn a_broken_peer_archive_does_not_block_start() {
-    let (_temp, state) = orchestration_state();
-    let home = state.policy.node_home.clone().unwrap();
-    write_peers(
-        &state,
-        &[saved_peer("old-local", "did:key:gone", Some(&home))],
-    );
-    write(
-        &state.policy.desktop_paths.retired_local_peers_path(),
-        "{ not json",
-    );
-
-    let retired = retire_orphaned_client_state(&state).await.unwrap();
-
     assert_eq!(retired.local_peers, 1);
     assert!(saved_peer_ids(&state).await.is_empty());
 }
@@ -522,7 +454,7 @@ async fn an_unreadable_init_record_keeps_the_local_peer() {
     let retired = retire_orphaned_client_state(&state).await.unwrap();
 
     assert!(!retired.local_node_lost);
-    assert_eq!(saved_peer_ids(&state).await, ["old-local"]);
+    assert_eq!(saved_peer_ids(&state).await, ["did:key:old"]);
 }
 
 #[cfg(unix)]

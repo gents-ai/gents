@@ -21,7 +21,6 @@ pub struct Rect {
 }
 
 impl Rect {
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn contains(&self, x: f64, y: f64) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
     }
@@ -43,7 +42,6 @@ pub struct Placement {
 /// macOS virtual key code, from which the app derives the event's `code`.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct HandedKey {
     key: String,
     key_code: u16,
@@ -68,12 +66,10 @@ struct PageState {
 /// machine together with the folder its page may read, the file's own.
 /// A page asked for a window of its own: the app opens it in a new tab.
 #[derive(Clone, serde::Serialize)]
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct NewTab {
     url: String,
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) enum Target {
     Web(String),
     File {
@@ -84,7 +80,6 @@ pub(crate) enum Target {
 
 /// A web address (`http`, `https`), or a local file as a `file://` URL, an
 /// absolute path or one under `~/`.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 async fn target(text: &str) -> Result<Target, String> {
     let text = text.trim();
     let path = match tauri::Url::parse(text) {
@@ -121,7 +116,6 @@ async fn target(text: &str) -> Result<Target, String> {
 }
 
 #[cfg(target_os = "macos")]
-#[allow(unused_unsafe)]
 mod mac {
     use std::cell::RefCell;
     use std::ffi::c_void;
@@ -321,7 +315,7 @@ mod mac {
                 let url = unsafe { action.request().URL() };
                 let scheme = url
                     .as_ref()
-                    .and_then(|url| unsafe { url.scheme() })
+                    .and_then(|url| url.scheme())
                     .map(|scheme| scheme.to_string());
                 /* web pages and what they embed, and a local page's own
                 folder; a link to another scheme or elsewhere on the disk
@@ -331,7 +325,7 @@ mod mac {
                     Some("file") => {
                         let path = url
                             .as_ref()
-                            .and_then(|url| unsafe { url.path() })
+                            .and_then(|url| url.path())
                             .map(|path| path.to_string());
                         match (path, self.ivars().files.borrow().as_deref()) {
                             (Some(path), Some(folder)) => path.starts_with(folder),
@@ -360,7 +354,7 @@ mod mac {
                 _features: &WKWindowFeatures,
             ) -> Option<Retained<WKWebView>> {
                 let url = unsafe { action.request().URL() }
-                    .and_then(|url| unsafe { url.absoluteString() })
+                    .and_then(|url| url.absoluteString())
                     .map(|url| url.to_string());
                 if let Some(url) = url {
                     emit(&self.ivars().app, "browser-new-tab", NewTab { url });
@@ -478,7 +472,7 @@ mod mac {
         };
         let mtm = MainThreadMarker::from(view);
         let host = unsafe { view.URL() }
-            .and_then(|url| unsafe { url.host() })
+            .and_then(|url| url.host())
             .map(|host| host.to_string())
             .unwrap_or_else(|| "This page".to_owned());
         let alert = NSAlert::new(mtm);

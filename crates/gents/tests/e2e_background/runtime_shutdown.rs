@@ -3,11 +3,12 @@ use crate::support::accepted_turn::{
     AcceptedTurnSpec,
 };
 use crate::support::fixtures::configure_agent_tools_as;
-use crate::support::live_inference::{rows_when, wait_for_request_terminal, STALL_CEILING};
+use crate::support::live_inference::{rows_when, wait_for_request_terminal};
 use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
-use gents_session::session::tool_call_state::CancelCause;
+use gents_protocol::tool_call::CancelCause;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::STALL_CEILING;
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -195,7 +196,7 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
     let turn = boot_background_turn("r6-background-shutdown-stop", Vec::new()).await;
     finish_dynamic_turn(&turn);
     assert_eq!(
-        wait_for_request_terminal(&turn.fixture.access, &turn.request_id, STALL_CEILING).await,
+        wait_for_request_terminal(&turn.fixture.access, &turn.request_id).await,
         "completed",
         "initial accepted request did not complete"
     );

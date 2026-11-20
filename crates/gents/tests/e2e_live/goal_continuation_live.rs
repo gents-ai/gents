@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_automation::goal::{load_canonical_goal_in_txn, seed_goal_from_access};
 use gents_protocol::goal_status::GoalStatus;
 use gents_store::graphql::escape_graphql_string;
@@ -9,10 +7,11 @@ use crate::support::agent_requests::canonical_now;
 use crate::support::builder_runtime::submit_request;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, rows_when, wait_for_assistant_answer,
-    wait_for_request_terminal, STALL_CEILING,
+    wait_for_request_terminal,
 };
-use crate::support::snapshots::SnapshotReader;
 use crate::support::test_db;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::STALL_CEILING;
 
 #[derive(Debug, Deserialize)]
 struct GoalChildRow {
@@ -89,7 +88,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(reader, initial_request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(reader, initial_request_id).await,
         "completed"
     );
     assert!(
@@ -116,7 +115,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     let child = wait_for_goal_child(reader, &goal.goal_id).await;
     assert_eq!(child.session_id, session_id);
     assert_eq!(
-        wait_for_request_terminal(reader, &child.request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(reader, &child.request_id).await,
         "completed"
     );
     let answer = wait_for_assistant_answer(reader, &child.request_id, STALL_CEILING).await;

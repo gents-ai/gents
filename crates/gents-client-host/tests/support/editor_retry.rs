@@ -1,43 +1,13 @@
-use super::{fake_llm, Attachment, ChatAction};
+use super::Attachment;
 use anyhow::{ensure, Context, Result};
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
 use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub const PROMPT: &str = "Retry this failed editor turn.";
-pub const REPLY: &str = "The original editor input completed after retry.";
 pub const CAPTURED: &str = "original retry captured context\n";
 
-fn is_retry_input(request: &Value) -> bool {
-    request["messages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|message| message["role"] == "user")
-        .any(|message| match &message["content"] {
-            Value::String(text) => text == PROMPT,
-            Value::Array(parts) => parts.iter().any(|part| part["text"] == PROMPT),
-            _ => false,
-        })
-}
-
-pub fn reply(request: &Value, attempts: &AtomicUsize) -> Option<ChatAction> {
-    if !is_retry_input(request) {
-        return None;
-    }
-    Some(if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-        ChatAction::HttpError(
-            axum::http::StatusCode::BAD_REQUEST,
-            json!({"error":{"message":"Retry fixture provider refusal", "type":"invalid_request_error"}}).to_string(),
-        )
-    } else {
-        ChatAction::Sse(fake_llm::completion_text_sse(REPLY))
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
 pub async fn verify(
     client: &mut Attachment,
     id: &mut u32,

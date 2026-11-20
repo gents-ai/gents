@@ -59,7 +59,7 @@ use std::time::Duration;
 use defra_node::Node as EmbeddedNode;
 
 pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
-    let p2p = gents_store::identity::node_p2p(node).expect("P2P enabled");
+    let p2p = crate::node_access::operations(node).expect("P2P enabled");
     let addresses = tokio::time::timeout(Duration::from_secs(10), p2p.listen_addresses())
         .await
         .expect("P2P listen-address deadline")
@@ -74,7 +74,7 @@ pub async fn wait_for_connected_peer(node: &EmbeddedNode) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut changes = node.subscribe(&[defra_node::EventName::PeerConnection]);
     loop {
-        let peers = gents_store::identity::node_p2p(node)
+        let peers = crate::node_access::operations(node)
             .expect("P2P enabled")
             .connected_peers()
             .await

@@ -1,5 +1,6 @@
-export type { EnrollmentRequestView } from "../generated/EnrollmentRequestView.js";
+export type { ClientAccessRequestView } from "../generated/ClientAccessRequestView.js";
+export type { RuntimeAccessDecisionRequest } from "../generated/RuntimeAccessDecisionRequest.js";
+export type { RuntimeRemoveResponse } from "../generated/RuntimeRemoveResponse.js";
+export type { SavedRuntimeView } from "../generated/SavedRuntimeView.js";
 export type { DesktopBootstrapSummary as BootstrapSummary } from "../generated/DesktopBootstrapSummary.js";
-export type { P2PHealthView as P2PHealth } from "../generated/P2PHealthView.js";
-export type { SavedPeerView as SavedPeer } from "../generated/SavedPeerView.js";
 export type { DesktopInitSummary as InitSummary } from "../generated/DesktopInitSummary.js";

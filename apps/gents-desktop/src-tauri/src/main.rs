@@ -108,6 +108,5 @@ fn main() {
         return;
     }
 
-    gents_tools::native::enable_self_runner();
     gents_desktop_tauri_lib::run()
 }

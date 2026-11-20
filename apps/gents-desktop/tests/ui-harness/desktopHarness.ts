@@ -10,12 +10,11 @@ import type {
   FileImage,
   RequestAttachment,
 } from "@source-inc/gents-desktop-client";
-import type { BackendHealth } from "@source-inc/gents-desktop-client";
+import type { BackendHealth, DefaultPack } from "@source-inc/gents-desktop-client";
 import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
   AllowedFolder,
   DesktopApiAdapter,
-  EndedAccessView,
 } from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientUpdatedHandler,
@@ -27,7 +26,7 @@ import type {
   DesktopOperationsSnapshot,
   DesktopSessionSnapshot,
   DeploymentView,
-  EnrollmentRequestView,
+  ClientAccessRequestView,
   GrokLoginResult,
   InitSummary,
   InferenceBackendView,
@@ -818,9 +817,6 @@ function harnessAssistantItem(
   };
 }
 
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
-
 export type DesktopUiHarnessScenario =
   | "default"
   | "active-nodes"
@@ -847,6 +843,7 @@ export type DesktopUiHarnessScenario =
   | "answered"
   | "notices"
   | "startup-port-in-use"
+  | "starter-packs"
   | SharingScenario;
 
 export type DesktopUiHarnessOptions = {
@@ -856,6 +853,8 @@ export type DesktopUiHarnessOptions = {
   compactionAt?: number;
   /* list that compaction in the meter but draw no marker for it */
   compactionUnmarked?: boolean;
+  /* offer the starter packs in a scenario that has none of its own */
+  starterPacks?: boolean;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -1009,6 +1008,8 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
+  let starterPacks: DefaultPack[] =
+    scenario === "starter-packs" || options.starterPacks ? STARTER_PACKS : [];
   const sessionIndexCount =
     options.sessionIndexCount ?? MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
   if (
@@ -1057,7 +1058,7 @@ export function createDesktopUiHarness(
   if (scenario === "backend-unavailable") {
     deployment = {
       ...deployment,
-      source: "local-standard",
+      local: true,
       nodeReadiness: {
         ...deployment.nodeReadiness,
         agents: deployment.nodeReadiness.agents.map((agent) => ({
@@ -1249,18 +1250,6 @@ export function createDesktopUiHarness(
     };
   }
   let removed = false;
-  let endedAccess: EndedAccessView[] =
-    scenario === "joined-access"
-      ? [
-          {
-            nodeDid: "did:key:harness-harbor",
-            label: "Harbor",
-            reason: "revoked",
-            endedAt: new Date(Date.now() - HOUR_MS).toISOString(),
-            leaseExpiresAt: new Date(Date.now() + 6 * DAY_MS).toISOString(),
-          },
-        ]
-      : [];
   let provisioned = scenario !== "empty-fleet";
   let pairingStatusReads = 0;
   let pairingAuthorized = scenario === "storage-recovery";
@@ -1302,7 +1291,7 @@ export function createDesktopUiHarness(
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "discovery-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth();
-  let enrollmentRequests: EnrollmentRequestView[] = [];
+  let accessRequests: ClientAccessRequestView[] = [];
   let updateEvents = 0;
   let storeVersion = 1;
   let liveSourceEpoch = 1;
@@ -2061,7 +2050,7 @@ export function createDesktopUiHarness(
   function snapshot() {
     const visibleDeployment = {
       ...deployment,
-      dialSucceeded: p2pStatus === "healthy",
+
       runtimeConnection: p2pStatus === "healthy" ? "connected" : "disconnected",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
@@ -2073,15 +2062,12 @@ export function createDesktopUiHarness(
       deployments.push({
         ...visibleDeployment,
         nodeDid: remoteDid,
-        peerId: "peer-harness-remote",
-        source: "enrollment",
+
+        local: false,
         label: "studio-1",
         graphql: null,
         operatorAccess: false,
-        leaseExpiresAt:
-          scenario === "joined-access"
-            ? new Date(Date.now() + 2 * DAY_MS + HOUR_MS).toISOString()
-            : null,
+
         node: {
           ...visibleDeployment.node,
           nodeDid: remoteDid,
@@ -2116,14 +2102,6 @@ export function createDesktopUiHarness(
         mailboxItems: [],
       });
     }
-    const health = {
-      status: p2pStatus,
-      connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
-      consecutiveFailures: p2pStatus === "healthy" ? 0 : 3,
-      lastOkAt: p2pStatus === "healthy" ? STARTED_AT : null,
-      lastError: p2pStatus === "healthy" ? null : "fixture transport unavailable",
-      lastFailureAt: p2pStatus === "healthy" ? null : STARTED_AT,
-    };
     const freshHome = scenario === "empty-fleet" && !provisioned;
     const next: DesktopClientSnapshot = {
       bootstrap: {
@@ -2141,30 +2119,29 @@ export function createDesktopUiHarness(
         nodeHomeExists: !freshHome,
         clientStateExists: true,
         localSetupUnfinished: false,
-        savedPeers: !provisioned
+        savedRuntimes: !provisioned
           ? []
           : [
               {
-                peerId: deployment.peerId,
                 label: deployment.label,
                 nodeDid: deployment.nodeDid,
-                addr: deployment.addr,
+
                 graphql: deployment.graphql,
-                source: deployment.source,
+
                 local: false,
               },
             ],
       },
       client: {
         clientDid: "did:key:desktop-harness",
-        p2pHealth: health,
+
         syncHealth,
-        enrollmentRequests,
+        accessRequests,
         rowCount,
         approxSerializedBytes: rowCount * 512,
         operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
-        endedAccess,
+        unkeptChanges: [],
       },
     };
     return clone(next);
@@ -2363,24 +2340,21 @@ export function createDesktopUiHarness(
       provisioned = true;
       deployment = {
         ...deployment,
-        source: "enrollment",
+        local: false,
         label,
         node: { ...deployment.node, displayName: label },
       };
       const summary: InitSummary = {
         status: "ready",
-        source: "bombadil-harness",
+
         nodeHome: "/tmp/gents-bombadil/agent",
         desktopHome: "/tmp/gents-bombadil/desktop",
-        peerDirectory: "/tmp/gents-bombadil/peers.json",
+        runtimeDirectory: "/tmp/gents-bombadil/peers.json",
         label,
         nodeName: label,
         nodeDid: NODE_DID,
         graphql: "http://127.0.0.1:9181/api/v0/graphql",
-        p2pTransport: "memory",
-        p2pPeerId: "peer-bombadil-local",
-        p2pListenAddress: "/ip4/127.0.0.1/tcp/9292",
-        peerRecordId: "peer-record-bombadil",
+
         nextSteps: [],
       };
       return summary;
@@ -2435,10 +2409,14 @@ export function createDesktopUiHarness(
       return { plugins: [], target_packs: [] };
     },
     async listDefaultPacks() {
-      return { packs: [] };
+      return { packs: starterPacks };
     },
-    async approveDefaultPacks() {
-      return { packs: [], failed: [] };
+    async approveDefaultPacks(asked: { pack: string }[]) {
+      const approved = new Set(asked.map((one) => one.pack));
+      starterPacks = starterPacks.map((pack) =>
+        approved.has(pack.pack) ? { ...pack, state: "installed" as const } : pack,
+      );
+      return { packs: starterPacks, failed: [] };
     },
     async listDynamicWorkflows() {
       return { workflows: [], installed: [] };
@@ -2544,7 +2522,7 @@ export function createDesktopUiHarness(
               repaired: [],
               outcome: "noLocalNode",
               blocker: null,
-              savedPeers: [],
+              savedRuntimes: [],
               localNodeLost: false,
             };
           },
@@ -2586,22 +2564,17 @@ export function createDesktopUiHarness(
     async setSelectedNode() {
       return undefined;
     },
-    async removePeer(peerId) {
-      if (peerId !== deployment.peerId) {
-        throw new Error(`peer ${peerId} not found`);
+    async removeRuntime(nodeDid) {
+      if (nodeDid !== deployment.nodeDid) {
+        throw new Error(`runtime ${nodeDid} not found`);
       }
       removed = true;
       notify("peers");
-      return snapshot();
+      return { ...snapshot(), removed: true };
     },
-    async dismissEndedAccess(nodeDid) {
-      endedAccess = endedAccess.filter((ended) => ended.nodeDid !== nodeDid);
-      notify("peers");
-      return snapshot();
-    },
-    async renamePeer(peerId, label) {
-      if (peerId !== deployment.peerId) {
-        throw new Error(`peer ${peerId} not found`);
+    async renameRuntime(nodeDid, label) {
+      if (nodeDid !== deployment.nodeDid) {
+        throw new Error(`runtime ${nodeDid} not found`);
       }
       deployment = { ...deployment, label };
       notify("peers");
@@ -2643,6 +2616,7 @@ export function createDesktopUiHarness(
         sessionId: "session-intro",
         nodeDid: NODE_DID,
         agentDid: DEFAULT_AGENT_DID,
+        publication: "delivered",
       };
     },
     async fetchRequestTimeline(nodeDid, requestId) {
@@ -2690,19 +2664,20 @@ export function createDesktopUiHarness(
         ],
       };
     },
-    async requestStatusEnrollment() {
-      const request: EnrollmentRequestView = {
+    async listRuntimeAccess() {
+      return [];
+    },
+    async decideRuntimeAccess() {
+      throw new Error("No device access request is selected.");
+    },
+    async requestRuntimeAccess() {
+      const request: ClientAccessRequestView = {
         requestId: "enrollment-request-harness",
-        networkId: "network-harness",
-        adminDid: NODE_DID,
-        serverPeer: "peer-enrollment-pending",
-        serverLabel: "Bombadil UI Agent",
-        ownerNode: NODE_DID,
-        state: "pending_approval",
-        activationError: null,
-        expiresAt: "2026-09-03T15:00:00.000Z",
+        nodeDid: NODE_DID,
+        clientDid: "did:key:client",
+        state: "pending",
       };
-      enrollmentRequests = [request];
+      accessRequests = [request];
       return request;
     },
     async fetchSessionSnapshot(_sessionId, _nodeDid, _requestId, timelinePage) {
@@ -2853,6 +2828,7 @@ export function createDesktopUiHarness(
           requestId: heldRequestId,
           nodeDid: request.nodeDid,
           agentDid: request.agentDid ?? null,
+          publication: "delivered" as const,
         };
       }
       if (request.sessionId && sessions.has(request.sessionId)) {
@@ -2888,6 +2864,7 @@ export function createDesktopUiHarness(
             requestId,
             nodeDid: request.nodeDid,
             agentDid: request.agentDid ?? null,
+            publication: "delivered" as const,
           };
         }
         const response = `Bombadil harness response ${requestSeq}: received "${content.slice(
@@ -2932,6 +2909,7 @@ export function createDesktopUiHarness(
           requestId,
           nodeDid: request.nodeDid,
           agentDid: request.agentDid ?? null,
+          publication: "delivered" as const,
         };
       }
 
@@ -2955,7 +2933,7 @@ export function createDesktopUiHarness(
         agentDid: request.agentDid || DEFAULT_AGENT_DID,
         lifecycleState: "completed",
       };
-      return result;
+      return { ...result, publication: "delivered" as const };
     },
     async renameSession(request) {
       const session = sessions.get(request.sessionId);
@@ -4683,17 +4661,16 @@ function harnessLiveTextPatch(value: string, baseByteLen: number, baseHash: stri
 
 function createDeployment(): DeploymentView {
   return {
-    peerId: "peer-bombadil-local",
     label: "Bombadil UI Agent",
     nodeDid: NODE_DID,
-    addr: "/ip4/127.0.0.1/tcp/9292",
-    source: "bombadil-harness",
+
+    local: true,
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
-    dialSucceeded: true,
+
     runtimeConnection: "connected",
     chatSafe: true,
     chatRefusal: null,
-    leaseExpiresAt: null,
+
     operatorAccess: true,
     nodeReadiness: {
       source: { state: "current" },
@@ -4705,7 +4682,7 @@ function createDeployment(): DeploymentView {
         { state: "ready", agentDid: "ops" },
       ],
     },
-    lastError: null,
+
     node: {
       nodeDid: NODE_DID,
       displayName: "Bombadil UI Agent",
@@ -5002,10 +4979,10 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
 function initialSyncHealth(): SyncHealthView {
   return {
     state: "healthy",
-    lastError: null,
+
     runtimeCount: 1,
     connectedRuntimeCount: 1,
-    activationErrorCount: 0,
+
     cause: null,
     nextAction: null,
   };
@@ -5014,6 +4991,45 @@ function initialSyncHealth(): SyncHealthView {
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
+
+/* the starter packs as a release carries them: each missing until installed,
+   and dynamic_workflows installed and off until turned on */
+const starterPack = (
+  name: string,
+  purpose: string,
+  without: string,
+  state: DefaultPack["state"] = "missing",
+): DefaultPack => ({
+  pack: `gents/${name}`,
+  purpose,
+  without,
+  state,
+  version: "1.0.0",
+  reason: null,
+});
+const STARTER_PACKS: DefaultPack[] = [
+  starterPack(
+    "web",
+    "searching and reading the web",
+    "Without it the Engineer cannot search or read the web.",
+  ),
+  starterPack(
+    "dynamic_workflows",
+    "workflows that put several agents on one job",
+    "Without it the Engineer cannot run workflows.",
+    "not_enabled",
+  ),
+  starterPack(
+    "charts",
+    "charts on the pages it builds",
+    "Without it the Engineer's pages have no charts.",
+  ),
+  starterPack(
+    "script",
+    "short scripts over its own tools: waiting, trying logic, bulk changes",
+    "Without it the Engineer makes every tool call one at a time.",
+  ),
+];
 
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
@@ -5035,6 +5051,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "discovery-offline":
     case "storage-recovery":
     case "startup-port-in-use":
+    case "starter-packs":
     case "days":
     case "automated-inputs":
     case "background":

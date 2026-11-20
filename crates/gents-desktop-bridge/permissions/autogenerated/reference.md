@@ -726,32 +726,6 @@ Denies the desktop_default_packs_approve command without any pre-configured scop
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-ended-access-dismiss`
-
-</td>
-<td>
-
-Enables the desktop_ended_access_dismiss command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-ended-access-dismiss`
-
-</td>
-<td>
-
-Denies the desktop_ended_access_dismiss command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-event-source-delete`
 
 </td>
@@ -2286,110 +2260,6 @@ Denies the desktop_pack_wire_sources command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-peer-enroll-invite`
-
-</td>
-<td>
-
-Enables the desktop_peer_enroll_invite command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-enroll-invite`
-
-</td>
-<td>
-
-Denies the desktop_peer_enroll_invite command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-peer-enroll-status`
-
-</td>
-<td>
-
-Enables the desktop_peer_enroll_status command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-enroll-status`
-
-</td>
-<td>
-
-Denies the desktop_peer_enroll_status command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-peer-remove`
-
-</td>
-<td>
-
-Enables the desktop_peer_remove command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-remove`
-
-</td>
-<td>
-
-Denies the desktop_peer_remove command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-peer-rename`
-
-</td>
-<td>
-
-Enables the desktop_peer_rename command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-rename`
-
-</td>
-<td>
-
-Denies the desktop_peer_rename command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-pending-message-steer`
 
 </td>
@@ -2929,6 +2799,136 @@ Enables the desktop_request_timeline command without any pre-configured scope.
 <td>
 
 Denies the desktop_request_timeline command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-runtime-access-decide`
+
+</td>
+<td>
+
+Enables the desktop_runtime_access_decide command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-runtime-access-decide`
+
+</td>
+<td>
+
+Denies the desktop_runtime_access_decide command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-runtime-access-list`
+
+</td>
+<td>
+
+Enables the desktop_runtime_access_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-runtime-access-list`
+
+</td>
+<td>
+
+Denies the desktop_runtime_access_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-runtime-access-request`
+
+</td>
+<td>
+
+Enables the desktop_runtime_access_request command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-runtime-access-request`
+
+</td>
+<td>
+
+Denies the desktop_runtime_access_request command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-runtime-remove`
+
+</td>
+<td>
+
+Enables the desktop_runtime_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-runtime-remove`
+
+</td>
+<td>
+
+Denies the desktop_runtime_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-runtime-rename`
+
+</td>
+<td>
+
+Enables the desktop_runtime_rename command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-runtime-rename`
+
+</td>
+<td>
+
+Denies the desktop_runtime_rename command without any pre-configured scope.
 
 </td>
 </tr>
@@ -4020,7 +4020,7 @@ Request retry
 </td>
 <td>
 
-Node addresses, routes and enrollment requests in the client snapshot
+Node addresses, routes and runtime access requests
 
 </td>
 </tr>
@@ -4137,7 +4137,7 @@ Allow, change and remove plugin folders, and answer a plugin question
 </td>
 <td>
 
-Authenticated peer enrollment, removal and rename, and ended access
+Runtime client access requests, decisions, removal and rename
 
 </td>
 </tr>

@@ -39,7 +39,7 @@ function appOn(nodeDid: string) {
   return testApp({
     snapshot: {
       bootstrap: { initNodeDid: "did:key:home" },
-      client: { deployments: [node({ nodeDid, source: "enrollment" })] },
+      client: { deployments: [node({ nodeDid, local: false })] },
     },
   });
 }

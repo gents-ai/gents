@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Context;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::tool_call::ToolCallState;
 
 pub fn sequence_message_key(
     node_did: &str,
@@ -36,10 +37,7 @@ pub async fn load_history_with_access(
         session_id,
         node_did,
         requester_did,
-        None,
-        None,
-        None,
-        None,
+        super::output::sequenced::SequencedMessageFilter::default(),
     )
     .await?
     .into_iter()
@@ -86,10 +84,12 @@ pub async fn load_sequenced_history_for_request(
         &request.session_id,
         &request.node_did,
         request.requester_did.as_deref(),
-        through_sequence,
-        after_sequence,
-        (!include_request_input).then_some(request.doc_id.as_str()),
-        Some(provider_profile),
+        super::output::sequenced::SequencedMessageFilter {
+            through_sequence,
+            after_sequence,
+            exclude_request_doc_id: (!include_request_input).then_some(request.doc_id.as_str()),
+            replay_profile: Some(provider_profile),
+        },
     )
     .await
 }
@@ -188,7 +188,7 @@ pub async fn retry_has_published_input(
                 ))
                 .filter(Filter::any_of(
                     tool_call_fields::LIFECYCLE_STATE,
-                    ["pending", "running"],
+                    ToolCallState::nonterminal().map(ToolCallState::as_str),
                 ))
                 .filter(Filter::any([
                     Filter::eq(tool_call_fields::AWAIT_MODE, "foreground"),
@@ -262,10 +262,12 @@ pub(crate) async fn load_sequenced_history_projection(
         session_id,
         node_did,
         requester_did,
-        through_sequence,
-        after_sequence,
-        current_input_request_doc_id,
-        None,
+        super::output::sequenced::SequencedMessageFilter {
+            through_sequence,
+            after_sequence,
+            exclude_request_doc_id: current_input_request_doc_id,
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -288,10 +290,12 @@ pub async fn load_sequenced_history_projection_on(
         session_id,
         node_did,
         requester_did,
-        through_sequence,
-        after_sequence,
-        current_input_request_doc_id,
-        None,
+        super::output::sequenced::SequencedMessageFilter {
+            through_sequence,
+            after_sequence,
+            exclude_request_doc_id: current_input_request_doc_id,
+            ..Default::default()
+        },
     )
     .await
 }

@@ -382,10 +382,8 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         trigger_doc_id: trigger_doc,
         schedule_doc_id: schedule_doc.clone(),
         schedule_id: "schedule".into(),
-        task_id: "task".into(),
         task,
         cadence: gents_documents::ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: gents_documents::ConcurrencyMode::Serial,
     };
     let snapshot = crate::triggers::engine::tests::snapshot_with_agent_and_schedules(

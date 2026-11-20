@@ -36,10 +36,11 @@ use crate::support::interrupt::{
     wait_for_inference_call_state, wait_for_request_lifecycle_state, wait_for_runtime_ready,
     BootedAgent,
 };
-use crate::support::live_inference::{bind_target, live_target, InferenceTarget, STALL_CEILING};
-use crate::support::snapshots::SnapshotReader;
+use crate::support::live_inference::{bind_target, live_target, InferenceTarget};
 use crate::support::test_db;
 use crate::support::TestDb;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::STALL_CEILING;
 
 const LIVE_SAMPLING_ID: &str = "live-interrupt:live-sampling";
 const LIVE_CONTEXT_ID: &str = "live-interrupt:context";

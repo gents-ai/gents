@@ -9,9 +9,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
-use crate::support::snapshots::SnapshotReader;
 use crate::support::snapshots::{is_routed_ready_after, wait_for_runtime_snapshot_as};
 use crate::support::test_db;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const TRIGGER_ID: &str = "trigger-e2e-signup";
 const TASK_ID: &str = "task-e2e-signup";
@@ -364,12 +364,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     );
     assert!(request.content.as_deref().unwrap().contains(EXTERNAL_ID));
     assert_eq!(
-        wait_for_request_terminal(
-            &fixture.access,
-            &request.request_id,
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&fixture.access, &request.request_id).await,
         "completed"
     );
     assert!(

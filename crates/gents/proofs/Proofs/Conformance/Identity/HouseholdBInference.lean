@@ -72,7 +72,7 @@ structure RuntimeDefaultAccountInput where
   runtimeActor : Bool
   sameNode : Bool
   sameSnapshot : Bool
-  nativeRead : Bool
+  mayUse : Bool
   visibleDefault : Option String
   deriving ToJson
 
@@ -82,27 +82,28 @@ def runtimeDefaultAccountCases : List RuntimeDefaultAccountInput :=
    ("foreign-node", true, false, true, true, some "named"),
    ("agent-actor", false, true, true, true, some "named"),
    ("other-snapshot", true, true, false, true, some "named"),
-   ("read-failed", true, true, true, false, some "named")].map
-    fun (name, runtimeActor, sameNode, sameSnapshot, nativeRead, visibleDefault) =>
-      { name, runtimeActor, sameNode, sameSnapshot, nativeRead, visibleDefault }
+   ("use-revoked", true, true, true, false, some "named")].map
+    fun (name, runtimeActor, sameNode, sameSnapshot, mayUse, visibleDefault) =>
+      { name, runtimeActor, sameNode, sameSnapshot, mayUse, visibleDefault }
 
 def runtimeDefaultAccountAllowed (i : RuntimeDefaultAccountInput) : Bool :=
-  Configuration.runtimeMayReadDefaultAccount ⟨i.runtimeActor, i.sameNode, i.sameSnapshot, i.nativeRead⟩
+  Configuration.runtimeMayReadDefaultAccount ⟨i.runtimeActor, i.sameNode, i.sameSnapshot, i.mayUse⟩
 
 @[conformance_family]
 def runtimeDefaultAccountRead : Family RuntimeDefaultAccountInput Bool where
-  inputs := runtimeDefaultAccountCases.filter fun i => i.sameSnapshot && i.nativeRead
+  inputs := runtimeDefaultAccountCases.filter fun i => i.sameSnapshot && i.mayUse
   model := runtimeDefaultAccountAllowed
 
 /-- model-production-gap: production cannot build a different snapshot or a
-failed native read for the runtime default account. `runtime_default_oauth_account_ref`
+refused use for the runtime default account. `runtime_default_oauth_account_ref`
 takes the Agent write's own `ConfigApplyTxn`, so the read always shares its
-snapshot, and the metadata query and the delegated read check are answered by
-the same native ACP state in that transaction, so a row the runtime may query
-but not read is not produced by any served-node fixture. -/
+snapshot, and it reads only the accounts the runtime may use
+(`Identity.Household.runtimeMayUse`, gents#3935): an account it may not use is
+filtered out as absent rather than refused, so no served-node fixture observes
+a refused use. -/
 @[conformance_family]
 def runtimeDefaultAccountReadUnreached : Family RuntimeDefaultAccountInput Bool where
-  inputs := runtimeDefaultAccountCases.filter fun i => !(i.sameSnapshot && i.nativeRead)
+  inputs := runtimeDefaultAccountCases.filter fun i => !(i.sameSnapshot && i.mayUse)
   model := runtimeDefaultAccountAllowed
 
 structure TaskCheckpointInput where

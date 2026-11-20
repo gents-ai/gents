@@ -15,7 +15,7 @@ fn ping_trigger(emit_outcome: bool) -> ResolvedEventTrigger {
     let task = ResolvedTask {
         emit_outcome,
         task_id: "ping-task".to_string(),
-        agent_did: crate::triggers::callback::test_agent_did(),
+        agent_did: fixture_agent_did(FIXTURE_AGENT_NONCE),
         ..resolved_task("Handle the ping: {{ doc.message }}")
     };
     ResolvedEventTrigger {
@@ -34,7 +34,7 @@ async fn ping_snapshot(
         .expect("test node runtime identity")
         .to_owned();
     let mut agent = event_test_behavior().as_ref().clone();
-    agent.agent_identity = crate::triggers::callback::test_agent_identity();
+    agent.agent_identity = fixture_agent(FIXTURE_AGENT_NONCE);
     agent.agent_did = agent.agent_identity.did().to_owned();
     let runtime_node = Arc::new(gents_store::identity::RuntimeNode {
         node_did: node_did.clone(),
@@ -75,7 +75,7 @@ async fn ping_node(schema: &str, emit_outcome: bool) -> gents_inference::test_su
             (
                 gents_store::collection::Collection::Task,
                 serde_json::json!({"task_id":"ping-task",
-            "agent_did":crate::triggers::callback::test_agent_did(),
+            "agent_did":fixture_agent_did(FIXTURE_AGENT_NONCE),
             "prompt_template":"Handle the ping: {{ doc.message }}", "emit_outcome":emit_outcome}),
             ),
             (
@@ -183,7 +183,7 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
 impl Delivery {
     async fn cursor(&self) -> String {
         let owner = self.db.node_identity.did().to_owned();
-        crate::triggers::callback::test_agent_access(&self.node)
+        fixture_agent_access(&self.node, FIXTURE_AGENT_NONCE)
             .transact_write("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
@@ -303,7 +303,7 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
         vec![(
             gents_store::collection::Collection::Task,
             serde_json::json!({"task_id":"ping-task",
-                "agent_did":crate::triggers::callback::test_agent_did(),
+                "agent_did":fixture_agent_did(FIXTURE_AGENT_NONCE),
                 "prompt_template":"Handle the ping: {{ doc.message }}", "emit_outcome":false}),
         )],
     )
@@ -451,18 +451,7 @@ struct PanicMaterializer;
 impl MaterializerHandle for PanicMaterializer {
     fn materialize(
         &self,
-        _task: &gents_documents::automation::ResolvedTask,
-        _trigger_id: Option<&str>,
-        _trigger_kind: TriggerKind,
-        _trigger_doc_id: Option<&str>,
-        _source_doc_id: Option<&str>,
-        _correlation: Option<&str>,
-        _trigger_context: Option<&str>,
-        _rendered_prompt: &str,
-        _rendered_goal_objective: Option<&str>,
-        _durable_fire_key: &str,
-        _delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
-        _prepared_ids: Option<(&str, &str)>,
+        _fire: FireMaterialization<'_>,
     ) -> Pin<
         Box<
             dyn Future<Output = Result<String, crate::triggers::engine::MaterializeError>>

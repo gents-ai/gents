@@ -8,7 +8,9 @@ use super::history::{
     split_messages_for_summary_with_counter_bounded,
 };
 use super::reduction::ReductionResultState;
-use super::rolling::{deadline_elapsed, largest_fitting_summary_chunk, summarize_checkpoint};
+use super::rolling::{
+    deadline_elapsed, largest_fitting_summary_chunk, summarize_checkpoint, RollingSummaryWindow,
+};
 use super::summary::{compaction_prompt, format_summary, ContinuationCheckpoint};
 use super::{
     apply_reduction_decision, bounded_summary, merge_optional_params, provider_view,
@@ -260,6 +262,7 @@ where
             let summary_max_output_tokens = self.summary_max_output_tokens(options, context_window);
             summary_config.max_tokens = Some(summary_max_output_tokens as u64);
             summary_config.aggregate_token_budget = options.aggregate_token_budget.clone();
+            summary_config.provider_call = options.provider_call.clone();
             summary_config.additional_params = merge_optional_params(
                 merge_optional_params(
                     summary_config.additional_params.take(),
@@ -321,10 +324,12 @@ where
                         remaining,
                         max_chunk_messages,
                         rolling_summary.as_deref(),
-                        &summary_config,
-                        options,
                         consumed,
-                        context_window,
+                        &RollingSummaryWindow {
+                            summary_config: &summary_config,
+                            options,
+                            context_window,
+                        },
                     )
                     .await?;
                     let chunk = pretruncate_tool_results(

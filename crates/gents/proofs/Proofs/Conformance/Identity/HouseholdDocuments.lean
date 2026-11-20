@@ -151,8 +151,6 @@ def projectionBinding : Family ProjectionInput Bool where
     let state := if i.revoked then Household.apply Configuration.projectionBindingFixture
       (.revoke ⟨"configuration", "binding", "parent", .object "nodes" "node"⟩)
       else Configuration.projectionBindingFixture
-    if i.permission == "read" then
-      Household.nativeRead (i.actor == "runtime") 5 state i.actor "configuration" "binding"
-    else Household.allowed 5 state i.actor "configuration" "binding" i.permission
+    Household.allowed 5 state i.actor "configuration" "binding" i.permission
 
 end Conformance.Household

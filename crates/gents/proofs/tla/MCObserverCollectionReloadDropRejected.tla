@@ -1,0 +1,4 @@
+---- MODULE MCObserverCollectionReloadDropRejected ----
+EXTENDS ObserverCollectionReload
+
+====

@@ -123,7 +123,7 @@ impl DefraQueryMcp {
             collection: args.collection,
             options: args.options,
         };
-        gents_loop::tool::Tool::call(&tool, call, &gents_loop::tool::ToolCallEnvelope::ambient())
+        gents_loop::tool::Tool::call(&tool, call, &gents_loop::tool::ToolCallEnvelope::default())
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -132,11 +132,8 @@ impl DefraQueryMcp {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for DefraQueryMcp {
     fn get_info(&self) -> ServerInfo {
-        #[allow(clippy::field_reassign_with_default)]
-        let mut info = ServerInfo::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.instructions = Some(String::from("Document access through query, and through write when explicitly exposed; call argv:[help] for commands. Every call requires caller-signed DefraDB bearer authorization and acts as that caller."));
-        info
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("Document access through query, and through write when explicitly exposed; call argv:[help] for commands. Every call requires caller-signed DefraDB bearer authorization and acts as that caller.")
     }
 }
 
@@ -175,18 +172,20 @@ mod tests {
 mod conformance {
     use super::caller_endpoint;
 
-    #[test]
-    fn mcp_query_reader_matches_lean() {
+    #[tokio::test]
+    async fn mcp_query_reader_matches_lean() {
         use gents_lean_vocab::families::runtime_reconcile_http_access_mcp_query_reads_as as family;
-        family::replay(|input: &family::Input<String>| {
-            let presented =
-                (input.identity != "anonymous").then(|| format!("Bearer {}", input.identity));
+        for case in family::cases::<String>() {
+            let identity = &case.input.identity;
+            let presented = (identity != "anonymous").then(|| format!("Bearer {identity}"));
             let forwarded =
-                caller_endpoint("http://127.0.0.1:1/api/v0/graphql", presented.as_deref())?
-                    .unwrap()
-                    .authorization()
-                    .unwrap()?;
-            forwarded.strip_prefix("Bearer ").map(str::to_owned)
-        });
+                match caller_endpoint("http://127.0.0.1:1/api/v0/graphql", presented.as_deref()) {
+                    Some(endpoint) => endpoint.unwrap().runtime_authorization().await.unwrap(),
+                    None => None,
+                };
+            case.check(
+                forwarded.and_then(|header| header.strip_prefix("Bearer ").map(str::to_owned)),
+            );
+        }
     }
 }

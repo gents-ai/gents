@@ -228,10 +228,12 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         let mut parent_create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "parent-request",
-            db.node_did(),
-            db.agent_did(),
-            db.agent_did(),
-            "generated-owned-steering-session",
+            gents_protocol::request_admission::RequestScope::new(
+                db.node_did(),
+                db.agent_did(),
+                db.agent_did(),
+                "generated-owned-steering-session",
+            ),
             "parent input",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

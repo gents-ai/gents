@@ -3,8 +3,7 @@ use super::prepare_goal_continuation;
 #[tokio::test]
 async fn pin_goal_continuation_preparation() {
     let tempdir = tempfile::tempdir().unwrap();
-    let _identity =
-        gents_session::request::lifecycle::test_support::pin_fixed_signing_identity(tempdir.path());
+    let _identity = gents_store::test_support::pin_fixed_signing_identity(tempdir.path());
 
     let mut parent = gents_session::request::lifecycle::test_support::pin_parent_request();
     parent.workspace_id = Some("ws-goal-1".to_string());
@@ -22,8 +21,10 @@ async fn pin_goal_continuation_preparation() {
         agent_did,
         goal_id,
         content,
-        continuation_sequence,
-        false,
+        gents_protocol::request_input::GoalContinuationInput {
+            sequence: continuation_sequence,
+            wrapup: false,
+        },
         "2030-01-01T00:00:00Z",
         parent.request_hop,
     )

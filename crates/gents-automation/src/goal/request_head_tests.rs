@@ -3,7 +3,9 @@ use crate::goal::continuation::prepare_goal_continuation;
 use gents_lean_vocab::families::goal_request_head_contracts_membership as members;
 use gents_lean_vocab::families::goal_request_head_contracts_selection as head;
 use gents_lean_vocab::families::goal_wake_ancestry_contracts_ancestry as ancestry;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::Deserialize;
@@ -51,10 +53,12 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                 let mut create = AgentRequestCreate::base(
                     model.purpose,
                     fixture.base_id(model.request),
-                    identity.did(),
-                    identity.did(),
-                    identity.did(),
-                    format!("session-{}", model.session),
+                    RequestScope::new(
+                        identity.did(),
+                        identity.did(),
+                        identity.did(),
+                        format!("session-{}", model.session),
+                    ),
                     "review notifications",
                     "scheduled",
                     "2026-10-21T00:00:00Z",
@@ -106,10 +110,12 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
                     let mut create = AgentRequestCreate::base(
                         model.purpose,
                         row.request_id.clone(),
-                        fixture.identity(model.owner).did(),
-                        fixture.identity(model.owner).did(),
-                        fixture.identity(model.owner).did(),
-                        "session-1",
+                        RequestScope::new(
+                            fixture.identity(model.owner).did(),
+                            fixture.identity(model.owner).did(),
+                            fixture.identity(model.owner).did(),
+                            "session-1",
+                        ),
                         "entry",
                         "interactive",
                         "2026-10-21T00:00:00Z",
@@ -476,10 +482,12 @@ impl Fixture<'_> {
                 let base = AgentRequestCreate::base(
                     gents_protocol::request_admission::RequestPurpose::Normal,
                     self.base_id(parent_request),
-                    identity.did(),
-                    identity.did(),
-                    identity.did(),
-                    format!("session-{}", model.session),
+                    RequestScope::new(
+                        identity.did(),
+                        identity.did(),
+                        identity.did(),
+                        format!("session-{}", model.session),
+                    ),
                     "parent",
                     "interactive",
                     &now,
@@ -496,8 +504,10 @@ impl Fixture<'_> {
                 self.identity(model.owner).did().into(),
                 &format!("goal-{goal}"),
                 "signed child",
-                i64::try_from(model.sequence).unwrap(),
-                false,
+                gents_protocol::request_input::GoalContinuationInput {
+                    sequence: i64::try_from(model.sequence).unwrap(),
+                    wrapup: false,
+                },
                 &now,
                 parent.request_hop,
             )
@@ -507,10 +517,12 @@ impl Fixture<'_> {
             let mut base = AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 self.base_id(model.request),
-                identity.did(),
-                identity.did(),
-                identity.did(),
-                format!("session-{}", model.session),
+                RequestScope::new(
+                    identity.did(),
+                    identity.did(),
+                    identity.did(),
+                    format!("session-{}", model.session),
+                ),
                 "signed root",
                 "interactive",
                 &now,
@@ -671,13 +683,15 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
         .transact_write("test.assignment_session", |txn| {
             Box::pin(gents_session::session::ensure_session_in_txn(
                 txn,
-                "bound-session",
-                identity.did(),
-                agent.did(),
-                Some(agent.did()),
-                None,
-                None,
-                "2026-01-01T00:00:00Z",
+                gents_session::session::NewAgentSession {
+                    session_id: "bound-session",
+                    node_did: identity.did(),
+                    agent_did: agent.did(),
+                    requester_did: Some(agent.did()),
+                    title: None,
+                    provenance: None,
+                    created_at: "2026-01-01T00:00:00Z",
+                },
             ))
         })
         .await
@@ -700,10 +714,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             id,
-            identity.did(),
-            agent.did(),
-            agent.did(),
-            "bound-session",
+            RequestScope::new(identity.did(), agent.did(), agent.did(), "bound-session"),
             "root",
             "interactive",
             created,
@@ -743,8 +754,10 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             agent.did().into(),
             &goal.goal_id,
             "old continuation",
-            sequence,
-            false,
+            gents_protocol::request_input::GoalContinuationInput {
+                sequence,
+                wrapup: false,
+            },
             "2026-01-01T00:00:02Z",
             parent.request_hop,
         )

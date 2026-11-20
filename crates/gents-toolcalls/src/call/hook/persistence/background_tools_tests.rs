@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use super::*;
-use crate::call::hook::BackgroundExecutionRegistry;
+use crate::call::hook::background_executions::BackgroundExecutionRegistry;
 use crate::call::lifecycle::admission_fixture::{
     published_admission_with_owner, PublishedAdmissionOptions,
 };
@@ -453,7 +453,7 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
             worker_registry.set_stop_receipt(
                 &worker_call,
                 &worker_doc,
-                crate::call::hook::RetainedStopReceipt::Failure(
+                crate::call::hook::background_executions::RetainedStopReceipt::Failure(
                     gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
                         "native wait failed",
                     ),
@@ -529,7 +529,7 @@ async fn failed_replay_adopts_competing_durable_terminal() {
     registry.set_stop_receipt(
         &call,
         &doc,
-        crate::call::hook::RetainedStopReceipt::Failure(
+        crate::call::hook::background_executions::RetainedStopReceipt::Failure(
             gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("earlier failure"),
         ),
     );
@@ -594,30 +594,30 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
         let deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
         tokio::time::pause();
         let worker = tokio::spawn(async move {
-            gents_tools::runtime_context::scope_request_tool_execution(
+            let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
                 Some(deadline),
                 worker_token,
-                gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
-                    &PendingNative,
-                    "{}".into(),
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
-                    move |outcome| {
-                        if let Some(gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut {
-                            ..
-                        }) = outcome
-                        {
-                            worker_registry.set_stop_receipt(
-                                "deadline-call",
-                                "deadline-doc",
-                                crate::call::hook::RetainedStopReceipt::Timeout,
-                            );
-                            if let Some(sender) = worker_sender.lock().unwrap().take() {
-                                let _ = sender.send(());
-                            }
+            )
+            .call();
+            gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
+                &PendingNative,
+                "{}".into(),
+                &scope_call,
+                move |outcome| {
+                    if let Some(gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }) =
+                        outcome
+                    {
+                        worker_registry.set_stop_receipt(
+                            "deadline-call",
+                            "deadline-doc",
+                            crate::call::hook::background_executions::RetainedStopReceipt::Timeout,
+                        );
+                        if let Some(sender) = worker_sender.lock().unwrap().take() {
+                            let _ = sender.send(());
                         }
-                        true
-                    },
-                ),
+                    }
+                    true
+                },
             )
             .await
         });
@@ -639,7 +639,7 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
             .clone();
         let preserve_timeout = matches!(
             entry.requested_stop.lock().unwrap().as_ref(),
-            Some(crate::call::hook::RetainedStopReceipt::Timeout)
+            Some(crate::call::hook::background_executions::RetainedStopReceipt::Timeout)
         );
         case.check(
             gents_lean_vocab::families::process_stop_timeout_before_cleanup::TimeoutOutput {

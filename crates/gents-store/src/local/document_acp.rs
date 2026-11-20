@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use serde::{Deserialize, Serialize};
 
@@ -10,8 +11,16 @@ use crate::local::store_key::StoreKey;
 
 #[cfg(feature = "vera")]
 mod embedded_vera;
+mod enrollment;
+mod http_edge;
 #[cfg(test)]
 mod tests;
+
+pub use enrollment::{
+    enrollment, enrollment_root, ensure_enrollment, EnrollmentAnswer, EnrollmentRequest,
+    EnrollmentRoot,
+};
+pub use http_edge::HttpEdge;
 
 const VERA_DIR_NAME: &str = "vera";
 const NODE_DIR_NAME: &str = "node";
@@ -40,59 +49,59 @@ impl DocumentAcp {
 impl std::fmt::Display for DocumentAcp {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::Local => "the node's own store",
-            Self::Vera => "Vera",
+            Self::Local => "local",
+            Self::Vera => "vera",
         })
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocumentAcpError {
-    #[error(
-        "this home decides document access through {recorded} and cannot be switched to \
-         {requested}; initialize a new home to choose differently"
-    )]
+    #[error("this home cannot be changed to work differently; set up a new home instead")]
     Switch {
         recorded: DocumentAcp,
         requested: DocumentAcp,
     },
-    #[error(
-        "this home decides document access through an embedded Vera node, which this build does \
-         not include; use a build with the `vera` feature"
-    )]
+    #[error("this version of Gents cannot open this home; update Gents on this device")]
     Unavailable,
     #[error(
-        "{node} cannot sign for an embedded Vera node, which needs an Ed25519 node key; \
-         initialize the home with a file or macos-keychain identity"
+        "this home cannot be kept with a Secure Enclave device key; set it up with a file or \
+         keychain key instead"
     )]
     NodeKeyCannotSign { node: String },
-    #[error(
-        "a home that decides document access through an embedded Vera node cannot be created or \
-         opened yet, because client-signed writes and staged access-control writes are not \
-         supported on it; use a home initialized without `--document-acp vera`"
-    )]
+    #[error("this kind of home cannot be opened by this version of Gents yet")]
     NotYetUsable,
+    #[error("make this change from the Gents app or CLI on your own device")]
+    HeldUserKey,
     #[error(
-        "this home's embedded Vera deployment was created under a different {what} than this \
-         Gents build and node identity give it; open the home with the Gents version that \
-         created it"
+        "this version of Gents cannot connect to this home; update Gents on this device and try \
+         again"
+    )]
+    DelegationRequired,
+    /// The provider grants no transport relationships yet (defradb.rs#2980),
+    /// so the runtime publishes no peer records as its Node.
+    #[error(
+        "peer networking is not available on this home yet, so it cannot be shared with other \
+         devices"
+    )]
+    TransportGrantsAwaitProvider,
+    #[error(
+        "this home was created by another version of Gents or with another device key; open it \
+         with the Gents version and key that created it"
     )]
     DeploymentDiffers { what: &'static str },
     #[error(
-        "this home decides document access through an embedded Vera node, whose directory {} is \
-         missing. It held the access records of the home's documents, so nothing was created in \
-         its place; restore it from a backup of this home",
+        "part of this home is missing ({}); nothing was created in its place. Restore the home \
+         from a backup",
         path.display()
     )]
     DeploymentMissing { path: PathBuf },
     #[error(
-        "the embedded Vera deployment in {} is not the one this home was created with, so it \
-         holds none of the access records of the home's documents; restore the directory from a \
-         backup of this home",
+        "part of this home ({}) belongs to another home; restore it from a backup of this home",
         path.display()
     )]
     DeploymentReplaced { path: PathBuf },
-    #[error("reading the embedded Vera deployment record {}", path.display())]
+    #[error("reading this home's record {}", path.display())]
     Record {
         path: PathBuf,
         #[source]
@@ -107,6 +116,10 @@ pub enum DocumentAcpError {
 }
 
 impl DocumentAcpError {
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+
     pub(crate) fn refusal(&self) -> Option<IncompatibleStoreKind> {
         match self {
             Self::DeploymentDiffers { .. } => Some(IncompatibleStoreKind::OtherVersionSchema),
@@ -117,12 +130,171 @@ impl DocumentAcpError {
             | Self::Unavailable
             | Self::NodeKeyCannotSign { .. }
             | Self::NotYetUsable
+            | Self::HeldUserKey
+            | Self::DelegationRequired
+            | Self::TransportGrantsAwaitProvider
             | Self::Inspect { .. } => None,
         }
     }
 }
 
 type Result<T> = std::result::Result<T, DocumentAcpError>;
+
+/// What a runtime's public status reports of its delegation audience
+/// (`Identity.UserDelegation.statusReports`).
+pub fn status_reports(
+    provider: DocumentAcp,
+    audience: Option<DelegationAudience>,
+) -> ReportedDelegationAudience {
+    match (provider, audience) {
+        (DocumentAcp::Local, _) => ReportedDelegationAudience::Absent,
+        (DocumentAcp::Vera, Some(audience)) => ReportedDelegationAudience::Named(audience),
+        (DocumentAcp::Vera, None) => ReportedDelegationAudience::Unavailable,
+    }
+}
+
+/// Whether the runtime may sign a pack's effects with a User key kept in its
+/// home (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`).
+pub fn runtime_signs_with_held_user_key(provider: DocumentAcp) -> Result<()> {
+    match provider {
+        DocumentAcp::Local => Ok(()),
+        DocumentAcp::Vera => Err(DocumentAcpError::HeldUserKey),
+    }
+}
+
+/// The provider's time `node`'s Vera access control reports, in Unix
+/// seconds, which a client mints its delegations at
+/// (`Identity.UserDelegation.issueAt`); none for a node that decides access in
+/// its own store or whose provider has verified no block.
+pub fn node_provider_time(node: &defra_node::Node) -> Option<u64> {
+    #[cfg(feature = "vera")]
+    {
+        embedded_vera::provider_time(node)
+    }
+    #[cfg(not(feature = "vera"))]
+    {
+        let _ = node;
+        None
+    }
+}
+
+/// The worker and deployment `node`'s Vera access control acts under a
+/// delegation for; none for a node that decides access in its own store.
+pub fn node_delegation_audience(node: &defra_node::Node) -> Option<DelegationAudience> {
+    #[cfg(feature = "vera")]
+    {
+        embedded_vera::delegation_audience(node)
+    }
+    #[cfg(not(feature = "vera"))]
+    {
+        let _ = node;
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Publication {
+    Proceeds,
+    AwaitsTransportGrants,
+}
+
+/// Whether the runtime publishes peer records as its Node
+/// (`Identity.NodePublication.publication`).
+pub fn publication(provider: DocumentAcp) -> Publication {
+    match provider {
+        DocumentAcp::Local => Publication::Proceeds,
+        DocumentAcp::Vera => Publication::AwaitsTransportGrants,
+    }
+}
+
+/// Refuses a Node-run peer publication on `node` before anything is written
+/// while its provider grants no transport relationships.
+pub fn ensure_node_publication(node: &defra_node::Node) -> Result<()> {
+    match publication(provider_of(node)) {
+        Publication::Proceeds => Ok(()),
+        Publication::AwaitsTransportGrants => Err(DocumentAcpError::TransportGrantsAwaitProvider),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigurationGrantRoute {
+    Direct,
+    OwnerStaged,
+}
+
+/// How a configuration actor changes a relation only the document's owner
+/// manages (`Identity.OwnerStaged.configurationGrantRoute`).
+pub fn configuration_grant_route(
+    provider: DocumentAcp,
+    actor_owns: bool,
+) -> ConfigurationGrantRoute {
+    match (provider, actor_owns) {
+        (DocumentAcp::Local, _) | (DocumentAcp::Vera, true) => ConfigurationGrantRoute::Direct,
+        (DocumentAcp::Vera, false) => ConfigurationGrantRoute::OwnerStaged,
+    }
+}
+
+/// The runtime's periodic writes of its own peer records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Periodic {
+    RegistryHeartbeat,
+    EndpointHeartbeat,
+    Directory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeriodicLoop {
+    Beats,
+    Idle,
+}
+
+/// What a periodic peer publication's loop does on a home whose document
+/// access control runs on `provider` (`Identity.NodePublication.periodic`).
+pub fn periodic(provider: DocumentAcp, _: Periodic) -> PeriodicLoop {
+    match publication(provider) {
+        Publication::Proceeds => PeriodicLoop::Beats,
+        Publication::AwaitsTransportGrants => PeriodicLoop::Idle,
+    }
+}
+
+/// [`periodic`] for `node`, whose provider is fixed while it runs.
+pub fn node_periodic(node: &defra_node::Node, publication: Periodic) -> PeriodicLoop {
+    periodic(provider_of(node), publication)
+}
+
+/// Where `node` decides document access.
+pub fn provider_of(node: &defra_node::Node) -> DocumentAcp {
+    #[cfg(feature = "vera")]
+    {
+        if node.vera_acp().is_some() {
+            return DocumentAcp::Vera;
+        }
+    }
+    let _ = node;
+    DocumentAcp::Local
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presented {
+    IdentityToken,
+    Delegation,
+}
+
+/// What the runtime does with an authenticated request at its HTTP edge
+/// (`Identity.UserDelegation.edge`): `Err` refuses it.
+pub fn edge(
+    provider: DocumentAcp,
+    caller: crate::config_client::user_write::Author,
+    presented: Presented,
+) -> Result<()> {
+    use crate::config_client::user_write::Author;
+    match (provider, caller, presented) {
+        (DocumentAcp::Vera, Author::User, Presented::IdentityToken) => {
+            Err(DocumentAcpError::DelegationRequired)
+        }
+        _ => Ok(()),
+    }
+}
 
 pub(crate) fn refused(error: &defra_node::Error) -> Option<DocumentAcpError> {
     #[cfg(feature = "vera")]

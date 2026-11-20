@@ -20,7 +20,7 @@ test-group = "desktop-live-fixture"
 retries = 0
 fail-fast = false
 # A test is reported after 60 s and killed after 900 s. The kill must exceed
-# STALL_CEILING (600 s, crates/gents/tests/support/live_inference.rs): a wait
+# STALL_CEILING (600 s, crates/gents-store/src/test_support.rs): a wait
 # bounded by it fails with the rows it last read, and a kill at or below it
 # would replace that evidence with a bare TIMEOUT.
 slow-timeout = { period = "60s", terminate-after = 15 }
@@ -29,6 +29,10 @@ status-level = "pass"
 final-status-level = "fail"
 failure-output = "immediate-final"
 success-output = "never"
+
+[[profile.ci.overrides]]
+filter = 'binary_id(=gents::e2e_triggers) & test(/^workspace_change_unit_cycle::/)'
+threads-required = "num-test-threads"
 
 [[profile.ci.overrides]]
 # Twenty sequential requests: about 60 s alone and 500-2750 s on a loaded host,

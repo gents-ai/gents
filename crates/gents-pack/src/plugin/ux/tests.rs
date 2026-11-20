@@ -104,6 +104,47 @@ fn lists_pack_plugins_with_their_declaration_and_namespaced_id() {
 }
 
 #[test]
+fn a_pack_plugin_listing_carries_the_digest_of_the_archive_it_was_installed_from() {
+    let home = tempfile::tempdir().unwrap();
+    install_record(
+        home.path(),
+        "acme/board",
+        vec![ux("board", Some("ux/board/plugin.js"), None)],
+        vec![],
+    );
+    install_record(
+        home.path(),
+        "acme/clock",
+        vec![ux("clock", None, Some("clock_producer"))],
+        vec![InstalledPackPlugin {
+            name: "clock_producer".into(),
+            digest: format!("sha256:{}", "c".repeat(64)),
+        }],
+    );
+    let digest = |id: &str| find(home.path(), id).unwrap().digest;
+    let installed = Some(format!("sha256:{}", "b".repeat(64)));
+    assert_eq!(digest("acme/board/board"), installed, "file-produced");
+    assert_eq!(digest("acme/clock/clock"), installed, "afb-produced");
+
+    let mut reinstall = crate::pack::read_home_install(home.path(), "acme/board")
+        .unwrap()
+        .unwrap();
+    reinstall.digest = format!("sha256:{}", "d".repeat(64));
+    reinstall.assets = "packs/.materialized/acme/board/dddd".into();
+    write_home_install(home.path(), &reinstall).unwrap();
+    assert_eq!(
+        digest("acme/board/board"),
+        Some(reinstall.digest),
+        "a reinstall from a new archive lists its digest"
+    );
+    assert_eq!(
+        digest("acme/clock/clock"),
+        installed,
+        "other packs keep theirs"
+    );
+}
+
+#[test]
 fn a_pack_plugin_lists_its_declared_data_surfaces_and_a_dev_plugin_none() {
     let home = tempfile::tempdir().unwrap();
     let mut plugin = ux("board", Some("ux/board/plugin.js"), None);

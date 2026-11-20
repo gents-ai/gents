@@ -1,22 +1,21 @@
 use base64::Engine as _;
 use chrono::{DateTime, Local, NaiveDate};
-use gents_desktop_core::client::canonical_output::{
+use gents_observe::client_inference::AgentView;
+use gents_observe::client_projection::canonical_output::{
     project_canonical_message, terminal_tool_output, CanonicalMessageProjection,
 };
-use gents_desktop_core::client::{
-    session_summary_entries, ClientStore, SessionTranscriptQueryPage,
-};
-use gents_desktop_core::inference::AgentView;
+use gents_observe::client_projection::query::SessionTranscriptQueryPage;
+use gents_observe::client_projection::store::{session_summary_entries, ClientStore};
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::file_changes::{FileImage, ToolFileChanges};
 use gents_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
 use gents_protocol::output::rows::authored_message_key;
 use gents_protocol::output::{MessageBlock, MessageRole};
 use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
+use gents_protocol::tool_call::ToolCallState;
 use gents_protocol::tool_names::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
 use gents_protocol::transcript::present_message;
-use gents_session::session::tool_call_state::ToolCallState;
-use gents_shell::app::ChatLine;
+use gents_shell::app::transcript::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState};
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -566,7 +565,8 @@ pub(super) fn clean(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use chrono::{Local, NaiveDate, TimeZone};
-    use gents_desktop_core::client::{ClientStore, ClientStoreRows, SessionTranscriptQueryPage};
+    use gents_observe::client_projection::query::SessionTranscriptQueryPage;
+    use gents_observe::client_projection::store::{ClientStore, ClientStoreRows};
     use gents_protocol::file_changes::{
         FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
     };
@@ -577,7 +577,7 @@ mod tests {
     };
     use gents_protocol::row::{AgentRequestRow, AgentToolCallRow, CompactionEntryRow};
     use gents_protocol::session::AgentSession;
-    use gents_shell::app::ChatLine;
+    use gents_shell::app::transcript::ChatLine;
     use gents_shell::sample::{Opens, RunState, Running, Tone};
     use gents_shell::source::{Change, ChangeKind, Day, SessionState};
     use rapidhash::{HashMapExt, RapidHashMap};

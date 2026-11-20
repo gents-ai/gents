@@ -39,20 +39,19 @@ describe("repair banner", () => {
         bootstrap: {
           ...bootstrap,
           initConfigStatus: "configured",
-          savedPeers: [
+          savedRuntimes: [
             {
-              peerId: "studio",
               label: "Studio",
               nodeDid: "did:key:studio",
-              addr: "a",
-              source: "enrollment",
+
+              local: false,
               graphql: null,
             },
           ],
         },
         client: {
           clientDid: "test-client",
-          deployments: [node({ nodeDid: "did:key:studio", source: "enrollment" })],
+          deployments: [node({ nodeDid: "did:key:studio", local: false })],
           operatorConfigAuthoritativeNodeDids: [bootstrap.initNodeDid],
         },
       },
@@ -73,25 +72,21 @@ describe("repair banner", () => {
     nodeHomeExists: false,
   };
   const deadLocalPeer = {
-    peerId: "34b9a22e",
     label: "Forge",
     nodeDid: "did:key:z6Mkme2nSRm7bykKyXQvfKPsZ68RAGr4HoXbTCzzh9esNrZg",
-    addr: "endpointaa2l",
-    source: "enrollment",
+
     graphql: "http://127.0.0.1:21919/api/v0/graphql",
     local: true,
   };
   const studioPeer = {
-    peerId: "studio",
     label: "Studio",
     nodeDid: "did:key:studio",
-    addr: "a",
-    source: "enrollment",
+
     graphql: null,
     local: false,
   };
   const launch = async (
-    savedPeers: unknown[],
+    savedRuntimes: unknown[],
     deployments: unknown[],
     localNodeLost: boolean,
   ) => {
@@ -102,13 +97,13 @@ describe("repair banner", () => {
           repaired: ["Stopped an old node that kept crashing."],
           outcome: localNodeLost ? "needsSetup" : "noLocalNode",
           blocker: null,
-          savedPeers: [],
+          savedRuntimes: [],
           localNodeLost,
         }),
       },
       supportsManagedServer: true,
       snapshot: {
-        bootstrap: { ...removedHome, savedPeers },
+        bootstrap: { ...removedHome, savedRuntimes },
         client: {
           clientDid: "test-client",
           deployments,
@@ -136,7 +131,7 @@ describe("repair banner", () => {
   it("a_lost_local_node_shows_the_wizard_even_with_a_saved_remote", async () => {
     await launch(
       [studioPeer],
-      [node({ nodeDid: "did:key:studio", label: "Studio", source: "enrollment" })],
+      [node({ nodeDid: "did:key:studio", label: "Studio", local: false })],
       true,
     );
     expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
@@ -148,7 +143,7 @@ describe("repair banner", () => {
   it("finishing_the_wizard_opens_the_app_with_the_banner", async () => {
     await launch(
       [studioPeer],
-      [node({ nodeDid: "did:key:studio", label: "Studio", source: "enrollment" })],
+      [node({ nodeDid: "did:key:studio", label: "Studio", local: false })],
       true,
     );
     await userEvent.click(screen.getByRole("button", { name: "Continue with Studio" }));
@@ -159,7 +154,7 @@ describe("repair banner", () => {
   it("a_remote_only_desktop_opens_on_its_remote", async () => {
     await launch(
       [studioPeer],
-      [node({ nodeDid: "did:key:studio", label: "Studio", source: "enrollment" })],
+      [node({ nodeDid: "did:key:studio", label: "Studio", local: false })],
       false,
     );
     expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
@@ -191,11 +186,11 @@ describe("repair banner", () => {
           repaired: [],
           outcome: "needsSetup",
           blocker: null,
-          savedPeers: [],
+          savedRuntimes: [],
           localNodeLost: true,
         }),
         fetchDesktopSnapshot: async () => ({
-          bootstrap: { ...removedHome, savedPeers: [] },
+          bootstrap: { ...removedHome, savedRuntimes: [] },
           client: null,
         }),
       },
@@ -204,7 +199,7 @@ describe("repair banner", () => {
         bootstrap: {
           ...bootstrap,
           initConfigStatus: "configured",
-          savedPeers: [localPeer],
+          savedRuntimes: [localPeer],
         },
         client: {
           clientDid: "test-client",
@@ -235,7 +230,7 @@ describe("repair banner", () => {
       app.stores.client.setState({
         snapshot: {
           ...snapshot,
-          bootstrap: { ...removedHome, savedPeers: [localPeer] },
+          bootstrap: { ...removedHome, savedRuntimes: [localPeer] },
         },
       });
     });

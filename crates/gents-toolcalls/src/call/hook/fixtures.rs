@@ -166,10 +166,12 @@ pub async fn claimed_hook_request(
     let create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        root.did(),
-        root.did(),
-        root.did(),
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            root.did(),
+            root.did(),
+            root.did(),
+            session_id,
+        ),
         "child request",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -203,10 +205,12 @@ pub async fn create_corroborated_child_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         child_request_id,
-        &hook.node_did,
-        signer.did(),
-        signer.did(),
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            &hook.node_did,
+            signer.did(),
+            signer.did(),
+            session_id,
+        ),
         "child request",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -376,13 +380,15 @@ pub async fn accepted_hook_tool_lifecycle(
         .expect("accepted test tool requires active session");
     drop(state);
     hook.adopt_accepted_tool_dispatch(
-        internal_call_id,
-        None,
-        &request_id,
-        &session_id,
-        tool_name,
-        arguments,
-        deadline_at,
+        &crate::call::hook::ToolDispatch {
+            internal_call_id,
+            provider_call_id: None,
+            request_id: &request_id,
+            session_id: &session_id,
+            tool_name,
+            args: arguments,
+            deadline_at,
+        },
         await_mode,
     )
     .await

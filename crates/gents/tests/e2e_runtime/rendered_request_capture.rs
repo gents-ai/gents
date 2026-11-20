@@ -19,11 +19,11 @@ use crate::support::builder_runtime::{
 use crate::support::interrupt::{
     wait_for_request_lifecycle_state, wait_for_request_terminal_state, BootedAgent,
 };
-use crate::support::live_inference::STALL_CEILING;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const CAPTURE_MODEL: &str = "capture-model";
 const CAPTURE_BACKEND_ID: &str = "capture-backend";
@@ -1782,7 +1782,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(&actors, &failed_doc, STALL_CEILING).await,
+        wait_for_request_terminal_state(&actors, &failed_doc).await,
         RequestLifecycleState::Failed
     );
     assert!(
@@ -2285,7 +2285,7 @@ async fn boot_capture_agent_with(
     .backend_id(CAPTURE_BACKEND_ID)
     .model_name(CAPTURE_MODEL)
     .stream_batch_ms(0)
-    .deadline_duration_secs(30);
+    .deadline_duration_secs(gents_store::test_support::UNREACHED_DEADLINE.as_secs());
     let runtime = customize(behavior)
         .done()
         .build()
@@ -2666,12 +2666,9 @@ impl OwnedCaptureFixture {
     }
 
     async fn wait_terminal(&self, request_id: &str) -> RequestLifecycleState {
-        let state = crate::support::live_inference::wait_for_request_terminal(
-            &self.access,
-            request_id,
-            STALL_CEILING,
-        )
-        .await;
+        let state =
+            crate::support::live_inference::wait_for_request_terminal(&self.access, request_id)
+                .await;
         RequestLifecycleState::parse(&state).expect("terminal request lifecycle")
     }
 

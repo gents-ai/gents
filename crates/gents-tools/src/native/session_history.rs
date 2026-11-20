@@ -24,7 +24,7 @@ mod observation;
 mod snapshot;
 pub use snapshot::load_session_history_snapshot_with_access;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_loop::tool::ToolDefinition;
 use gents_loop::tool::{Tool, ToolDyn};
@@ -34,6 +34,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use gents_store::graphql::escape_graphql_string;
+
+use crate::guided_failure::GuidedFailure;
 
 const ACTIONS: [&str; 7] = [
     "help",
@@ -340,22 +342,19 @@ impl Tool for SessionHistoryTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
         let action = args.action.as_deref().unwrap_or("list").trim();
         if !ACTIONS.contains(&action) {
-            return Err(anyhow!(
-                "unsupported sessions action; next call: sessions {{\"action\":\"help\"}}"
-            )
+            return Err(anyhow::Error::from(guided(
+                "unsupported sessions action",
+                json!({"action":"help"}),
+            ))
             .into());
         }
-        let value = discovery::run(self, &args, action).await.map_err(|error| {
-            if format!("{error:#}").contains("next call:") {
-                error
-            } else {
-                anyhow!("{error:#}; next call: sessions {{\"action\":\"help\"}}")
-            }
-        })?;
+        let value = discovery::run(self, context, &args, action)
+            .await
+            .map_err(|error| GuidedFailure::or_help(Self::NAME, error))?;
         Ok(if action == "output" {
             serde_json::to_string(
                 &gents_session::session::output_render::Ordered::reading_order(
@@ -376,6 +375,10 @@ pub fn build_session_history_tool(
     actor: identity::Did,
 ) -> Box<dyn ToolDyn> {
     Box::new(SessionHistoryTool::new(node, node_did, actor))
+}
+
+fn guided(reason: impl Into<String>, call: Value) -> GuidedFailure {
+    GuidedFailure::new(SESSION_HISTORY_TOOL_NAME, reason, call)
 }
 
 fn clamp_limit(limit: Option<usize>) -> usize {

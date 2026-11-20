@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::support::agent_requests::submit_user_request;
 use crate::support::fixtures::configure_agent_tools_as;
 use crate::support::interrupt::spawn_runtime;
-use crate::support::live_inference::{bind_target, live_target, wait_for_rows};
+use crate::support::live_inference::{bind_target, live_target, rows_when};
 use crate::support::test_db_in;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -81,9 +81,8 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     let arguments = serde_json::json!({"tool_name":"bash", "args":{"command":"sh", "args":["-c", "exec 3< \"$1\"; printf READY; IFS= read -r release <&3", "gents-live-crash", root.join("release").display().to_string()]}});
     submit_user_request(&node_did, &actors.fixture, session_id, "r6-recovery-parent",
         &format!("Call spawn_process with exactly these arguments: {arguments}. Then call wait_process using the returned tool_call_id and timeout_secs 120. Wait for that result before answering."), Default::default()).await;
-    let running = wait_for_rows(&actors.fixture.access, "AgentToolCall",
-        r#"{ AgentToolCall(filter: {request_id: {_eq: "r6-recovery-parent"}, lifecycle_state: {_eq: "running"}}) {tool_call_id tool_name} }"#,
-        Duration::from_secs(180), |rows| {
+    let running = rows_when(&actors.fixture.access, "AgentToolCall",
+        r#"{ AgentToolCall(filter: {request_id: {_eq: "r6-recovery-parent"}, lifecycle_state: {_eq: "running"}}) {tool_call_id tool_name} }"#, |rows| {
             let calls = rows["AgentToolCall"].as_array().unwrap();
             calls.iter().any(|row| row["tool_name"] == "bash") && calls.iter().any(|row| row["tool_name"] == "wait_process")
         }).await;
@@ -309,8 +308,9 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         gents_session::exec::ownership::ProcessObservation::Running,
         "the spawned process must survive its runtime's crash"
     );
-    let executions = gents_toolcalls::call::hook::BackgroundExecutionRegistry::default()
-        .with_process_records(records);
+    let executions =
+        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default()
+            .with_process_records(records);
     gents_toolcalls::call::lifecycle::ToolCallLifecycle::recover_all_with_executions(
         &node,
         &ready.node_did,

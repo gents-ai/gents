@@ -10,21 +10,25 @@ pub use gents_loop::rendered_request::{
     scope, transport, AdmissionJoin, AssemblyBuildPath, AssemblyTrace, AssistantMessageId,
     CaptureOrderKey, CaptureScope, CaptureScopeKind, CaptureSeam, ContextAccounting,
     ContextCompactionReason, ContextInputComponents, ParsedProvenance, ProvenanceManifest,
-    ProvenanceStatus, RenderedCompletionRequest, RenderedRequestCaptureFactory,
-    RenderedRequestCaptureSink, RenderedRequestCapturingHttpClient, RenderedRequestComponents,
-    RenderedRequestContext, RenderedRequestSource, ThreadedToolResult, ASSEMBLY_TRACE_VERSION,
-    CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION, PROVENANCE_MANIFEST_VERSION,
+    ProvenanceStatus, ProviderRoute, RenderedAttempt, RenderedCompletionRequest,
+    RenderedRequestCaptureFactory, RenderedRequestCaptureSink, RenderedRequestCapturingHttpClient,
+    RenderedRequestComponents, RenderedRequestContext, RenderedRequestSource, ThreadedToolResult,
+    ASSEMBLY_TRACE_VERSION, CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION,
+    PROVENANCE_MANIFEST_VERSION,
 };
 pub use sink::defra_rendered_request_capture_factory_for_agent;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use sink::defra_rendered_request_capture_factory_for_signer;
 pub use sink::DefraRenderedRequestSink;
 
-/// The kind guard keeps the task-local admission join honest if a caller wires
-/// the wrong capture scope. One-shot captures never join because no admission
-/// scope exists there.
-fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
-    let join = crate::admission::current_call_join()?;
+/// The kind guard keeps the sending call's admission join honest if a caller
+/// wires the wrong capture scope. One-shot captures never join because their
+/// calls carry no admission.
+fn admission_join_for_scope(
+    capture_scope: &str,
+    admission: Option<&gents_loop::provider_call::admission::AdmissionCallContext>,
+) -> Option<AdmissionJoin> {
+    let join = admission?.current_join()?;
     let scope_kind = capture_scope.parse::<CaptureScope>().ok()?.kind;
     admission_kind_matches_scope(join.call_kind, scope_kind).then_some(AdmissionJoin {
         call_id: join.call_id,
@@ -36,10 +40,10 @@ fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
 /// one-shot runs have no admission scope at all, so a join observed under a
 /// oneshot capture could only be another loop's call.
 pub(crate) fn admission_kind_matches_scope(
-    call_kind: crate::admission::CallKind,
+    call_kind: gents_loop::provider_call::admission::CallKind,
     scope_kind: CaptureScopeKind,
 ) -> bool {
-    use crate::admission::CallKind;
+    use gents_loop::provider_call::admission::CallKind;
 
     matches!(
         (call_kind, scope_kind),
@@ -806,7 +810,7 @@ mod tests {
 
     #[test]
     fn admission_kinds_map_to_their_capture_scopes() {
-        use crate::admission::CallKind;
+        use gents_loop::provider_call::admission::CallKind;
 
         let cases = [
             (CallKind::Inference, CaptureScopeKind::Inference, true),

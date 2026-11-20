@@ -1,5 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryNavProvider } from "@gents/shell";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -85,7 +84,7 @@ describe("the composer's reason box", () => {
 
   it("sends a remote node's set-up to that machine", () => {
     show({
-      source: "enrollment",
+      local: false,
       graphql: null,
       nodeReadiness: readiness("backend_not_configured"),
     });
@@ -93,59 +92,12 @@ describe("the composer's reason box", () => {
     expect(screen.queryByRole("link", { name: "Set up inference" })).toBeNull();
   });
 
-  it("says a node is offline", () => {
+  it("keeps the composer usable while the node is offline", () => {
     show({ runtimeConnection: "disconnected" });
-    expect(box()).toHaveTextContent(/is offline/);
-    expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
-    inputOutOfReach();
-  });
-
-  describe("for this computer's own node, stopped", () => {
-    const server = (state: string) => {
-      const startManagedServer = vi
-        .fn()
-        .mockResolvedValue({ state: "running", nodeName: "Forge", nodeDid: NODE });
-      const app = show({ runtimeConnection: "disconnected" }, null, {
-        managedServerStatus: vi
-          .fn()
-          .mockResolvedValue({ state, nodeName: "Forge", nodeDid: NODE }),
-        startManagedServer,
-      });
-      return { app, startManagedServer };
-    };
-
-    it("offers to start it", async () => {
-      const { startManagedServer } = server("stopped");
-      const start = await screen.findByRole("button", { name: "Start node" });
-      expect(box()).toContainElement(start);
-      expect(box()).toHaveTextContent(/isn't running on this computer/);
-      expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
-      await userEvent.click(start);
-      expect(startManagedServer).toHaveBeenCalledWith("Forge", undefined);
-    });
-
-    it("offers no start while it runs", async () => {
-      const { app } = server("running");
-      await waitFor(() =>
-        expect(app.stores.localServer.getState().status?.state).toBe("running"),
-      );
-      expect(box()).toHaveTextContent(/is offline/);
-      expect(screen.queryByRole("button", { name: "Start node" })).toBeNull();
-    });
-
-    it("offers no start for another computer's node", async () => {
-      const { app } = server("stopped");
-      await waitFor(() =>
-        expect(app.stores.localServer.getState().status?.state).toBe("stopped"),
-      );
-      act(() =>
-        publish(app, [
-          node({ source: "enrollment", runtimeConnection: "disconnected" }),
-        ]),
-      );
-      expect(box()).toHaveTextContent(/is offline/);
-      expect(screen.queryByRole("button", { name: "Start node" })).toBeNull();
-    });
+    expect(screen.queryByTestId("composer-reason")).toBeNull();
+    expect(
+      screen.getByRole("textbox", { name: "Message" }).closest("[inert]"),
+    ).toBeNull();
   });
 
   it("says a node refuses this app instead of connecting forever", () => {
@@ -157,7 +109,7 @@ describe("the composer's reason box", () => {
   });
 
   it("says a node has no address instead of waiting on it", () => {
-    show({ source: "enrollment", graphql: null, runtimeConnection: "noEndpoint" });
+    show({ local: false, graphql: null, runtimeConnection: "noEndpoint" });
     expect(box()).toHaveTextContent(/has no address this app can reach/);
     expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
     inputOutOfReach();

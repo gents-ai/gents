@@ -81,7 +81,9 @@ impl ConfigAccess {
             Self::Graphql(endpoint) => {
                 let url = format!("{}/acp/node/status", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
-                let response = endpoint.authorize(client.get(url))?.send().await?;
+                let response = endpoint
+                    .send_resolving(|endpoint| endpoint.authorize(client.get(&url)))
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::HttpOperationStatus {
@@ -104,15 +106,13 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => {
                 local.require_actor_signer()?;
-                let actor = local
+                local
                     .identity()
-                    .cloned()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                let context = local.request_context();
                 let subject = subject.clone();
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()));
                         Ok::<_, ConfigClientError>(
                             node.explain_nac_subject_as(&context, subject.as_str())
                                 .await?,
@@ -124,13 +124,75 @@ impl ConfigAccess {
                 let url = format!("{}/acp/node/explain", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
                 let response = endpoint
-                    .authorize(client.get(url).query(&[("subject", subject.as_str())]))?
-                    .send()
-                    .await?;
+                    .send_resolving(|endpoint| {
+                        endpoint.authorize(client.get(&url).query(&[("subject", subject.as_str())]))
+                    })
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::HttpOperationStatus {
                         operation: "explain node subject",
+                        status,
+                    });
+                }
+                Ok(response.json().await?)
+            }
+        }
+    }
+
+    pub async fn observe_actor_relationship(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        relation: &str,
+        target: &identity::Did,
+    ) -> Result<bool, ConfigClientError> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        match self {
+            Self::Local(local) => {
+                local.require_actor_signer()?;
+                let context = local.request_context();
+                let (collection, doc_id, relation, target) = (
+                    collection.to_owned(),
+                    doc_id.to_owned(),
+                    relation.to_owned(),
+                    target.to_string(),
+                );
+                local
+                    .run_owned(move |node| async move {
+                        Ok::<_, ConfigClientError>(
+                            node.observe_dac_actor_relationship_as(
+                                &context,
+                                &collection,
+                                &doc_id,
+                                &relation,
+                                &target,
+                            )
+                            .await?,
+                        )
+                    })
+                    .await
+            }
+            Self::Graphql(endpoint) => {
+                let url = format!(
+                    "{}/acp/document/relationship",
+                    graphql_api_base(endpoint.url())?
+                );
+                let client = graphql::http_client().await?;
+                let response = endpoint
+                    .send_resolving(|endpoint| {
+                        endpoint.authorize(client.get(&url).query(&[
+                            ("collection", collection),
+                            ("docID", doc_id),
+                            ("relation", relation),
+                            ("targetActor", target.as_str()),
+                        ]))
+                    })
+                    .await??;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(ConfigClientError::HttpOperationStatus {
+                        operation: "observe document actor relationship",
                         status,
                     });
                 }
@@ -149,18 +211,14 @@ impl ConfigAccess {
         crate::graphql::validate_collection_identifier(collection)?;
         match self {
             Self::Local(local) => {
+                local.require_actor_signer()?;
                 local
-                    .agent_signer()
-                    .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
-                let actor = local
                     .identity()
-                    .cloned()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                let context = local.request_context();
                 let (collection, doc_id) = (collection.to_owned(), doc_id.to_owned());
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()));
                         Ok::<_, ConfigClientError>(
                             node.list_dac_relationships_as(&context, &collection, &doc_id)
                                 .await?,
@@ -175,13 +233,14 @@ impl ConfigAccess {
                 );
                 let client = graphql::http_client().await?;
                 let response = endpoint
-                    .authorize(
-                        client
-                            .get(url)
-                            .query(&[("collection", collection), ("docID", doc_id)]),
-                    )?
-                    .send()
-                    .await?;
+                    .send_resolving(|endpoint| {
+                        endpoint.authorize(
+                            client
+                                .get(&url)
+                                .query(&[("collection", collection), ("docID", doc_id)]),
+                        )
+                    })
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::HttpOperationStatus {
@@ -194,8 +253,15 @@ impl ConfigAccess {
         }
     }
 
+    /// A grant to a member whose Node administration removal is owed is
+    /// refused (Lean `Identity.EnrollmentGrant.permissionGrantAdmitted`).
     /// Native NAC decides the change as this access's actor: locally its
     /// identity under its managed signer, over HTTP the endpoint principal.
+    /// The runtime principal's own change is issued as the NAC owner, which
+    /// is never the Node (`Identity.NodeProvisioning.nacOwner`): native admits
+    /// a NAC change with no node exception, so the runtime names the owner in
+    /// process and keeps the NAC authority it had as owner without its read
+    /// bypass.
     async fn change_node_relation(
         &self,
         relation: &'static str,
@@ -207,13 +273,27 @@ impl ConfigAccess {
                 local.require_mutation_signer()?;
                 let actor = local
                     .identity()
-                    .cloned()
-                    .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                    .ok_or(ConfigClientError::NodePermissionActorRequired)?
+                    .clone();
+                let context = local.request_context();
                 let target = target.clone();
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()));
+                        let _guard = if delete {
+                            None
+                        } else {
+                            Some(admit_permission_grant(&node, &target).await?)
+                        };
+                        let context = match node.node_identity_did() == Some(actor.as_str()) {
+                            true => defra_core::RequestContext::default().with_identity(Some(
+                                node.nac_manager()
+                                    .owner()
+                                    .await
+                                    .ok_or(ConfigClientError::NodeAcpOwnerUnknown)?
+                                    .to_string(),
+                            )),
+                            false => context,
+                        };
                         if delete {
                             node.delete_nac_actor_relationship_as(
                                 &context,
@@ -230,20 +310,26 @@ impl ConfigAccess {
                     .await
             }
             WriteRoute::Http(endpoint) => {
-                let url = format!(
-                    "{}/acp/node/relationship",
-                    graphql_api_base(endpoint.url())?
-                );
+                let path = if delete {
+                    "/acp/node/relationship"
+                } else {
+                    super::owner_staged_route::PERMISSION_GRANT_PATH
+                };
+                let url = format!("{}{path}", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
                 let body = serde_json::json!({
                     "Relation": relation, "TargetActor": target.as_str(),
                 });
-                let request = if delete {
-                    client.delete(url)
-                } else {
-                    client.post(url)
-                };
-                let response = endpoint.authorize(request.json(&body))?.send().await?;
+                let response = endpoint
+                    .send_resolving(|endpoint| {
+                        let request = if delete {
+                            client.delete(&url)
+                        } else {
+                            client.post(&url)
+                        };
+                        endpoint.authorize(request.json(&body))
+                    })
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::NodePermissionStatus {
@@ -255,4 +341,20 @@ impl ConfigAccess {
             }
         }
     }
+}
+
+pub(super) async fn admit_permission_grant(
+    node: &std::sync::Arc<defra_node::Node>,
+    target: &identity::Did,
+) -> Result<tokio::sync::OwnedMutexGuard<()>, ConfigClientError> {
+    let guard = crate::identity::enrollment_decision_gate(node)
+        .lock_owned()
+        .await;
+    let owed = crate::identity::owed_removal_receipts(node, target.as_str()).await?;
+    if !crate::identity::permission_grant_admitted(!owed.is_empty()) {
+        return Err(ConfigClientError::AdministrationRemovalPending {
+            member: target.to_string(),
+        });
+    }
+    Ok(guard)
 }

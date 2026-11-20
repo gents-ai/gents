@@ -13,7 +13,7 @@ use rig::streaming::RawStreamingChoice;
 
 use super::lock_fixtures_for_test;
 use super::route::{ClaudeRoute, ClaudeRouteError};
-use super::send::stream_messages_routed;
+use super::send::{stream_messages_routed, MessagesAccount};
 use super::tests::echo_request;
 use super::wire_tests::{reply, Server, Wire};
 use crate::clients::claude_subscription::{AccountIdentity, ApiKeyBearer};
@@ -54,13 +54,16 @@ async fn exchange(
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
     let bearer = ApiKeyBearer::new(SECRET);
     let stream = stream_messages_routed(
+        &Default::default(),
         &route,
         MODEL,
         &echo_request(),
-        &account,
+        MessagesAccount {
+            context: &account,
+            bearer: &bearer,
+            usage: None,
+        },
         RapidHashSet::new(),
-        &bearer,
-        None,
     )
     .await
     .expect("200");
@@ -192,13 +195,16 @@ async fn a_signed_in_gateway_marks_its_attribution_from_the_jwt_it_sends() {
     );
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
     let stream = stream_messages_routed(
+        &Default::default(),
         &route,
         MODEL,
         &echo_request(),
-        &account,
+        MessagesAccount {
+            context: &account,
+            bearer: &ApiKeyBearer::new(jwt.clone()),
+            usage: None,
+        },
         RapidHashSet::new(),
-        &ApiKeyBearer::new(jwt.clone()),
-        None,
     )
     .await
     .expect("200");
@@ -305,13 +311,16 @@ async fn claude_platform_on_aws_sends_a_client_request_id_only_on_its_default_ur
     };
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
     let stream = stream_messages_routed(
+        &Default::default(),
         &local,
         MODEL,
         &echo_request(),
-        &account,
+        MessagesAccount {
+            context: &account,
+            bearer: &ApiKeyBearer::new(SECRET),
+            usage: None,
+        },
         RapidHashSet::new(),
-        &ApiKeyBearer::new(SECRET),
-        None,
     )
     .await
     .expect("200");
@@ -368,13 +377,16 @@ async fn a_rejected_credential_is_reported_without_a_second_send() {
     let route = route(BackendProviderKind::ClaudeGateway, &server, "", None);
     let account = AccountIdentity::of_platform("did:key:z6MkPlatform", "backend-1").context(false);
     let error = stream_messages_routed(
+        &Default::default(),
         &route,
         MODEL,
         &echo_request(),
-        &account,
+        MessagesAccount {
+            context: &account,
+            bearer: &ApiKeyBearer::new(SECRET),
+            usage: None,
+        },
         RapidHashSet::new(),
-        &ApiKeyBearer::new(SECRET),
-        None,
     )
     .await
     .err()

@@ -10,9 +10,9 @@ use super::plugin_job_support::{
     boot_job_harness, effects, guest_pin, job_call, job_row, result, spawn, wait_job, JobHarness,
     PlanEntry, PLUGIN,
 };
-use crate::support::live_inference::STALL_CEILING;
 use crate::support::streaming_backend::{StreamPlan, StreamResponse};
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const TOOL_CALL: &str = "job-s";
 const CHILD_PROMPT: &str = "surface child a";
@@ -129,7 +129,7 @@ async fn session_texts(h: &JobHarness) -> Vec<String> {
 }
 
 async fn notification(h: &JobHarness) -> String {
-    use crate::support::snapshots::SnapshotReader;
+    use gents_store::test_support::snapshot_reader::SnapshotReader;
     let marker = format!("<tool-completion tool_call_id=\"{TOOL_CALL}\"");
     let mut changes = h
         .actors

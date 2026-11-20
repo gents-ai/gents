@@ -57,6 +57,16 @@ pub enum GraphqlError {
         #[source]
         source: reqwest::Error,
     },
+    /// A 401 or 403, with the `code` its body named, so a client can tell
+    /// the edge of a Vera home asking for a delegation from any refusal.
+    #[cfg(feature = "native")]
+    #[error("reading GraphQL response from {graphql}")]
+    Refused {
+        graphql: String,
+        #[source]
+        source: reqwest::Error,
+        code: Option<String>,
+    },
     #[cfg(feature = "native")]
     #[error("decoding GraphQL response body from {graphql}")]
     DecodeBody {
@@ -97,10 +107,24 @@ impl GraphqlError {
             Self::ClientBuild(source)
             | Self::Post { source, .. }
             | Self::ReadResponse { source, .. }
+            | Self::Refused { source, .. }
             | Self::DecodeBody { source, .. } => Some(source),
             _ => None,
         }
     }
+    /// The `code` the body of a 401 or 403 named.
+    #[cfg(feature = "native")]
+    pub fn refusal_code(&self) -> Option<(reqwest::StatusCode, &str)> {
+        match self {
+            Self::Refused {
+                source,
+                code: Some(code),
+                ..
+            } => Some((source.status()?, code)),
+            _ => None,
+        }
+    }
+
     /// The GraphQL errors DefraDB answered with, which its transparent
     /// variant hides from `source()`.
     pub fn database_failure(&self) -> Option<&crate::database_error::GraphqlFailure> {

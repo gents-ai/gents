@@ -34,7 +34,7 @@ describe("native command async invariants", () => {
 
     expect(occurrences).toHaveLength(1);
     expect(source).toContain(
-      "ClientCore::start_with_paths_reporting_stages(paths, options, stage_tx).await",
+      "ClientRuntime::start_with_paths_reporting_stages(paths, options, stage_tx)",
     );
     expect(source).toContain("start_client_core_async");
     expect(source).toContain("std::thread::Builder::new()");

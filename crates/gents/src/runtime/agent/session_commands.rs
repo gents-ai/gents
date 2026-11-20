@@ -206,7 +206,14 @@ pub async fn run_session_command_reconciler(
     agents: tokio::sync::watch::Receiver<Arc<SessionCommandAgentSnapshot>>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    run_session_command_reconciler_with_agents(node, identity, Some(agents), cancel).await
+    run_session_command_reconciler_with_agents(
+        node,
+        identity,
+        Some(agents),
+        gents_p2p::p2p_reconcile::intervals::DEFAULT_SWEEP,
+        cancel,
+    )
+    .await
 }
 
 pub(crate) async fn run_session_command_reconciler_with_agents(
@@ -217,6 +224,7 @@ pub(crate) async fn run_session_command_reconciler_with_agents(
             Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
         >,
     >,
+    sweep_interval: std::time::Duration,
     cancel: CancellationToken,
 ) -> Result<()> {
     let watched = CommandKind::ALL
@@ -231,7 +239,7 @@ pub(crate) async fn run_session_command_reconciler_with_agents(
     let changes = futures::stream::unfold(changes, |mut changes| async move {
         changes.recv().await.map(|batch| (batch, changes))
     });
-    let mut interval = tokio::time::interval(gents_p2p::p2p_reconcile::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(sweep_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let ticks = futures::stream::unfold(interval, |mut interval| async move {
         interval.tick().await;
@@ -408,6 +416,7 @@ where
                             &identity,
                             &id,
                             agent_identity.as_ref(),
+                            None,
                         )
                         .await
                     }
@@ -521,7 +530,7 @@ mod tests {
         let user =
             gents_store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
                 .unwrap();
-        gents_session::test_support::grant_operator_user(&node, identity.as_ref(), &user).await;
+        gents_store::test_support::grant_operator_user(&node, identity.as_ref(), &user).await;
         let binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
         let agent =
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();

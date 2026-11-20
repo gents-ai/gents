@@ -9,8 +9,13 @@
 use std::fmt;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
+use crate::llm::rig_compat::http::Response as HttpResponse;
+use crate::llm::rig_compat::http::StreamingResponse;
+use crate::llm::rig_compat::http::{
+    self as http_client, HeaderMap, HeaderValue, LazyBody, MultipartForm, Request, Transport, Uri,
+};
 use bytes::Bytes;
 use gents_claude::request::{self, RequestHead};
 use gents_claude::transport::{
@@ -18,15 +23,10 @@ use gents_claude::transport::{
     Target, TransportError,
 };
 use gents_loop::account_usage::UsageSource;
+use gents_loop::provider_call::ProviderCall;
 use rand::Rng;
 use reqwest::header::HeaderName;
 use reqwest::StatusCode;
-use rig::http_client::Response as HttpResponse;
-use rig::http_client::StreamingResponse;
-use rig::http_client::{
-    self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, Uri,
-};
-use rig::wasm_compat::WasmCompatSend;
 use serde_json::Value;
 use tokio::sync::OnceCell;
 
@@ -87,7 +87,6 @@ struct Shared {
 }
 
 static SHARED: OnceCell<Shared> = OnceCell::const_new();
-static GZIP_LATCHED_OFF: LazyLock<Arc<AtomicBool>> = LazyLock::new(Arc::default);
 
 fn env_pair(upper: &str, lower: &str) -> Option<String> {
     std::env::var(upper).or_else(|_| std::env::var(lower)).ok()
@@ -309,23 +308,18 @@ impl fmt::Debug for ClaudeHttpClient {
 }
 
 impl ClaudeHttpClient {
-    pub(crate) fn new(usage: Option<Arc<UsageReporter>>) -> Self {
+    /// A client reporting to `usage` whose gzip decision reads and sets `gzip_off`.
+    pub(crate) fn new(usage: Option<Arc<UsageReporter>>, gzip_off: Arc<AtomicBool>) -> Self {
         Self {
             usage,
-            gzip_off: GZIP_LATCHED_OFF.clone(),
+            gzip_off,
             #[cfg(test)]
             route: None,
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn with_test_route(
-        mut self,
-        gzip_off: Arc<AtomicBool>,
-        host: &str,
-        port: u16,
-    ) -> Self {
-        self.gzip_off = gzip_off;
+    pub(crate) fn with_test_route(mut self, host: &str, port: u16) -> Self {
         self.route = Some((host.to_owned(), port));
         self
     }
@@ -396,14 +390,15 @@ impl ClaudeHttpClient {
     /// The target this request actually connects to: the URL's target, or the test route's
     /// host and port when one is set.
     fn effective_target(&self, outgoing: &Outgoing) -> Target {
-        #[cfg_attr(not(test), allow(unused_mut))]
-        let mut target = outgoing.target.clone();
         #[cfg(test)]
         if let Some((host, port)) = &self.route {
-            target.host.clone_from(host);
-            target.port = *port;
+            return Target {
+                host: host.clone(),
+                port: *port,
+                tls: outgoing.target.tls,
+            };
         }
-        target
+        outgoing.target.clone()
     }
 
     /// Sends the request, resending it plain once when the API rejects the gzip body, and
@@ -414,7 +409,7 @@ impl ClaudeHttpClient {
         uri: Uri,
         headers: HeaderMap,
         body: Bytes,
-    ) -> impl Future<Output = http_client::Result<Exchange>> + WasmCompatSend + 'static {
+    ) -> impl Future<Output = http_client::Result<Exchange>> + Send + 'static {
         let this = self.clone();
         async move {
             let outgoing = Outgoing::new(&method, &uri, &headers)?;
@@ -515,7 +510,7 @@ async fn read_error_body(mut body: Body) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-fn body_stream(body: Body) -> http_client::sse::BoxedStream {
+fn body_stream(body: Body) -> http_client::BoxedStream {
     Box::pin(futures::stream::unfold(body, |mut body| async move {
         match body.chunk().await {
             Ok(Some(chunk)) => Some((Ok(chunk), body)),
@@ -528,23 +523,15 @@ fn body_stream(body: Body) -> http_client::sse::BoxedStream {
     }))
 }
 
-impl HttpClientExt for ClaudeHttpClient {
-    fn send<T, U>(
+impl Transport for ClaudeHttpClient {
+    fn send(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        T: Into<Bytes> + WasmCompatSend,
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
+        _call: &ProviderCall,
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<Bytes>>>> + Send + 'static
     {
         let (parts, body) = req.into_parts();
-        let exchange = self.execute(
-            parts.method.to_string(),
-            parts.uri,
-            parts.headers,
-            body.into(),
-        );
+        let exchange = self.execute(parts.method.to_string(), parts.uri, parts.headers, body);
         async move {
             let Exchange {
                 status,
@@ -555,42 +542,33 @@ impl HttpClientExt for ClaudeHttpClient {
             if let Some(map) = builder.headers_mut() {
                 *map = headers;
             }
-            let body: LazyBody<U> = Box::pin(async move {
+            let body: LazyBody<Bytes> = Box::pin(async move {
                 let mut bytes = Vec::new();
                 while let Some(chunk) = body.chunk().await.map_err(ClaudeTransportError::from)? {
                     bytes.extend_from_slice(&chunk);
                 }
-                Ok(U::from(Bytes::from(bytes)))
+                Ok(Bytes::from(bytes))
             });
             builder.body(body).map_err(http_client::Error::Protocol)
         }
     }
 
-    fn send_multipart<U>(
+    fn send_multipart(
         &self,
+        _call: &ProviderCall,
         _req: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
+    ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<Bytes>>>> + Send + 'static
     {
         std::future::ready(Err(ClaudeTransportError::Multipart.into()))
     }
 
-    fn send_streaming<T>(
+    fn send_streaming(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-    where
-        T: Into<Bytes>,
-    {
+        _call: &ProviderCall,
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let (parts, body) = req.into_parts();
-        let exchange = self.execute(
-            parts.method.to_string(),
-            parts.uri,
-            parts.headers,
-            body.into(),
-        );
+        let exchange = self.execute(parts.method.to_string(), parts.uri, parts.headers, body);
         async move {
             let Exchange {
                 status,
@@ -618,15 +596,17 @@ pub(super) fn capturing(
     RenderedRequestCapturingHttpClient::new(MessagesTransport { fixture, live })
 }
 
-/// The capture layer decides at this future's first poll, so it is awaited
-/// in the task that armed the capture.
+/// The capture layer claims the capture `call` armed at this future's first
+/// poll.
 pub(super) fn send_capturing(
+    call: &ProviderCall,
     fixture: Option<String>,
     live: ClaudeHttpClient,
     request: Request<Bytes>,
 ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
     let client = capturing(fixture, live);
-    async move { client.send_streaming(request).await }
+    let call = call.clone();
+    async move { client.send_streaming(&call, request).await }
 }
 
 /// Serves a queued SSE fixture in tests; otherwise forwards to the Bun-exact client.
@@ -636,61 +616,55 @@ pub(super) struct MessagesTransport {
     pub(super) live: ClaudeHttpClient,
 }
 
-impl HttpClientExt for MessagesTransport {
-    fn send<T, U>(
+impl Transport for MessagesTransport {
+    fn send(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        T: Into<Bytes> + WasmCompatSend,
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
+        call: &ProviderCall,
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<Bytes>>>> + Send + 'static
     {
         let inner = self.live.clone();
+        let call = call.clone();
         let fixture = self.fixture.clone();
         let (parts, body) = req.into_parts();
-        let body: Bytes = body.into();
         async move {
             if fixture.is_some() {
-                let body: LazyBody<U> = Box::pin(async { Ok(U::from(Bytes::from_static(b"{}"))) });
+                let body: LazyBody<Bytes> = Box::pin(async { Ok(Bytes::from_static(b"{}")) });
                 return Ok(HttpResponse::builder().status(200).body(body)?);
             }
             let req = Request::from_parts(parts, body);
-            HttpClientExt::send::<Bytes, U>(&inner, req).await
+            Transport::send(&inner, &call, req).await
         }
     }
 
-    fn send_multipart<U>(
+    fn send_multipart(
         &self,
+        call: &ProviderCall,
         req: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
+    ) -> impl Future<Output = http_client::Result<HttpResponse<LazyBody<Bytes>>>> + Send + 'static
     {
         let inner = self.live.clone();
-        async move { HttpClientExt::send_multipart::<U>(&inner, req).await }
+        let call = call.clone();
+        async move { Transport::send_multipart(&inner, &call, req).await }
     }
 
-    fn send_streaming<T>(
+    fn send_streaming(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-    where
-        T: Into<Bytes>,
-    {
+        call: &ProviderCall,
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let inner = self.live.clone();
+        let call = call.clone();
         let fixture = self.fixture.clone();
         let (parts, body) = req.into_parts();
-        let body: Bytes = body.into();
         async move {
             if let Some(sse) = fixture {
-                let stream: http_client::sse::BoxedStream =
+                let stream: http_client::BoxedStream =
                     Box::pin(futures::stream::iter([Ok(Bytes::from(sse))]));
                 return Ok(HttpResponse::builder().status(200).body(stream)?);
             }
             let req = Request::from_parts(parts, body);
-            HttpClientExt::send_streaming(&inner, req).await
+            Transport::send_streaming(&inner, &call, req).await
         }
     }
 }

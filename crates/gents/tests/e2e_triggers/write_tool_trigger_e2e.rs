@@ -1,4 +1,4 @@
-use crate::support::snapshots::SnapshotReader;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use std::time::Duration;
 
 use gents::{DocumentRuntimeOptions, Gents};
@@ -345,8 +345,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
     assert_eq!(
         crate::support::live_inference::wait_for_request_terminal(
             &fixture.access,
-            &request.request_id,
-            Duration::from_secs(120)
+            &request.request_id
         )
         .await,
         "completed"
@@ -393,7 +392,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
             "status": "open",
         }))
         .expect("decode write-tool args"),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect("request_action write tool call");
@@ -434,8 +433,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
     assert_eq!(
         crate::support::live_inference::wait_for_request_terminal(
             &fixture.access,
-            &request.request_id,
-            Duration::from_secs(120)
+            &request.request_id
         )
         .await,
         "completed"

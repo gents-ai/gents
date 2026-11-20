@@ -35,15 +35,17 @@ pub struct TaskRunResult {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendResult {
+    pub publication: ChatPublication,
     pub session_id: String,
     pub request_id: String,
     pub node_did: String,
     pub agent_did: Option<String>,
 }
 
-impl From<gents_desktop_core::client::SubmittedRequest> for ChatSendResult {
-    fn from(receipt: gents_desktop_core::client::SubmittedRequest) -> Self {
+impl From<gents::client_operations::SubmittedRequest> for ChatSendResult {
+    fn from(receipt: gents::client_operations::SubmittedRequest) -> Self {
         Self {
+            publication: ChatPublication::Delivered,
             session_id: receipt.session_id,
             request_id: receipt.request_id,
             node_did: receipt.node_did,
@@ -110,4 +112,11 @@ impl ClientUpdateEvent {
             store_version: Some(version),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatPublication {
+    Retained,
+    Delivered,
 }

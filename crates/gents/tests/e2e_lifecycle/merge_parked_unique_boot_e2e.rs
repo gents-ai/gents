@@ -8,10 +8,10 @@ use gents::defra_node::Node as EmbeddedNode;
 use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
 use gents_store::graphql::escape_graphql_string;
 
-use crate::support::live_inference::STALL_CEILING;
-use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db;
 use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::STALL_CEILING;
 
 const CONFLICT_DID: &str = "did:test:984-stale-endpoint";
 
@@ -91,8 +91,8 @@ async fn install_replicator(sender: &Arc<EmbeddedNode>, receiver: &Arc<EmbeddedN
     let collections = vec!["PeerRegistry".to_string()];
 
     // Transport administration runs as each Node's own identity.
-    let sender_p2p = gents_store::identity::node_p2p(sender).expect("sender p2p");
-    let receiver_p2p = gents_store::identity::node_p2p(receiver).expect("receiver p2p");
+    let sender_p2p = gents_p2p::node_access::operations(sender).expect("sender p2p");
+    let receiver_p2p = gents_p2p::node_access::operations(receiver).expect("receiver p2p");
     sender_p2p
         .connect_peer(&receiver_addr)
         .await
@@ -170,9 +170,9 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         .expect("reopen deadline")
         .expect("boot after a merge-parked unique-index conflict");
 
-    gents_store::schema::migration::ensure_migrations(&home.node)
+    gents_store::schema::ensure_runtime_schemas(&home.node)
         .await
-        .expect("ensure_migrations after boot");
+        .expect("ensure runtime schemas after boot");
 
     let mut docs = scan_endpoints(&home.node).await;
     docs.sort();

@@ -9,7 +9,8 @@ use ratatui::Terminal;
 
 use crate::app::layers::LayerKind;
 use crate::app::session_rows;
-use crate::app::{App, ChatLine};
+use crate::app::transcript::ChatLine;
+use crate::app::App;
 use crate::draw;
 use crate::keys::KeySet;
 use crate::layout::{layout, Right, Screen};

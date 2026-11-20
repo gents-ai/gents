@@ -200,10 +200,7 @@ impl Fixture<'_> {
         let followup = receipt["requestId"]
             .as_str()
             .context("follow-up request id")?;
-        ensure!(
-            wait_for_request_terminal(self.access, followup, Duration::from_secs(30)).await
-                == "completed"
-        );
+        ensure!(wait_for_request_terminal(self.access, followup,).await == "completed");
         let followup_view = super::live_runtime::wait_client(
             client,
             updates,
@@ -398,7 +395,8 @@ impl Replaced {
             },
         };
         let receipt: RuntimeControlReceipt = endpoint
-            .authorize(client.post(url).json(&command))?
+            .authorize_runtime(client.post(url).json(&command))
+            .await?
             .send()
             .await?
             .error_for_status()?

@@ -34,17 +34,6 @@ pub(crate) enum TransportDetail {
     Display,
 }
 
-/// The token endpoint URL: the override variable when it is set and non-blank, else the default.
-pub(crate) fn endpoint_url<F>(override_env: &str, default: F) -> String
-where
-    F: FnOnce() -> String,
-{
-    std::env::var(override_env)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(default)
-}
-
 impl TokenEndpoint {
     /// Send a refresh `request`, classify a rejection into an [`OAuthAuthProblem`] and decode a
     /// success as `R`.

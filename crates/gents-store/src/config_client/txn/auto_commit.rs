@@ -59,6 +59,8 @@ impl ConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            client_authorization: None,
+            presented_delegation: None,
         })))
     }
 
@@ -96,7 +98,7 @@ impl ConfigAccess {
         let document = document.to_owned();
         let variables = variables.cloned();
         let operation = operation.to_owned();
-        let identity = local.identity().cloned();
+        let context = local.request_context();
         let managed_agent = local.agent_signer().is_some();
         local
             .run_owned(move |node| async move {
@@ -105,7 +107,7 @@ impl ConfigAccess {
                     &document,
                     variables,
                     &operation,
-                    identity,
+                    context,
                     managed_agent,
                 )
                 .await
@@ -149,7 +151,15 @@ impl ConfigAccess {
             reached.notify_one();
             std::future::pending::<()>().await;
         }
-        Self::execute_local_read(node, document, variables.cloned(), operation, None, false).await
+        Self::execute_local_read(
+            node,
+            document,
+            variables.cloned(),
+            operation,
+            defra_core::RequestContext::default().with_bearer(None, None),
+            false,
+        )
+        .await
     }
 
     async fn execute_local_read(
@@ -157,11 +167,18 @@ impl ConfigAccess {
         document: &str,
         variables: Option<Value>,
         operation: &str,
-        identity: Option<identity::Did>,
+        context: defra_core::RequestContext,
         managed_agent: bool,
     ) -> Result<defra_node::QueryResponse> {
         let started = Instant::now();
-        let mut request = query::QueryRequest::new(document).with_identity(identity);
+        let actor = context
+            .identity()
+            .map(identity::Did::new)
+            .transpose()
+            .map_err(ConfigClientError::RelationshipTargetIdentity)?;
+        let mut request = query::QueryRequest::new(document)
+            .with_identity(actor)
+            .with_context(context);
         if let Some(variables) = variables {
             request = request.with_variables(variables);
         }
@@ -236,7 +253,7 @@ impl ConfigAccess {
                     mutation,
                     variables.cloned(),
                     telemetry,
-                    local.identity().cloned(),
+                    local.request_context(),
                     local.agent_signer.clone(),
                 )
                 .await?;
@@ -375,9 +392,16 @@ impl ConfigAccess {
         graphql::ensure_mutation_document(mutation)?;
         let operation = WriteOperation::new(operation)?;
         let telemetry = Arc::new(auto_commit_telemetry(operation, WriteBackend::Embedded)?);
-        let response =
-            Self::execute_local_mutation(node, operation, mutation, None, telemetry, None, None)
-                .await?;
+        let response = Self::execute_local_mutation(
+            node,
+            operation,
+            mutation,
+            None,
+            telemetry,
+            defra_core::RequestContext::default().with_bearer(None, None),
+            None,
+        )
+        .await?;
         Ok(crate::graphql::into_data_envelope(response.data))
     }
 
@@ -396,7 +420,7 @@ impl ConfigAccess {
             &rendered.document,
             Some(rendered.variables.clone()),
             telemetry,
-            None,
+            defra_core::RequestContext::default().with_bearer(None, None),
             None,
         )
         .await?;
@@ -411,7 +435,16 @@ impl ConfigAccess {
         graphql::ensure_mutation_document(mutation)?;
         let operation = WriteOperation::new(operation)?;
         let telemetry = Arc::new(auto_commit_telemetry(operation, WriteBackend::Embedded)?);
-        Self::execute_local_mutation(node, operation, mutation, None, telemetry, None, None).await
+        Self::execute_local_mutation(
+            node,
+            operation,
+            mutation,
+            None,
+            telemetry,
+            defra_core::RequestContext::default().with_bearer(None, None),
+            None,
+        )
+        .await
     }
 
     async fn execute_local_mutation(
@@ -420,9 +453,14 @@ impl ConfigAccess {
         mutation: &str,
         variables: Option<Value>,
         telemetry: Arc<AttemptTelemetry>,
-        identity: Option<identity::Did>,
+        context: defra_core::RequestContext,
         signer: Option<crate::identity::ManagedAgentSigner>,
     ) -> Result<defra_node::QueryResponse> {
+        let actor = context
+            .identity()
+            .map(identity::Did::new)
+            .transpose()
+            .map_err(ConfigClientError::RelationshipTargetIdentity)?;
         let write_guard = match mutation_write_gate(node).acquire(operation).await {
             Ok(guard) => guard,
             Err(error) => {
@@ -464,7 +502,9 @@ impl ConfigAccess {
                 }
                 let started = Instant::now();
                 native_completion.started = true;
-                let mut request = query::QueryRequest::new(&mutation).with_identity(identity);
+                let mut request = query::QueryRequest::new(&mutation)
+                    .with_identity(actor)
+                    .with_context(context);
                 if let Some(variables) = variables {
                     request = request.with_variables(variables);
                 }

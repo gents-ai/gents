@@ -287,27 +287,43 @@ structure AdmissionObservation where
   maxBackgrounded : Nat
   deriving Lean.ToJson
 
-def liveAfter (admissions : Nat) : Nat :=
-  (List.range admissions).foldl (fun live _ => (Background.admitBackground live).getD live) 0
+/-- An Agent's Tools `host.max_background_tool_calls` (`none` when unset) and
+the native scenario that fills one request to the limit it resolves to. -/
+structure ConfiguredBound where
+  theoremName : String
+  scenario : String
+  configured : Option Nat
+  deriving Lean.ToJson
+
+/-- The live count after `attempts` sequential admissions under `limit`. -/
+def liveAfter (limit attempts : Nat) : Nat :=
+  (List.range attempts).foldl (fun live _ => (Background.admitBackground limit live).getD live) 0
 
 end BackgroundBudget
 
+/-- Sequential admissions on one request until one is refused. Cases cover the
+unset default, the lower validation boundary, a value between, the ceiling, and
+one above it that the resolver clamps (`admitted_background_within_ceiling`). -/
 @[conformance_family]
-def backgroundAdmissionBound : Family BackgroundBudget.Bound BackgroundBudget.AdmissionObservation where
-  inputs := [{ theoremName := "Background.admitted_background_count_bounded"
-               scenario := "background_tool_admission_respects_max_backgrounded_per_parent"
-               numericBound := Background.maxBackgroundedPerParent }]
+def backgroundAdmissionBound :
+    Family BackgroundBudget.ConfiguredBound BackgroundBudget.AdmissionObservation where
+  inputs := [none, some 1, some 3, some Background.maxBackgroundedPerParent,
+      some (Background.maxBackgroundedPerParent + 1)].map fun configured =>
+    { theoremName := "Background.admitted_background_within_ceiling"
+      scenario := "background_tool_admission_respects_configured_max_background_tool_calls"
+      configured }
   model := fun i =>
-    let live := BackgroundBudget.liveAfter i.numericBound
+    let limit := Background.backgroundLimit i.configured
+    let live := BackgroundBudget.liveAfter limit (Background.maxBackgroundedPerParent + 1)
     let refusal :=
-      if (Background.admitBackground live).isNone then
+      if (Background.admitBackground limit live).isNone then
         PluginJob.Refusal.backgroundBudgetExceeded.code
       else none
     { kindFields :=
         ⟨"await_mode", ToolExecution.AwaitMode.background.toDefraDB⟩ ::
           refusal.toList.map fun code => ⟨"error_code_on_violation", code⟩
       currentBackgrounded := live
-      maxBackgrounded := Background.maxBackgroundedPerParent }
+      maxBackgrounded := limit }
 
 @[conformance_family]
 def backgroundReceiptContention : Family BackgroundBudget.Bound Bool where

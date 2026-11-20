@@ -1,12 +1,14 @@
 use super::{
-    admission_fixture::publish_accepted_on_claimed_request,
     admission_fixture::published_admission_with_owner,
-    admission_fixture::PublishedAdmissionOptions, delivery::RawPresentation,
-    delivery::TerminalFields, AwaitMode,
+    admission_fixture::PublishedAdmissionOptions,
+    admission_fixture::{publish_accepted_on_claimed_request, AcceptedFixtureCall},
+    delivery::RawPresentation,
+    delivery::TerminalFields,
+    AwaitMode,
 };
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use gents_protocol::tool_call::ToolCallState;
 use gents_protocol::{output::PayloadPresentation, session::SessionObservation};
-use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
@@ -145,12 +147,14 @@ async fn tool_publications_follow_lean_session_activity() {
                     admission.node.clone(),
                     &mut owner,
                     &admission.node_did,
-                    turn,
-                    "test_activity",
-                    &format!("tool-activity-{turn}"),
-                    serde_json::json!({}),
-                    AwaitMode::Foreground,
-                    true,
+                    AcceptedFixtureCall {
+                        turn,
+                        tool_name: "test_activity",
+                        tool_call_id: &format!("tool-activity-{turn}"),
+                        arguments: serde_json::json!({}),
+                        await_mode: AwaitMode::Foreground,
+                        start_running: true,
+                    },
                 )
                 .await
                 .unwrap();

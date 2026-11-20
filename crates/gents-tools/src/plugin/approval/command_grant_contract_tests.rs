@@ -253,63 +253,69 @@ async fn remembered_invocations_until_revocation(launch: bool) {
         None,
     )
     .unwrap();
-    workspace::scope(
-        context,
-        scope_interactive(true, async {
-            let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();
-            let policy = crate::native::CommandExecutionPolicy::write_capable();
-            let args = vec!["remembered-invocation".to_owned()];
-            let argv = vec!["printf".to_owned(), args[0].clone()];
-            let run = || async {
-                if launch {
-                    let output = crate::native::run_command_for_test(
-                        &tools,
-                        "bash",
-                        "printf",
-                        &args,
-                        None,
-                        Duration::from_secs(10),
-                        &policy,
-                        false,
-                        1024,
-                    )
-                    .await?;
-                    assert!(output.contains("remembered-invocation"));
-                    Ok::<(), anyhow::Error>(())
-                } else {
-                    workspace::authorize_command(&argv, &project, &project, None, &policy).await
-                }
-            };
-            let (operator, observation) =
-                crate::plugin::approval::testing::Operator::answer_with_observation(
-                    &home,
-                    Answer::AlwaysInvocation,
+    let call = crate::runtime_context::ToolHostContext {
+        interactive: true,
+        approval: context.clone(),
+        ..Default::default()
+    }
+    .call();
+    async {
+        let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();
+        let policy = crate::native::CommandExecutionPolicy::write_capable();
+        let args = vec!["remembered-invocation".to_owned()];
+        let argv = vec!["printf".to_owned(), args[0].clone()];
+        let run = || async {
+            if launch {
+                let output = crate::native::run_command_for_test(
+                    &call,
+                    &tools,
+                    "bash",
+                    crate::native::CommandRequest {
+                        command_name: "printf",
+                        args: &args,
+                        cwd: None,
+                        timeout: Duration::from_secs(10),
+                        raw_json: false,
+                        max_output_chars: 1024,
+                    },
+                    &policy,
                 )
-                .await
-                .unwrap();
-            let (first, prompt) = tokio::join!(run(), operator);
-            let prompt = prompt.unwrap();
-            assert!(!observation.id().unwrap().is_empty());
-            assert!(!prompt.is_empty());
-            first.unwrap();
-            run().await.unwrap();
-            assert!(pending_requests(&home).unwrap().is_empty());
-            let current = workspace::resolve(&home, &key, None).unwrap().unwrap();
-            workspace::revoke_commands(&home, &key, current.selection.revision).unwrap();
-            let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Once)
-                .await
-                .unwrap();
-            let (again, observed) = tokio::join!(run(), operator);
-            observed.unwrap();
-            again.unwrap();
-            let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Deny)
-                .await
-                .unwrap();
-            let (once_more, observed) = tokio::join!(run(), operator);
-            observed.unwrap();
-            assert!(once_more.is_err());
-        }),
-    )
+                .await?;
+                assert!(output.contains("remembered-invocation"));
+                Ok::<(), anyhow::Error>(())
+            } else {
+                workspace::authorize_command(&call, &argv, &project, &project, None, &policy).await
+            }
+        };
+        let (operator, observation) =
+            crate::plugin::approval::testing::Operator::answer_with_observation(
+                &home,
+                Answer::AlwaysInvocation,
+            )
+            .await
+            .unwrap();
+        let (first, prompt) = tokio::join!(run(), operator);
+        let prompt = prompt.unwrap();
+        assert!(!observation.id().unwrap().is_empty());
+        assert!(!prompt.is_empty());
+        first.unwrap();
+        run().await.unwrap();
+        assert!(pending_requests(&home).unwrap().is_empty());
+        let current = workspace::resolve(&home, &key, None).unwrap().unwrap();
+        workspace::revoke_commands(&home, &key, current.selection.revision).unwrap();
+        let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Once)
+            .await
+            .unwrap();
+        let (again, observed) = tokio::join!(run(), operator);
+        observed.unwrap();
+        again.unwrap();
+        let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Deny)
+            .await
+            .unwrap();
+        let (once_more, observed) = tokio::join!(run(), operator);
+        observed.unwrap();
+        assert!(once_more.is_err());
+    }
     .await;
 }
 
@@ -333,79 +339,85 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
         None,
     )
     .unwrap();
-    workspace::scope(
-        context,
-        scope_interactive(true, async {
-            let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();
-            let policy = crate::native::CommandExecutionPolicy::write_capable()
-                .with_mode(crate::native::CommandExecutionMode::WorkspaceWrite);
-            let args = vec![
-                "-c".into(),
-                concat!(
-                    "test \"$TMPDIR\" = \"$TMP\" && test \"$TMP\" = \"$TEMP\" && ",
-                    "/usr/bin/mktemp -d \"$TMPDIR/browser-profile-XXXXXX\"",
-                )
-                .into(),
-            ];
-            let run = || {
-                crate::native::run_command_for_test(
-                    &tools,
-                    "bash",
-                    "/bin/sh",
-                    &args,
-                    None,
-                    Duration::from_secs(10),
-                    &policy,
-                    false,
-                    4096,
-                )
-            };
-            let (operator, observation) =
-                crate::plugin::approval::testing::Operator::answer_with_observation(
-                    &home,
-                    Answer::Once,
-                )
-                .await
-                .unwrap();
-            let (result, prompt) = tokio::join!(run(), operator);
-            let prompt = prompt.unwrap();
-            assert!(!prompt.is_empty());
-            let original = observation.id().unwrap();
-            let result = result.unwrap();
-            let temporary = project.join(".gents-tmp");
-            let profiles: Vec<_> = std::fs::read_dir(&temporary)
-                .unwrap()
-                .map(|entry| entry.unwrap().path())
-                .collect();
-            assert_eq!(
-                profiles.len(),
-                1,
-                "approved command did not create one profile: {result}"
-            );
-            assert!(profiles[0].is_dir());
-            assert!(
-                result.contains(&profiles[0].to_string_lossy().to_string()),
-                "{result}"
-            );
-            assert!(pending_requests(&home).unwrap().is_empty());
-            let (operator, next_observation) =
-                crate::plugin::approval::testing::Operator::answer_with_observation(
-                    &home,
-                    Answer::Deny,
-                )
-                .await
-                .unwrap();
-            let (result, observed) = tokio::join!(run(), operator);
-            let observed = observed.unwrap();
-            assert!(!observed.is_empty());
-            // A one-time answer is deliberately not remembered; a later
-            // invocation must publish a distinct approval identity.
-            assert_ne!(next_observation.id().unwrap(), original);
-            assert!(result.is_err());
-            assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 1);
-            assert!(pending_requests(&home).unwrap().is_empty());
-        }),
-    )
+    let call = crate::runtime_context::ToolHostContext {
+        interactive: true,
+        approval: context.clone(),
+        ..Default::default()
+    }
+    .call();
+    async {
+        let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();
+        let policy = crate::native::CommandExecutionPolicy::write_capable()
+            .with_mode(crate::native::CommandExecutionMode::WorkspaceWrite);
+        let args = vec![
+            "-c".into(),
+            concat!(
+                "test \"$TMPDIR\" = \"$TMP\" && test \"$TMP\" = \"$TEMP\" && ",
+                "/usr/bin/mktemp -d \"$TMPDIR/browser-profile-XXXXXX\"",
+            )
+            .into(),
+        ];
+        let run = || {
+            crate::native::run_command_for_test(
+                &call,
+                &tools,
+                "bash",
+                crate::native::CommandRequest {
+                    command_name: "/bin/sh",
+                    args: &args,
+                    cwd: None,
+                    timeout: Duration::from_secs(10),
+                    raw_json: false,
+                    max_output_chars: 4096,
+                },
+                &policy,
+            )
+        };
+        let (operator, observation) =
+            crate::plugin::approval::testing::Operator::answer_with_observation(
+                &home,
+                Answer::Once,
+            )
+            .await
+            .unwrap();
+        let (result, prompt) = tokio::join!(run(), operator);
+        let prompt = prompt.unwrap();
+        assert!(!prompt.is_empty());
+        let original = observation.id().unwrap();
+        let result = result.unwrap();
+        let temporary = project.join(".gents-tmp");
+        let profiles: Vec<_> = std::fs::read_dir(&temporary)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(
+            profiles.len(),
+            1,
+            "approved command did not create one profile: {result}"
+        );
+        assert!(profiles[0].is_dir());
+        assert!(
+            result.contains(&profiles[0].to_string_lossy().to_string()),
+            "{result}"
+        );
+        assert!(pending_requests(&home).unwrap().is_empty());
+        let (operator, next_observation) =
+            crate::plugin::approval::testing::Operator::answer_with_observation(
+                &home,
+                Answer::Deny,
+            )
+            .await
+            .unwrap();
+        let (result, observed) = tokio::join!(run(), operator);
+        let observed = observed.unwrap();
+        assert!(!observed.is_empty());
+        // A one-time answer is deliberately not remembered; a later
+        // invocation must publish a distinct approval identity.
+        assert_ne!(next_observation.id().unwrap(), original);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 1);
+        assert!(pending_requests(&home).unwrap().is_empty());
+    }
     .await;
 }
 
@@ -506,22 +518,25 @@ async fn guarded_command_launch_rejects_unsupported_isolation_before_asking() {
         "guard-fixture".into(),
         marker.to_string_lossy().into_owned(),
     ];
-    let error = workspace::scope(
-        context,
-        scope_interactive(
-            true,
-            crate::native::run_command_for_test(
-                &tools,
-                "bash_unrestricted",
-                "/bin/sh",
-                &args,
-                None,
-                Duration::from_secs(1),
-                &command_policy,
-                false,
-                1024,
-            ),
-        ),
+    let call = crate::runtime_context::ToolHostContext {
+        interactive: true,
+        approval: context.clone(),
+        ..Default::default()
+    }
+    .call();
+    let error = crate::native::run_command_for_test(
+        &call,
+        &tools,
+        "bash_unrestricted",
+        crate::native::CommandRequest {
+            command_name: "/bin/sh",
+            args: &args,
+            cwd: None,
+            timeout: Duration::from_secs(1),
+            raw_json: false,
+            max_output_chars: 1024,
+        },
+        &command_policy,
     )
     .await
     .unwrap_err();

@@ -126,10 +126,13 @@ async fn foreground_handoff_after_parent_completion(
     let pid_arg = pid_file.to_string_lossy().into_owned();
     let gate_arg = gate.to_string_lossy().into_owned();
     let running = tokio::spawn(async move {
-        gents_tools::runtime_context::scope_request_tool_execution(
-            Some(deadline), parent_for_task,
-            task_hook.run_backgroundable_foreground("bash_unrestricted", "handoff-command", Box::new(move |envelope: gents_loop::tool::ToolCallEnvelope, _cleanup| Box::pin(async move {
-                let token = envelope.runtime_unchecked().map(|runtime| runtime.cancellation_token).unwrap_or_default();
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            Some(deadline),
+            parent_for_task,
+        )
+        .call();
+        task_hook.run_backgroundable_foreground("bash_unrestricted", "handoff-command", Box::new(move |envelope: gents_loop::tool::ToolCallEnvelope, _cleanup| Box::pin(async move {
+                let token = envelope.runtime().map(|runtime| runtime.cancellation_token).unwrap_or_default();
                 let result = gents_session::exec::run_managed_exec(gents_session::exec::ManagedExecRequest {
                     argv: vec!["/bin/sh".into(), "-c".into(), "printf '%s' $$ > \"$1\"; read value < \"$2\"; printf 'finished:%s' \"$value\"".into(), "sh".into(), pid_arg, gate_arg],
                     cwd, deadline_at: Some(deadline), cancellation_token: token,
@@ -142,8 +145,7 @@ async fn foreground_handoff_after_parent_completion(
                         gents_loop::tool_call_lifecycle::ToolOutcome::Completed(String::from_utf8(stdout).unwrap()),
                     other => gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(&format!("{other:?}")),
                 }
-            })), &gents_loop::tool::ToolCallEnvelope::ambient()),
-        ).await
+            })), &scope_call).await
     });
     let pid: i32 = tokio::time::timeout(STALL_CEILING, tokio::fs::read_to_string(&pid_file))
         .await
@@ -207,13 +209,15 @@ async fn foreground_handoff_after_parent_completion(
     for id in &filler_ids {
         let mut admitted = hook
             .adopt_accepted_tool_dispatch(
-                id,
-                None,
-                "handoff-parent",
-                &session,
-                "held_background_tool",
-                "{}",
-                deadline,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id: id,
+                    provider_call_id: None,
+                    request_id: "handoff-parent",
+                    session_id: &session,
+                    tool_name: "held_background_tool",
+                    args: "{}",
+                    deadline_at: deadline,
+                },
                 gents_protocol::tool_call::AwaitMode::Background,
             )
             .await
@@ -223,13 +227,15 @@ async fn foreground_handoff_after_parent_completion(
     }
     let mut overflow = hook
         .adopt_accepted_tool_dispatch(
-            &overflow_id,
-            None,
-            "handoff-parent",
-            &session,
-            "held_background_tool",
-            "{}",
-            deadline,
+            &crate::call::hook::ToolDispatch {
+                internal_call_id: &overflow_id,
+                provider_call_id: None,
+                request_id: "handoff-parent",
+                session_id: &session,
+                tool_name: "held_background_tool",
+                args: "{}",
+                deadline_at: deadline,
+            },
             gents_protocol::tool_call::AwaitMode::Background,
         )
         .await
@@ -248,7 +254,7 @@ async fn foreground_handoff_after_parent_completion(
         .unwrap();
     for filler in &mut fillers {
         filler
-            .cancel_during_run(gents_session::session::tool_call_state::CancelCause::UserCancelled)
+            .cancel_during_run(gents_protocol::tool_call::CancelCause::UserCancelled)
             .await
             .unwrap();
     }
@@ -351,17 +357,18 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
     let (started, observed) = tokio::sync::oneshot::channel();
     let runner = hook.clone();
     let running = tokio::spawn(async move {
-        gents_tools::runtime_context::scope_request_tool_execution(
-            Some(deadline),
-            parent,
-            runner.run_backgroundable_foreground(
+        let scope_call =
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(Some(deadline), parent)
+                .call();
+        runner
+            .run_backgroundable_foreground(
                 "bash_unrestricted",
                 "handoff-cancel-command",
                 Box::new(
                     move |envelope: gents_loop::tool::ToolCallEnvelope, _cleanup| {
                         Box::pin(async move {
                             let token = envelope
-                                .runtime_unchecked()
+                                .runtime()
                                 .map(|runtime| runtime.cancellation_token)
                                 .unwrap_or_default();
                             let _ = started.send(token.clone());
@@ -370,10 +377,9 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
                         })
                     },
                 ),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            ),
-        )
-        .await
+                &scope_call,
+            )
+            .await
     });
     let execution_token = observed.await.unwrap();
     let guard = hook.in_flight_lifecycles.lock().await;
@@ -437,10 +443,13 @@ async fn refused_foreground_handoff_can_be_retried() {
     let (finish, finished) = tokio::sync::oneshot::channel();
     let runner = hook.clone();
     let running = tokio::spawn(async move {
-        gents_tools::runtime_context::scope_request_tool_execution(
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
             Some(deadline),
             CancellationToken::new(),
-            runner.run_backgroundable_foreground(
+        )
+        .call();
+        runner
+            .run_backgroundable_foreground(
                 "bash_unrestricted",
                 "retry-command",
                 Box::new(move |_, _cleanup| {
@@ -450,10 +459,9 @@ async fn refused_foreground_handoff_can_be_retried() {
                         gents_loop::tool_call_lifecycle::ToolOutcome::Completed("finished".into())
                     })
                 }),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            ),
-        )
-        .await
+                &scope_call,
+            )
+            .await
     });
     observed.await.unwrap();
     hook.in_flight_lifecycles
@@ -472,11 +480,14 @@ async fn refused_foreground_handoff_can_be_retried() {
     .unwrap());
     gents_store::test_support::read_when_changed(
         &node,
-        &["AgentToolCall"],
+        "AgentToolCall",
         "the refused handoff clears its request",
         async || {
             let state = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ background_requested_at }} }}"#)).await.unwrap();
-            state["data"]["AgentToolCall"][0]["background_requested_at"].is_null().then_some(())
+            if state["data"]["AgentToolCall"][0]["background_requested_at"].is_null() {
+                return Ok(());
+            }
+            Err(state)
         },
     )
     .await;
@@ -552,13 +563,15 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
     for id in &ids {
         starts.push(
             hook.adopt_accepted_tool_dispatch(
-                id,
-                None,
-                "concurrent-parent",
-                &session,
-                "held_background_tool",
-                "{}",
-                deadline,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id: id,
+                    provider_call_id: None,
+                    request_id: "concurrent-parent",
+                    session_id: &session,
+                    tool_name: "held_background_tool",
+                    args: "{}",
+                    deadline_at: deadline,
+                },
                 gents_protocol::tool_call::AwaitMode::Background,
             )
             .await
@@ -579,11 +592,9 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
         .collect::<Vec<_>>();
     assert_eq!(refusals, vec![capacity]);
     for start in &mut starts {
-        if start.state() == gents_session::session::tool_call_state::ToolCallState::Running {
+        if start.state() == gents_protocol::tool_call::ToolCallState::Running {
             start
-                .cancel_during_run(
-                    gents_session::session::tool_call_state::CancelCause::UserCancelled,
-                )
+                .cancel_during_run(gents_protocol::tool_call::CancelCause::UserCancelled)
                 .await
                 .unwrap();
         }
@@ -675,17 +686,20 @@ async fn recover_unverified_foreground(
     let task_parent = parent.clone();
     let task_doc = doc.clone();
     let running = tokio::spawn(async move {
-        gents_tools::runtime_context::scope_request_tool_execution(
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
             Some(deadline),
             task_parent,
-            task_hook.run_backgroundable_foreground(
+        )
+        .call();
+        task_hook
+            .run_backgroundable_foreground(
                 "bash",
                 "unverified-foreground",
                 Box::new(
                     move |envelope: gents_loop::tool::ToolCallEnvelope, _cleanup| {
                         Box::pin(async move {
                             let token = envelope
-                                .runtime_unchecked()
+                                .runtime()
                                 .map(|runtime| runtime.cancellation_token)
                                 .unwrap_or_default();
                             let process = OwnedTestProcess::spawn(Some(
@@ -698,10 +712,9 @@ async fn recover_unverified_foreground(
                         })
                     },
                 ),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            ),
-        )
-        .await
+                &scope_call,
+            )
+            .await
     });
     let process = process_rx.await.unwrap();
     parent.cancel();

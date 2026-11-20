@@ -15,6 +15,7 @@ pub(super) use command::command_output::{captured_channel, stopped_stream, trunc
 pub(super) use command::command_run::run_command;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use command::command_run::run_command as run_command_for_test;
+pub use command::command_run::CommandRequest;
 pub use command::command_validation::validate_command_policy;
 #[cfg(test)]
 pub(super) use command::command_validation::validate_read_only_command;
@@ -55,11 +56,12 @@ pub fn background_command_timeout(requested_secs: Option<u64>) -> std::time::Dur
 }
 
 pub(super) fn resolve_command_timeout_in_scope(
+    call: &gents_loop::tool::ToolCallEnvelope,
     requested_secs: Option<u64>,
     foreground_default: std::time::Duration,
     foreground_max: std::time::Duration,
 ) -> std::time::Duration {
-    let background = crate::runtime_context::current_tool_runtime_context()
+    let background = crate::runtime_context::tool_runtime_context(call)
         .is_some_and(|context| context.background);
     resolve_command_timeout(
         requested_secs,

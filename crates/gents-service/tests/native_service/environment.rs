@@ -118,7 +118,7 @@ fn explicit_environment_replacement_updates_and_removes_entries() -> Result<()> 
             .install_with_environment(&read_environment_file(&input)?)?;
         let contents = fs::read_to_string(&path)?;
         assert!(!contents.contains("PACK_KEEP"));
-        assert!(contents.contains("GENTS_SYSTEM_LOG"));
+        assert!(contents.contains("--system-log"));
         assert!(contents.contains("PATH"));
     }
     Ok(())
@@ -167,7 +167,7 @@ fn systemd_environment_directives_keep_native_syntax_order_and_scope() -> Result
         "  'PACK_SECOND=space value'\n",
         "EnvironmentFile=-%h/.config/pack.env\n",
         "PassEnvironment=PACK_INHERITED\n",
-        "UnsetEnvironment=PATH GENTS_SYSTEM_LOG PACK_REMOVED\n",
+        "UnsetEnvironment=PATH PACK_REMOVED\n",
         "Environment=\n",
         "Environment=\"PACK_LAST=after reset\"\n",
         "Environment=PACK_SLASH=\\\\\n",
@@ -181,38 +181,24 @@ fn systemd_environment_directives_keep_native_syntax_order_and_scope() -> Result
     assert!(updated.contains(directives));
     assert!(!updated.contains("WRONG_UNIT"));
     assert_eq!(updated.matches("Type=simple").count(), 1);
-    assert_eq!(
-        updated
-            .matches("Environment=\"GENTS_SYSTEM_LOG=1\"")
-            .count(),
-        0
-    );
     let exec = updated
         .lines()
         .find_map(|line| line.strip_prefix("ExecStart="))
         .expect("systemd ExecStart");
-    assert!(exec.starts_with(
-        "\"/usr/bin/env\" -- \"GENTS_SYSTEM_LOG=1\" \"PATH=/reviewed/bin:/usr/bin\" "
-    ));
+    assert!(exec.starts_with("\"/usr/bin/env\" -- \"PATH=/reviewed/bin:/usr/bin\" "));
     assert!(exec.contains("\"server\" \"--home\" "));
+    assert!(exec.ends_with(" \"--system-log\""));
     assert!(
         !manager(config.clone(), platform, ScriptedRunner::default())
             .installed_executable_differs()?
     );
     let output = std::process::Command::new("/usr/bin/env")
         .env_clear()
-        .args([
-            "--",
-            "GENTS_SYSTEM_LOG=1",
-            "PATH=/reviewed/bin:/usr/bin",
-            "/usr/bin/env",
-        ])
-        .env("GENTS_SYSTEM_LOG", "0")
+        .args(["--", "PATH=/reviewed/bin:/usr/bin", "/usr/bin/env"])
         .env("PATH", "/deliberately-wrong")
         .output()?;
     assert!(output.status.success());
     let environment = String::from_utf8(output.stdout)?;
-    assert!(environment.lines().any(|line| line == "GENTS_SYSTEM_LOG=1"));
     assert!(environment
         .lines()
         .any(|line| line == "PATH=/reviewed/bin:/usr/bin"));
@@ -231,7 +217,6 @@ fn invalid_environment_input_keeps_values_out_of_errors() -> Result<()> {
         r#"{"PACK_CONFIG":"PRIVATE_TEST_VALUE\u0000"}"#,
         r#"{"PACK_CONFIG":"PRIVATE_TEST_VALUE",}"#,
         r#"{"PATH":"PRIVATE_TEST_VALUE"}"#,
-        r#"{"GENTS_SYSTEM_LOG":"PRIVATE_TEST_VALUE"}"#,
         r#"{"1BAD_NAME":"PRIVATE_TEST_VALUE"}"#,
     ] {
         fs::write(&file, invalid)?;

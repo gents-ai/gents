@@ -119,14 +119,16 @@ async fn create_work(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) {
     ).await.unwrap();
     crate::session::import_history_observation(
         node,
-        &physical,
-        "archive-session",
-        "runtime",
-        Some("other-requester"),
-        "Original transcript",
-        "archive:original",
-        1,
-        None,
+        crate::session::HistoryObservation {
+            request_id: &physical,
+            session_id: "archive-session",
+            node_did: "runtime",
+            requester_did: Some("other-requester"),
+            text: "Original transcript",
+            message_key_suffix: "archive:original",
+            sequence: 1,
+            tool_call: None,
+        },
     )
     .await;
 }

@@ -31,12 +31,16 @@ impl LspWritethrough {
         Self { pool, config }
     }
 
-    pub async fn after_mutation(&self, path: &Path) -> Option<String> {
+    pub async fn after_mutation(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        path: &Path,
+    ) -> Option<String> {
         let format = self
-            .after_mutation_under_lock(path, MutationKind::Write)
+            .after_mutation_under_lock(call, path, MutationKind::Write)
             .await;
         let diag = self
-            .diagnostics_after_unlock(path, MutationKind::Write)
+            .diagnostics_after_unlock(call, path, MutationKind::Write)
             .await;
         merge_notes(format, diag)
     }
@@ -44,10 +48,11 @@ impl LspWritethrough {
     // Caller must already hold the path's file-mutation lock; this never acquires it.
     pub async fn after_mutation_under_lock(
         &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
         path: &Path,
         kind: MutationKind,
     ) -> Option<String> {
-        let lease = self.ready_lease(path).await?;
+        let lease = self.ready_lease(call, path).await?;
         let uri = super::uri::path_to_file_uri(path);
         let text = std::fs::read_to_string(path).ok()?;
         let language_id = primary_for_file(&self.config.servers, path)
@@ -68,6 +73,9 @@ impl LspWritethrough {
                     "textDocument": { "uri": uri },
                     "options": { "tabSize": 4, "insertSpaces": true }
                 }),
+                crate::runtime_context::tool_runtime_context(call)
+                    .map(|runtime| runtime.cancellation_token)
+                    .as_ref(),
             )
             .await
         {
@@ -78,8 +86,8 @@ impl LspWritethrough {
                 return Some("format-on-write skipped: language server formatting failed".into());
             }
         };
-        let workspace = super::overlay_workspace_or(&self.config.workspace);
-        let context = ToolContext::new(workspace, true).ok()?;
+        let workspace = super::overlay_workspace_or(call, &self.config.workspace);
+        let context = ToolContext::new(workspace, true).ok()?.for_call(call);
         let encoding = lease.client().position_encoding().await;
         let workspace_edit = json!({ "changes": { uri: edits } });
         let prepared = match prepare_workspace_edit(&context, &workspace_edit, encoding) {
@@ -113,6 +121,7 @@ impl LspWritethrough {
     // Must run after the file-mutation lock is released.
     pub async fn diagnostics_after_unlock(
         &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
         path: &Path,
         kind: MutationKind,
     ) -> Option<String> {
@@ -123,7 +132,7 @@ impl LspWritethrough {
         if !wanted {
             return None;
         }
-        let lease = self.ready_lease(path).await?;
+        let lease = self.ready_lease(call, path).await?;
         let uri = super::uri::path_to_file_uri(path);
         let captured = lease.client().tracked_version(&uri).await.unwrap_or(1);
         let result = lease
@@ -131,6 +140,9 @@ impl LspWritethrough {
             .request(
                 "textDocument/diagnostic",
                 json!({ "textDocument": { "uri": uri } }),
+                crate::runtime_context::tool_runtime_context(call)
+                    .map(|runtime| runtime.cancellation_token)
+                    .as_ref(),
             )
             .await
             .ok()?;
@@ -141,27 +153,34 @@ impl LspWritethrough {
         ))
     }
 
-    async fn ready_lease(&self, path: &Path) -> Option<LspLease> {
+    async fn ready_lease(
+        &self,
+        call: &gents_loop::tool::ToolCallEnvelope,
+        path: &Path,
+    ) -> Option<LspLease> {
         let server = primary_for_file(&self.config.servers, path)?;
         if server.is_linter {
             return None;
         }
-        let session_id = crate::runtime_context::current_tool_runtime_context()
+        let session_id = crate::runtime_context::tool_runtime_context(call)
             .and_then(|scope| scope.session_id)
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| self.config.session_id.clone());
-        let workspace_root = super::overlay_workspace_or(&self.config.workspace);
+        let workspace_root = super::overlay_workspace_or(call, &self.config.workspace);
         let key = PoolKey {
-            runtime_home: crate::runtime_context::current_tool_runtime_context()
+            runtime_home: crate::runtime_context::tool_runtime_context(call)
                 .and_then(|context| context.runtime_home),
             session_id,
             agent_did: self.config.agent_did.clone(),
             workspace_root,
             server_name: server.name.clone(),
             config_digest: self.config.digest.clone(),
-            operator_guard_home: crate::plugin::approval::workspace::command_guard_home().ok()?,
+            operator_guard_home: crate::plugin::approval::workspace::command_guard_home(
+                crate::runtime_context::host(call).approval.as_ref(),
+            )
+            .ok()?,
         };
-        self.pool.get_ready(&key).await
+        self.pool.get_ready(call, &key).await
     }
 }
 

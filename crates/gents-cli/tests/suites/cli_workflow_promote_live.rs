@@ -1,6 +1,6 @@
 use crate::support::*;
 
-use gents::support::snapshots::SnapshotReader;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -10,7 +10,6 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-#[allow(dead_code)]
 #[path = "../support/failure_artifacts.rs"]
 mod failure_artifacts;
 use failure_artifacts::FailureArtifacts;
