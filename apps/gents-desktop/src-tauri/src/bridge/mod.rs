@@ -49,14 +49,9 @@ pub(crate) fn context() -> tauri::Context<tauri::Wry> {
 pub fn run() {
     install_tracing(TracingConfig {
         filter: None,
-        console: std::env::var("GENTS_DESKTOP_CONSOLE_LOG")
-            .ok()
-            .is_some_and(|v| {
-                matches!(
-                    v.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            }),
+        console: std::env::args_os()
+            .skip(1)
+            .any(|argument| argument == "--console-log"),
     });
     // Before anything spawns a helper: a packaged launch puts its own copies
     // of the host's tools first on PATH, and an older bundled `xdg-open` can

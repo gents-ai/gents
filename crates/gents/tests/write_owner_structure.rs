@@ -93,9 +93,10 @@ fn production_sources(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Whether an item compiles only into tests: a `#[cfg(..)]` that requires
-/// `test`, the `test-fixtures` feature or the `test-home-guard` feature, none
-/// of which reaches a shipped build (`gents_test_fixtures_stay_dev_only`,
-/// `service_isolation_stays_test_only`).
+/// `test`, the `test-fixtures` feature, the `test-home-guard` feature or the
+/// `native-e2e` feature, none of which reaches a shipped build
+/// (`gents_test_fixtures_stay_dev_only`, `service_isolation_stays_test_only`,
+/// `native_e2e_stays_test_only`).
 fn cfg_test(attributes: &[syn::Attribute]) -> bool {
     attributes.iter().any(|attribute| {
         attribute.path().is_ident("cfg")
@@ -117,7 +118,7 @@ fn predicate_requires_test(predicate: &syn::Meta) -> bool {
         syn::Meta::Path(path) => path.is_ident("test"),
         syn::Meta::NameValue(pair) => {
             pair.path.is_ident("feature")
-                && matches!(&pair.value, Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. }) if [GENTS_TEST_FIXTURES, SERVICE_ISOLATION.1].contains(&name.value().as_str()))
+                && matches!(&pair.value, Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. }) if [GENTS_TEST_FIXTURES, SERVICE_ISOLATION.1, NATIVE_E2E].contains(&name.value().as_str()))
         }
         syn::Meta::List(list) if list.path.is_ident("all") => {
             operands(list).iter().any(predicate_requires_test)
@@ -1019,6 +1020,123 @@ fn test_fixtures_fence_flags_production_and_default_enablement() {
     }
 }
 
+/// The feature end-to-end launchers pass on the command line to build the
+/// desktop, bridge and CLI with their native test harness hooks; release
+/// builds never pass it (`scripts/check-native-e2e-capabilities.sh` keeps its
+/// capability out of the shipped app).
+const NATIVE_E2E: &str = "native-e2e";
+
+/// `cfg_test` treats `native-e2e` items as test code, which holds only while
+/// no manifest enables the feature outside `[dev-dependencies]` except a
+/// crate's own `native-e2e` feature forwarding it to a dependency.
+fn native_e2e_leaks(manifest: &toml::Table) -> Vec<String> {
+    let mut tables = Vec::new();
+    for kind in ["dependencies", "build-dependencies"] {
+        tables.push((kind, manifest.get(kind)));
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            tables.extend(targets.values().map(|target| (kind, target.get(kind))));
+        }
+    }
+    let mut leaks = Vec::new();
+    for (kind, table) in tables {
+        for (key, specification) in table.and_then(toml::Value::as_table).into_iter().flatten() {
+            if specification
+                .get("features")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|features| {
+                    features
+                        .iter()
+                        .any(|feature| feature.as_str() == Some(NATIVE_E2E))
+                })
+            {
+                leaks.push(format!("[{kind}] {key}"));
+            }
+        }
+    }
+    for (feature, enabled) in manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+    {
+        if feature != NATIVE_E2E
+            && enabled
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .any(|entry| entry.rsplit('/').next() == Some(NATIVE_E2E))
+        {
+            leaks.push(format!("[features] {feature}"));
+        }
+    }
+    leaks
+}
+
+#[test]
+fn native_e2e_stays_test_only() {
+    let root = repo_root();
+    let workspace = toml_file(&root.join("Cargo.toml"));
+    let mut leaks = Vec::new();
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let member = member.as_str().expect("member path");
+        let manifest = toml_file(&root.join(member).join("Cargo.toml"));
+        leaks.extend(
+            native_e2e_leaks(&manifest)
+                .into_iter()
+                .map(|site| format!("{member}/Cargo.toml {site}")),
+        );
+    }
+    assert!(
+        leaks.is_empty(),
+        "the `native-e2e` feature is enabled only from the command line, [dev-dependencies] or a crate's own `native-e2e` feature:\n{}",
+        leaks.join("\n")
+    );
+}
+
+#[test]
+fn native_e2e_fence_flags_production_and_default_enablement() {
+    let leaks = |manifest: &str| native_e2e_leaks(&manifest.parse().expect("parse manifest"));
+    for (manifest, expected) in [
+        (
+            r#"[dependencies]
+            bridge = { path = "../bridge", features = ["native-e2e"] }"#,
+            "[dependencies] bridge",
+        ),
+        (
+            r#"[target.'cfg(unix)'.dependencies]
+            bridge = { path = "../bridge", features = ["native-e2e"] }"#,
+            "[dependencies] bridge",
+        ),
+        (
+            r#"[features]
+            default = ["native-e2e"]
+            native-e2e = []"#,
+            "[features] default",
+        ),
+        (
+            r#"[features]
+            desktop = ["bridge?/native-e2e"]"#,
+            "[features] desktop",
+        ),
+    ] {
+        assert_eq!(leaks(manifest), [expected], "{manifest}");
+    }
+    for manifest in [
+        r#"[dev-dependencies]
+        bridge = { path = "../bridge", features = ["native-e2e"] }"#,
+        r#"[features]
+        native-e2e = ["tauri-host", "bridge/native-e2e"]"#,
+        r#"[dependencies]
+        bridge = { path = "../bridge", features = ["native-e2e-ui"] }"#,
+    ] {
+        assert!(leaks(manifest).is_empty(), "{manifest}");
+    }
+}
+
 /// The feature that cuts a test build off the machine's service manager
 /// (`gents_service::native_service::isolation`). The per-user service label
 /// is not per `HOME`, so a `gents` a test spawns with a temporary `HOME`
@@ -1575,13 +1693,18 @@ fn item_cfg_test_excludes_items_whose_cfg_requires_test() {
         #[cfg(any(feature = "test-fixtures", feature = "other"))] fn k() {}
         #[cfg(any(test, feature = "test-home-guard"))] fn l() {}
         fn m() {}
+        #[cfg(all(feature = "native-e2e", debug_assertions))] fn n() {}
+        #[cfg(any(feature = "native-e2e", feature = "other"))] fn o() {}
         "#,
     )
     .expect("parse snippet");
     let excluded = syntax.items.iter().map(item_cfg_test).collect::<Vec<_>>();
     assert_eq!(
         excluded,
-        [true, true, true, true, false, false, false, false, true, true, false, true, false]
+        [
+            true, true, true, true, false, false, false, false, true, true, false, true, false,
+            true, false
+        ]
     );
 }
 
@@ -2496,16 +2619,10 @@ fn ambient_context_skips_only_named_documented_statics() {
 /// (#1764).
 #[rustfmt::skip]
 const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("apps/fixture-host/src-tauri/src/lib.rs", 1, "FIXTURE_DOMAIN_HOME: the fixture-host test application's data directory; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("apps/gents-desktop/src-tauri/src/bin/bridge_runner/http/routes.rs", 3, "GENTS_TAURI_LIVE gates live-fixture routes of the bridge test runner; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 1, "HOME: expands a leading ~ in a user-typed path; legitimately external (platform discovery)"),
     ("apps/gents-desktop/src-tauri/src/bridge/links.rs", 1, "APPIMAGE: AppImage probe deciding how links open from a packaged Linux build; legitimately external"),
-    ("apps/gents-desktop/src-tauri/src/bridge/mod.rs", 7, "GENTS_DESKTOP_CONSOLE_LOG becomes a desktop launch flag; GENTS_NATIVE_E2E and GENTS_E2E_* select the native end-to-end harness: test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("apps/gents-desktop/src-tauri/src/bridge/product_telemetry.rs", 2, "GENTS_UMAMI_ENDPOINT and GENTS_UMAMI_WEBSITE_ID: a fixed property of the release build; becomes option_env! or a desktop setting"),
-    ("apps/gents-desktop/src-tauri/src/browser_data.rs", 2, "GENTS_NATIVE_E2E and GENTS_E2E_WEBVIEW_STORE_ID isolate the e2e webview store; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture.rs", 2, "GENTS_TAURI_LIVE_RETAIN_DATA and GENTS_DESKTOP_TEST_LOG configure the live-fixture runner; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 4, "live-fixture backend selection and provider API keys; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/inference.rs", 1, "GENTS_DESKTOP_LIVE_INFERENCE selects live-fixture inference; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 2, "the API key variable a live-fixture backend names: the runner checks it is set before seeding a backend the runtime will read it from by name; stays"),
     ("crates/gents-chatgpt-login/src/lib.rs", 1, "CODEX_CA_CERT and SSL_CERT_FILE: standard custom CA bundle convention; legitimately external"),
     ("crates/gents-cli/src/commands/chat/streaming.rs", 1, "NO_COLOR: standard convention disabling terminal colour; legitimately external"),
     ("crates/gents-cli/src/commands/desktop.rs", 2, "GENTS_DESKTOP_HOME and GENTS_HOME: home discovery when --desktop-home or --home is absent; becomes a call to the home owners' discovery instead of a second reading"),
@@ -2521,7 +2638,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-cli/src/desired_state/load.rs", 1, "desired-state ${VAR} interpolation: the manifest names operator-supplied variables; legitimately external"),
     ("crates/gents-desktop-bridge/src/host_browser.rs", 4, "BROWSER, PATH, APPDIR and APPIMAGE: platform browser discovery and the AppImage probe; legitimately external"),
     ("crates/gents-desktop-bridge/src/package_tools.rs", 6, "PATH, APPDIR, APPIMAGE and the launcher's variables: restores the host environment for host programs launched from an AppImage; legitimately external"),
-    ("crates/gents-desktop-bridge/src/tauri_commands/e2e.rs", 13, "GENTS_NATIVE_E2E and GENTS_E2E_* drive the native end-to-end command (native-e2e feature); test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 4, "GENTS_BIN, PATH, APPDIR and APPIMAGE: discovery of the gents executable and the AppImage probe; GENTS_BIN becomes a desktop setting, the rest are legitimately external"),
     ("crates/gents-desktop/src/main.rs", 2, "GENTS_DESKTOP_TAURI_BIN and PATH: discovery of the desktop executable; GENTS_DESKTOP_TAURI_BIN becomes a flag"),
     ("crates/gents-documents/src/inference_backend.rs", 1, "the variable an InferenceBackend document names as its API key source (auth kind environment); the document decides, legitimately external"),
@@ -2749,7 +2865,6 @@ const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("apps/gents-desktop/src-tauri/src/bridge/plugin_window/placement.rs", 1, "plugin window placements of the one desktop process; moves onto the Tauri app state"),
     ("apps/gents-desktop/src-tauri/src/bridge/swipe.rs", 1, "sideways scroll room per desktop view; moves onto the Tauri app state"),
     ("apps/gents-desktop/src-tauri/src/bridge/windows.rs", 1, "next window label of the one desktop process; stays"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture.rs", 1, "one-time tracing set-up of the bridge test runner binary; stays"),
     ("crates/gents-automation/src/lifecycle_hooks.rs", 2, "the bundled hook registry and composition built once: an immutable value built once on first use, the same for every node and Agent; stays"),
     ("crates/gents-desktop-bridge/src/runtime_setup.rs", 1, "the desktop's one Tokio runtime, built at its entry point; stays"),
     ("crates/gents-desktop-bridge/src/snapshot/runtime.rs", 1, "starter cache shared by every snapshot read; moves onto the ClientRuntime it caches for"),
