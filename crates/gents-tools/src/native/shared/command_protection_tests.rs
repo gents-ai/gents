@@ -1,5 +1,5 @@
 use super::super::context::ToolContext;
-use super::command_run::run_command;
+use super::command_run::{run_command, CommandRequest};
 use super::*;
 use gents_session::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use std::time::Duration;
@@ -287,13 +287,15 @@ async fn bounded_commands_protect_runtime_keys_without_workspace_consent() {
             &scope_call,
             &context,
             "bash",
-            "/bin/cat",
-            &[key.to_str().unwrap().into()],
-            None,
-            Duration::from_secs(5),
+            CommandRequest {
+                command_name: "/bin/cat",
+                args: &[key.to_str().unwrap().into()],
+                cwd: None,
+                timeout: Duration::from_secs(5),
+                raw_json: true,
+                max_output_chars: 4096,
+            },
             &policy,
-            true,
-            4096,
         )
         .await
         .unwrap_err();

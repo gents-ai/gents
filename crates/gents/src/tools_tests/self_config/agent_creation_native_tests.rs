@@ -391,14 +391,16 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         gents_toolcalls::test_support::self_config::config(&["agent", "tools", "node"]);
     tool_config.agent_did = creator.agent_did.clone();
     let tools = super::build_self_config_tools_with_runtime(
-        Arc::default(),
-        node.clone(),
-        runtime.did().to_owned(),
-        Some(signer.clone()),
-        Some(runtime.clone()),
+        super::SelfConfigRuntime {
+            usage_cache: Arc::default(),
+            node: node.clone(),
+            node_did: runtime.did().to_owned(),
+            identity: Some(signer.clone()),
+            runtime_identity: Some(runtime.clone()),
+            plugins: Arc::<gents_toolcalls::plugin::executor::PluginExecutor>::default(),
+            tasks: Arc::new(gents_tools::task_run::NoTaskRunService),
+        },
         &tool_config,
-        Arc::<gents_toolcalls::plugin::executor::PluginExecutor>::default(),
-        Arc::new(gents_tools::task_run::NoTaskRunService),
         Some(node_binding),
     );
     let tool = tools

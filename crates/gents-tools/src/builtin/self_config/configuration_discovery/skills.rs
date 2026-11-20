@@ -32,22 +32,14 @@ impl Scanner {
             } else {
                 DiscoveryItemState::Enabled
             };
-            self.emit(
-                source,
-                &manifest,
-                DiscoveryCategory::Skill,
-                &parsed.name,
-                state,
-                DiscoveryFacts::Skill {
+            self.emit(source, &manifest, ItemDraft { category: DiscoveryCategory::Skill, display_label: &parsed.name, state, facts: DiscoveryFacts::Skill {
                     description: parsed.description,
                     untrusted_instructions_excerpt: bounded_sanitized_text(&parsed.body),
                     allowed_tools: parsed.allowed_tools,
                     declared_model: parsed.model,
-                },
-                MappingSupport::partial(
+                }, mapping: MappingSupport::partial(
                     "only the manifest was inspected; supporting files, tool requirements, and activation semantics remain unverified",
-                ),
-            );
+                ) });
         }
     }
 

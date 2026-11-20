@@ -406,13 +406,15 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
                 &approval_call,
                 &tool_context,
                 "bash_unrestricted",
-                program,
-                &arguments,
-                key.path.to_str(),
-                Duration::from_secs(5),
+                gents_tools::native::CommandRequest {
+                    command_name: program,
+                    args: &arguments,
+                    cwd: key.path.to_str(),
+                    timeout: Duration::from_secs(5),
+                    raw_json: true,
+                    max_output_chars: 2048,
+                },
                 &policy,
-                true,
-                2048,
             )
             .await
             .unwrap();
@@ -672,13 +674,15 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
                 &approval_call,
                 &tool_context,
                 "bash_unrestricted",
-                &program,
-                &arguments,
-                None,
-                Duration::from_secs(5),
+                gents_tools::native::CommandRequest {
+                    command_name: &program,
+                    args: &arguments,
+                    cwd: None,
+                    timeout: Duration::from_secs(5),
+                    raw_json: true,
+                    max_output_chars: 2048,
+                },
                 &policy,
-                true,
-                2048,
             )
             .await
             .map(|_| ())

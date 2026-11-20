@@ -387,24 +387,24 @@ impl ToolSurface {
         }
         if self.include_meta_tools {
             tools.extend(
-                build_meta_tools(
-                    runtime.node.clone(),
-                    runtime.mcp_pool.clone(),
-                    runtime.health_map.clone(),
-                    runtime.local_hostname.clone(),
-                    runtime.local_subnet.clone(),
-                    runtime.node_did.clone(),
-                    identity::Did::new(
+                build_meta_tools(crate::mcp::meta::MetaToolContext {
+                    node: runtime.node.clone(),
+                    mcp_pool: runtime.mcp_pool.clone(),
+                    health: runtime.health_map.clone(),
+                    local_hostname: runtime.local_hostname.clone(),
+                    local_subnet: runtime.local_subnet.clone(),
+                    node_did: runtime.node_did.clone(),
+                    actor: identity::Did::new(
                         runtime
                             .agent_identity
                             .as_ref()
                             .context("MCP tools require the selected agent identity")?
                             .did(),
                     )?,
-                    self.allowed_mcp_service_ids.clone(),
-                    self.remote_tools.clone().unwrap_or_default(),
-                    runtime.configuration.clone(),
-                )
+                    allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
+                    remote_tools: self.remote_tools.clone().unwrap_or_default(),
+                    configuration: runtime.configuration.clone(),
+                })
                 .await?,
             );
         }
@@ -549,18 +549,20 @@ impl ToolSurface {
         };
         tools.extend(
             crate::builtin::self_config::build_self_config_tools_with_runtime(
-                runtime.usage_cache.clone(),
-                runtime.node.clone(),
-                runtime.node_did.clone(),
-                runtime.agent_identity.clone(),
-                runtime.identity.clone(),
+                crate::builtin::self_config::SelfConfigRuntime {
+                    usage_cache: runtime.usage_cache.clone(),
+                    node: runtime.node.clone(),
+                    node_did: runtime.node_did.clone(),
+                    identity: runtime.agent_identity.clone(),
+                    runtime_identity: runtime.identity.clone(),
+                    plugins: runtime.plugins.clone(),
+                    tasks: runtime.tasks.clone(),
+                },
                 &SelfConfigToolConfig {
                     selected_plugins: self.plugin_tools.clone(),
                     plugin_builder: runtime.native_executables.host.clone(),
                     ..self.self_config.clone()
                 },
-                runtime.plugins.clone(),
-                runtime.tasks.clone(),
                 node_binding,
             ),
         );

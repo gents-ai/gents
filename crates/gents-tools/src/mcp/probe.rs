@@ -5,8 +5,8 @@ use gents_protocol::operations::mcp_service::McpProbeReceipt;
 use gents_store::config_client::ConfigAccess;
 
 use super::health::{
-    run_health_check_cycle_for_actor, HealthCheckerOptions, HealthStatus, McpHealthCheckService,
-    ServiceHealthMap,
+    run_health_check_cycle_for_actor, HealthCheckerOptions, HealthCycleScope, HealthStatus,
+    LocalNetwork, McpHealthCheckService, ServiceHealthMap,
 };
 use super::pool::McpPool;
 
@@ -80,11 +80,15 @@ pub async fn probe(
         run_health_check_cycle_for_actor(
             vec![McpHealthCheckService::from(service)],
             Utc::now(),
-            pool,
-            &health_map,
-            local_hostname,
-            local_subnet,
-            &options,
+            HealthCycleScope {
+                mcp_pool: pool,
+                health_map: &health_map,
+                local: LocalNetwork {
+                    hostname: local_hostname,
+                    subnet: local_subnet,
+                },
+                options: &options,
+            },
             actor,
         ),
     )

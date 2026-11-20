@@ -48,21 +48,36 @@ pub(super) fn downgrade_bash(agent_name: &str, requested: BashMode, ceiling: Bas
     ceiling
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn build_host_tools(
-    agent_name: &str,
-    file_tools: FileToolMode,
-    bash: BashMode,
-    command_policy: Option<CommandExecutionPolicy>,
-    effective_bash: &ToolPolicyBash,
-    file_tool_root: Option<&Path>,
-    cli_tool_names: &[String],
-    output_limits: &CommandOutputLimits,
-    timeouts: &ToolTimeouts,
-    file_limits: crate::native::FileToolLimits,
-    enable_lsp: bool,
-    ceiling: &ToolCeiling,
-) -> Result<ToolSet> {
+pub(super) struct HostToolsRequest<'a> {
+    pub(super) agent_name: &'a str,
+    pub(super) file_tools: FileToolMode,
+    pub(super) bash: BashMode,
+    pub(super) command_policy: Option<CommandExecutionPolicy>,
+    pub(super) effective_bash: &'a ToolPolicyBash,
+    pub(super) file_tool_root: Option<&'a Path>,
+    pub(super) cli_tool_names: &'a [String],
+    pub(super) output_limits: &'a CommandOutputLimits,
+    pub(super) timeouts: &'a ToolTimeouts,
+    pub(super) file_limits: crate::native::FileToolLimits,
+    pub(super) enable_lsp: bool,
+    pub(super) ceiling: &'a ToolCeiling,
+}
+
+pub(super) fn build_host_tools(request: HostToolsRequest<'_>) -> Result<ToolSet> {
+    let HostToolsRequest {
+        agent_name,
+        file_tools,
+        bash,
+        command_policy,
+        effective_bash,
+        file_tool_root,
+        cli_tool_names,
+        output_limits,
+        timeouts,
+        file_limits,
+        enable_lsp,
+        ceiling,
+    } = request;
     let mut builder =
         ToolSetBuilder::default().background_lifetime(timeouts.background.bash.lifetime);
     let needs_file_tool_root = !matches!(file_tools, FileToolMode::Off)
