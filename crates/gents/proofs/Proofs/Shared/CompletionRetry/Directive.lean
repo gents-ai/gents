@@ -91,10 +91,11 @@ def retractThenSchedule (s : State) (failure : FailureClass) (error : String) (w
 
 /-- A failure after this turn's tool effects keeps the turn: no Retracted
 closure is written, and the next attempt is paid from the transport budget
-under the transport deadline gate. -/
+under the transport deadline and wait-cap gates. -/
 def closeAndContinue? (s : State) (wake : Time) : Option State :=
   if s.phase = .streaming ∧ s.transportUsed < s.budget.transportRetries ∧
-      fitsDeadline wake s.deadline ∧ s.now ≤ wake then
+      fitsDeadline wake s.deadline ∧ s.now ≤ wake ∧
+      withinMaxWait s.now wake s.budget.maxWait then
     some { s with phase := .backingOff wake, transportUsed := s.transportUsed + 1,
                   attempt := s.attempt + 1 }
   else none
@@ -172,9 +173,9 @@ theorem effects_turn_pays_like_a_retracted_retry (s t : State) (error : String) 
   unfold closeAndContinue? at h
   split at h
   · rename_i hc
-    obtain ⟨hs, hb, hd, hn⟩ := hc
+    obtain ⟨hs, hb, hd, hn, hw⟩ := hc
     cases h
-    simp [retractThenSchedule, step?, hs, hb, hd, hn]
+    simp [retractThenSchedule, step?, hs, hb, hd, hn, hw]
   · cases h
 
 /-- A turn with effects either keeps the turn and spends one transport retry,

@@ -3,6 +3,7 @@ import Proofs.Conformance.RootCandidates.StartupBarrier
 import Proofs.Conformance.RootCandidates.EvalSelection
 import Proofs.Conformance.RootCandidates.CompletionParameters
 import Proofs.Conformance.RootCandidates.PinnedTokenLimit
+import Proofs.Conformance.RootCandidates.PinnedRetryBudget
 import Proofs.Conformance.RootCandidates.StartupDegraded
 import Proofs.Conformance.RootCandidates.BashSelection
 import Proofs.Conformance.RootCandidates.SessionCalibration
