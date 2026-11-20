@@ -208,6 +208,10 @@ pub async fn encode_install_request(
         .cloned()
         .chain(from_environment)
         .collect::<Vec<_>>();
+    gents_pack::operations::pack::parse_variables(&dependency_variables).context(
+        "a hosted install sends the runtime its --var values and each variable the packs' \
+         configurations read from this shell's environment; nothing was installed",
+    )?;
     let bind_agents = args.bind_agents.clone();
     let wire = args.wire.clone();
     let (overwrite, keep, preview, force_rebind, grant_authority) = (
