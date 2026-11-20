@@ -11,18 +11,16 @@ use axum::{
     Json,
 };
 use futures_util::{stream, StreamExt};
-use tokio::sync::Semaphore;
 
 use super::router::RuntimeHttpState;
 
-static WATCH_SLOTS: Semaphore = Semaphore::const_new(16);
 const WATCH_LIFETIME: Duration = Duration::from_secs(30);
 
 pub(super) async fn watch(
     State(state): State<RuntimeHttpState>,
     Json(request): Json<gents_tools::ux_data::UxDataCall>,
 ) -> Response {
-    let Ok(permit) = WATCH_SLOTS.try_acquire() else {
+    let Ok(permit) = state.pack_watch_slots.clone().try_acquire_owned() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "Too many pack observations.",

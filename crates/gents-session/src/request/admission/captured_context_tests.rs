@@ -200,9 +200,14 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         let request = super::load_request_for_admission_test(&node, &doc)
             .await
             .unwrap();
-        let result =
-            super::verify_fresh_local_self_request(&node, &identity, &request, &binding.agent_did)
-                .await;
+        let result = super::verify_fresh_local_self_request(
+            &node,
+            &identity,
+            &request,
+            &binding.agent_did,
+            None,
+        )
+        .await;
         let accepted = result.is_ok();
         let stored = access
             .execute(&format!(

@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use fixture_domain_plugin::DomainConfig;
@@ -30,14 +31,24 @@ fn bridge_config() -> BridgeConfig {
     }
 }
 
+/// The domain plugin's data directory, from `--domain-home <path>`.
+fn domain_home_argument(arguments: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
+    let mut arguments = arguments.into_iter().skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == "--domain-home" {
+            return arguments.next().map(PathBuf::from);
+        }
+    }
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let host_root = dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("gents-fixture-host");
-    let domain_home = std::env::var_os("FIXTURE_DOMAIN_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| host_root.join("domain"));
+    let domain_home =
+        domain_home_argument(std::env::args_os()).unwrap_or_else(|| host_root.join("domain"));
     let _ = std::fs::create_dir_all(&domain_home);
 
     install_tracing(TracingConfig {

@@ -760,6 +760,7 @@ async fn serve_foreground(
             serve_lifecycle: serve_lifecycle.clone(),
         },
         Some(backend_health.clone()),
+        args.pack_watch_limit,
     );
     let scrape_state = runtime_routers.scrape_state;
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();

@@ -344,6 +344,7 @@ pub async fn claimed_owner_caused_by(
             deadline_duration_secs: 60,
             execution_origin: ExecutionOrigin::Interactive,
             backend_id: "lease-test".into(),
+            operator_tool_root: None,
         },
         lineage,
         Some(agent_identity),

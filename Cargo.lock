@@ -6910,7 +6910,6 @@ dependencies = [
  "gents-workspace-hack",
  "hmac 0.12.1",
  "identity",
- "kovan-map",
  "opentelemetry 0.31.0",
  "query",
  "rand 0.9.2",

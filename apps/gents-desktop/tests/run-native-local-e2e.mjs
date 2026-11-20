@@ -138,7 +138,6 @@ async function runPhase(phase) {
     TMPDIR: `${runTmp}/`,
     GENTS_BIN: join(binaries, "gents"),
     GENTS_NATIVE_E2E: "1",
-    GENTS_DESKTOP_CONSOLE_LOG: "1",
     GENTS_E2E_NODE_HOME: nodeHome,
     GENTS_E2E_LOCAL_TOOL_ROOT: toolRoot,
     GENTS_E2E_AGENT_LABEL: "Native Acceptance Engineer",
@@ -151,7 +150,7 @@ async function runPhase(phase) {
     GENTS_E2E_EXPECTED_RESPONSE: marker,
   };
   log = createWriteStream(join(artifactRoot, `${phase}.log`));
-  app = spawn(join(binaries, "gents-desktop-tauri"), ["--desktop-home", desktopHome], {
+  app = spawn(join(binaries, "gents-desktop-tauri"), ["--desktop-home", desktopHome, "--console-log"], {
     cwd: repoRoot,
     env,
     stdio: ["ignore", "pipe", "pipe"],
