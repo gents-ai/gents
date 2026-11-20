@@ -16,7 +16,6 @@ test-fixtures = ["test-home-guard", "gents-store/test-fixtures"]
 [dependencies]
 gents-store.workspace = true
 acp.workspace = true
-schema.workspace = true
 db.workspace = true
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }

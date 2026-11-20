@@ -1333,7 +1333,6 @@ dependencies = [
  "base64 0.22.1",
  "donsetch_core",
  "scraper",
- "serde",
  "serde_json",
  "sha2 0.10.9",
  "url",

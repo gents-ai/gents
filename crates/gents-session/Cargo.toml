@@ -31,7 +31,6 @@ gents-inference.workspace = true
 gents-p2p.workspace = true
 acp.workspace = true
 schema.workspace = true
-storage.workspace = true
 db.workspace = true
 document.workspace = true
 rapidhash = { workspace = true }
@@ -64,7 +63,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 rig-core.workspace = true
-reqwest = { workspace = true, features = ["stream"] }
 tokio-util = "0.7"
 tempfile = "3"
 
