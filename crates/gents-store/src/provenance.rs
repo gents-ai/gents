@@ -40,20 +40,20 @@ pub enum DocumentSignersError {
     Read {
         doc_id: String,
         #[source]
-        source: ConfigClientError,
+        source: Box<ConfigClientError>,
     },
     #[error("decode the version history of document {doc_id}")]
     Decode {
         doc_id: String,
         #[source]
-        source: GraphqlResponseError,
+        source: Box<GraphqlResponseError>,
     },
     #[error("name the signer of version {cid} of document {doc_id}")]
     Signer {
         doc_id: String,
         cid: String,
         #[source]
-        source: IdentityError,
+        source: Box<IdentityError>,
     },
 }
 
@@ -67,7 +67,7 @@ pub async fn document_signers(
         .await
         .map_err(|source| DocumentSignersError::Read {
             doc_id: doc_id.to_owned(),
-            source,
+            source: Box::new(source),
         })?;
     let commits = composite_commits_at(
         response.get("data").and_then(|data| data.get("_commits")),
@@ -75,7 +75,7 @@ pub async fn document_signers(
     )
     .map_err(|source| DocumentSignersError::Decode {
         doc_id: doc_id.to_owned(),
-        source,
+        source: Box::new(source),
     })?;
     signers_of(doc_id, commits)
 }
@@ -96,7 +96,7 @@ fn signers_of(
                 .map_err(|source| DocumentSignersError::Signer {
                     doc_id: doc_id.to_owned(),
                     cid: commit.cid.clone(),
-                    source,
+                    source: Box::new(source),
                 })?;
             Ok((commit.cid.as_str(), commit.height, did))
         })
@@ -121,7 +121,7 @@ fn signers_of(
         Err(source) => {
             return Err(DocumentSignersError::Decode {
                 doc_id: doc_id.to_owned(),
-                source,
+                source: Box::new(source),
             })
         }
     };
