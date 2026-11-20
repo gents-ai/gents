@@ -73,7 +73,8 @@ async fn routing_affinity_isolates_concurrent_executions_without_capture() {
             .body(Bytes::from_static(b"{}"))
             .unwrap();
         let original_headers = other.headers().clone();
-        let other = crate::clients::xai_grok::XaiGrokOAuthPolicy::default().patch_request_body(&call, other);
+        let other = crate::clients::xai_grok::XaiGrokOAuthPolicy::default()
+            .patch_request_body(&call, other);
         assert_eq!(other.headers(), &original_headers);
 
         let mut later = HeaderMap::new();
