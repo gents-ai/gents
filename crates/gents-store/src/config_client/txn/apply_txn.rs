@@ -73,6 +73,41 @@ pub(super) enum EmbeddedTransactionPurpose {
 }
 
 impl<'a> ConfigApplyTxn<'a> {
+    /// What lets the caller wait, once this transaction committed, for the
+    /// access changes it owes (`Identity.OwedRegistration.dependentStep`).
+    pub fn owed_access_ticket(&self) -> Result<crate::config_client::owed::OwedAccessTicket> {
+        use crate::config_client::owed::OwedAccessTicket;
+        match &self.backend {
+            TxnBackend::Embedded {
+                node,
+                handle,
+                identity,
+                ..
+            } => Ok(OwedAccessTicket::Embedded {
+                node: node.clone(),
+                handle: handle.clone(),
+                actor: identity.as_ref().map(ToString::to_string),
+            }),
+            TxnBackend::Http { endpoint, id, .. } => match &self.loopback_node {
+                Some(node) => Ok(OwedAccessTicket::Embedded {
+                    node: node.clone(),
+                    handle: id
+                        .parse()
+                        .map_err(|_| ConfigClientError::OwedAwaitTransaction)?,
+                    actor: endpoint.principal_did().map(str::to_owned),
+                }),
+                None => Ok(OwedAccessTicket::Http {
+                    endpoint: (*endpoint).clone(),
+                    node_did: endpoint
+                        .runtime_node_did()
+                        .ok_or(ConfigClientError::OwedAwaitTransaction)?
+                        .to_owned(),
+                    transaction: id.clone(),
+                }),
+            },
+        }
+    }
+
     fn local_node(&self) -> Option<&Arc<EmbeddedNode>> {
         match &self.backend {
             TxnBackend::Embedded { node, .. } => Some(node),

@@ -163,6 +163,10 @@ pub enum ConfigClientError {
     AdministrationRemovalPending { member: String },
     #[error("the owed Node administration removal was not closed")]
     OwedRemovalUnconfirmed,
+    #[error("the runtime did not answer how this write's access changes stand")]
+    OwedAwait(#[source] Box<crate::identity::RemoteAgentProvisionError>),
+    #[error("the transaction to wait for is not one this node opened")]
+    OwedAwaitTransaction,
     #[error("a document relationship requires an authenticated actor")]
     RelationshipActorRequired,
     #[error("invalid transaction owner observation response")]
