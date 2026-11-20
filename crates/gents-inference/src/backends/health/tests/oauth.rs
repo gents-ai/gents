@@ -82,15 +82,31 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     let doc = crate::backends::registry::capture_backend_document(&node, &configured)
         .await
         .unwrap();
-    crate::backends::registry::set_backend_probe_status_for_connection(
-        &node,
-        &configured,
-        &doc,
-        "healthy",
-        Utc::now(),
-    )
-    .await
-    .unwrap();
+    let publication_allowed = |native_read: bool| {
+        gents_lean_vocab::families::household_backend_probe_access::cases()
+            .into_iter()
+            .find(|case| {
+                case.input.native_read == native_read
+                    && case.input.same_doc
+                    && case.input.same_connection
+                    && case.input.committed
+            })
+            .unwrap()
+            .check(native_read);
+        native_read
+    };
+    assert_eq!(
+        crate::backends::registry::set_backend_probe_status_for_connection(
+            &node,
+            &configured,
+            &doc,
+            "healthy",
+            Utc::now(),
+        )
+        .await
+        .is_ok(),
+        publication_allowed(true)
+    );
     let observation = user_access
         .transact_readonly("test.runtime_probe.observation", |txn| {
             Box::pin(async move {
@@ -152,6 +168,33 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
         )
         .await
         .unwrap();
+    let runtime = identity::Did::new(did).unwrap();
+    let usable = gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone())
+        .transact_readonly("test.runtime_use.backend_node", |txn| {
+            let (runtime, parent) = (&runtime, parent.to_owned());
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    txn.runtime_may_use(runtime, "Node", std::slice::from_ref(&parent))
+                        .await?,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(usable, vec![false]);
+    let hosting_read = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(did).unwrap(),
+    )
+    .execute("{ InferenceBackendMetadata { _docID } }")
+    .await
+    .unwrap();
+    assert_eq!(
+        hosting_read["data"]["InferenceBackendMetadata"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
     assert!(
         crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
             .await
@@ -163,7 +206,7 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             .await
             .is_err()
     );
-    assert!(
+    assert_eq!(
         crate::backends::registry::set_backend_probe_status_for_connection(
             &node,
             &configured,
@@ -172,7 +215,64 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             Utc::now(),
         )
         .await
+        .is_ok(),
+        publication_allowed(false)
+    );
+    assert!(
+        crate::backends::registry::record_model_catalog_for_document(
+            &node,
+            &configured,
+            &doc,
+            gents_documents::BackendModelCatalog {
+                node_did: configured.catalog_scope().map(str::to_owned),
+                observed_at: Utc::now().to_rfc3339(),
+                models: vec![],
+            },
+        )
+        .await
         .is_err()
+    );
+    assert_eq!(
+        user_access
+            .transact_readonly("test.runtime_probe.retained_observation", |txn| {
+                Box::pin(async move {
+                    crate::backends::registry::lookup_backend_observation_in_txn(
+                        txn,
+                        did,
+                        "runtime-probe",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .probe_status
+            .as_deref(),
+        Some("healthy")
+    );
+    gents_store::config_client::ConfigAccess::local_as(node.clone(), did.parse().unwrap())
+        .grant_node_permission(
+            &user.did().parse().unwrap(),
+            gents_store::config_client::NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
+    user_access
+        .transact_write("test.probe.remove_backend", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.delete_configuration_document("InferenceBackendMetadata", doc)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(
+        crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
+            .await
+            .unwrap()
+            .is_empty()
     );
     models.shutdown().await;
 }
@@ -583,12 +683,19 @@ async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_
     }
 }
 
-struct TokenUrlOverrideGuard(&'static str);
-
-impl Drop for TokenUrlOverrideGuard {
-    fn drop(&mut self) {
-        std::env::remove_var(self.0);
-    }
+fn claude_bearer_refreshing_at(
+    node: &std::sync::Arc<defra_node::Node>,
+    did: &str,
+    url: &str,
+) -> std::sync::Arc<crate::auth::credential::DbCredentialBearer> {
+    bearer_refreshing_at(
+        node,
+        did,
+        crate::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        crate::auth::credential::OAuthRefreshKind::Claude,
+        crate::auth::claude::CLAUDE_OAUTH_PRODUCT,
+        url,
+    )
 }
 
 #[tokio::test]
@@ -621,18 +728,12 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
     claude.endpoint = models.endpoint();
     oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
 
-    // TOKEN_URL_ENV is process-global; serialize changes to its override.
-    let _env = TOKEN_URL_ENV.lock().await;
-    let _guard = TokenUrlOverrideGuard(crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     let (url, server) = one_shot_token_server(
         200,
         r#"{"access_token":"access-REFRESHED","refresh_token":"refresh-ROTATED","expires_in":28800}"#,
     )
     .await;
-    std::env::set_var(
-        crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
-        &url,
-    );
+    let _bearer = claude_bearer_refreshing_at(&node, did, &url);
     let outcome = probe_backends_cycle(
         &node,
         &client,
@@ -719,8 +820,6 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
     oauth_backend_observation(&user_access, &runtime_access, &claude, "unknown").await;
     oauth_backend_observation(&user_access, &runtime_access, &next, "unknown").await;
 
-    let _env = TOKEN_URL_ENV.lock().await;
-    let _guard = TokenUrlOverrideGuard(crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     let (received_tx, _received) = oneshot::channel();
     let (_never_release, release_rx) = oneshot::channel();
     let (url, _server) = crate::auth::credential::test_support::gated_token_server(
@@ -729,10 +828,7 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
         Some((received_tx, release_rx)),
     )
     .await;
-    std::env::set_var(
-        crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
-        &url,
-    );
+    let _bearer = claude_bearer_refreshing_at(&node, did, &url);
     let outcome = tokio::time::timeout(
         Duration::from_secs(30),
         probe_backends_cycle(
@@ -814,22 +910,18 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
 #[tokio::test]
 async fn subscription_probe_preserves_typed_refresh_rejections() {
     let models = ModelsListener::start();
-    let _env = TOKEN_URL_ENV.lock().await;
-    for (provider, override_env, kind, forbidden_event) in [
+    for (provider, kind, forbidden_event) in [
         (
             crate::auth::claude::CLAUDE_OAUTH_PROVIDER,
-            crate::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
             crate::backends::provider::BackendProviderKind::ClaudeCliSubscription,
             "subscriptionNotEntitled",
         ),
         (
             crate::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-            gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
             crate::backends::provider::BackendProviderKind::ChatGptCodex,
             "probeFail",
         ),
     ] {
-        let _guard = TokenUrlOverrideGuard(override_env);
         for (status, body, event) in [
             (401, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
             (400, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
@@ -856,7 +948,14 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             backend.node_did = did.clone();
             oauth_backend_configuration(&user_access, &backend).await;
             let (url, server) = one_shot_token_server(status, body).await;
-            std::env::set_var(override_env, url);
+            let _bearer = bearer_refreshing_at(
+                &node,
+                &did,
+                provider,
+                crate::backends::health::oauth::oauth_refresh_kind(kind),
+                crate::backends::health::oauth::oauth_product(kind),
+                &url,
+            );
             let health = BackendHealthMap::new();
             let outcome = probe_backends_cycle(
                 &node,

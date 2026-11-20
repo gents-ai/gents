@@ -3,9 +3,13 @@ use std::time::Duration;
 #[cfg(feature = "native")]
 use super::{GraphqlError, Result};
 
+/// `timeout` bounds each attempt by the clock; `None` waits for the answer or
+/// a connection failure. A store read takes `None`: a total timeout fails a
+/// live server that is only slow on a loaded host
+/// (`tla/CommitResponseWait.tla`, `ClientWindow`).
 #[derive(Debug, Clone, Copy)]
 pub struct GraphqlRequestOptions {
-    pub timeout: Duration,
+    pub timeout: Option<Duration>,
     pub max_attempts: usize,
     pub retry_backoff: Duration,
 }
@@ -13,11 +17,38 @@ pub struct GraphqlRequestOptions {
 impl Default for GraphqlRequestOptions {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(30),
+            timeout: None,
             max_attempts: 5,
             retry_backoff: Duration::from_millis(100),
         }
     }
+}
+
+/// How long a store client waits to establish a connection. A request that
+/// never connected was never sent, so giving up decides nothing about its
+/// outcome.
+const STORE_CONNECT_LIMIT: Duration = Duration::from_secs(30);
+
+/// TCP keepalive on store connections: idle time before the first probe, the
+/// probe interval and the unanswered probes that end the connection. A live
+/// host's kernel answers probes whatever its load, so they end only a
+/// connection whose host is gone, which no reset reports
+/// (`tla/CommitResponseWait.tla`, `NoKeepalive`).
+const STORE_KEEPALIVE_IDLE: Duration = Duration::from_secs(15);
+const STORE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const STORE_KEEPALIVE_RETRIES: u32 = 3;
+
+/// The builder of every HTTP client that talks to a DefraDB endpoint: no
+/// total request timeout, a connect limit, keepalive probes and the pooled
+/// connection idle limit.
+#[cfg(feature = "native")]
+pub fn store_http_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(STORE_CONNECT_LIMIT)
+        .tcp_keepalive(STORE_KEEPALIVE_IDLE)
+        .tcp_keepalive_interval(STORE_KEEPALIVE_INTERVAL)
+        .tcp_keepalive_retries(STORE_KEEPALIVE_RETRIES)
+        .pool_idle_timeout(POOLED_CONNECTION_IDLE_LIMIT)
 }
 
 /// How long a pooled connection to a DefraDB HTTP server may sit idle before
@@ -37,13 +68,9 @@ pub(super) async fn graphql_http_client() -> Result<&'static reqwest::Client> {
     CLIENT
         .get_or_try_init(|| async {
             // Native certificate loading can block; initialize once off the executor.
-            tokio::task::spawn_blocking(|| {
-                reqwest::Client::builder()
-                    .pool_idle_timeout(POOLED_CONNECTION_IDLE_LIMIT)
-                    .build()
-            })
-            .await?
-            .map_err(GraphqlError::ClientBuild)
+            tokio::task::spawn_blocking(|| store_http_client_builder().build())
+                .await?
+                .map_err(GraphqlError::ClientBuild)
         })
         .await
 }
@@ -54,14 +81,22 @@ pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOp
         Ok(client) => client,
         Err(_) => return false,
     };
-    match client
-        .post(graphql)
-        .timeout(options.timeout)
+    let mut request = client.post(graphql);
+    if let Some(timeout) = options.timeout {
+        request = request.timeout(timeout);
+    }
+    match request
         .json(&serde_json::json!({ "query": "{ __typename }" }))
         .send()
         .await
     {
-        Ok(response) => response.status().is_success(),
+        Ok(response) => {
+            response.status().is_success()
+                || matches!(
+                    response.status(),
+                    reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+                )
+        }
         Err(_) => false,
     }
 }
@@ -117,7 +152,10 @@ pub(super) async fn execute_graphql_async_with_tx(
             Some(variables) => serde_json::json!({ "query": query, "variables": variables }),
             None => serde_json::json!({ "query": query }),
         };
-        let mut request = client.post(graphql).timeout(options.timeout).json(&body);
+        let mut request = client.post(graphql).json(&body);
+        if let Some(timeout) = options.timeout {
+            request = request.timeout(timeout);
+        }
         if let Some(id) = txn_id {
             request = request.header("x-defradb-tx", id);
         }
@@ -141,7 +179,7 @@ pub(super) async fn execute_graphql_async_with_tx(
                     cause = ?error,
                     is_timeout = error.is_timeout(),
                     is_connect = error.is_connect(),
-                    timeout_ms = options.timeout.as_millis() as u64,
+                    timeout_ms = options.timeout.map(|timeout| timeout.as_millis() as u64),
                     "retrying async GraphQL request after transport error"
                 );
                 last_error = Some(GraphqlError::Post {
@@ -159,6 +197,18 @@ pub(super) async fn execute_graphql_async_with_tx(
             }
         };
 
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            if let Err(source) = response.error_for_status_ref() {
+                return Err(GraphqlError::Refused {
+                    graphql: graphql.to_owned(),
+                    source,
+                    code: refusal_code(response).await,
+                });
+            }
+        }
         let response = match response.error_for_status() {
             Ok(response) => response,
             Err(error)
@@ -225,6 +275,27 @@ pub(super) async fn execute_graphql_async_with_tx(
     )
 }
 
+/// The bound on the body of a refusal read for its `code`; a longer body is
+/// no edge's answer.
+#[cfg(feature = "native")]
+const REFUSAL_BODY_LIMIT: usize = 4096;
+
+#[cfg(feature = "native")]
+async fn refusal_code(mut response: reqwest::Response) -> Option<String> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        body.extend_from_slice(&chunk);
+        if body.len() > REFUSAL_BODY_LIMIT {
+            return None;
+        }
+    }
+    serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()?
+        .get("code")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 #[cfg(feature = "native")]
 fn ensure_query_document(document: &str) -> Result<()> {
     let document = document.trim_start();
@@ -284,12 +355,18 @@ pub fn graphql_error_is_retryable(error: &(dyn std::error::Error + 'static)) -> 
 /// Auto-commit reads must use this rather than [`graphql_error_is_retryable`]:
 /// DefraDB's HTTP handler already retried their store conflicts.
 ///
+#[cfg(feature = "native")]
+pub fn graphql_transport_error_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
+    graphql_transport_source(error).is_some_and(graphql_transport_error_is_retryable)
+}
+
 /// External premise: an HTTP transport failure is a `reqwest::Error`, which
 /// callers carry erased in the chain.
 #[cfg(feature = "native")]
-pub fn graphql_transport_error_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
+pub fn graphql_transport_source<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a reqwest::Error> {
     crate::error_chain::find_source::<reqwest::Error>(error)
-        .is_some_and(graphql_transport_error_is_retryable)
 }
 
 #[cfg(feature = "native")]

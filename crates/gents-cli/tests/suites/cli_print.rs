@@ -29,7 +29,7 @@ async fn assert_file_read(live: &LiveCli, id: &str, token: &str) -> Result<()> {
         )
         .await?;
         found |=
-            gents_session::tool_call::query::result::render_tool_result(&output)?.contains(&token);
+            gents_session::tool_call::query::result::render_tool_result(&output)?.contains(token);
     }
     ensure!(
         found,

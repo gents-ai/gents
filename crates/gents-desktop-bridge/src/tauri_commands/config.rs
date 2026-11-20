@@ -1,7 +1,7 @@
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use tauri::{AppHandle, Runtime, State};
 
-use crate::error::BridgeError;
+use gents_store::client_error::BridgeError;
 
 use super::emit_config_update_and_snapshot;
 use crate::commands::{

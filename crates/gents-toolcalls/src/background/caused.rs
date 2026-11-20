@@ -145,16 +145,18 @@ pub(crate) async fn kill(
         crate::background::completion::append_background_tool_completion(
             node,
             &lifecycle.access()?,
-            lifecycle.session_id(),
-            &calling_request_id,
-            lifecycle
-                .doc_id()
-                .context("session-message row lacks physical identity")?,
-            lifecycle.tool_name(),
-            "cancelled",
-            "",
-            Some("explicit_cancel"),
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            &crate::background::completion::BackgroundToolCompletion {
+                parent_session_id: lifecycle.session_id(),
+                parent_request_id: &calling_request_id,
+                tool_call_doc_id: lifecycle
+                    .doc_id()
+                    .context("session-message row lacks physical identity")?,
+                tool_name: lifecycle.tool_name(),
+                status: "cancelled",
+                result: "",
+                reason: Some("explicit_cancel"),
+                wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            },
         )
         .await?;
     }

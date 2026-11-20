@@ -173,7 +173,7 @@ pub async fn accepted_call(
         provider_call_id,
         internal_call_id,
         args,
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
 }

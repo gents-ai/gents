@@ -6,7 +6,6 @@ mod retained_reasoning;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use serde::{Deserialize, Serialize};
 
 use self::operations_snapshot::operations_snapshot_response;
@@ -42,13 +41,14 @@ use gents_desktop_bridge::tauri_commands::ux_plugins::{
 };
 use gents_desktop_bridge::types::{
     AgentSaveRequest, BackendRotationSetRequest, BackendSaveRequest, ChatSendRequest,
-    DefaultAgentSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshotRequest,
-    DesktopProbeMcpServiceRequest, DesktopSessionProvenanceRequest, EnrollmentRequestView,
-    EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
-    InferenceProfileSaveRequest, NodeConfigSaveRequest, ScheduleDeleteRequest, ScheduleRunRequest,
-    ScheduleSaveRequest, SessionRenameRequest, SessionRowsWindow, TaskRunRequest, TaskSaveRequest,
-    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
-    TriggerDeleteRequest, TriggerSaveRequest,
+    ClientAccessRequestView, DefaultAgentSetRequest, DesktopInterruptRequest,
+    DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
+    DesktopSessionProvenanceRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
+    InferenceProfileSaveRequest, NodeConfigSaveRequest, RuntimeAccessConnectRequest,
+    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest,
+    SessionRowsWindow, TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest,
+    ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
+    TriggerSaveRequest,
 };
 use gents_server::packs;
 
@@ -95,8 +95,15 @@ struct SelectedNodeRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PeerIdRequest {
-    peer_id: String,
+struct RuntimeRequest {
+    node_did: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeRenameRequest {
+    node_did: String,
+    label: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,47 +265,19 @@ pub(super) async fn handle_request(
             serde_json::json!({ "status": "ok" }).to_string(),
         )),
         ("GET", "/status") => {
-            let snapshot = build_desktop_client_snapshot(fixture).await;
-            let deployment = snapshot
-                .client
-                .as_ref()
-                .and_then(|client| client.deployments.first())
-                .ok_or_else(|| anyhow!("live bridge runner has no deployment"))?;
-            let node = fixture.runtime_node()?;
-            let identity = Arc::clone(fixture.runtime_identity()?);
-            let network = gents_p2p::p2p_reconcile::ensure_enrollment_network(
-                node,
-                identity.as_ref(),
-                fixture.deployment_label(),
-            )
-            .await?;
-            let issuer = gents_p2p::p2p_reconcile::EnrollmentOfferIssuer::new(
-                Arc::clone(node),
-                identity,
-                fixture.runtime_p2p()?,
-                network.network_id,
-                fixture.node_did().to_string(),
-                "client".to_string(),
-            );
-            let enrollment = issuer.mint().await?;
-            let schema =
-                gents_p2p::p2p_reconcile::read_client_replicated_schema(Arc::clone(node)).await?;
-            Ok(HttpResponse::json_ok(
-                serde_json::json!({
-                    "enrollment": enrollment,
-                    (gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD): schema,
-                    "node_name": deployment.label.clone(),
-                    "node_did": deployment.node_did.clone(),
-                    "p2p_shareable_address": deployment.addr.clone(),
-                    "p2p_listen_addresses": [deployment.addr.clone()],
-                    "desktop_graphql": deployment.graphql.clone(),
-                    "p2p": {
-                        "p2p_shareable_address": deployment.addr.clone(),
-                        "p2p_listen_addresses": [deployment.addr.clone()],
-                    },
-                })
-                .to_string(),
-            ))
+            let authentication =
+                gents_store::config_client::client_authentication::runtime_authentication(
+                    &gents_store::config_client::ConfigAccess::local(
+                        fixture.runtime_node()?.clone(),
+                    ),
+                )
+                .await?;
+            json(serde_json::json!({
+                "node_did": fixture.node_did(),
+                "node_name": fixture.deployment_label(),
+                "desktop_graphql": fixture.init_summary().graphql,
+                (gents_protocol::client_authentication::STATUS_FIELD): authentication,
+            }))
         }
         ("GET", "/desktop/version") => Ok(HttpResponse::json_ok(serde_json::to_string(
             &VersionResponse {
@@ -375,67 +354,67 @@ pub(super) async fn handle_request(
             }
             Ok(HttpResponse::json_ok(serde_json::json!({}).to_string()))
         }
-        ("POST", "/desktop/test-fixture/remove-peer") => {
-            require_live_fixture()?;
-            let request = decode::<PeerIdRequest>(&request.body, "decoding peer removal")?;
-            let removed = fixture
-                .desktop_core()
-                .remove_peer(request.peer_id.trim())
-                .await?;
-            Ok(HttpResponse::json_ok(
-                serde_json::json!({
-                    "peerId": removed.peer_id,
-                    "label": removed.label,
-                    "addr": removed.addr,
-                    "connected": removed.connected,
-                    "warning": removed.warning,
-                })
-                .to_string(),
-            ))
+        ("POST", "/desktop/runtime/remove") => {
+            let request = decode::<RuntimeRequest>(&request.body, "decoding runtime removal")?;
+            let removed = gents_desktop_bridge::commands::forget_runtime(
+                fixture.desktop_core(),
+                request.node_did,
+            )
+            .await?;
+            let snapshot = build_desktop_client_snapshot(fixture).await;
+            json(gents_desktop_bridge::types::RuntimeRemoveResponse { snapshot, removed })
         }
-        ("POST", "/desktop/test-fixture/drift-remote-return-route") => {
-            require_live_fixture()?;
-            let desktop_address = fixture
+        ("POST", "/desktop/runtime/rename") => {
+            let request = decode::<RuntimeRenameRequest>(&request.body, "decoding runtime rename")?;
+            gents_desktop_bridge::commands::rename_runtime(
+                fixture.desktop_core(),
+                request.node_did,
+                request.label,
+            )
+            .await?;
+            json(build_desktop_client_snapshot(fixture).await)
+        }
+        ("POST", "/desktop/runtime/access/list") => {
+            let request = decode::<RuntimeRequest>(&request.body, "decoding runtime access list")?;
+            let requests = fixture
                 .desktop_core()
-                .p2p()
-                .shareable_address()
-                .await?
-                .context("desktop has no shareable address for route drift")?;
-            fixture
-                .runtime_p2p()?
-                .add_replicator(
-                    vec!["Network".to_string()],
-                    Some(&desktop_address),
-                    Default::default(),
-                    Vec::new(),
-                    None,
-                )
+                .list_runtime_access_requests(&request.node_did)
                 .await?;
-            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
+            json(
+                requests
+                    .into_iter()
+                    .map(ClientAccessRequestView::from)
+                    .collect::<Vec<_>>(),
+            )
+        }
+        ("POST", "/desktop/runtime/access/decide") => {
+            let request = decode::<gents_desktop_bridge::types::RuntimeAccessDecisionRequest>(
+                &request.body,
+                "decoding runtime access decision",
+            )?;
+            let receipt = fixture
+                .desktop_core()
+                .decide_runtime_access(&request.node_did, &request.request_id, request.decision)
+                .await?;
+            json(ClientAccessRequestView::from(receipt))
         }
         ("GET", "/desktop/test-fixture/remote-replicators") => {
             require_live_fixture()?;
             let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
-        ("POST", "/desktop/peer/enroll-status") => {
-            let request = decode::<EnrollmentStatusRequest>(
+        ("POST", "/desktop/runtime/access/request") => {
+            let request = decode::<RuntimeAccessConnectRequest>(
                 &request.body,
-                "decoding enrollment status request",
+                "decoding runtime access request",
             )?;
-            let payload = fetch_runtime_connection_payload(
-                &request.server_address,
-                Some(fixture.desktop_core().node_identity()),
+            json(
+                gents_desktop_bridge::commands::request_runtime_access(
+                    fixture.desktop_core(),
+                    request,
+                )
+                .await?,
             )
-            .await?;
-            let enrollment = fixture
-                .desktop_core()
-                .request_status_enrollment(&payload)
-                .await?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(
-                &EnrollmentRequestView::from(enrollment),
-            )?))
         }
         ("POST", "/desktop/session/snapshot") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
@@ -647,7 +626,7 @@ pub(super) async fn handle_request(
             )?;
             let access = fixture.desktop_core().operator_access(&request.node_did)?;
             json(serde_json::to_value(
-                gents_desktop_core::workspace_root::select_agent_workspace_root(
+                gents::client_workspace::select_agent_workspace_root(
                     &access,
                     &request.node_did,
                     &request.agent_did,
@@ -960,7 +939,10 @@ struct UxSourceRequest {
     id: String,
 }
 
-fn json(value: serde_json::Value) -> Result<HttpResponse> {
+fn json<T>(value: T) -> Result<HttpResponse>
+where
+    T: Serialize,
+{
     Ok(HttpResponse::json_ok(serde_json::to_string(&value)?))
 }
 

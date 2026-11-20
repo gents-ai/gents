@@ -195,6 +195,7 @@ where
         admission,
         turn_index,
         prior_reduction_keys: reduction_chain_keys.clone(),
+        provider_call: config.provider_call.clone(),
     })
     .await
     .map_err(turn_compaction_failure)?;

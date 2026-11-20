@@ -86,7 +86,8 @@ async fn signed_node() -> (Arc<EmbeddedNode>, Arc<BlockingSigner>, ReleaseSigner
             remote_signer: Some(signer.clone()),
             signing_authorization: None,
         },
-    );
+    )
+    .expect("the signing identity registers");
     let release = ReleaseSignerOnDrop(signer.clone());
     let node = Arc::new(
         EmbeddedNode::builder()

@@ -58,6 +58,17 @@ impl IsolatedWorkspaceDoc {
             path_capability: self.path_capability.clone(),
         }
     }
+
+    pub(crate) fn provenance(&self) -> WorkspaceProvenance {
+        WorkspaceProvenance {
+            owner_node_did: self.owner_node_did.clone(),
+            writer_principal: self.writer_principal.clone(),
+            integrator_principal: self.integrator_principal.clone(),
+            caused_by_invocation_id: self.caused_by_invocation_id.clone(),
+            caused_by_correlation: self.caused_by_correlation.clone(),
+            route: self.route.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,23 +218,25 @@ impl WorkspaceDocuments for MemoryWorkspaceDocuments {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fields of the IsolatedWorkspace document"
-)]
+/// The workspace's owner node, its writer and integrator, and the invocation
+/// that caused it; every executor stamps these on the documents it writes.
+#[derive(Debug, Clone)]
+pub struct WorkspaceProvenance {
+    pub owner_node_did: String,
+    pub writer_principal: String,
+    pub integrator_principal: String,
+    pub caused_by_invocation_id: String,
+    pub caused_by_correlation: String,
+    pub route: HandoffRoute,
+}
+
 pub(crate) fn new_isolated_workspace(
     identity: &LogicalWorkspaceIdentity,
     creation_policy: CreationPolicy,
     adapter: WorkspaceAdapterKind,
-    owner_node_did: &str,
-    writer_principal: &str,
-    integrator_principal: &str,
-    caused_by_invocation_id: &str,
-    caused_by_correlation: &str,
+    provenance: &WorkspaceProvenance,
     lifecycle_state: &str,
     instruction_manifest: String,
-    seal_hash: Option<String>,
-    route: &HandoffRoute,
 ) -> IsolatedWorkspaceDoc {
     IsolatedWorkspaceDoc {
         path_capability: identity.path_capability.clone(),
@@ -234,15 +247,15 @@ pub(crate) fn new_isolated_workspace(
         branch: identity.branch.clone(),
         creation_policy: creation_policy.as_str().to_string(),
         adapter: adapter.as_str().to_string(),
-        owner_node_did: owner_node_did.to_string(),
-        writer_principal: writer_principal.to_string(),
-        integrator_principal: integrator_principal.to_string(),
+        owner_node_did: provenance.owner_node_did.clone(),
+        writer_principal: provenance.writer_principal.clone(),
+        integrator_principal: provenance.integrator_principal.clone(),
         instruction_manifest,
-        seal_hash,
+        seal_hash: None,
         lifecycle_state: lifecycle_state.to_string(),
-        caused_by_invocation_id: caused_by_invocation_id.to_string(),
-        caused_by_correlation: caused_by_correlation.to_string(),
-        route: route.clone(),
+        caused_by_invocation_id: provenance.caused_by_invocation_id.clone(),
+        caused_by_correlation: provenance.caused_by_correlation.clone(),
+        route: provenance.route.clone(),
     }
 }
 

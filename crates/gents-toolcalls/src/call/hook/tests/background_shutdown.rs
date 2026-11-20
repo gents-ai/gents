@@ -56,27 +56,24 @@ async fn shutdown_terminates_a_live_background_process_group() {
         ready.to_string_lossy().into_owned(),
         gate.to_string_lossy().into_owned(),
     ];
-    let worker = tokio::spawn(gents_session::exec::ownership::scope_process_recorder(
-        recorder,
-        async move {
-            let outcome =
-                gents_session::exec::run_managed_exec(gents_session::exec::ManagedExecRequest {
-                    argv,
-                    cwd,
-                    deadline_at: None,
-                    cancellation_token: worker_token,
-                    max_output_bytes: 1024,
-                    stdin: Vec::new(),
-                    environment: None,
-                    tool_name: Some("gents-shutdown-probe".to_owned()),
-                    live_output: None,
-                    process_recorder: None,
-                })
-                .await;
-            drop(reservation);
-            outcome
-        },
-    ));
+    let worker = tokio::spawn(async move {
+        let outcome =
+            gents_session::exec::run_managed_exec(gents_session::exec::ManagedExecRequest {
+                argv,
+                cwd,
+                deadline_at: None,
+                cancellation_token: worker_token,
+                max_output_bytes: 1024,
+                stdin: Vec::new(),
+                environment: None,
+                tool_name: Some("gents-shutdown-probe".to_owned()),
+                live_output: None,
+                process_recorder: Some(recorder),
+            })
+            .await;
+        drop(reservation);
+        outcome
+    });
 
     let identity = tokio::time::timeout(Duration::from_secs(30), async {
         loop {

@@ -414,7 +414,9 @@ mod tests {
         assert!(!path.join("MANIFEST").exists());
         let node = gents::defra_node::Node::builder()
             .data_path(&path)
-            .with_regolith_options(gents_store::local::storage_backend::regolith_options())
+            .with_regolith_options(gents_store::local::storage_backend::regolith_options(
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            ))
             .with_node_identity_did(identity.did())
             .build()
             .await

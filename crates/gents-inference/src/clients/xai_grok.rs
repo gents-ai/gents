@@ -29,9 +29,8 @@ pub const XAI_GROK_OAUTH_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 
 // The proxy answers HTTP 426 when the advertised `x-grok-client-version` is
 // below its minimum (observed floor 1.0.13). Keep this at or above the floor;
-// GENTS_XAI_GROK_CLIENT_VERSION overrides it at runtime.
+// a backend's `client_version` overrides it.
 const GROK_CLIENT_VERSION: &str = "1.0.46";
-const GROK_CLIENT_VERSION_ENV: &str = "GENTS_XAI_GROK_CLIENT_VERSION";
 
 pub fn default_backend_endpoint() -> &'static str {
     XAI_GROK_OAUTH_BASE_URL
@@ -67,24 +66,20 @@ pub fn classify_xai_auth_error(
     classify_oauth_auth_error(&XAI_OAUTH_PRODUCT, node_did, provider, problem)
 }
 
-pub fn grok_client_version() -> String {
-    std::env::var(GROK_CLIENT_VERSION_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| GROK_CLIENT_VERSION.to_string())
+/// The `x-grok-client-version` this client advertises; `None` is the built-in version.
+pub fn grok_client_version(client_version: Option<&str>) -> String {
+    client_version.map_or_else(|| GROK_CLIENT_VERSION.to_string(), str::to_string)
 }
 
-pub fn grok_client_version_gate_guidance() -> String {
+pub fn grok_client_version_gate_guidance(client_version: Option<&str>) -> String {
     format!(
         "Grok proxy rejected the client version gents sent ({}). Update gents, or set \
-         {} to a version the proxy accepts and retry.",
-        grok_client_version(),
-        GROK_CLIENT_VERSION_ENV
+         client_version on the Grok backend to a version the proxy accepts and retry.",
+        grok_client_version(client_version)
     )
 }
 
-pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
+pub fn build_xai_grok_oauth_headers(client_version: Option<&str>) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Accept",
@@ -101,7 +96,7 @@ pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
     );
     headers.insert(
         "x-grok-client-version",
-        HeaderValue::from_str(&grok_client_version())
+        HeaderValue::from_str(&grok_client_version(client_version))
             .context("Grok client version could not be encoded as an HTTP header")?,
     );
     headers.insert("User-Agent", HeaderValue::from_static("xai-grok-cli"));
@@ -113,13 +108,15 @@ pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
 /// rotation per request. Identity headers ride per-request (the Chat
 /// Completions client builder has no default-header hook).
 #[derive(Clone, Default)]
-pub struct XaiGrokOAuthPolicy;
+pub struct XaiGrokOAuthPolicy {
+    pub client_version: Option<String>,
+}
 
 impl crate::auth::http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401];
 
     fn merge_identity_headers(&self, headers: &mut HeaderMap) -> http_client::Result<()> {
-        let identity = build_xai_grok_oauth_headers()
+        let identity = build_xai_grok_oauth_headers(self.client_version.as_deref())
             .map_err(|error| http_client::Error::Instance(error.into()))?;
         for (name, header_value) in identity.iter() {
             if !headers.contains_key(name) {
@@ -129,7 +126,11 @@ impl crate::auth::http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
         Ok(())
     }
 
-    fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
+    fn patch_request_body(
+        &self,
+        _call: &gents_loop::provider_call::ProviderCall,
+        req: Request<Bytes>,
+    ) -> Request<Bytes> {
         let (parts, body) = req.into_parts();
         let mut body = body;
         if parts.uri.path().ends_with("/responses") {
@@ -140,7 +141,11 @@ impl crate::auth::http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
         Request::from_parts(parts, body)
     }
 
-    fn patch_streaming(&self, response: StreamingResponse) -> StreamingResponse {
+    fn patch_streaming(
+        &self,
+        _call: &gents_loop::provider_call::ProviderCall,
+        response: StreamingResponse,
+    ) -> StreamingResponse {
         normalize_xai_usage_stream(response)
     }
 }
@@ -285,6 +290,7 @@ async fn build_authenticated_http(
     node: Arc<EmbeddedNode>,
     node_did: &str,
     account_ref: Option<&str>,
+    client_version: Option<&str>,
 ) -> Result<CapturingXaiGrokOAuthHttpClient> {
     let provider = XAI_OAUTH_PROVIDER;
     let (bearer, _credential) = crate::auth::http::bootstrap_oauth_client(
@@ -301,7 +307,10 @@ async fn build_authenticated_http(
         crate::rendered_request::RenderedRequestCapturingHttpClient::<
             crate::clients::provider_http::ProviderHttpClient,
         >::default(),
-    ))
+    )
+    .with_policy(XaiGrokOAuthPolicy {
+        client_version: client_version.map(str::to_owned),
+    }))
 }
 
 pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
@@ -316,11 +325,12 @@ pub async fn build_responses_client(
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
+    client_version: Option<&str>,
 ) -> Result<crate::llm::rig_compat::providers::ResponsesClient<CapturingXaiGrokOAuthHttpClient>> {
-    let headers = build_xai_grok_oauth_headers()?;
+    let headers = build_xai_grok_oauth_headers(client_version)?;
     let endpoint = normalize_endpoint(endpoint);
-    let http = build_authenticated_http(node, node_did, account_ref).await?;
-    crate::clients::inference_http::build_openai_responses_client(
+    let http = build_authenticated_http(node, node_did, account_ref, client_version).await?;
+    crate::llm::rig_compat::providers::build_openai_responses_client(
         "xai-oauth-managed",
         &endpoint,
         http,
@@ -334,11 +344,12 @@ pub async fn build_chat_completions_client(
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
+    client_version: Option<&str>,
 ) -> Result<crate::llm::rig_compat::providers::ChatCompletionsClient<CapturingXaiGrokOAuthHttpClient>>
 {
     let endpoint = normalize_endpoint(endpoint);
-    let http = build_authenticated_http(node, node_did, account_ref).await?;
-    crate::clients::inference_http::build_openai_chat_completions_client(
+    let http = build_authenticated_http(node, node_did, account_ref, client_version).await?;
+    crate::llm::rig_compat::providers::build_openai_chat_completions_client(
         "xai-oauth-managed",
         &endpoint,
         http,
@@ -533,7 +544,12 @@ mod tests {
             .uri("https://cli-chat-proxy.grok.com/v1/files")
             .body(MultipartForm::default())
             .unwrap();
-        let _ = HttpClientExt::send_multipart::<Bytes>(&client, req).await;
+        let _ = gents_loop::rig_compat::http::Transport::send_multipart(
+            &client,
+            &Default::default(),
+            req,
+        )
+        .await;
         let headers = captured
             .lock()
             .expect("capture lock")
@@ -584,7 +600,7 @@ mod tests {
                 .headers()
                 .get("x-grok-client-version")
                 .and_then(|value| value.to_str().ok()),
-            Some(grok_client_version().as_str())
+            Some(grok_client_version(None).as_str())
         );
     }
 
@@ -624,7 +640,7 @@ mod tests {
     /// only composing the real stack catches it.
     #[tokio::test]
     async fn the_captured_row_carries_the_store_false_grok_injects() {
-        use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
+        use crate::rendered_request::scope::{arm, test_scope, CaptureScopeKind};
         use crate::rendered_request::transport::CountingInner;
         use crate::rendered_request::{
             AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest,
@@ -662,8 +678,13 @@ mod tests {
             sink,
         );
 
-        scope_request(scope, async {
+        async {
+            let call = gents_loop::provider_call::ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
             arm(
+                call.capture.as_ref(),
                 CaptureScopeKind::Inference,
                 0,
                 0,
@@ -681,10 +702,10 @@ mod tests {
                     .expect("assembled body"),
                 ))
                 .expect("request");
-            let _ = HttpClientExt::send_streaming(&client, req)
+            let _ = gents_loop::rig_compat::http::Transport::send_streaming(&client, &call, req)
                 .await
                 .expect("send");
-        })
+        }
         .await;
 
         let seen = seen.lock().expect("seen");

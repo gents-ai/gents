@@ -391,8 +391,10 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             agent.did().into(),
             "output-goal",
             "Finish missing writes",
-            1,
-            false,
+            gents_protocol::request_input::GoalContinuationInput {
+                sequence: 1,
+                wrapup: false,
+            },
             "2026-09-05T00:00:01Z",
             root_request.request_hop,
         )

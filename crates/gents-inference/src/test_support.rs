@@ -10,41 +10,47 @@ use gents_documents::test_support::{
 };
 use gents_store::test_support::held_runtime_identity;
 
-pub async fn capture_scripted_provider_request(
-    request: &rig::completion::CompletionRequest,
-    model: &str,
-) -> Result<(), rig::completion::CompletionError> {
-    use rig::http_client::HttpClientExt;
-    let body = rig::providers::openai::completion::CompletionRequest::try_from((
-        model.to_string(),
-        request.clone(),
-    ))
-    .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    let mut body = serde_json::to_value(body)
-        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    body["stream"] = serde_json::Value::Bool(true);
-    body["stream_options"] = serde_json::json!({ "include_usage": true });
-    let inner = crate::rendered_request::transport::CountingInner::default();
-    let transport =
-        crate::rendered_request::transport::RenderedRequestCapturingHttpClient::new(inner.clone());
-    let outbound = rig::http_client::Request::builder()
-        .method("POST")
-        .uri("https://scripted-provider.invalid/v1/chat/completions")
-        .header("content-type", "application/json")
-        .body(bytes::Bytes::from(serde_json::to_vec(&body).map_err(
-            |error| rig::completion::CompletionError::ProviderError(error.to_string()),
-        )?))
-        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    transport
-        .send_streaming(outbound)
-        .await
-        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
-    assert_eq!(
-        inner.send_count(),
-        1,
-        "capture must authorize scripted provider send"
-    );
-    Ok(())
+/// A request with fixed identity and no execution state, for code that reads
+/// only what a request names.
+pub fn agent_request(request_id: &str) -> gents_protocol::row::AgentRequest {
+    gents_protocol::row::AgentRequest {
+        retry_parent_request_doc_id: None,
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
+        doc_id: format!("doc-{request_id}"),
+        request_id: request_id.to_string(),
+        node_did: "did:test:test".to_string(),
+        requester_did: None,
+        agent_did: "default".to_string(),
+        session_id: format!("session-{request_id}"),
+        content: "hello".to_string(),
+        max_total_tokens: None,
+        input: Default::default(),
+        execution_origin: None,
+        created_at: "2026-04-15T00:00:00Z".to_string(),
+        deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_lease_secs: None,
+        request_hop: 0,
+        caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+        caused_by_trigger_id: None,
+        caused_by_trigger_kind: None,
+        caused_by_source_doc_id: None,
+        caused_by_correlation: None,
+        caused_by_trigger_context: None,
+        workspace_id: None,
+        workspace_authority: None,
+        workspace_owner_node_did: None,
+        workspace_seal_hash: None,
+        executed_model_name: None,
+        executed_reasoning_effort: None,
+        executed_service_tier: None,
+        executed_inference_profile_id: None,
+        executed_runtime_generation: None,
+    }
 }
 
 pub async fn ensure_test_default_agent(
@@ -150,7 +156,7 @@ pub fn resolved_agent(
     use crate::resolved::{
         MaxTurnsProvenance, ResolvedAgent, ResolvedConfiguration, DEFAULT_CONTEXT_WINDOW,
         DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME,
-        DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+        DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS, DEFAULT_TITLE_TIMEOUT_SECS,
     };
     use gents_documents::inference_defaults::{
         DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -180,6 +186,7 @@ pub fn resolved_agent(
         backend_endpoint: "http://127.0.0.1:1/v1".to_string(),
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         claude_platform: None,
+        client_version: None,
         model_name: DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
@@ -191,9 +198,12 @@ pub fn resolved_agent(
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+        title_timeout: Duration::from_secs(DEFAULT_TITLE_TIMEOUT_SECS),
         deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
         completion_retry: Default::default(),
         sampling: Default::default(),

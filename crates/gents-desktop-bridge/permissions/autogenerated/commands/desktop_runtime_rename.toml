@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-runtime-rename"
+description = "Enables the desktop_runtime_rename command without any pre-configured scope."
+commands.allow = ["desktop_runtime_rename"]
+
+[[permission]]
+identifier = "deny-desktop-runtime-rename"
+description = "Denies the desktop_runtime_rename command without any pre-configured scope."
+commands.deny = ["desktop_runtime_rename"]

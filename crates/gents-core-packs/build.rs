@@ -21,6 +21,11 @@ fn main() {
     let dir = std::env::var_os("GENTS_CORE_PACKS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| manifest_dir.join("../../target/core-packs"));
+    // Cargo treats a watched path that does not exist as changed on every
+    // build, which recompiled this crate and everything above it each time.
+    // An empty directory embeds the same empty set as a missing one, and its
+    // mtime changes when `make core-packs` writes the packs into it.
+    std::fs::create_dir_all(&dir).expect("create the core packs directory");
     println!("cargo:rerun-if-changed={}", dir.display());
     let required = std::env::var("GENTS_REQUIRE_CORE_PACKS").is_ok_and(|value| value == "1");
     let mut entries = Vec::new();

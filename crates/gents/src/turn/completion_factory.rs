@@ -68,6 +68,7 @@ pub(crate) fn loop_config(
         provider_input_counter.profile(),
     );
     LoopConfig {
+        provider_call: Default::default(),
         replay: Default::default(),
         provider_input_counter,
         preamble: Some(preamble),
@@ -117,9 +118,9 @@ pub(crate) fn loop_config(
         configuration_guard: crate::turn::provider_input::configuration::configuration_guard(
             &agent_config.configuration,
         ),
-        on_rendered_request: Some(
-            gents_inference::rendered_request::scope::ambient_arming_sink(capture_scope),
-        ),
+        on_rendered_request: Some(gents_inference::rendered_request::scope::arming_sink(
+            capture_scope,
+        )),
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
@@ -132,10 +133,12 @@ pub(crate) fn loop_config(
         provider_idle_timeout: Some(agent_config.provider_idle_timeout),
         deadline: None,
         max_turns: agent_config.max_turns,
+        max_invalid_tool_calls: agent_config.max_invalid_tool_calls,
+        repeated_tool_failure_limit: agent_config.repeated_tool_failure_limit,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
+        tool_context: gents_loop::tool::ToolCallEnvelope::default(),
     }
 }
 

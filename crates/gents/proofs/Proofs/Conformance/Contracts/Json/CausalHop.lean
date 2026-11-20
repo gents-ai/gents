@@ -95,10 +95,6 @@ structure CallInput where
   events : List CausalHop.Event
   deriving Lean.ToJson
 
-def optionalNatJson : Option Nat → String
-  | none => "null"
-  | some value => toString value
-
 def chainHops : Nat → List CausalHop.Step → List Nat
   | _, [] => []
   | start, step :: rest =>
@@ -444,8 +440,15 @@ theorem ping_pong_with_returns_erases_to_model :
 
 theorem default_max_request_hop_is_unbounded : CausalHop.defaultMaxRequestHop = none := rfl
 
-def defaultMaxRequestHopJson : String :=
-  optionalNatJson CausalHop.defaultMaxRequestHop
+structure DefaultCapInput where
+  name : String
+  deriving ToJson
+
+/-- A Node published without `max_request_hop`, as `gents init` publishes it. -/
+@[conformance_family]
+def defaultCap : Family DefaultCapInput (Option Nat) where
+  inputs := [{ name := "node_without_max_request_hop" }]
+  model := fun _ => CausalHop.defaultMaxRequestHop
 
 def signerDid (signer : String) : Nat :=
   if signer == "creator" then 1 else if signer == "worker" then 2 else 3

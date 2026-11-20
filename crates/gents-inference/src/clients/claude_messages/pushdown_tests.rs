@@ -275,7 +275,7 @@ fn thinking_outcome(error: MessagesParseError) -> String {
 }
 
 fn sealed_block(
-    event: &RawStreamingChoice<crate::clients::claude_subscription::ClaudeStreamResponse>,
+    event: &RawStreamingChoice<crate::llm::rig_compat::model::StreamEnd>,
 ) -> Option<gents_lean_vocab::families::contracts_claude_thinking_stream::ClaudeStreamBlockWire> {
     use crate::llm::message::ReasoningContent;
     use gents_lean_vocab::families::contracts_claude_thinking_stream::{

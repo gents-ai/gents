@@ -55,22 +55,22 @@ impl Fixture {
             1024,
             policy,
         );
-        workspace::scope(
-            context,
-            approval::scope_interactive(
-                interactive,
-                Tool::call(
-                    &tool,
-                    BashArgs {
-                        command: command.to_owned(),
-                        args: args.to_vec(),
-                        cwd: None,
-                        timeout_secs: None,
-                        raw_json: true,
-                    },
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
-                ),
-            ),
+        let call = crate::runtime_context::ToolHostContext {
+            interactive,
+            approval: context.clone(),
+            ..Default::default()
+        }
+        .call();
+        Tool::call(
+            &tool,
+            BashArgs {
+                command: command.to_owned(),
+                args: args.to_vec(),
+                cwd: None,
+                timeout_secs: None,
+                raw_json: true,
+            },
+            &call,
         )
         .await
     }
@@ -364,70 +364,72 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
             .with_network_mode(CommandNetworkMode::Disabled),
     );
     approval::mark_listening(fixture.home.path()).unwrap();
-    workspace::scope(
-        scope,
-        approval::scope_interactive(true, async {
-            for (directory, allowed) in [(&project, true), (&sibling, false)] {
-                let marker = directory.join("executed");
-                let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
-                let call = Tool::call(
-                    &tool,
-                    BashArgs {
-                        command: "/usr/bin/touch".into(),
-                        args: vec![marker.to_str().unwrap().into()],
-                        cwd: Some(directory.to_str().unwrap().into()),
-                        timeout_secs: None,
-                        raw_json: true,
-                    },
-                    &envelope,
-                );
-                let answer = async {
-                    let question = fixture.question().await;
-                    let workspace::BindingAction::Command { writable_root, .. } =
-                        &question.binding().unwrap().action
-                    else {
-                        panic!("expected a command approval")
-                    };
-                    assert_eq!(writable_root.as_deref(), Some(key.path.as_path()));
-                    approval::decide(fixture.home.path(), &question.id, Answer::Once).unwrap();
-                };
-                let (result, ()) = tokio::join!(call, answer);
-                let output: serde_json::Value = match result {
-                    Ok(output) if allowed => serde_json::from_str(&output).unwrap(),
-                    Err(ToolError::ReportedFailure {
-                        class: gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
-                        text,
-                    }) if !allowed => serde_json::from_str(&text).unwrap(),
-                    other => panic!("unexpected command result: {other:?}"),
-                };
-                assert_eq!(output["ok"], allowed, "{output}");
-                assert_eq!(marker.exists(), allowed);
-            }
-            workspace::save_mode(
-                fixture.home.path(),
-                &key,
-                1,
-                workspace::Mode::FullAccess,
-                None,
-            )
-            .unwrap();
-            let marker = sibling.join("executed");
-            Tool::call(
+    let envelope = crate::runtime_context::ToolHostContext {
+        interactive: true,
+        approval: scope.clone(),
+        ..Default::default()
+    }
+    .call();
+    async {
+        for (directory, allowed) in [(&project, true), (&sibling, false)] {
+            let marker = directory.join("executed");
+            let call = Tool::call(
                 &tool,
                 BashArgs {
                     command: "/usr/bin/touch".into(),
                     args: vec![marker.to_str().unwrap().into()],
-                    cwd: Some(sibling.to_str().unwrap().into()),
+                    cwd: Some(directory.to_str().unwrap().into()),
                     timeout_secs: None,
                     raw_json: true,
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            )
-            .await
-            .unwrap();
-            assert!(marker.is_file());
-        }),
-    )
+                &envelope,
+            );
+            let answer = async {
+                let question = fixture.question().await;
+                let workspace::BindingAction::Command { writable_root, .. } =
+                    &question.binding().unwrap().action
+                else {
+                    panic!("expected a command approval")
+                };
+                assert_eq!(writable_root.as_deref(), Some(key.path.as_path()));
+                approval::decide(fixture.home.path(), &question.id, Answer::Once).unwrap();
+            };
+            let (result, ()) = tokio::join!(call, answer);
+            let output: serde_json::Value = match result {
+                Ok(output) if allowed => serde_json::from_str(&output).unwrap(),
+                Err(ToolError::ReportedFailure {
+                    class: gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                    text,
+                }) if !allowed => serde_json::from_str(&text).unwrap(),
+                other => panic!("unexpected command result: {other:?}"),
+            };
+            assert_eq!(output["ok"], allowed, "{output}");
+            assert_eq!(marker.exists(), allowed);
+        }
+        workspace::save_mode(
+            fixture.home.path(),
+            &key,
+            1,
+            workspace::Mode::FullAccess,
+            None,
+        )
+        .unwrap();
+        let marker = sibling.join("executed");
+        Tool::call(
+            &tool,
+            BashArgs {
+                command: "/usr/bin/touch".into(),
+                args: vec![marker.to_str().unwrap().into()],
+                cwd: Some(sibling.to_str().unwrap().into()),
+                timeout_secs: None,
+                raw_json: true,
+            },
+            &envelope,
+        )
+        .await
+        .unwrap();
+        assert!(marker.is_file());
+    }
     .await;
     assert!(approval::pending_requests(fixture.home.path())
         .unwrap()

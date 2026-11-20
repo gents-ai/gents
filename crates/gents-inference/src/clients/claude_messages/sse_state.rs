@@ -4,10 +4,10 @@ use gents_protocol::message::ReasoningContent;
 use serde_json::Value;
 
 use super::{MessagesParseError, ThinkingParseCause};
-use crate::clients::claude_subscription::ClaudeStreamResponse;
 use crate::llm::rig_compat::completion::{
     CompletionError, RawStreamingChoice, RawStreamingToolCall, Usage,
 };
+use crate::llm::rig_compat::model::StreamEnd;
 use gents_loop::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
 
 /// Incremental SSE parser for one Messages response.
@@ -65,7 +65,7 @@ impl MessagesSseState {
     pub fn push_line(
         &mut self,
         line: &str,
-    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+    ) -> Result<Vec<RawStreamingChoice<StreamEnd>>, CompletionError> {
         self.push_line_typed(line).map_err(Into::into)
     }
 
@@ -74,7 +74,7 @@ impl MessagesSseState {
     pub fn push_line_typed(
         &mut self,
         line: &str,
-    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
+    ) -> Result<Vec<RawStreamingChoice<StreamEnd>>, MessagesParseError> {
         let line = line.strip_suffix('\r').unwrap_or(line);
         if let Some(rest) = line.strip_prefix("data:") {
             if !self.data.is_empty() {
@@ -91,25 +91,25 @@ impl MessagesSseState {
     }
 
     /// End of body: flush an open block and emit `FinalResponse` if none seen.
-    pub fn finish(self) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+    pub fn finish(self) -> Result<Vec<RawStreamingChoice<StreamEnd>>, CompletionError> {
         self.finish_typed().map_err(Into::into)
     }
 
     /// End of body with the parser's typed cause retained.
     pub fn finish_typed(
         mut self,
-    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
+    ) -> Result<Vec<RawStreamingChoice<StreamEnd>>, MessagesParseError> {
         self.finish_typed_inner()
     }
 
     fn finish_typed_inner(
         &mut self,
-    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
+    ) -> Result<Vec<RawStreamingChoice<StreamEnd>>, MessagesParseError> {
         let mut events = self.dispatch_pending_data()?;
         self.close_at_eof(&mut events)?;
         if !self.finished {
             self.finished = true;
-            events.push(RawStreamingChoice::FinalResponse(ClaudeStreamResponse {
+            events.push(RawStreamingChoice::FinalResponse(StreamEnd {
                 usage: self.usage.take(),
                 token_usage: messages_token_usage(&self.usage_fields, false)?,
                 request_id: self.request_id.clone(),
@@ -121,7 +121,7 @@ impl MessagesSseState {
     pub(super) fn finish_observed(
         mut self,
     ) -> (
-        Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError>,
+        Result<Vec<RawStreamingChoice<StreamEnd>>, CompletionError>,
         Vec<ClaudeAuditEvent>,
     ) {
         let result = self.finish_typed_inner().map_err(Into::into);
@@ -130,7 +130,7 @@ impl MessagesSseState {
 
     fn dispatch_pending_data(
         &mut self,
-    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
+    ) -> Result<Vec<RawStreamingChoice<StreamEnd>>, MessagesParseError> {
         if self.data.is_empty() {
             return Ok(Vec::new());
         }
@@ -176,7 +176,7 @@ impl MessagesSseState {
 
     fn close_at_eof(
         &mut self,
-        events: &mut Vec<RawStreamingChoice<ClaudeStreamResponse>>,
+        events: &mut Vec<RawStreamingChoice<StreamEnd>>,
     ) -> Result<(), MessagesParseError> {
         match self.pending.take() {
             Some(PendingBlock::Tool(tool)) => {
@@ -193,7 +193,7 @@ impl MessagesSseState {
     fn handle_payload(
         &mut self,
         payload: &Value,
-    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
+    ) -> Result<Vec<RawStreamingChoice<StreamEnd>>, MessagesParseError> {
         let mut events = Vec::new();
         let Some(kind) = payload.get("type").and_then(Value::as_str) else {
             return Ok(events);
@@ -535,7 +535,7 @@ impl MessagesSseState {
                 self.close_at_eof(&mut events)?;
                 if !self.finished {
                     self.finished = true;
-                    events.push(RawStreamingChoice::FinalResponse(ClaudeStreamResponse {
+                    events.push(RawStreamingChoice::FinalResponse(StreamEnd {
                         usage: self.usage,
                         token_usage: messages_token_usage(&self.usage_fields, true)?,
                         request_id: self.request_id.clone(),
@@ -562,14 +562,14 @@ impl MessagesSseState {
 pub fn parse_messages_sse(
     sse: &str,
     surface: &RapidHashSet<String>,
-) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+) -> Result<Vec<RawStreamingChoice<StreamEnd>>, CompletionError> {
     parse_messages_sse_typed(sse, surface).map_err(Into::into)
 }
 
 pub fn parse_messages_sse_typed(
     sse: &str,
     surface: &RapidHashSet<String>,
-) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
+) -> Result<Vec<RawStreamingChoice<StreamEnd>>, MessagesParseError> {
     let mut state = MessagesSseState::new(surface.clone());
     let mut events = Vec::new();
     for line in sse.lines() {
@@ -636,7 +636,7 @@ fn mapped_tool_call(
     tool: PendingTool,
     surface: &RapidHashSet<String>,
     seen_ids: &mut RapidHashSet<String>,
-) -> Result<RawStreamingChoice<ClaudeStreamResponse>, MessagesParseError> {
+) -> Result<RawStreamingChoice<StreamEnd>, MessagesParseError> {
     if tool.id.trim().is_empty() || tool.name.trim().is_empty() {
         return Err(MessagesParseError::MalformedToolUse {
             message: "missing id or name".to_string(),

@@ -8,7 +8,9 @@ use gents_protocol::operations::request::{
     RequestMatches, RequestOperationError, RequestReceipt, RequestRef, RequestReissueInput,
     RequestWaitInput,
 };
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_store::config_client::ConfigAccess;
@@ -101,6 +103,66 @@ pub async fn get(
     }
 }
 
+pub async fn recover_send(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    route: &MessageSendRoute,
+) -> Result<Option<RequestReceipt>, RequestOperationError> {
+    let Some(request_id) = route
+        .request_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(session_id) = route
+        .session_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let actor = target::client_actor(access, signer)?;
+    let requester =
+        crate::session::client_requester_scope(access, &route.node_did, session_id, &actor)
+            .await
+            .map_err(RequestOperationError::passthrough)?;
+    recover_scoped_send(access, &route.node_did, session_id, &requester, request_id).await
+}
+
+async fn recover_scoped_send(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester: &str,
+    request_id: &str,
+) -> Result<Option<RequestReceipt>, RequestOperationError> {
+    let held = held_client_request(
+        access,
+        ClientRequestScope {
+            node_did,
+            session_id,
+            requester_did: requester,
+            request_id,
+        },
+    )
+    .await
+    .map_err(|error| target::submission_error(request_id, error))?;
+    match held {
+        Some(held) => read::receipt(
+            access,
+            node_did,
+            &held.session_id,
+            requester,
+            &held.request_id,
+            None,
+        )
+        .await
+        .map(Some),
+        None => Ok(None),
+    }
+}
+
 pub async fn send(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
@@ -120,6 +182,25 @@ where
     P: FnOnce(String, String) -> F,
     F: Future<Output = Result<MessageSendBody, RequestOperationError>>,
 {
+    send_retaining(access, signer, route, prepare, |_| {
+        std::future::ready(Ok(()))
+    })
+    .await
+}
+
+pub async fn send_retaining<P, F, R, RF>(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    route: MessageSendRoute,
+    prepare: P,
+    retain: R,
+) -> Result<RequestReceipt, RequestOperationError>
+where
+    P: FnOnce(String, String) -> F,
+    F: Future<Output = Result<MessageSendBody, RequestOperationError>>,
+    R: FnOnce(AgentRequestCreate) -> RF,
+    RF: Future<Output = Result<(), RequestOperationError>>,
+{
     let MessageSendRoute {
         node_did,
         session_id,
@@ -134,27 +215,10 @@ where
         .await
         .map_err(RequestOperationError::passthrough)?;
     if supplied_request_id.is_some() {
-        let held = held_client_request(
-            access,
-            ClientRequestScope {
-                node_did: &node_did,
-                session_id: &session_id,
-                requester_did: &requester,
-                request_id: &request_id,
-            },
-        )
-        .await
-        .map_err(|error| target::submission_error(&request_id, error))?;
-        if let Some(held) = held {
-            return read::receipt(
-                access,
-                &node_did,
-                &held.session_id,
-                &requester,
-                &held.request_id,
-                None,
-            )
-            .await;
+        if let Some(receipt) =
+            recover_scoped_send(access, &node_did, &session_id, &requester, &request_id).await?
+        {
+            return Ok(receipt);
         }
     }
     let MessageSendBody {
@@ -232,16 +296,31 @@ where
     )
     .await
     .map_err(RequestOperationError::passthrough)?;
-    let held = send_client_request(access, &create)
+    retain(create.clone()).await?;
+    send_prepared(access, signer, &create).await
+}
+
+pub async fn send_prepared(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    create: &AgentRequestCreate,
+) -> Result<RequestReceipt, RequestOperationError> {
+    let actor = target::client_actor(access, signer)?;
+    if create.admission.signer_did != actor {
+        return Err(RequestOperationError::passthrough(anyhow::anyhow!(
+            "the prepared request belongs to another client"
+        )));
+    }
+    let held = send_client_request(access, create)
         .await
-        .map_err(|error| target::submission_error(&request_id, error))?;
+        .map_err(|error| target::submission_error(&create.request_id, error))?;
     read::receipt(
         access,
-        &node_did,
-        &session_id,
-        &requester,
+        &create.node_did,
+        &create.session_id,
+        &create.requester_did,
         &held,
-        Some(&create),
+        Some(create),
     )
     .await
 }

@@ -46,15 +46,15 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
     }
 
     let resolved = gents_service::home_state::cli_identity_paths()?;
-    let held =
-        gents_desktop_core::client::DesktopPaths::from_root(&options.desktop_root).cli_client();
+    let held = gents_store::client_journal::paths::DesktopPaths::from_root(&options.desktop_root)
+        .cli_client();
     if resolved.root() != held.root() {
         anyhow::bail!(
             "provisioning {} would keep its administrator key in {}, but the caller's desktop root keeps it in {}; start this process with {} set to {}",
             options.home.display(),
             resolved.root().display(),
             held.root().display(),
-            gents_desktop_core::client::DESKTOP_HOME_ENV,
+            gents_store::client_journal::paths::DESKTOP_HOME_ENV,
             options.desktop_root.display(),
         );
     }

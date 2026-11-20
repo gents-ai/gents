@@ -135,22 +135,20 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
         fixture
             .create_session(name, bound, case.input.visible.is_some())
             .await;
-        let node_view = ConfigAccess::local_as(
-            fixture.db.node.clone(),
-            fixture.runtime.did().parse().unwrap(),
-        )
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(name)
-        ))
-        .await
-        .unwrap();
+        let reader = gents_store::test_support::unrelated_document_reader(&fixture.db.node).await;
+        let node_view = reader
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(name)
+            ))
+            .await
+            .unwrap();
         assert!(
             node_view["data"]["AgentSession"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            "runtime must not read private session"
+            "unrelated reader must not read private session"
         );
         let result = resolve_agent_for_request(&fixture.db.node, &fixture.request(name, requested))
             .await
@@ -285,21 +283,23 @@ async fn materialized_request_session_is_selectable_and_matches_lean() {
         gents_session::request::lifecycle::materialize::write_pending_agent_request_with_identity(
             &db.node,
             identity::Did::new(agent.did()).unwrap(),
-            &node_did,
-            agent.did(),
-            "materialized selection probe",
-            gents_session::request::lifecycle::ExecutionOrigin::Interactive,
-            gents_session::request::lifecycle::TriggerLineage {
-                trigger_id: None,
-                trigger_kind: Some("manual".into()),
-                source_doc_id: None,
-                correlation: None,
-                trigger_context: None,
+            gents_session::request::lifecycle::materialize::PendingAgentRequest {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                content: "materialized selection probe",
+                execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+                trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
+                    trigger_id: None,
+                    trigger_kind: Some("manual".into()),
+                    source_doc_id: None,
+                    correlation: None,
+                    trigger_context: None,
+                },
+                conversation_title: Some("materialized probe"),
+                workspace_lineage: None,
+                requester_did: None,
+                trigger_doc_id: None,
             },
-            Some("materialized probe"),
-            None,
-            None,
-            None,
             None,
             None,
             Some(agent.as_ref()),

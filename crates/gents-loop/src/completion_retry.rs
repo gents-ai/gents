@@ -368,12 +368,10 @@ impl CompletionRetryState {
                 let is_fresh = self.last_parse_error.as_deref() != Some(error_text);
                 let resample_budget_spent = self.resample_used >= self.policy.max_resample;
 
-                let resample_pacing =
-                    resample_delay(&self.policy.transport_backoff, self.resample_used);
-
-                if let Some(base_delay) =
-                    resample_pacing.filter(|_| is_fresh && !resample_budget_spent)
-                {
+                if is_fresh && !resample_budget_spent {
+                    let base_delay =
+                        resample_delay(&self.policy.transport_backoff, self.resample_used)
+                            .unwrap_or(Duration::ZERO);
                     let delay = jitter(base_delay, &mut rand::rng());
                     if exceeds_deadline(now, delay, deadline) {
                         return PreStreamDirective::Fail {

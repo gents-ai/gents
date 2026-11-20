@@ -75,11 +75,25 @@ pub fn execute_request_with_base(
     base: Option<PathBuf>,
     request: NativeFsRunnerRequest,
 ) -> Result<String> {
-    let context = RunnerContext::new_with_base(root, base)?;
+    execute_in_context(&RunnerContext::new_with_base(root, base)?, request)
+}
+
+#[cfg(feature = "test-fixtures")]
+pub fn execute_request_with_blocker(
+    root: PathBuf,
+    base: Option<PathBuf>,
+    request: NativeFsRunnerRequest,
+    blocker: Option<crate::blocker::TraversalBlocker>,
+) -> Result<String> {
+    let context = RunnerContext::new_with_base(root, base)?.with_blocker(blocker);
+    execute_in_context(&context, request)
+}
+
+fn execute_in_context(context: &RunnerContext, request: NativeFsRunnerRequest) -> Result<String> {
     match request {
-        NativeFsRunnerRequest::ListFiles(args) => list_files(&context, args),
-        NativeFsRunnerRequest::Glob(args) => glob(&context, args),
-        NativeFsRunnerRequest::Grep(args) => grep(&context, args),
+        NativeFsRunnerRequest::ListFiles(args) => list_files(context, args),
+        NativeFsRunnerRequest::Glob(args) => glob(context, args),
+        NativeFsRunnerRequest::Grep(args) => grep(context, args),
     }
 }
 

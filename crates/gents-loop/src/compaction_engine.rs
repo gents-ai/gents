@@ -260,6 +260,7 @@ where
             let summary_max_output_tokens = self.summary_max_output_tokens(options, context_window);
             summary_config.max_tokens = Some(summary_max_output_tokens as u64);
             summary_config.aggregate_token_budget = options.aggregate_token_budget.clone();
+            summary_config.provider_call = options.provider_call.clone();
             summary_config.additional_params = merge_optional_params(
                 merge_optional_params(
                     summary_config.additional_params.take(),

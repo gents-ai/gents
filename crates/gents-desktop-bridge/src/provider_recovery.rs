@@ -108,7 +108,7 @@ async fn validate_scope(access: &ConfigAccess, request: &ProviderRecoveryRequest
         },
     )
     .await
-    .map_err(gents_desktop_core::error::request_operation_failure)?;
+    .map_err(gents_store::client_error::request_operation_failure)?;
     anyhow::ensure!(
         stopped.session_id.as_deref() == Some(request.session_id.as_str()),
         "stopped request no longer belongs to the selected session"
@@ -275,8 +275,10 @@ pub async fn apply(
                 &scope.node_did,
                 &scope.session_id,
                 &scope.request_id,
-                backend_id,
-                *with_compaction,
+                gents_automation::goal::AccountMove {
+                    target_backend_id: backend_id,
+                    move_companions: *with_compaction,
+                },
                 &|_| Ok(Vec::new()),
             )
             .await

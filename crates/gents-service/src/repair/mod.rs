@@ -28,7 +28,7 @@ use crate::repair::port::{
     ServedIdentity,
 };
 use crate::repair::reason::{blocker_for_exit, read_last_error};
-use gents_protocol::graphql::{graphql_endpoint_available, GraphqlRequestOptions};
+use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 
 use crate::repair::service::{
     apply, gather_facts, newer_node, on_manager, plan_before_setup, plan_service, served_version,
@@ -967,26 +967,34 @@ async fn last_error(config: &NativeServiceConfig) -> Option<String> {
     read_last_error(&config.user_home, Some(&legacy)).await
 }
 
-/// Whether the runtime `home` records answers, and where. Only that it
-/// answers matters here, so no client identity is loaded.
-pub(crate) async fn answering_graphql(home: &Path) -> Result<Option<String>> {
-    match read_runtime_state(home)? {
-        Some(state)
-            if graphql_endpoint_available(
-                &state.graphql,
-                GraphqlRequestOptions {
-                    timeout: Duration::from_secs(2),
-                    max_attempts: 1,
-                    retry_backoff: Duration::from_millis(50),
-                },
-            )
-            .await =>
-        {
-            Ok(Some(state.graphql))
-        }
-        _ => Ok(None),
-    }
+/// One bounded public lifecycle probe. Protected GraphQL queries require a
+/// client identity, so an anonymous query cannot establish service readiness.
+/// Observing readiness grants no document access.
+pub async fn serving_status(graphql: &str) -> Option<serde_json::Value> {
+    let payload = tokio::time::timeout(
+        Duration::from_secs(2),
+        gents::client_runtime::fetch_runtime_connection_payload(graphql),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    ObservedServeLifecycle::observe(&payload)
+        .is_ready()
+        .then_some(payload)
 }
+
+/// Bind the public readiness observation to the Node recorded by this home;
+/// no client identity is loaded for an availability decision.
+pub(crate) async fn answering_graphql(home: &Path) -> Result<Option<String>> {
+    let Some(state) = read_runtime_state(home)? else {
+        return Ok(None);
+    };
+    let ready = serving_status(&state.graphql).await.is_some_and(|payload| {
+        served_identity(Some(&state.node_did), &payload) == ServedIdentity::Matches
+    });
+    Ok(ready.then_some(state.graphql))
+}
+
 fn local_service(home: &Path, executable: &Path) -> Result<Option<NativeServiceManager>> {
     if NativeServicePlatform::current().is_err() {
         return Ok(None);

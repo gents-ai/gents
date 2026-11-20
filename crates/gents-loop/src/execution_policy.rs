@@ -190,6 +190,22 @@ mod conformance {
     }
 
     #[test]
+    fn retry_wake_dispatch_follows_the_generated_model() {
+        gents_lean_vocab::families::request_execution_lease_retry_wake_dispatches::replay(|i| {
+            let observed = LeaseObservation {
+                request: if i.processing {
+                    RequestLifecycleState::Processing
+                } else {
+                    RequestLifecycleState::Claimed
+                },
+                generation: if i.owned { "owner" } else { "recovery" },
+                deadline_ms: if i.before_deadline { 11 } else { 10 },
+            };
+            authorize_producer_decision(observed, "owner", 10)
+        });
+    }
+
+    #[test]
     fn native_admission_follows_the_lean_lease_model() {
         gents_lean_vocab::families::request_execution_lease_contracts_admission::replay::<
             RequestLifecycleState,

@@ -1,5 +1,5 @@
 use super::*;
-use gents_desktop_core::client::canonical_output::canonical_live_text;
+use gents_observe::client_projection::canonical_output::canonical_live_text;
 
 fn live_text_hash(value: &str) -> String {
     // FNV-1a: projection-continuity checksum only, not a security primitive.
@@ -43,7 +43,7 @@ fn accepts_live_cursor(base: Option<&str>, current: Option<&str>, terminal: bool
 
 #[allow(clippy::too_many_arguments)]
 pub async fn build_session_live_delta(
-    core: &ClientCore,
+    core: &ClientRuntime,
     session_id: &str,
     node_did: Option<&str>,
     request_id: &str,
@@ -66,7 +66,7 @@ pub async fn build_session_live_delta(
             .operator_observation_graphql(node_did)
             .map(ConfigAccess::Graphql)
             .ok_or_else(|| anyhow::anyhow!("Connect to the runtime to read this session."))?;
-        live_store = gents_desktop_core::client::load_session_request_live_store_on(
+        live_store = gents_observe::client_projection::query::load_session_request_live_store_on(
             &access, &observed, session_id, node_did, request_id,
         )
         .await?;
@@ -146,7 +146,7 @@ pub async fn build_session_live_delta(
 pub(crate) fn build_session_live_delta_from_store(
     request_store: &ClientStore,
     store: &ClientStore,
-    revision: gents_desktop_core::client::StoreProjectionRevision,
+    revision: gents_observe::client_projection::observe::StoreProjectionRevision,
     session_id: &str,
     node_did: Option<&str>,
     request_id: &str,

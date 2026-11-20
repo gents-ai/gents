@@ -4,9 +4,10 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tokio::sync::watch;
 
 use super::core_start::{acquire_client_lifecycle, start_client_core_async, CLIENT_LIFECYCLE_WAIT};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{spawn_client_update_task, ClientStartProgress, DesktopAppState};
 use crate::types::ClientUpdateEvent;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 pub(crate) enum ClientStartRegistration {
     Joined(watch::Receiver<ClientStartProgress>),
@@ -84,7 +85,7 @@ where
 
 pub(super) async fn run_detached_client_start<R>(
     app: AppHandle<R>,
-    paths: gents_desktop_core::client::DesktopPaths,
+    paths: gents_store::client_journal::paths::DesktopPaths,
     progress_tx: watch::Sender<ClientStartProgress>,
 ) where
     R: Runtime,

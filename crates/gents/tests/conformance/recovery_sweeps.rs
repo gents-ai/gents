@@ -1,169 +1,8 @@
 use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use std::collections::BTreeMap;
 use support::agent_requests::{RequestActors, RequestSeed};
 
 const RECOVERY_CREATED_AT: &str = "2026-03-23T00:00:00Z";
-const PLUGIN_JOB_SWEEP_ID: &str = "tool_call_lifecycle_recover_plugin_job_rows";
-
-pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
-    let cases = lean_recovery_sweep_cases();
-    assert_eq!(
-        cases.len(),
-        60,
-        "Lean should emit one row per registered recovery predicate witness"
-    );
-
-    let expected_sweep_ids = [
-        "request_lifecycle_recover_all_requests",
-        "tool_call_lifecycle_recover_all_running_calls",
-        "tool_call_lifecycle_reconcile_orphaned_background_tools",
-        "tool_call_lifecycle_reconcile_background_completion_side_effects",
-        "tool_call_lifecycle_reconcile_terminal_parent_owned_tools",
-        "tool_call_lifecycle_recover_session_message_rows",
-        PLUGIN_JOB_SWEEP_ID,
-        "inference_call_recover_all_stale_calls",
-        "task_hook_recover_interrupted_cleanup",
-        "lifecycle_hook_redrive_owed_deliveries",
-    ]
-    .into_iter()
-    .collect::<BTreeSet<_>>();
-    let actual_sweep_ids = cases
-        .iter()
-        .map(|case| case.sweep_id.as_str())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        actual_sweep_ids, expected_sweep_ids,
-        "Lean recovery sweep registry drifted"
-    );
-    assert_periodic_recovery_registry_matches_lean(cases);
-
-    // Plugin-job rows keep running when a tick re-drives them; their own
-    // consumer drives and checks them.
-    for case in cases
-        .iter()
-        .filter(|case| case.sweep_id != PLUGIN_JOB_SWEEP_ID)
-    {
-        assert_recovery_case_metadata(case);
-        drive_recovery_sweep_case(case).await;
-    }
-}
-
-fn assert_recovery_case_metadata(case: &gents_lean_vocab::LeanRecoverySweepCase) {
-    let expected_cadence = if rust_periodic_recovery_sweep_ids().contains(case.sweep_id.as_str()) {
-        "periodic"
-    } else {
-        "startup"
-    };
-    assert_eq!(case.cadence.as_str(), expected_cadence, "{}", case.name);
-    assert_eq!(
-        case.implementation_status.as_str(),
-        "implemented",
-        "recovery case {} must be implemented before the runtime drive can consume it",
-        case.name
-    );
-    if case.name.ends_with("_deferred") {
-        assert_eq!(case.measure_before, 0, "{}", case.name);
-        assert_eq!(case.measure_after, 0, "{}", case.name);
-        assert_eq!(case.terminal_state, "running", "{}", case.name);
-    } else {
-        assert!(
-            case.measure_before > case.measure_after,
-            "recovery case {} must decrease its measure",
-            case.name
-        );
-        assert_ne!(
-            case.terminal_state.as_str(),
-            "running",
-            "recovery case {} must not leave a stale row running",
-            case.name
-        );
-    }
-    assert_eq!(
-        case.measure_after, 0,
-        "recovery case {} must reach zero measure",
-        case.name
-    );
-    assert!(
-        !case.deadline_audit_ref.trim().is_empty(),
-        "recovery case {} must name its audit reference",
-        case.name
-    );
-}
-
-fn assert_periodic_recovery_registry_matches_lean(
-    cases: &[gents_lean_vocab::LeanRecoverySweepCase],
-) {
-    let mut lean_periodic_by_id = BTreeMap::new();
-    for case in cases.iter().filter(|case| case.cadence == "periodic") {
-        if let Some(previous) =
-            lean_periodic_by_id.insert(case.sweep_id.as_str(), case.rust_function.as_str())
-        {
-            assert_eq!(
-                previous,
-                case.rust_function.as_str(),
-                "Lean emitted conflicting Rust functions for periodic recovery sweep {}",
-                case.sweep_id
-            );
-        }
-    }
-
-    let mut rust_periodic_by_id = BTreeMap::new();
-    for metadata in gents_toolcalls::call::periodic_recovery::periodic_recovery_sweep_metadata() {
-        assert!(
-            !metadata.sweep_ids.is_empty(),
-            "periodic recovery registry entry {} must name at least one Lean sweep id",
-            metadata.rust_function
-        );
-        for sweep_id in metadata.sweep_ids {
-            assert!(
-                rust_periodic_by_id
-                    .insert(*sweep_id, metadata.rust_function)
-                    .is_none(),
-                "periodic recovery sweep id {sweep_id} registered more than once"
-            );
-        }
-    }
-
-    assert_eq!(
-        rust_periodic_by_id.keys().copied().collect::<BTreeSet<_>>(),
-        lean_periodic_by_id.keys().copied().collect::<BTreeSet<_>>(),
-        "Rust periodic recovery registry drifted from Lean cadence=periodic sweeps"
-    );
-    for (sweep_id, rust_function) in rust_periodic_by_id {
-        assert_eq!(
-            Some(&rust_function),
-            lean_periodic_by_id.get(sweep_id),
-            "periodic recovery registry Rust function drifted for {sweep_id}"
-        );
-    }
-}
-
-fn rust_periodic_recovery_sweep_ids() -> BTreeSet<&'static str> {
-    gents_toolcalls::call::periodic_recovery::periodic_recovery_sweep_metadata()
-        .iter()
-        .flat_map(|metadata| metadata.sweep_ids.iter().copied())
-        .collect()
-}
-
-async fn drive_recovery_sweep_case(case: &gents_lean_vocab::LeanRecoverySweepCase) {
-    if case.collection == "AgentToolCall" {
-        return;
-    }
-    if case.collection == "TaskHookRecord" {
-        return;
-    }
-    // Owed-delivery rows are driven through the production record by
-    // `owed_delivery_traces_follow_the_lean_model`.
-    if case.collection == "OwedDelivery" {
-        return;
-    }
-    match (case.collection.as_str(), case.sweep_id.as_str()) {
-        ("AgentRequest", _) => drive_request_recovery_case(case).await,
-        ("InferenceCall", _) => drive_inference_call_recovery_case(case).await,
-        (other, _) => panic!("unhandled recovery collection {other} for {}", case.name),
-    }
-}
 
 pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     let db = test_db("startup-recovery-order-1001").await;
@@ -360,110 +199,107 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
     }
 }
 
-async fn drive_request_recovery_case(case: &gents_lean_vocab::LeanRecoverySweepCase) {
-    let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
-    let actors = RequestActors::new(&db).await;
-    let request_id = format!("{}-request", case.name);
-    let session_id = format!("{}-session", case.name);
-    let doc_id = seed_scoped_request(&actors, &request_id, &session_id, "processing").await;
-    seed_expired_execution_tuple(&actors, &doc_id).await;
-    seed_recovery_session(
-        &actors,
-        &session_id,
-        Some("recovery request"),
-        &doc_id,
-        &request_id,
-    )
-    .await;
-    actors
-        .set_lifecycle_state(
-            &doc_id,
-            RequestLifecycleState::parse(&case.pre_state).expect("Lean pre-state"),
-        )
-        .await;
-    if case.terminal_state == "interrupted" {
-        actors
-            .set_interrupt_requested_at(&doc_id, "2026-07-09T00:00:00Z")
-            .await;
-    }
-
-    let report = RequestLifecycle::recover_all_with_identities(
-        &db.node,
-        db.node_identity.did(),
-        std::slice::from_ref(actors.agent()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        report.requests_recovered, 1,
-        "request recovery case {} should recover one request",
-        case.name
-    );
-
-    let row = fetch_request_recovery_row(&actors, &request_id).await;
-    assert_eq!(
-        row.lifecycle_state.as_str(),
-        case.terminal_state.as_str(),
-        "request recovery case {} terminal state drifted",
-        case.name
-    );
+fn recovered(count: usize) -> u64 {
+    u64::try_from(count).expect("a recovery count fits u64")
 }
 
-async fn drive_inference_call_recovery_case(case: &gents_lean_vocab::LeanRecoverySweepCase) {
-    let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
-    let actors = RequestActors::new(&db).await;
-    let request_id = format!("{}-request", case.name);
-    let session_id = format!("{}-session", case.name);
-    let parent_doc_id = seed_scoped_request(&actors, &request_id, &session_id, "processing").await;
-    // The call binds to its session while the parent is live; the parent then
-    // reaches the case's state.
-    insert_scoped_inference_call(
-        &actors,
-        &parent_doc_id,
-        &request_id,
-        &session_id,
-        case.pre_state.as_str(),
-    )
-    .await;
-    let parent_state = match case.name.as_str() {
-        "inference_interrupted_parent_to_cancelled" => RequestLifecycleState::Interrupted,
-        "inference_queued_stale_to_cancelled" | "inference_running_stale_to_failed" => {
-            RequestLifecycleState::Completed
-        }
-        other => panic!("unhandled inference recovery case {other}"),
-    };
-    actors
-        .set_lifecycle_state(&parent_doc_id, parent_state)
+pub(super) async fn generated_request_recovery_cases_drive_request_owner() {
+    for case in gents_lean_vocab::families::recovery_sweeps_request::cases() {
+        let input = &case.input;
+        let db = test_db(&format!("recovery-sweep-{}", input.name)).await;
+        let actors = RequestActors::new(&db).await;
+        let request_id = format!("{}-request", input.name);
+        let session_id = format!("{}-session", input.name);
+        let doc_id = seed_scoped_request(&actors, &request_id, &session_id, "processing").await;
+        seed_expired_execution_tuple(&actors, &doc_id).await;
+        seed_recovery_session(
+            &actors,
+            &session_id,
+            Some("recovery request"),
+            &doc_id,
+            &request_id,
+        )
         .await;
+        actors
+            .set_lifecycle_state(
+                &doc_id,
+                RequestLifecycleState::parse(&input.pre_state).expect("Lean pre-state"),
+            )
+            .await;
+        if input.interrupt_requested {
+            actors
+                .set_interrupt_requested_at(&doc_id, "2026-07-09T00:00:00Z")
+                .await;
+        }
+        let recover = || {
+            RequestLifecycle::recover_all_with_identities(
+                &db.node,
+                db.node_identity.did(),
+                std::slice::from_ref(actors.agent()),
+            )
+        };
+        let first = recover().await.unwrap();
+        let row = fetch_request_recovery_row(&actors, &request_id).await;
+        let second = recover().await.unwrap();
+        case.check(gents_lean_vocab::families::recovery_sweeps_request::Swept {
+            terminal_state: row.lifecycle_state.as_str().to_owned(),
+            measure_before: recovered(first.requests_recovered),
+            measure_after: recovered(second.requests_recovered),
+        });
+    }
+}
 
-    let report = InferenceCall::recover_all_with_identities(
-        &db.node,
-        db.node_identity.did(),
-        std::slice::from_ref(actors.agent()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        report.calls_recovered, 1,
-        "inference recovery case {} should recover one call",
-        case.name
-    );
-
-    let row = fetch_inference_recovery_row(&actors, &request_id).await;
-    assert_eq!(
-        row.call_state.as_str(),
-        case.terminal_state.as_str(),
-        "inference recovery case {} terminal state drifted",
-        case.name
-    );
-    let terminal_row = InferenceCallSlotRow::new(BACKEND_ID, row.call_state.as_str());
-    assert_eq!(slot_contribution(terminal_row, BACKEND_ID), 0);
-    assert_eq!(
-        reconstructed_running_slot_count([terminal_row], BACKEND_ID),
-        0,
-        "terminal InferenceCall recovery case {} must reconstruct zero running slots",
-        case.name
-    );
+pub(super) async fn generated_inference_recovery_cases_drive_inference_owner() {
+    for case in gents_lean_vocab::families::recovery_sweeps_inference::cases() {
+        let input = &case.input;
+        let db = test_db(&format!("recovery-sweep-{}", input.name)).await;
+        let actors = RequestActors::new(&db).await;
+        let request_id = format!("{}-request", input.name);
+        let session_id = format!("{}-session", input.name);
+        let parent_doc_id =
+            seed_scoped_request(&actors, &request_id, &session_id, "processing").await;
+        insert_scoped_inference_call(
+            &actors,
+            &parent_doc_id,
+            &request_id,
+            &session_id,
+            input.pre_state.as_str(),
+        )
+        .await;
+        let parent_state = if input.cause == "interruptedParent" {
+            RequestLifecycleState::Interrupted
+        } else {
+            RequestLifecycleState::Completed
+        };
+        actors
+            .set_lifecycle_state(&parent_doc_id, parent_state)
+            .await;
+        let recover = || {
+            InferenceCall::recover_all_with_identities(
+                &db.node,
+                db.node_identity.did(),
+                std::slice::from_ref(actors.agent()),
+            )
+        };
+        let first = recover().await.unwrap();
+        let row = fetch_inference_recovery_row(&actors, &request_id).await;
+        let second = recover().await.unwrap();
+        let terminal_row = InferenceCallSlotRow::new(BACKEND_ID, row.call_state.as_str());
+        assert_eq!(slot_contribution(terminal_row, BACKEND_ID), 0);
+        assert_eq!(
+            reconstructed_running_slot_count([terminal_row], BACKEND_ID),
+            0,
+            "terminal InferenceCall recovery case {} must reconstruct zero running slots",
+            input.name
+        );
+        case.check(
+            gents_lean_vocab::families::recovery_sweeps_inference::Swept {
+                terminal_state: row.call_state,
+                measure_before: recovered(first.calls_recovered),
+                measure_after: recovered(second.calls_recovered),
+            },
+        );
+    }
 }
 
 async fn seed_scoped_request(

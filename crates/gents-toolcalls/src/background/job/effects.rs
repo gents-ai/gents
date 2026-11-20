@@ -180,20 +180,25 @@ pub(crate) async fn stage_recorded_effects_in_txn(
         *seen += 1;
         let session_id = job_session_id(&job.row.root, &slot, attempt);
         let hop = message_hop(txn, job, &target.0, &session_id).await?;
+        let (node_did, agent_did) = target;
         staged.push(
             stage_request(
                 txn,
                 job.goals,
                 job.cause,
-                &target.0,
-                &target.1,
-                session_id,
-                &message.text,
-                None,
-                job_message_key(&job.row.root, &slot, attempt, k),
-                hop,
-                None,
-                true,
+                StagedRequest {
+                    target: SessionMessageTarget {
+                        node_did,
+                        agent_did,
+                        session_id,
+                    },
+                    content: &message.text,
+                    title: None,
+                    retry_key: job_message_key(&job.row.root, &slot, attempt, k),
+                    hop,
+                    cwd: None,
+                    existing_destination: true,
+                },
             )
             .await?,
         );
@@ -290,15 +295,19 @@ async fn stage_spawn(
         txn,
         job.goals,
         job.cause,
-        &node_did,
-        &agent_did,
-        job_session_id(&job.row.root, &spawn.slot, spawn.attempt),
-        &spawn.prompt,
-        Some(spawn.title.as_str()),
-        job_spawn_key(&job.row.root, &spawn.slot, spawn.attempt),
-        hop,
-        cwd,
-        false,
+        StagedRequest {
+            target: SessionMessageTarget {
+                node_did,
+                agent_did,
+                session_id: job_session_id(&job.row.root, &spawn.slot, spawn.attempt),
+            },
+            content: &spawn.prompt,
+            title: Some(spawn.title.as_str()),
+            retry_key: job_spawn_key(&job.row.root, &spawn.slot, spawn.attempt),
+            hop,
+            cwd,
+            existing_destination: false,
+        },
     )
     .await
 }
@@ -319,26 +328,41 @@ async fn message_hop(
     ))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fields of the staged AgentRequest"
-)]
+/// One AgentRequest a job stages: the session it is delivered to, its
+/// message and title, its retry key and hop, the cwd it runs in, and whether
+/// the destination session already exists.
+pub struct StagedRequest<'a> {
+    pub target: SessionMessageTarget,
+    pub content: &'a str,
+    pub title: Option<&'a str>,
+    pub retry_key: String,
+    pub hop: u32,
+    pub cwd: Option<String>,
+    pub existing_destination: bool,
+}
+
 async fn stage_request(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     goals: &dyn gents_session::session::message::SessionMessageGoals,
     cause: &SessionMessageCause,
-    node_did: &str,
-    agent_did: &str,
-    session_id: String,
-    content: &str,
-    title: Option<&str>,
-    retry_key: String,
-    hop: u32,
-    cwd: Option<String>,
-    existing_destination: bool,
+    request: StagedRequest<'_>,
 ) -> Result<AgentRequestCreate> {
+    let StagedRequest {
+        target,
+        content,
+        title,
+        retry_key,
+        hop,
+        cwd,
+        existing_destination,
+    } = request;
+    let SessionMessageTarget {
+        node_did,
+        agent_did,
+        session_id,
+    } = &target;
     anyhow::ensure!(
-        node_did == cause.caller_node_did,
+        *node_did == cause.caller_node_did,
         "cross-runtime agent delivery is not supported; a job stages requests only on its own runtime"
     );
     let existing = one_request(txn, &retry_key).await?;
@@ -360,7 +384,7 @@ async fn stage_request(
             .prepare_goal_input_in_txn(
                 txn,
                 node_did,
-                &session_id,
+                session_id,
                 agent_did,
                 Some(&cause.caller_agent_did),
                 input,
@@ -371,69 +395,41 @@ async fn stage_request(
     let signer = txn
         .managed_agent_signer()
         .context("plugin job message requires a managed Agent signer")?;
-    let create =
-        gents_session::request::lifecycle::materialize::build_session_message_request_with_input(
-            cause,
-            &SessionMessageTarget {
-                node_did: node_did.to_owned(),
-                agent_did: agent_did.to_owned(),
-                session_id: session_id.clone(),
-            },
+    let create = gents_session::request::lifecycle::materialize::build_session_message_request(
+        cause,
+        &target,
+        gents_session::request::lifecycle::materialize::SessionMessageRequest {
             content,
             title,
-            &request_id,
-            Some(retry_key.clone()),
+            request_id: &request_id,
+            retry_key: Some(retry_key.clone()),
             hop,
             input,
-            &signer,
-        )
-        .await?;
+        },
+        &signer,
+    )
+    .await?;
     if let Some(existing) = existing {
         if same_fingerprint(&existing, &create) {
             return Ok(create);
         }
         bail!("job staging integrity error: retry key {retry_key} does not match the admitted request");
     }
-    let plan = gents_session::session::message::Plan::request(session_id, hop, create.clone());
+    let plan =
+        gents_session::session::message::Plan::request(target.session_id, hop, create.clone());
     gents_session::session::message::stage_planned_write_in_txn(txn, goals, cause, &plan).await?;
     Ok(create)
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "fields of the staged AgentRequest"
-)]
 pub async fn stage_request_fixture(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     goals: &dyn gents_session::session::message::SessionMessageGoals,
     cause: &SessionMessageCause,
-    node_did: &str,
-    agent_did: &str,
-    session_id: String,
-    content: &str,
-    title: Option<&str>,
-    retry_key: String,
-    hop: u32,
-    cwd: Option<String>,
-    existing_destination: bool,
+    request: StagedRequest<'_>,
 ) -> Result<AgentRequestCreate> {
-    stage_request(
-        txn,
-        goals,
-        cause,
-        node_did,
-        agent_did,
-        session_id,
-        content,
-        title,
-        retry_key,
-        hop,
-        cwd,
-        existing_destination,
-    )
-    .await
+    stage_request(txn, goals, cause, request).await
 }
 
 type StoredRequest = gents_protocol::row::AgentRequestRow;
@@ -844,6 +840,7 @@ mod tests {
                 (node_did.to_owned(), agent_did.to_owned()),
             )],
             live_background: 0,
+            background_limit: Default::default(),
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),

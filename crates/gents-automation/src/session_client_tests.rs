@@ -54,10 +54,12 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
             let opened = crate::goal::submit_goal_backed_request_with_identity(
                 &node,
                 identity::Did::new(agent.did()).unwrap(),
-                db.node_identity.did(),
-                "task-session",
-                "finish work",
-                None,
+                crate::operations::goal::GoalStart {
+                    node_did: db.node_identity.did(),
+                    session_id: "task-session",
+                    objective: "finish work",
+                    token_budget: None,
+                },
                 &request,
                 Some(agent.as_ref()),
             )
@@ -131,10 +133,12 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
         let submitted = crate::goal::submit_goal_backed_request_with_identity(
             &node,
             identity::Did::new(actor).unwrap(),
-            db.node_identity.did(),
-            "task-session",
-            "finish work",
-            None,
+            crate::operations::goal::GoalStart {
+                node_did: db.node_identity.did(),
+                session_id: "task-session",
+                objective: "finish work",
+                token_budget: None,
+            },
             &attempt,
             Some(signer),
         )
@@ -229,10 +233,12 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
             let retry = crate::goal::submit_goal_backed_request_with_identity(
                 &node,
                 identity::Did::new(agent.did()).unwrap(),
-                db.node_identity.did(),
-                "task-session",
-                "finish work",
-                None,
+                crate::operations::goal::GoalStart {
+                    node_did: db.node_identity.did(),
+                    session_id: "task-session",
+                    objective: "finish work",
+                    token_budget: None,
+                },
                 &request,
                 Some(agent.as_ref()),
             )
@@ -260,7 +266,6 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     let agent = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let sibling = gents_store::identity::provision_agent_identity(&runtime).unwrap();
     let endpoint = db.client_endpoint().to_owned();
-    let relationship_url = endpoint.replace("/graphql", "/acp/node/relationship");
     let endpoint_for = |actor: &KeyIdentity| {
         gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, actor.did())
             .with_client_signing_capability(actor.client_signing_capability().unwrap())
@@ -273,28 +278,21 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
         .await
         .is_err());
     gents_session::test_support::grant_operator_user(&node, &runtime, &user).await;
-    let client = reqwest::Client::new();
+    let runtime_local = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     for did in [
         agent.agent_did.as_str(),
         sibling.agent_did.as_str(),
         other_user.did(),
     ] {
-        for relation in ["read-document", "update-document", "add-dac-relation"] {
-            let response = node_endpoint
-                .authorize(
-                    client
-                        .post(relationship_url.as_str())
-                        .json(&serde_json::json!({"Relation": relation, "TargetActor": did})),
-                )
-                .unwrap()
-                .send()
+        for permission in [
+            gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::DocumentUpdate,
+            gents_store::config_client::NodePermission::DacRelationAdd,
+        ] {
+            runtime_local
+                .grant_node_permission(&did.parse().unwrap(), permission)
                 .await
                 .unwrap();
-            assert!(
-                response.status().is_success(),
-                "{}",
-                response.text().await.unwrap()
-            );
         }
     }
     let schema = "type IdentitySchemaProbe { name: String }";

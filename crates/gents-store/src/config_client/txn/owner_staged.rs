@@ -148,6 +148,17 @@ impl StagedRelation {
                     callback_doc_id: callback_doc_id.clone(),
                 }),
             },
+            OwnerStagedChange::ConfigurationReader {
+                configuration,
+                doc_id,
+                agent_did,
+            } => Self {
+                collection: configuration.collection(),
+                doc_id: doc_id.clone(),
+                relation: "reader",
+                target: actor(agent_did)?,
+                authority: Authority::Configuration(TargetKind::ControlledAgent),
+            },
             OwnerStagedChange::PairingReader {
                 observation,
                 doc_id,
@@ -399,7 +410,7 @@ impl ConfigApplyTxn<'_> {
         if !managed {
             return refused(unmanaged);
         }
-        let context = defra_core::RequestContext::default().with_identity(Some(owner.to_string()));
+        let context = self.request_context(Some(owner.clone()));
         let node = Arc::clone(node);
         let handle = handle.clone();
         let (collection, doc_id, relation, target) = (
@@ -463,8 +474,8 @@ impl ConfigApplyTxn<'_> {
                 requester,
                 &collection,
                 &[doc_id],
-                defra_node::DocumentAccessMode::Named {
-                    permission: "update".into(),
+                defra_node::DocumentAccessMode::Document {
+                    permission: acp::DocumentPermission::Update,
                     node_permission: acp::nac::NodePermission::DocumentUpdate,
                 },
             )
@@ -656,6 +667,7 @@ impl ConfigAccess {
             move |operation, rollback| {
                 let actor = actor.clone();
                 let proof = local.agent_proof.clone();
+                let presented = local.presented_delegation();
                 Box::pin(async move {
                     let mut txn = ConfigApplyTxn::begin_local_owned(
                         local.node(),
@@ -666,6 +678,7 @@ impl ConfigAccess {
                     )
                     .await?;
                     txn.agent_proof = proof;
+                    txn.presented_delegation = presented;
                     Ok(txn)
                 })
             },

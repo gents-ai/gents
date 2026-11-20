@@ -95,13 +95,11 @@ pub async fn ensure_migrations_with_registry(
     validate_client_journal_binding(node, registry)?;
     validate_mailbox_binding(node, registry)?;
     reject_unknown_lineage(node, registry).await?;
-    let file_image_owner = register_file_image_policy(node, registry).await?;
-    register_identity_policy(node, registry).await?;
-    register_client_journal_policy(node, registry).await?;
-    register_mailbox_policy(node, registry).await?;
+    let file_image_owner = validate_file_image_bindings(node, registry)?;
+    crate::node_policies::register(node, registry).await?;
     register_baseline(node, registry, &mut report).await?;
     register_branchable_identity_collection_owners(node, registry).await?;
-    if let Some(owner) = file_image_owner.filter(|_| manages_file_images(registry)) {
+    if let Some(owner) = file_image_owner {
         register_file_image_owner(node, owner, registry).await?;
     }
     let baseline_ready = Instant::now();
@@ -279,32 +277,21 @@ async fn register_branchable_identity_collection_owners(
     Ok(())
 }
 
-async fn register_identity_policy(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
-    if !registry.managed_names().any(|name| {
+pub(crate) fn manages_identity(registry: &Registry<'_>) -> bool {
+    registry.managed_names().any(|name| {
         gents_protocol::schemas::IDENTITY_POLICY_BINDINGS
             .iter()
             .any(|(collection, _)| *collection == name)
-    }) {
-        return Ok(());
-    }
-    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY, AGENT_OWNERSHIP_POLICY_ID};
-    node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
-    let policy = node
-        .add_dac_policy_with_counter_as(&node_context(node), AGENT_OWNERSHIP_POLICY, 0)
-        .await?;
-    if policy != AGENT_OWNERSHIP_POLICY_ID {
-        return Err(Error::IdentityPolicyMismatch);
-    }
-    Ok(())
+    })
 }
 
-fn manages_client_journal(registry: &Registry<'_>) -> bool {
+pub(crate) fn manages_client_journal(registry: &Registry<'_>) -> bool {
     registry
         .managed_names()
         .any(|name| name == gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME)
 }
 
-fn manages_mailbox(registry: &Registry<'_>) -> bool {
+pub(crate) fn manages_mailbox(registry: &Registry<'_>) -> bool {
     registry
         .managed_names()
         .any(|name| name == gents_protocol::schemas::MAILBOX_ITEM_NAME)
@@ -324,20 +311,6 @@ fn validate_mailbox_binding(node: &EmbeddedNode, registry: &Registry<'_>) -> Res
                     collection: MAILBOX_ITEM_NAME.into(),
                 });
             }
-        }
-    }
-    Ok(())
-}
-
-async fn register_mailbox_policy(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
-    use gents_protocol::schemas::{MAILBOX_POLICY, MAILBOX_POLICY_ID};
-    if manages_mailbox(registry) {
-        node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
-        let policy = node
-            .add_dac_policy_with_counter_as(&node_context(node), MAILBOX_POLICY, 0)
-            .await?;
-        if policy != MAILBOX_POLICY_ID {
-            return Err(Error::IdentityPolicyMismatch);
         }
     }
     Ok(())
@@ -364,24 +337,7 @@ fn validate_client_journal_binding(node: &EmbeddedNode, registry: &Registry<'_>)
     Ok(())
 }
 
-async fn register_client_journal_policy(
-    node: &EmbeddedNode,
-    registry: &Registry<'_>,
-) -> Result<()> {
-    use gents_protocol::schemas::{CLIENT_JOURNAL_POLICY, CLIENT_JOURNAL_POLICY_ID};
-    if manages_client_journal(registry) {
-        node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
-        let policy = node
-            .add_dac_policy_with_counter_as(&node_context(node), CLIENT_JOURNAL_POLICY, 0)
-            .await?;
-        if policy != CLIENT_JOURNAL_POLICY_ID {
-            return Err(Error::IdentityPolicyMismatch);
-        }
-    }
-    Ok(())
-}
-
-fn node_context(node: &EmbeddedNode) -> RequestContext {
+pub(crate) fn node_context(node: &EmbeddedNode) -> RequestContext {
     RequestContext::default().with_identity(node.node_identity_did().map(str::to_owned))
 }
 
@@ -393,7 +349,7 @@ const FILE_COLLECTION_POLICIES: &[(&str, bool)] = &[
     (gents_protocol::schemas::FILE_INVENTORY_PROGRESS_NAME, false),
 ];
 
-fn manages_file_images(registry: &Registry<'_>) -> bool {
+pub(crate) fn manages_file_images(registry: &Registry<'_>) -> bool {
     registry.managed_names().any(|name| {
         FILE_COLLECTION_POLICIES
             .iter()
@@ -401,7 +357,7 @@ fn manages_file_images(registry: &Registry<'_>) -> bool {
     })
 }
 
-async fn register_file_image_policy<'n>(
+fn validate_file_image_bindings<'n>(
     node: &'n EmbeddedNode,
     registry: &Registry<'_>,
 ) -> Result<Option<&'n str>> {
@@ -413,18 +369,9 @@ async fn register_file_image_policy<'n>(
             validate_file_image_policy(&collection, *branchable)?;
         }
     }
-    let owner = node.node_identity_did().ok_or(Error::MissingNodeIdentity)?;
-    let policy = node
-        .add_dac_policy_with_counter_as(
-            &node_context(node),
-            gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
-            0,
-        )
-        .await?;
-    if policy != gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID {
-        return Err(Error::FileImagePolicyMismatch);
-    }
-    Ok(Some(owner))
+    Ok(Some(
+        node.node_identity_did().ok_or(Error::MissingNodeIdentity)?,
+    ))
 }
 
 /// Policy bindings are outside the pinned schema version; lineage validation

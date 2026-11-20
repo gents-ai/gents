@@ -47,8 +47,10 @@ impl Limited {
             self.f.identity.did(),
             SESSION,
             PARENT,
-            target,
-            false,
+            crate::goal::AccountMove {
+                target_backend_id: target,
+                move_companions: false,
+            },
             &|_| Ok(Vec::new()),
         )
         .await
@@ -314,8 +316,10 @@ async fn resume_on_counts_the_plugin_slots_of_the_moved_profile() {
         limited.f.identity.did(),
         SESSION,
         PARENT,
-        &limited.b,
-        false,
+        crate::goal::AccountMove {
+            target_backend_id: &limited.b,
+            move_companions: false,
+        },
         &|profile| {
             asked.lock().unwrap().push(profile.to_owned());
             Ok(vec!["team/ocr".into()])
@@ -341,8 +345,10 @@ async fn resume_on_checks_the_session_before_the_switch() {
         limited.f.identity.did(),
         "other-session",
         PARENT,
-        &limited.b,
-        false,
+        crate::goal::AccountMove {
+            target_backend_id: &limited.b,
+            move_companions: false,
+        },
         &|_| Ok(Vec::new()),
     )
     .await

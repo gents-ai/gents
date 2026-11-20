@@ -1,17 +1,18 @@
+use crate::client_runtime::ClientRuntime;
 use anyhow::{ensure, Context, Result};
-use gents_desktop_core::client::ClientCore;
 use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{
     GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView, SessionGoalState,
     SessionGoalView,
 };
 use gents_automation::goal::SessionGoalObservationState;
 use gents_protocol::goal_control::SessionGoalObservation;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 pub async fn session_goal(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
     session_id: &str,
 ) -> Result<SessionGoalState> {
@@ -45,7 +46,7 @@ fn session_goal_state(
 }
 
 fn waiting_question_ids(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
     session_id: &str,
     observation: &SessionGoalObservation,
@@ -118,14 +119,14 @@ fn budget(raw: Option<String>) -> Result<Option<i64>> {
 }
 
 pub async fn control_goal(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: GoalControlRequest,
 ) -> Result<GoalControlResult, BridgeError> {
     control_goal_with_reference(core, request, None).await
 }
 
 pub(super) async fn control_goal_with_reference(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: GoalControlRequest,
     resume: Option<crate::types::GoalSubmissionReceipt>,
 ) -> Result<GoalControlResult, BridgeError> {

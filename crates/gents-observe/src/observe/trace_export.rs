@@ -186,7 +186,6 @@ pub fn raw_message_json(message: &Message) -> Result<Value> {
 
 /// Callers passing a physical request identity exclude its in-flight input row,
 /// which is owned by the request itself.
-#[allow(clippy::too_many_arguments)]
 pub async fn load_trace_transcript(
     access: &gents_store::config_client::ConfigAccess,
     session_id: &str,

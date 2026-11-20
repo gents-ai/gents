@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  projectDeploymentTransportStatus,
+  projectRuntimeConnectionStatus,
   projectDeploymentOperationalState,
   projectSyncOperationalStatus,
   projectRouteOperationalStatus,
@@ -72,11 +72,13 @@ describe("ClientShell presentation agreement", () => {
     const { presentationCases: cases, recoveryCases } =
       await generatedPresentationCases();
     expect(cases).toHaveLength(22);
-    expect(recoveryCases).toHaveLength(16);
+    expect(recoveryCases).toHaveLength(11);
     for (const contractCase of recoveryCases) {
       const actual =
         contractCase.surface === "transport"
-          ? projectDeploymentTransportStatus(contractCase.connected)
+          ? projectRuntimeConnectionStatus(
+              contractCase.connected ? "connected" : "disconnected",
+            )
           : contractCase.surface === "route"
             ? projectRouteOperationalStatus(
                 contractCase.refusal && {
@@ -87,7 +89,7 @@ describe("ClientShell presentation agreement", () => {
             : contractCase.surface === "deploymentError"
               ? projectDeploymentOperationalState({
                   ...deployment,
-                  dialSucceeded: false,
+
                   runtime: {
                     reconcilePhase: null,
                     lastReconcileResult: null,
@@ -99,10 +101,9 @@ describe("ClientShell presentation agreement", () => {
                 }).summary
               : projectSyncOperationalStatus({
                   ...contractCase.sync!,
-                  lastError: null,
+
                   runtimeCount: 1,
                   connectedRuntimeCount: 0,
-                  activationErrorCount: 0,
                 });
       expect(actual.kind, contractCase.name).toBe(contractCase.expected_kind);
       expect(actual.action, contractCase.name).toBe(contractCase.expected_action);

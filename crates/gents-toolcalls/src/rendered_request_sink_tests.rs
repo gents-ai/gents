@@ -209,13 +209,15 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
             Box::pin(async move {
                 gents_session::session::ensure_session_in_txn(
                     txn,
-                    "session",
-                    root.did(),
-                    agent.did(),
-                    None,
-                    None,
-                    None,
-                    "2026-01-01T00:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: "session",
+                        node_did: root.did(),
+                        agent_did: agent.did(),
+                        requester_did: None,
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-01-01T00:00:00Z",
+                    },
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(())
