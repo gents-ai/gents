@@ -4,9 +4,6 @@ const DELIVERED: &str = "completed";
 const PENDING: &str = "completionPending";
 const PENDING_REASON_PREFIX: &str = "completionPending:";
 
-/// `AgentToolCall.status` of a settled call: whether its completion side
-/// effects (notification and wake) are delivered, and the persisted reason
-/// they render while still owed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompletionDelivery<'a> {
     Delivered,
