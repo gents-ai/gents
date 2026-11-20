@@ -156,7 +156,11 @@ impl ClientAccessOwner {
     ) -> Result<ClientAccessReceipt, ClientAccessError> {
         let _decision = self.decisions.lock().await;
         let runtime = self.runtime()?;
-        let existing = retained(&runtime.read(&request_query(&request.request_id)).await?)?;
+        let existing = retained(
+            &runtime
+                .read_for_decision(&request_query(&request.request_id))
+                .await?,
+        )?;
         let same = existing
             .as_ref()
             .map(|row| row.request())
@@ -241,8 +245,12 @@ impl ClientAccessOwner {
         let runtime = self.runtime()?;
         let approver = ConfigAccess::local_as(self.node.clone(), caller.actor().clone())
             .with_client_authorization(caller.clone())?;
-        let existing = retained(&runtime.read(&request_query(&decision.request_id)).await?)?
-            .ok_or(ClientAccessError::Record)?;
+        let existing = retained(
+            &runtime
+                .read_for_decision(&request_query(&decision.request_id))
+                .await?,
+        )?
+        .ok_or(ClientAccessError::Record)?;
         let mut receipt = existing.receipt()?;
         let signed = existing.request()?;
         if receipt.request_id != decision.request_id
