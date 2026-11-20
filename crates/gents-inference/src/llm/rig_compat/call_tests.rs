@@ -148,7 +148,7 @@ async fn codex_calls_sharing_an_affinity_carry_its_session_and_retained_turn_sta
         "chatgpt-oauth-managed",
         crate::clients::chatgpt_codex::default_backend_endpoint(),
         http,
-        crate::clients::chatgpt_codex::build_chatgpt_codex_headers(None, false).unwrap(),
+        crate::clients::chatgpt_codex::build_chatgpt_codex_headers(None, false, None).unwrap(),
     )
     .unwrap();
     let model = client.completion_model("gpt-5-codex");

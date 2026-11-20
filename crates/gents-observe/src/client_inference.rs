@@ -337,6 +337,7 @@ pub async fn discover_models(
         &spec.endpoint,
         api_key,
         credential.as_ref(),
+        None,
     )
     .await;
     let models = match found {
