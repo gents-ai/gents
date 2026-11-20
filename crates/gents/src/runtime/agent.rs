@@ -21,7 +21,8 @@ use gents_inference::resolved::{
     DEFAULT_TITLE_TIMEOUT_SECS,
 };
 use gents_store::identity::{NodeIdentity, RuntimeNode};
-use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::FailurePolicy;
 use gents_tools::mcp::health::HealthCheckerOptions;
 use gents_tools::mcp::pool::McpPool;
 use gents_tools::surface::{
@@ -106,7 +107,7 @@ where
         ),
         background_tool_registry: gents_toolcalls::call::hook::BackgroundToolRegistry::default(),
         background_execution_registry:
-            gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
         startup_barrier: Arc::new(runtime::StartupBarrier::ready_for_test()),
         runtime_status,
         slot_generation: 1,

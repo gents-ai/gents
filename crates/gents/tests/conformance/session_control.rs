@@ -320,9 +320,9 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
                 node_did,
                 &stopped_session,
                 Some(fixture.agent.did()),
-                std::sync::Arc::new(gents_toolcalls::call::hook::RuntimeExecutionWitness {
+                std::sync::Arc::new(gents_toolcalls::call::hook::background_executions::RuntimeExecutionWitness {
                     background_executions:
-                        gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
                     job_driver,
                 }),
             )
@@ -416,9 +416,9 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
                 node_did,
                 &session_id,
                 Some(fixture.agent.did()),
-                std::sync::Arc::new(gents_toolcalls::call::hook::RuntimeExecutionWitness {
+                std::sync::Arc::new(gents_toolcalls::call::hook::background_executions::RuntimeExecutionWitness {
                     background_executions:
-                        gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
                     job_driver: job_driver.clone(),
                 }),
             )

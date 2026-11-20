@@ -38,9 +38,8 @@ use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use gents_session::request::watcher::DefraWatcher;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{NodeIdentity, RuntimeNode};
-use gents_toolcalls::call::hook::{
-    BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::{BackgroundToolRegistry, FailurePolicy};
 use gents_tools::surface::AgentToolSurfaceConfig;
 
 /// Answers every review with `reply`, or by allowing the invocation its

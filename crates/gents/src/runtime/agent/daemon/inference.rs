@@ -463,9 +463,8 @@ pub(super) mod tests {
     use gents_loop::tool::ToolDyn;
     use gents_protocol::row::AgentRequest;
     use gents_store::identity::{NodeIdentity, RuntimeNode};
-    use gents_toolcalls::call::hook::{
-        BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-    };
+    use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+    use gents_toolcalls::call::hook::{BackgroundToolRegistry, FailurePolicy};
     use gents_tools::surface::AgentToolSurfaceConfig;
     use rig::completion::CompletionRequest;
     use std::sync::{atomic::Ordering, Arc};
