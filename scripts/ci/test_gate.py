@@ -283,8 +283,66 @@ class Shards(unittest.TestCase):
         build, run = captured
         self.assertNotIn("--partition", build)
         self.assertEqual(run[run.index("--partition") + 1], f"hash:2/{ROLES['portable']['partitions']}")
+        self.assertEqual(run[run.index("--test-threads") + 1], "8")
         with self.assertRaises(SystemExit):
             gate.run_build(selection, "portable", ROLES["portable"]["partitions"] + 1)
+
+    def test_the_build_jobs_slice_runs_from_its_build_without_an_archive(self):
+        selection = sharded(1, everything=True)
+        captured, listed, prebuilt = [], [], []
+
+        def run(arguments, **options):
+            captured.append((arguments, options))
+            prebuilt.append(os.environ.get("GENTS_TEST_BINARIES_PREBUILT"))
+            return True
+
+        def listing(arguments, source):
+            listed.append((arguments, source))
+            return {package: (0 if package in gate.NO_TESTS else 1, 0) for package in self.PORTABLE}, []
+
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, {"GATE_ARCHIVE_DIR": directory, "GITHUB_ACTIONS": "true",
+                                             "RUNNER_TEMP": directory}), \
+                mock.patch.object(gate, "nextest", run), \
+                mock.patch.object(gate, "sh", lambda *_: self.fail("the in-job build adds no worktree")), \
+                mock.patch.object(gate, "system_preflight", lambda: True), \
+                mock.patch.object(gate.LeanContract, "start", classmethod(lambda cls: None)), \
+                mock.patch.object(gate, "listed_tests", listing), \
+                mock.patch.object(gate, "results", []), contextlib.redirect_stdout(io.StringIO()):
+            os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
+            try:
+                gate.run(selection, "build:portable:2")
+            finally:
+                os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        (build, build_options), (test, test_options) = captured
+        selected = gate.build_arguments(self.PORTABLE)
+        self.assertIn("gents-fs-runner", selected)
+        self.assertEqual(selected[selected.index("--cargo-profile") + 1], gate.ARCHIVE_PROFILE)
+        self.assertEqual(build[:len(selected) + 1], ["list", *selected])
+        self.assertEqual(test[:len(selected) + 1], ["run", *selected])
+        self.assertEqual(test[len(selected) + 1:len(selected) + 3], ["--profile", "ci"])
+        self.assertEqual(listed, [(selected, gate.ROOT)])
+        self.assertNotIn("cwd", build_options)
+        self.assertNotIn("cwd", test_options)
+        self.assertEqual(prebuilt, [None, "1"])
+        for arguments in (build, test):
+            self.assertFalse({"--archive-file", "--workspace-remap"} & set(arguments))
+
+    def test_a_package_breaking_no_tests_stops_the_build_jobs_run(self):
+        selection = sharded(1, everything=True)
+        captured = []
+        tests = {package: (1, 0) for package in self.PORTABLE}
+        with mock.patch.object(gate, "nextest", lambda arguments, **_: captured.append(arguments[0]) or True), \
+                mock.patch.object(gate, "system_preflight", lambda: True), \
+                mock.patch.object(gate.LeanContract, "start", classmethod(lambda cls: None)), \
+                mock.patch.object(gate, "listed_tests", lambda *_: (tests, [])), \
+                mock.patch.object(gate, "results", []) as results, contextlib.redirect_stdout(io.StringIO()):
+            os.environ.pop("GITHUB_ACTIONS", None)
+            gate.run(selection, "build:portable:2")
+            [check] = [result for result in results if result[0] == "check portable build"]
+        self.assertEqual(captured, ["list"])
+        self.assertIn("listed in NO_TESTS", check[1])
 
     def test_the_build_waits_for_the_lean_contract_before_its_tests(self):
         events = []
@@ -310,7 +368,7 @@ class Shards(unittest.TestCase):
                         {package: (0 if package in gate.NO_TESTS else 1, 0) for package in self.PORTABLE}, [])):
                 os.environ.pop("GITHUB_ACTIONS", None)
                 gate.run(selection, "build:portable:1")
-            self.assertEqual(events, ["archive", "wait", "run", "stop"] if built else ["archive", "wait", "stop"])
+            self.assertEqual(events, ["list", "wait", "run", "stop"] if built else ["list", "wait", "stop"])
         workflow = workflow_jobs(CI)["build"]
         self.assertIn("lean-contract: deferred", workflow)
 
