@@ -123,6 +123,8 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         .envs(homes.env())
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&home)
+        .arg("--desktop-home")
+        .arg(homes.desktop_home())
         .args([
             "--tool-package",
             if matches!(

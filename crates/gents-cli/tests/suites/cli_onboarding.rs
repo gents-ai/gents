@@ -275,7 +275,6 @@ enum HomeSelection {
 
 struct ClientIdentityFixture {
     user_home: tempfile::TempDir,
-    identities: tempfile::TempDir,
     other: tempfile::TempDir,
 }
 
@@ -283,13 +282,18 @@ impl ClientIdentityFixture {
     fn new() -> Result<Self> {
         Ok(Self {
             user_home: tempfile::tempdir()?,
-            identities: tempfile::tempdir()?,
             other: tempfile::tempdir()?,
         })
     }
 
     fn key(&self) -> PathBuf {
-        self.identities.path().join("cli/principal.ed25519.key")
+        self.cli_client().identity_key_path().to_path_buf()
+    }
+
+    /// The default CLI client folder under this fixture's `HOME`, which a home
+    /// whose settings record none uses.
+    fn cli_client(&self) -> gents_store::client_journal::paths::DesktopPaths {
+        graphql::cli_client_paths(self.user_home.path(), &[])
     }
 
     fn command(
@@ -301,7 +305,6 @@ impl ClientIdentityFixture {
         let mut process = Command::new(cli_bin());
         process
             .env("HOME", self.user_home.path())
-            .env("GENTS_DESKTOP_HOME", self.identities.path())
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_DATA_HOME")
             .env("RUST_LOG", "error")
@@ -460,9 +463,7 @@ async fn observe_identity(case: &IdentityCase, command: &[&str]) -> Result<&'sta
     };
     place(&other, case.other.0, case.other.1)?;
     let held = if case.key_present {
-        let paths = gents_store::client_journal::paths::DesktopPaths::from_root(
-            fixture.identities.path().join("cli"),
-        );
+        let paths = fixture.cli_client();
         paths.ensure_root_dirs().await?;
         gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(&paths)
             .await?;
@@ -557,10 +558,6 @@ fn first_run_step(user_home: &Path, home: &Path, step: &str, graphql: &str) -> R
             "--nocapture",
         ])
         .env("HOME", user_home)
-        .env(
-            gents_store::client_journal::paths::DESKTOP_HOME_ENV,
-            user_home.join("selected-desktop"),
-        )
         .env(FIRST_RUN_HOME_ENV, home)
         .env(FIRST_RUN_STEP_ENV, step)
         .env(FIRST_RUN_GRAPHQL_ENV, graphql)
@@ -592,13 +589,7 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
         user_home,
         port,
         &["--home", home.to_str().context("home path")?],
-        &[(
-            gents_store::client_journal::paths::DESKTOP_HOME_ENV,
-            user_home
-                .join("selected-desktop")
-                .to_str()
-                .context("desktop root path")?,
-        )],
+        &[],
     )?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(
@@ -614,6 +605,11 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
     anyhow::ensure!(
         desktop.cli_client().identity_key_path().is_file(),
         "the selected desktop root has no administrator key"
+    );
+    anyhow::ensure!(
+        stored.client_identity.as_deref().map(Path::new) == Some(desktop.cli_client().root()),
+        "the home does not record the client identity that administers it: {:?}",
+        stored.client_identity
     );
     let fallback = if cfg!(target_os = "macos") {
         user_home.join("Library/Application Support/gents/desktop")
@@ -646,41 +642,15 @@ async fn provision_as_the_desktop(home: PathBuf, desktop_root: PathBuf) -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provisioning_refuses_a_desktop_root_the_process_does_not_resolve() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let user_home = tempdir.path();
-    first_run_step(user_home, &user_home.join(".gents"), "foreign-root", "")
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "run by the first-run tests in the fixture's HOME"]
 async fn desktop_first_run_in_fixture_home() -> Result<()> {
     let home = PathBuf::from(std::env::var_os(FIRST_RUN_HOME_ENV).context("fixture home")?);
     let step = std::env::var(FIRST_RUN_STEP_ENV).context("fixture step")?;
-    let resolved = gents_store::client_journal::paths::DesktopPaths::discover()?;
+    let selected = gents_store::client_journal::paths::DesktopPaths::from_root(
+        home.with_file_name("selected-desktop"),
+    );
     if step == "provision" {
-        return provision_as_the_desktop(home, resolved.root().to_path_buf()).await;
-    }
-    if step == "foreign-root" {
-        let foreign = home.with_file_name("another-desktop");
-        let refusal = provision_as_the_desktop(home.clone(), foreign.clone())
-            .await
-            .expect_err("a desktop root this process does not resolve is refused");
-        let refusal = format!("{refusal:#}");
-        anyhow::ensure!(
-            refusal.contains(gents_store::client_journal::paths::DESKTOP_HOME_ENV)
-                && refusal.contains(&foreign.display().to_string()),
-            "the refusal does not name the root to start with: {refusal}"
-        );
-        anyhow::ensure!(
-            !resolved.cli_client().root().exists() && !foreign.exists(),
-            "a refused provisioning wrote a client key"
-        );
-        anyhow::ensure!(
-            gents_service::home_state::read_init_config(&home)?.is_none(),
-            "a refused provisioning initialized the home"
-        );
-        return Ok(());
+        return provision_as_the_desktop(home, selected.root().to_path_buf()).await;
     }
     let graphql = std::env::var(FIRST_RUN_GRAPHQL_ENV).context("fixture graphql")?;
     let stored = gents_service::home_state::read_init_config(&home)?.context("initialized home")?;
@@ -688,7 +658,7 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
     let user = gents_service::home_state::client_identity_for(&home).await?;
     let desktop_user =
         gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
-            &resolved.cli_client(),
+            &selected.cli_client(),
         )?;
     anyhow::ensure!(
         desktop_user.did() == user.did(),

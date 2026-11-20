@@ -79,9 +79,9 @@ import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 const root = process.argv[2];
-const result = spawnSync(`${root}/Gents.app/Contents/MacOS/gents-desktop-tauri`, [], {
+const result = spawnSync(`${root}/Gents.app/Contents/MacOS/gents-desktop-tauri`, ['--desktop-home', `${root}/desktop`], {
   cwd: root,
-  env: { ...process.env, HOME: root, GENTS_DESKTOP_HOME: `${root}/desktop` },
+  env: { ...process.env, HOME: root },
   encoding: 'utf8', timeout: 20000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024,
 });
 const log = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;

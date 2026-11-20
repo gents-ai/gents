@@ -244,6 +244,11 @@ pub(crate) struct InitArgs {
         help = "Pack registry base URL, used by the Engineer's core pack installs. Defaults to the public registry"
     )]
     pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Desktop client state whose cli folder holds the client identity that administers this home; recorded in the home. Defaults to the platform's app data folder"
+    )]
+    pub(crate) desktop_home: Option<PathBuf>,
 }
 
 impl InitArgs {

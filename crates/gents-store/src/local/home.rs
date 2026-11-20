@@ -7,7 +7,7 @@ mod test_guard;
 
 pub use init_config::{
     default_key_path, ensure_home_identity_can_serve, init_config_path, keys_dir, read_init_config,
-    write_init_config, StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND,
+    recorded_client_identity, write_init_config, StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND,
 };
 pub use lock::{
     acquire_home_store, acquire_store, acquire_store_at, lock_home_store, lock_store,

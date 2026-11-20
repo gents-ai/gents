@@ -306,7 +306,7 @@ pub async fn home_graphql_endpoint(
     home_dir: &Path,
     url: impl Into<String>,
 ) -> Result<GraphqlEndpoint> {
-    home_graphql_endpoint_with_paths(home_dir, url, &cli_identity_paths()?).await
+    home_graphql_endpoint_with_paths(home_dir, url, &cli_identity_paths(home_dir)?).await
 }
 
 async fn home_graphql_endpoint_with_paths(
@@ -353,26 +353,31 @@ fn client_signed_endpoint(
     )?)
 }
 
-/// The CLI is a separate client principal, even when desktop and CLI share a user home.
-pub fn cli_identity_paths() -> Result<gents_store::client_journal::paths::DesktopPaths> {
-    Ok(cli_identity_paths_under(&desktop_paths()?))
+/// The CLI client identity that administers `home`: the folder its settings
+/// record (`init --desktop-home`), else the default desktop home's `cli`
+/// folder. The CLI is a separate client principal, even when desktop and CLI
+/// share a user home. The identity follows the home, never the environment, so
+/// a command given `--home` signs with the key that home was set up with.
+pub fn cli_identity_paths(home: &Path) -> Result<gents_store::client_journal::paths::DesktopPaths> {
+    match gents_store::local::home::recorded_client_identity(home) {
+        Some(recorded) => Ok(gents_store::client_journal::paths::DesktopPaths::from_root(
+            recorded,
+        )),
+        None => default_cli_identity_paths(),
+    }
 }
 
-/// Unit tests share one throwaway CLI client home; see [`use_unit_test_homes`].
-fn desktop_paths() -> Result<gents_store::client_journal::paths::DesktopPaths> {
+/// The CLI client identity under the default desktop home. Unit tests share
+/// one throwaway CLI client home; see [`use_unit_test_homes`].
+pub fn default_cli_identity_paths() -> Result<gents_store::client_journal::paths::DesktopPaths> {
     #[cfg(any(test, feature = "test-home-guard"))]
     if let Some(homes) = unit_test_homes() {
         return Ok(gents_store::client_journal::paths::DesktopPaths::from_root(
             homes.path().join("desktop"),
-        ));
+        )
+        .cli_client());
     }
-    gents_store::client_journal::paths::DesktopPaths::discover()
-}
-
-fn cli_identity_paths_under(
-    desktop: &gents_store::client_journal::paths::DesktopPaths,
-) -> gents_store::client_journal::paths::DesktopPaths {
-    desktop.cli_client()
+    Ok(gents_store::client_journal::paths::DesktopPaths::platform_default()?.cli_client())
 }
 
 /// The CLI's held User key signs every client-authored command; a registry
@@ -381,7 +386,7 @@ pub fn held_client_identity(
     home: &Path,
     actor_did: &str,
 ) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
-    let identity = existing_client_identity(home, &cli_identity_paths()?)?;
+    let identity = existing_client_identity(home, &cli_identity_paths(home)?)?;
     anyhow::ensure!(
         identity.did() == actor_did,
         "the GraphQL endpoint is not authenticated as this CLI's client identity"
@@ -506,12 +511,14 @@ pub async fn client_identity_for(
 > {
     client_identity_in(
         home,
-        &cli_identity_paths().map_err(ClientIdentityError::load)?,
+        &cli_identity_paths(home).map_err(ClientIdentityError::load)?,
     )
     .await
 }
 
-async fn client_identity_in(
+/// [`client_identity_for`] with the identity folder `paths`, which `init`
+/// passes before it records the folder in the home's settings.
+pub async fn client_identity_in(
     home: &Path,
     paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> std::result::Result<
@@ -537,14 +544,16 @@ async fn client_identity_in(
     load_or_create_client_identity(paths).await
 }
 
-/// `init` creating a new Node's store: the Node it makes is owned by this
-/// identity, so creating one is part of setting the home up.
-pub async fn client_identity_for_new_node() -> std::result::Result<
+/// `init` creating a new Node's store with the identity folder `paths`: the
+/// Node it makes is owned by this identity, so creating one is part of setting
+/// the home up.
+pub async fn client_identity_for_new_node(
+    paths: &gents_store::client_journal::paths::DesktopPaths,
+) -> std::result::Result<
     gents_store::client_journal::principal_identity::PrincipalIdentity,
     ClientIdentityError,
 > {
-    let paths = cli_identity_paths().map_err(ClientIdentityError::load)?;
-    load_or_create_client_identity(&paths).await
+    load_or_create_client_identity(paths).await
 }
 
 async fn load_or_create_client_identity(
@@ -631,7 +640,7 @@ mod tests {
     async fn cli_and_desktop_keep_distinct_stable_identities() {
         let home = tempfile::tempdir().unwrap();
         let desktop = gents_store::client_journal::paths::DesktopPaths::from_root(home.path());
-        let cli = super::cli_identity_paths_under(&desktop);
+        let cli = desktop.cli_client();
         desktop.ensure_root_dirs().await.unwrap();
         cli.ensure_root_dirs().await.unwrap();
         let desktop_identity =

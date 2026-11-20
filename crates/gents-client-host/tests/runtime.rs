@@ -539,6 +539,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .env("RUST_LOG", "warn,gents_server::commands::init=info")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
+        .arg("--desktop-home")
+        .arg(homes.desktop_home())
         .args([
             "--tool-package",
             if journey.editor_scenario().is_some() {

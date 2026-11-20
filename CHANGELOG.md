@@ -12,6 +12,15 @@ source consistency checks, not a separate runtime compatibility version.
   `gents config pack starter`, `pack prune` and `automation job promote` gain
   `--registry`, as every other pack and plugin command has. Without the flag
   the public registry is used (#1764).
+- Breaking: `GENTS_DESKTOP_HOME` is no longer read. The desktop app takes a
+  `--desktop-home PATH` launch argument, and `gents-desktop init`,
+  `gents-client-host --home` and `gents runtime desktop reset --desktop-home`
+  keep theirs; without one the platform's application data folder is used.
+  `gents init --desktop-home PATH` keeps the CLI client identity that
+  administers the new home in `PATH/cli` and records that folder in the home's
+  `init.json` (`client_identity`), so every later command given that home
+  signs with it on any platform. Desktop provisioning passes its own desktop
+  home this way instead of refusing a root the process did not resolve (#1764).
 - Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
   node home; without it commands use the folder chosen at setup, then `~/.gents`
   (Lean `HomeResolution`). The macOS uninstall script takes `--home DIR` and

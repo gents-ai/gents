@@ -67,7 +67,7 @@ export async function createIosReconnectFixture(
   const root = await mkdtemp(join(artifactRoot, "reconnect-runtime-"));
   const home = join(root, "node");
   const owner = join(root, "owner");
-  const env = { ...process.env, GENTS_DESKTOP_HOME: owner, RUST_LOG: "info" };
+  const env = { ...process.env, RUST_LOG: "info" };
   let server;
   let proxy;
   let log;
@@ -108,6 +108,8 @@ export async function createIosReconnectFixture(
           "init",
           "--home",
           home,
+          "--desktop-home",
+          owner,
           "--store-key-custody",
           "file",
           "--node-name",

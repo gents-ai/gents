@@ -914,6 +914,7 @@ mod tests {
                     .unwrap(),
                 ),
                 document_acp: Default::default(),
+                client_identity: None,
             },
         )
         .unwrap();
@@ -974,6 +975,7 @@ mod tests {
                     .unwrap(),
                 ),
                 document_acp: Default::default(),
+                client_identity: None,
             },
         )
         .unwrap();
@@ -994,9 +996,11 @@ mod tests {
     /// its config, store key and a fresh protected store whose provenance
     /// names the runtime.
     async fn initialized_home_with_store(temp: &Path) -> PathBuf {
-        let client = gents_service::home_state::client_identity_for_new_node()
-            .await
-            .unwrap();
+        let client = gents_service::home_state::client_identity_for_new_node(
+            &gents_service::home_state::default_cli_identity_paths().unwrap(),
+        )
+        .await
+        .unwrap();
         let home = initialized_home(temp);
         let config = read_init_config(&home).unwrap().unwrap();
         let identity = load_initialized_home_identity(&home, &config).unwrap();
@@ -1092,9 +1096,11 @@ mod tests {
 
     #[tokio::test]
     async fn an_offline_access_refuses_an_unfinished_vera_home_without_writing_to_it() {
-        gents_service::home_state::client_identity_for_new_node()
-            .await
-            .unwrap();
+        gents_service::home_state::client_identity_for_new_node(
+            &gents_service::home_state::default_cli_identity_paths().unwrap(),
+        )
+        .await
+        .unwrap();
         let temp = tempfile::tempdir().unwrap();
         let home = initialized_home(temp.path());
         let mut config = read_init_config(&home).unwrap().unwrap();

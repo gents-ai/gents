@@ -72,7 +72,6 @@ async fn reset(
 ) -> Result<ManagedServerResetResult> {
     let desktop = select_desktop(
         desktop_home,
-        std::env::var_os(gents_store::client_journal::paths::DESKTOP_HOME_ENV),
         &std::env::current_dir().context("resolving current directory")?,
     )?;
     let home = match home {
@@ -178,15 +177,8 @@ fn retire_then_clear(
     Ok(result)
 }
 
-fn select_desktop(
-    flag: Option<std::path::PathBuf>,
-    env: Option<std::ffi::OsString>,
-    cwd: &std::path::Path,
-) -> Result<DesktopPaths> {
-    let root = match flag.or_else(|| env.filter(|value| !value.is_empty()).map(Into::into)) {
-        Some(root) => root,
-        None => DesktopPaths::discover()?.root().to_path_buf(),
-    };
+fn select_desktop(flag: Option<std::path::PathBuf>, cwd: &std::path::Path) -> Result<DesktopPaths> {
+    let root = DesktopPaths::resolve(flag)?.root().to_path_buf();
     Ok(DesktopPaths::from_root(cwd.join(root)))
 }
 
@@ -538,10 +530,10 @@ mod tests {
     }
 
     #[test]
-    fn an_env_selected_relative_desktop_is_retried_from_another_directory() {
+    fn a_relative_desktop_flag_is_retried_from_another_directory() {
         let temp = tempfile::tempdir().unwrap();
         let (first, second) = (temp.path().join("first"), temp.path().join("second"));
-        let selected = select_desktop(None, Some("rel/desktop".into()), &first).unwrap();
+        let selected = select_desktop(Some("rel/desktop".into()), &first).unwrap();
         assert_eq!(selected.root(), first.join("rel/desktop"));
         let retry = retry_command(&temp.path().join("home"), selected.root()).unwrap();
         let Some(crate::cli::Command::Runtime {
@@ -555,7 +547,7 @@ mod tests {
         else {
             panic!("the retry is not a desktop reset: {retry}");
         };
-        let retried = select_desktop(desktop_home, None, &second).unwrap();
+        let retried = select_desktop(desktop_home, &second).unwrap();
         assert_eq!(retried.root(), selected.root());
     }
 
