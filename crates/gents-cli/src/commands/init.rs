@@ -1635,6 +1635,8 @@ fn tools_for_package(
                     ..Default::default()
                 }),
                 cli: Vec::new(),
+                max_instruction_chars: None,
+                max_background_tool_calls: None,
             })
         }
     };

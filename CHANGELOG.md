@@ -6,6 +6,17 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
+  background calls one request holds at once: Bash runs, remote service calls
+  and plugin jobs together. The refusal reports the configured limit.
+- Tools `host.max_instruction_chars` (1 to 262,144, unset 32 KiB) bounds the
+  AGENTS.md text an Agent places in its context, from live discovery and from a
+  workspace's frozen instructions alike. A workspace now freezes each
+  instruction file up to 256 KiB, and each reading Agent bounds it.
+- A pack plugin's `limits.max_rounds` (1 to 256) raises its request rounds per
+  invocation above the default of 64; like the other limits, a raise needs
+  consent at install (#1764).
+
 - InferenceBackend `client_version` sets the wire client version that ChatGPT Codex and
   Grok OAuth backends advertise, replacing the `GENTS_CHATGPT_CODEX_CLIENT_VERSION` and
   `GENTS_XAI_GROK_CLIENT_VERSION` environment overrides; unset, each client's built-in
