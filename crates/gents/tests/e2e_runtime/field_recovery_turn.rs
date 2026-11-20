@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use gents_documents::{
     DatastoreToolSurfaceDocument, DatastoreTools, QueryToolDecl, SurfaceToolDecl, Tools,
@@ -83,7 +82,7 @@ async fn writer_recovers_complete_large_task_contract_through_live_tool_calls() 
         Default::default(),
     ).await;
     assert_eq!(
-        wait_for_request_terminal(access, REQUEST, Duration::from_secs(120)).await,
+        wait_for_request_terminal(access, REQUEST).await,
         "completed"
     );
     let rows = access.execute("{ AgentToolCall(filter: {request_id: {_eq: \"live-field-recovery-request\"}, tool_name: {_eq: \"read_work\"}, lifecycle_state: {_eq: \"completed\"}}) {_docID} }").await.unwrap();

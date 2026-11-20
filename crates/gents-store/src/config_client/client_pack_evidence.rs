@@ -147,8 +147,8 @@ pub(super) enum VerifiedPackEvidence {
 pub enum PackEvidenceError {
     #[error("{0}")]
     Config(#[source] Box<ConfigClientError>),
-    #[error("pack mutation does not use a trusted configuration schema")]
-    UnsupportedCollection,
+    #[error("pack mutation on {0} does not use a trusted configuration schema")]
+    UnsupportedCollection(String),
     #[error("pack mutation evidence does not match its operation or actor")]
     Mismatch,
     #[error("building or verifying client create evidence")]
@@ -290,7 +290,8 @@ fn collection(mutation: &PackMutation) -> &str {
 
 fn trusted_schema(mutation: &PackMutation) -> Result<schema::CollectionVersion, PackEvidenceError> {
     let name = collection(mutation);
-    let sdl = trusted_delete_schema(name).ok_or(PackEvidenceError::UnsupportedCollection)?;
+    let sdl = trusted_delete_schema(name)
+        .ok_or_else(|| PackEvidenceError::UnsupportedCollection(name.to_owned()))?;
     Ok(signing_schema(sdl, name)?)
 }
 
@@ -506,6 +507,62 @@ pub(super) async fn verify_pack_evidence(
     .await?
 }
 
+impl ConfigApplyTxn<'_> {
+    /// An update or delete `signer`'s client signed over this transaction's
+    /// snapshot of the document, made as a stored command makes it: by the
+    /// working Agent's transaction for that User.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub async fn apply_stored_user_mutation_for_native_fixture(
+        &self,
+        signer: &ClientSigningCapability,
+        mutation: &PackMutation,
+    ) -> Result<Value, PackEvidenceError> {
+        let (PackMutation::Update { doc_id, .. } | PackMutation::Delete { doc_id, .. }) = mutation
+        else {
+            return Err(PackEvidenceError::Mismatch);
+        };
+        let scope = PackApprovalScope {
+            node_did: "stored".into(),
+            pack_digests: vec!["stored".into()],
+            nonce: "stored".into(),
+        };
+        let evidence = prepare_pack_evidence_observed(
+            signer,
+            &scope,
+            mutation,
+            Some(snapshot(self, doc_id).await?),
+        )
+        .await?;
+        let observed = snapshot(self, doc_id).await?;
+        let schema = trusted_schema(mutation)?;
+        let requested = mutation.clone();
+        let graph = tokio::task::spawn_blocking(move || match (requested, evidence.graph) {
+            (PackMutation::Update { doc_id, input, .. }, PackGraphEvidence::Update(evidence)) => {
+                Ok(VerifiedClientMutation::verify_update(
+                    &storage::Crdts::default(),
+                    &schema,
+                    &doc_id,
+                    &input,
+                    &observed,
+                    evidence,
+                )?)
+            }
+            (PackMutation::Delete { doc_id, .. }, PackGraphEvidence::Delete(evidence)) => Ok(
+                VerifiedClientMutation::verify_delete(&schema, &doc_id, &observed, evidence)?,
+            ),
+            _ => Err(PackEvidenceError::Mismatch),
+        })
+        .await??;
+        apply_pack_evidence(
+            self,
+            mutation,
+            VerifiedPackEvidence::Mutation(Arc::new(graph)),
+        )
+        .await
+    }
+}
+
 /// Apply only the graph verified for this exact plan operation and actor.
 pub(super) async fn apply_pack_evidence(
     txn: &ConfigApplyTxn<'_>,
@@ -537,6 +594,7 @@ pub(super) async fn apply_pack_evidence(
                 &document,
                 &serde_json::json!({"input": input}),
                 graph,
+                crate::config_client::user_write::WriteKind::Update,
             )
             .await?
         }

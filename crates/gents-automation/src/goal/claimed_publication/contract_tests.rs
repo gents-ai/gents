@@ -7,7 +7,9 @@ use serde_json::json;
 
 use gents_protocol::tool_call::AwaitMode;
 use gents_session::request::lifecycle::{ClaimOutcome, RequestTerminalOutcome, TerminalizeResult};
-use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+use gents_toolcalls::call::lifecycle::admission_fixture::{
+    publish_accepted_on_claimed_request, AcceptedFixtureCall,
+};
 use gents_toolcalls::call::lifecycle::SpawnedBackgroundToolAdmission;
 
 use super::super::operator_resume::support::*;
@@ -326,12 +328,14 @@ async fn run_generated_running_wait() {
             fixture.node.clone(),
             &mut request,
             fixture.identity.did(),
-            0,
-            "spawn_process",
-            "goal-spawn",
-            json!({"tool_name":"bash","args":{"command":"sleep 1"}}),
-            AwaitMode::Foreground,
-            true,
+            AcceptedFixtureCall {
+                turn: 0,
+                tool_name: "spawn_process",
+                tool_call_id: "goal-spawn",
+                arguments: json!({"tool_name":"bash","args":{"command":"sleep 1"}}),
+                await_mode: AwaitMode::Foreground,
+                start_running: true,
+            },
         )
         .await
         .unwrap();
@@ -352,12 +356,14 @@ async fn run_generated_running_wait() {
             fixture.node.clone(),
             &mut request,
             fixture.identity.did(),
-            1,
-            "wait_process",
-            "goal-wait",
-            json!({"tool_call_id":handle,"timeout_secs":1}),
-            AwaitMode::Foreground,
-            true,
+            AcceptedFixtureCall {
+                turn: 1,
+                tool_name: "wait_process",
+                tool_call_id: "goal-wait",
+                arguments: json!({"tool_call_id":handle,"timeout_secs":1}),
+                await_mode: AwaitMode::Foreground,
+                start_running: true,
+            },
         )
         .await
         .unwrap();
@@ -520,17 +526,7 @@ async fn run_generated_wait_observations() {
                     let mut older_request = verified_client_lifecycle(&fixture, older).await;
                     assert_eq!(older_request.claim().await.unwrap(), ClaimOutcome::Claimed);
                     let unrelated_handle = "unrelated-background-handle";
-                    let mut unrelated = publish_accepted_on_claimed_request(
-                        fixture.node.clone(),
-                        &mut older_request,
-                        fixture.identity.did(),
-                        0,
-                        "wait_process",
-                        "older-goal-wait",
-                        json!({"tool_call_id":unrelated_handle,"timeout_secs":1}),
-                        AwaitMode::Foreground,
-                        true,
-                    )
+                    let mut unrelated = publish_accepted_on_claimed_request(fixture.node.clone(), &mut older_request, fixture.identity.did(), AcceptedFixtureCall { turn: 0, tool_name: "wait_process", tool_call_id: "older-goal-wait", arguments: json!({"tool_call_id":unrelated_handle,"timeout_secs":1}), await_mode: AwaitMode::Foreground, start_running: true })
                     .await
                     .unwrap();
                     let older_terminal_header = unrelated.accepted_header_doc_id().unwrap().to_owned();
@@ -577,17 +573,7 @@ async fn run_generated_wait_observations() {
                 let mut renamed_wait_doc = None;
                 let mut wait_docs = Vec::new();
                 if wants_target {
-                    let mut spawn = publish_accepted_on_claimed_request(
-                        fixture.node.clone(),
-                        &mut request,
-                        fixture.identity.did(),
-                        turn,
-                        "spawn_process",
-                        "goal-spawn",
-                        json!({"tool_name":"bash","args":{"command":"sleep 1"}}),
-                        AwaitMode::Foreground,
-                        true,
-                    )
+                    let mut spawn = publish_accepted_on_claimed_request(fixture.node.clone(), &mut request, fixture.identity.did(), AcceptedFixtureCall { turn, tool_name: "spawn_process", tool_call_id: "goal-spawn", arguments: json!({"tool_name":"bash","args":{"command":"sleep 1"}}), await_mode: AwaitMode::Foreground, start_running: true })
                     .await
                     .unwrap();
                     handle = format!("spawned:{}", spawn.doc_id().unwrap());
@@ -632,7 +618,7 @@ async fn run_generated_wait_observations() {
                             } else if case.name.starts_with("cancelled_") {
                                 target
                                     .cancel_during_run(
-                                        gents_session::session::tool_call_state::CancelCause::UserCancelled,
+                                        gents_protocol::tool_call::CancelCause::UserCancelled,
                                     )
                                     .await
                                     .unwrap();
@@ -654,17 +640,7 @@ async fn run_generated_wait_observations() {
                     turn += 1;
                 }
                 if case.name == "ambiguous_same_handle_fails_closed" {
-                    let mut duplicate = publish_accepted_on_claimed_request(
-                        fixture.node.clone(),
-                        &mut request,
-                        fixture.identity.did(),
-                        turn,
-                        "bash",
-                        &handle,
-                        json!({"command":"sleep 1"}),
-                        AwaitMode::Foreground,
-                        false,
-                    )
+                    let mut duplicate = publish_accepted_on_claimed_request(fixture.node.clone(), &mut request, fixture.identity.did(), AcceptedFixtureCall { turn, tool_name: "bash", tool_call_id: &handle, arguments: json!({"command":"sleep 1"}), await_mode: AwaitMode::Foreground, start_running: false })
                     .await
                     .unwrap();
                     duplicate.start_running().await.unwrap();
@@ -682,21 +658,11 @@ async fn run_generated_wait_observations() {
                     }
                     let reply = observed_wait.reply.as_str();
                     let malformed_arguments = case.name == "malformed_accepted_wait_error_fails_closed";
-                    let mut wait = publish_accepted_on_claimed_request(
-                        fixture.node.clone(),
-                        &mut request,
-                        fixture.identity.did(),
-                        turn,
-                        "wait_process",
-                        &format!("goal-wait-{index}"),
-                        if malformed_arguments {
+                    let mut wait = publish_accepted_on_claimed_request(fixture.node.clone(), &mut request, fixture.identity.did(), AcceptedFixtureCall { turn, tool_name: "wait_process", tool_call_id: &format!("goal-wait-{index}"), arguments: if malformed_arguments {
                             json!({"tool_call_id":7})
                         } else {
                             json!({"tool_call_id":handle,"timeout_secs":1})
-                        },
-                        AwaitMode::Foreground,
-                        observed_wait.replied,
-                    )
+                        }, await_mode: AwaitMode::Foreground, start_running: observed_wait.replied })
                     .await
                     .unwrap();
                     terminal_header = wait.accepted_header_doc_id().map(str::to_owned);

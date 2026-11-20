@@ -45,15 +45,12 @@ fn local_self_request(
     agent_did: &str,
 ) -> gents_protocol::request_admission::AgentRequestCreate {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        node_did,
-        agent_did,
-        agent_did,
-        session_id,
+        RequestScope::new(node_did, agent_did, agent_did, session_id),
         "work",
         "interactive",
         CONVERGENCE_CREATED_AT,
@@ -139,15 +136,13 @@ async fn create_owned_request(
     node_did: &str,
     lifecycle_state: &str,
 ) -> String {
-    create_owned_request_with_times(
+    create_recovery_request(
         node,
-        agent_did,
         request_id,
         session_id,
         node_did,
+        agent_did,
         lifecycle_state,
-        CONVERGENCE_CREATED_AT,
-        CONVERGENCE_CREATED_AT,
     )
     .await
 }
@@ -207,58 +202,6 @@ async fn seed_owned_request_projection(
         .expect("root writes request-owned session projection");
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn create_owned_request_with_times(
-    node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    lifecycle_state: &str,
-    created_at: &str,
-    terminalized_at: &str,
-) -> String {
-    create_owned_request_with_times_and_requester(
-        node,
-        agent_did,
-        request_id,
-        session_id,
-        node_did,
-        lifecycle_state,
-        created_at,
-        terminalized_at,
-        None,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn create_owned_request_with_times_and_requester(
-    node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    lifecycle_state: &str,
-    created_at: &str,
-    terminalized_at: &str,
-    requester_did: Option<&str>,
-) -> String {
-    create_recovery_request(
-        node,
-        request_id,
-        session_id,
-        node_did,
-        agent_did,
-        lifecycle_state,
-        created_at,
-        terminalized_at,
-        requester_did,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
 async fn create_recovery_request(
     node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
@@ -266,28 +209,25 @@ async fn create_recovery_request(
     node_did: &str,
     agent_did: &str,
     lifecycle_state: &str,
-    created_at: &str,
-    terminalized_at: &str,
-    requester_did: Option<&str>,
 ) -> String {
     let mut input = json!({
         "request_id": request_id,
         "purpose": "normal",
         "node_did": node_did,
-        "requester_did": requester_did,
+        "requester_did": null,
         "agent_did": agent_did,
         "session_id": session_id,
         "retry_root_request": request_id,
         "content": "hello",
         "lifecycle_state": lifecycle_state,
         "execution_origin": "interactive",
-        "created_at": created_at,
+        "created_at": CONVERGENCE_CREATED_AT,
         "retry_count": 0,
         "max_retries": gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
         "request_hop": 0,
     });
     if RequestLifecycleState::is_terminal_str(Some(lifecycle_state)) {
-        input["terminalized_at"] = json!(terminalized_at);
+        input["terminalized_at"] = json!(CONVERGENCE_CREATED_AT);
         input["terminal_redrive_attempts"] = json!(0);
     }
     if matches!(lifecycle_state, "claimed" | "processing") {
@@ -295,28 +235,6 @@ async fn create_recovery_request(
         input["execution_lease_expires_at"] = json!(CONVERGENCE_CREATED_AT);
     }
     root_write_request(node, input, Some(agent_did)).await
-}
-
-async fn create_recovery_request_basic(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-    agent_did: &str,
-    state: &str,
-) -> String {
-    create_recovery_request(
-        node,
-        request_id,
-        session_id,
-        node_did,
-        agent_did,
-        state,
-        CONVERGENCE_CREATED_AT,
-        CONVERGENCE_CREATED_AT,
-        None,
-    )
-    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,14 +250,12 @@ fn coalesce_wakeup_input(session_id: &str) -> String {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn create_queue_request(
     node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
     request_id: &str,
     session_id: &str,
     node_did: &str,
-    execution_origin: &str,
     input: &str,
     created_at: &str,
 ) -> String {
@@ -356,7 +272,7 @@ async fn create_queue_request(
             "content": "wake up",
             "input": queue_input,
             "lifecycle_state": "pending",
-            "execution_origin": execution_origin,
+            "execution_origin": "scheduled",
             "created_at": created_at,
             "retry_count": 0,
             "max_retries": gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
@@ -476,7 +392,7 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
     let owner_did = db.node_identity.did();
     let request_id = "convergence-terminal-repair-request";
     let session_id = "convergence-terminal-repair-session";
-    let request_doc_id = create_recovery_request_basic(
+    let request_doc_id = create_recovery_request(
         &db.node,
         request_id,
         session_id,
@@ -521,7 +437,7 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
 
     let provider_request_id = "convergence-no-interrupt-latch";
     let provider_session_id = "convergence-no-interrupt-latch-session";
-    create_recovery_request_basic(
+    create_recovery_request(
         &db.node,
         provider_request_id,
         provider_session_id,
@@ -556,7 +472,7 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
 
     let runtime_interrupt_request_id = "convergence-runtime-interrupt-stamp";
     let runtime_interrupt_session_id = "convergence-runtime-interrupt-session";
-    let runtime_interrupt_doc_id = create_recovery_request_basic(
+    let runtime_interrupt_doc_id = create_recovery_request(
         &db.node,
         runtime_interrupt_request_id,
         runtime_interrupt_session_id,
@@ -619,7 +535,7 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
     let agent = support::managed_agent(&db).await;
     let owner_did = db.node_identity.did();
 
-    create_recovery_request_basic(
+    create_recovery_request(
         &db.node,
         "convergence-stuck-claimed",
         "convergence-stuck-claimed-session",
@@ -726,15 +642,12 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         ),
     ] {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             request_id,
-            node_did,
-            identity.did(),
-            identity.did(),
-            session_id,
+            RequestScope::new(node_did, identity.did(), identity.did(), session_id),
             "wake up",
             "scheduled",
             created_at,
@@ -828,7 +741,6 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
         "convergence-drain-owner",
         session_id,
         owner_did,
-        "scheduled",
         &input,
         "2026-03-23T00:00:00Z",
     )
@@ -839,7 +751,6 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
         "convergence-drain-foreign",
         session_id,
         &foreign,
-        "scheduled",
         &input,
         "2026-03-23T00:00:01Z",
     )

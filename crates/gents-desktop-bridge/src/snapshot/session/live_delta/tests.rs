@@ -1,5 +1,6 @@
 use super::*;
-use gents_desktop_core::client::{ClientStoreRows, StoreProjectionRevision};
+use gents_observe::client_projection::observe::StoreProjectionRevision;
+use gents_observe::client_projection::store::ClientStoreRows;
 use gents_protocol::output::rows::OutputSegmentRow;
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
@@ -70,21 +71,25 @@ fn cursor(store: &ClientStore) -> String {
 
 fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
     build_session_live_delta_from_store(
-        store,
-        store,
-        StoreProjectionRevision {
-            store_version: 900,
-            provenance_version: 1,
-            request_event_version: 1,
+        LiveDeltaStores {
+            request: store,
+            store,
+            revision: StoreProjectionRevision {
+                store_version: 900,
+                provenance_version: 1,
+                request_event_version: 1,
+            },
         },
         "session",
         Some("node"),
         "logical",
-        cursor,
-        5,
-        "4f9f2cab",
-        0,
-        "811c9dc5",
+        LiveDeltaBase {
+            cursor,
+            content_byte_len: 5,
+            content_hash: "4f9f2cab",
+            reasoning_byte_len: 0,
+            reasoning_hash: "811c9dc5",
+        },
     )
 }
 
@@ -104,7 +109,8 @@ fn observed_store_can_stay_payload_free_while_scoped_rows_produce_a_verified_suf
     let mut rows = rows();
     let initial = ClientStore::from_rows(rows.clone());
     let cursor = cursor(&initial);
-    let observed = gents_desktop_core::client::ObservedStores::new().ensure("did:test:node");
+    let observed =
+        gents_observe::client_projection::observe::ObservedStores::new().ensure("did:test:node");
     observed.replace_snapshot(initial);
     assert!(observed.snapshot().output_segments.is_empty());
     rows.output_segments.push(segment(1, " world 🌍"));
@@ -131,21 +137,25 @@ fn a_lagging_replica_request_row_binds_the_same_cursor_as_the_full_snapshot() {
             .unwrap()
             .cursor;
     let result = build_session_live_delta_from_store(
-        &observed,
-        &fresh,
-        StoreProjectionRevision {
-            store_version: 900,
-            provenance_version: 1,
-            request_event_version: 1,
+        LiveDeltaStores {
+            request: &observed,
+            store: &fresh,
+            revision: StoreProjectionRevision {
+                store_version: 900,
+                provenance_version: 1,
+                request_event_version: 1,
+            },
         },
         "session",
         Some("node"),
         "logical",
-        &snapshot_cursor,
-        5,
-        "4f9f2cab",
-        0,
-        "811c9dc5",
+        LiveDeltaBase {
+            cursor: &snapshot_cursor,
+            content_byte_len: 5,
+            content_hash: "4f9f2cab",
+            reasoning_byte_len: 0,
+            reasoning_hash: "811c9dc5",
+        },
     );
     assert_eq!(result.outcome, "delta");
     assert_eq!(
@@ -217,32 +227,36 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
         .unwrap();
     assert_eq!(content, "hello\r\n\r\n\r\nworld");
     let result = build_session_live_delta_from_store(
-        &store,
-        &store,
-        StoreProjectionRevision {
-            store_version: 1,
-            provenance_version: 1,
-            request_event_version: 1,
+        LiveDeltaStores {
+            request: &store,
+            store: &store,
+            revision: StoreProjectionRevision {
+                store_version: 1,
+                provenance_version: 1,
+                request_event_version: 1,
+            },
         },
         "session",
         Some("node"),
         "logical",
-        snapshot.live_cursor.as_deref().unwrap(),
-        content.len(),
-        &live_text_hash(content),
-        0,
-        "811c9dc5",
+        LiveDeltaBase {
+            cursor: snapshot.live_cursor.as_deref().unwrap(),
+            content_byte_len: content.len(),
+            content_hash: &live_text_hash(content),
+            reasoning_byte_len: 0,
+            reasoning_hash: "811c9dc5",
+        },
     );
     assert_eq!(result.outcome, "unchanged");
 }
 
 #[tokio::test]
 async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapshot_cursor() {
-    use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+    use gents_store::client_journal::paths::DesktopPaths;
     let home = tempfile::tempdir().unwrap();
-    let core = ClientCore::start_with_paths_and_options(
+    let core = ClientRuntime::start_with_paths_and_options(
         DesktopPaths::from_root(home.path()),
-        ClientCoreOptions::local_simulated_route(),
+        crate::client_test_support::file_journal_options(),
     )
     .await
     .unwrap();
@@ -260,13 +274,19 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         .to_string(),
     )
     .unwrap();
-    core.add_local_standard_peer_route_for_test(
-        "Live test",
-        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-        &node_did,
-        &graphql,
-        runtime_home.to_str().unwrap(),
+    crate::client_test_support::runtime_metadata(
+        &server,
+        &crate::client_test_support::RuntimeKey::of_principal(core.node_identity()),
     )
+    .await;
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: node_did.to_string(),
+        label: ("Live test").to_string(),
+        graphql: graphql.to_string(),
+        local_node_home: Some((runtime_home.to_str().unwrap()).to_string()),
+        access_request: None,
+        access_state: None,
+    })
     .await
     .unwrap();
     let mut rows = rows();
@@ -357,11 +377,13 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         "session",
         Some(&node_did),
         "logical",
-        &cursor,
-        5,
-        &live_text_hash("hello"),
-        0,
-        &live_text_hash(""),
+        LiveDeltaBase {
+            cursor: &cursor,
+            content_byte_len: 5,
+            content_hash: &live_text_hash("hello"),
+            reasoning_byte_len: 0,
+            reasoning_hash: &live_text_hash(""),
+        },
     )
     .await
     .unwrap();
@@ -374,11 +396,13 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         "session",
         Some(&node_did),
         "missing",
-        &cursor,
-        5,
-        &live_text_hash("hello"),
-        0,
-        &live_text_hash(""),
+        LiveDeltaBase {
+            cursor: &cursor,
+            content_byte_len: 5,
+            content_hash: &live_text_hash("hello"),
+            reasoning_byte_len: 0,
+            reasoning_hash: &live_text_hash(""),
+        },
     )
     .await
     .unwrap();
@@ -422,8 +446,11 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     )
     .await
     .unwrap_err();
-    let denied = crate::error::BridgeError::classify_transport_error(error);
-    assert_eq!(denied.code, crate::error::BridgeErrorCode::PermissionDenied);
+    let denied = gents_store::client_error::BridgeError::classify_transport_error(error);
+    assert_eq!(
+        denied.code,
+        gents_store::client_error::BridgeErrorCode::PermissionDenied
+    );
     assert!(!denied.message.contains("private metadata"));
     server.verify().await;
     server.reset().await;
@@ -442,11 +469,13 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         "session",
         Some(&node_did),
         "logical",
-        &cursor,
-        5,
-        &live_text_hash("hello"),
-        0,
-        &live_text_hash(""),
+        LiveDeltaBase {
+            cursor: &cursor,
+            content_byte_len: 5,
+            content_hash: &live_text_hash("hello"),
+            reasoning_byte_len: 0,
+            reasoning_hash: &live_text_hash(""),
+        },
     )
     .await
     .unwrap();

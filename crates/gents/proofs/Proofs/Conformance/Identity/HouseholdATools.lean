@@ -1,5 +1,6 @@
 import Proofs.Conformance.Identity.Conformance
 import Proofs.Conformance.Family
+import Proofs.Store.Identity.GrantSets
 
 namespace Conformance.HouseholdA
 
@@ -250,6 +251,11 @@ def toolOperationCollectionGet : Family OperationStep Bool where
     ⟨"agent-schema", operation "schema" true false false false false false "none"⟩,
     ⟨"agent-disabled", operation "none" false false false false false false "none"⟩]
   model := liveAgentHolds "get-collection"
+
+@[conformance_family]
+def toolOperationCollectionPatch : Family OperationStep Bool where
+  inputs := toolOperationCollectionGet.inputs
+  model := liveAgentHolds "patch-collection"
 
 /-- The delete-source scenario edits one Agent's self-config categories and
 pack installation in this order; the last step follows the revocation of an

@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequest;
@@ -230,10 +230,7 @@ impl RequestActors {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             seed.request_id,
-            &self.node_did,
-            agent,
-            agent,
-            seed.session_id,
+            RequestScope::new(&self.node_did, agent, agent, seed.session_id),
             seed.content.unwrap_or("hello"),
             seed.execution_origin.unwrap_or("interactive"),
             seed.created_at,
@@ -684,34 +681,42 @@ pub async fn submit_user_request(
         &fixture.user,
         node_did,
         &fixture.binding.agent_did,
-        session,
-        id,
-        text,
-        delivery,
+        UserMessage {
+            session,
+            id,
+            text,
+            delivery,
+        },
     )
     .await
 }
 
+pub struct UserMessage<'a> {
+    pub session: &'a str,
+    pub id: &'a str,
+    pub text: &'a str,
+    pub delivery: gents_protocol::request_input::QueueDelivery,
+}
+
 /// [`submit_user_request`] to any Agent of the User's node.
-#[allow(clippy::too_many_arguments)]
 pub async fn submit_user_request_to(
     access: &ConfigAccess,
     user: &gents_store::identity::KeyIdentity,
     node_did: &str,
     agent: &str,
-    session: &str,
-    id: &str,
-    text: &str,
-    delivery: gents_protocol::request_input::QueueDelivery,
+    message: UserMessage<'_>,
 ) -> String {
+    let UserMessage {
+        session,
+        id,
+        text,
+        delivery,
+    } = message;
     let requester = user.did();
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         id,
-        node_did,
-        requester,
-        agent,
-        session,
+        RequestScope::new(node_did, requester, agent, session),
         text,
         "interactive",
         canonical_now(),

@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::Node as EmbeddedNode;
@@ -21,21 +21,6 @@ use super::binding::{admit_workspace_binding, new_binding, AdmitBinding};
 use super::documents::WorkspaceBindingDoc;
 #[cfg(any(test, feature = "test-fixtures"))]
 use super::documents::{workspace_binding_upsert_mutation, workspace_bindings_upsert_mutation};
-
-static PROCESS_OPERATOR_TOOL_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
-
-pub fn install_process_operator_tool_root(root: Option<PathBuf>) {
-    *PROCESS_OPERATOR_TOOL_ROOT
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = root;
-}
-
-pub(crate) fn process_operator_tool_root() -> Option<PathBuf> {
-    PROCESS_OPERATOR_TOOL_ROOT
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IsolatedWorkspaceRecord {
@@ -66,8 +51,6 @@ pub struct WorkspaceOverlay {
     pub cwd: PathBuf,
     pub authority: WorkspaceAuthority,
     pub instruction_manifest: String,
-    #[allow(dead_code)]
-    pub seal_hash: Option<String>,
 }
 
 pub fn frozen_instruction_manifest_from_overlay(
@@ -255,7 +238,6 @@ pub(crate) async fn validate_request_workspace_input(
     request: &AgentRequest,
     artifact_requested: bool,
 ) -> Result<()> {
-    let operator_root = process_operator_tool_root();
     if super::runtime::writer_request_already_sealed(node, request).await? {
         let workspace_id = request
             .workspace_id
@@ -266,7 +248,7 @@ pub(crate) async fn validate_request_workspace_input(
                 .await?
                 .context("sealed writer workspace placement missing")?;
         let root = canonicalize_placement_path(&placement.host_path)?;
-        require_under_ceiling(&root, operator_root.as_deref())?;
+        require_under_ceiling(&root, None)?;
         resolve_bound_cwd(&root, request_workspace_cwd(request).as_deref())?;
         return Ok(());
     }
@@ -275,7 +257,7 @@ pub(crate) async fn validate_request_workspace_input(
         None,
         request,
         artifact_requested,
-        operator_root.as_deref(),
+        None,
         workspace_write_sandbox_enforced(),
     )
     .await?;
@@ -285,6 +267,7 @@ pub(crate) async fn validate_request_workspace_input(
 pub(crate) fn validate_unbound_request_workspace_input(
     request: &AgentRequest,
     artifact_requested: bool,
+    operator_tool_root: Option<&Path>,
 ) -> Result<()> {
     anyhow::ensure!(
         optional_id(request.workspace_id.as_deref()).is_none(),
@@ -296,7 +279,7 @@ pub(crate) fn validate_unbound_request_workspace_input(
     if let Some(cwd) = request_workspace_cwd(request) {
         let cwd = std::fs::canonicalize(&cwd).context("resolve invocation cwd")?;
         anyhow::ensure!(cwd.is_dir(), "invocation cwd is not a directory");
-        require_under_ceiling(&cwd, process_operator_tool_root().as_deref())?;
+        require_under_ceiling(&cwd, operator_tool_root)?;
     }
     Ok(())
 }
@@ -306,8 +289,8 @@ pub(crate) async fn validate_request_workspace_input_with_identity(
     agent_identity: &dyn gents_store::identity::NodeIdentity,
     request: &AgentRequest,
     artifact_requested: bool,
+    operator_tool_root: Option<&Path>,
 ) -> Result<()> {
-    let operator_root = process_operator_tool_root();
     let access = super::runtime::completion_access(node, agent_identity, &request.agent_did)?;
     if super::runtime::writer_request_already_sealed_with_identity(node, agent_identity, request)
         .await?
@@ -324,7 +307,7 @@ pub(crate) async fn validate_request_workspace_input_with_identity(
         .await?
         .context("sealed writer workspace placement missing")?;
         let root = canonicalize_placement_path(&placement.host_path)?;
-        require_under_ceiling(&root, operator_root.as_deref())?;
+        require_under_ceiling(&root, operator_tool_root)?;
         resolve_bound_cwd(&root, request_workspace_cwd(request).as_deref())?;
         return Ok(());
     }
@@ -333,7 +316,7 @@ pub(crate) async fn validate_request_workspace_input_with_identity(
         Some(&access),
         request,
         artifact_requested,
-        operator_root.as_deref(),
+        operator_tool_root,
         workspace_write_sandbox_enforced(),
     )
     .await?;
@@ -407,7 +390,7 @@ async fn load_request_workspace_overlay(
         bail!("artifact_write requires a sealed ReadOnly workspace binding");
     }
     let live_tree_hash = if sealed {
-        Some(super::adapter::working_tree_hash(Path::new(&placement.host_path)).await?)
+        Some(super::adapter::working_tree_hash(Path::new(&placement.host_path), None).await?)
     } else {
         None
     };
@@ -527,7 +510,6 @@ pub(crate) fn bind_workspace_overlay(
         cwd,
         authority: input.authority,
         instruction_manifest: workspace.instruction_manifest.clone(),
-        seal_hash: workspace.seal_hash.clone(),
     })
 }
 

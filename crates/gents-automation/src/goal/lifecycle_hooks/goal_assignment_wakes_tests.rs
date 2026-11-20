@@ -1,7 +1,7 @@
 use gents_lean_vocab::families::goal_wake_coalescing_contracts_assignment_wakes as wakes;
 use gents_protocol::goal::RequestAssignmentScope;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::row::AgentRequest;
@@ -24,10 +24,7 @@ async fn parent(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         format!("scope-parent-{id}"),
-        db.node_did(),
-        db.agent_did(),
-        db.agent_did(),
-        session,
+        RequestScope::new(db.node_did(), db.agent_did(), db.agent_did(), session),
         "work",
         "interactive",
         "2026-10-21T00:00:00Z",
@@ -240,12 +237,14 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
                     &access,
                     &node,
                     &parent,
-                    notice,
-                    notice,
-                    "review notifications",
-                    queue(&parent, key),
-                    None,
-                    gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+                        content: notice,
+                        message_key: notice,
+                        wake_content: "review notifications",
+                        queue: queue(&parent, key),
+                        existing_notification_doc_id: None,
+                        wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    },
                 )
                 .await
             }

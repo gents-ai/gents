@@ -15,7 +15,7 @@ where
 }
 
 fn configured_context_window(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
     profile: Option<&gents_documents::InferenceProfile>,
 ) -> Result<usize, String> {
     let Some(profile) = profile else {
@@ -50,18 +50,13 @@ fn configured_context_window(
     .map_err(|error| error.to_string())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "projection inputs come from separate stores and request options"
-)]
 pub(super) fn build_session_context_view(
-    store: &gents_desktop_core::client::ClientStore,
-    context_store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
+    context_store: &gents_observe::client_projection::store::ClientStore,
     node_did: Option<&str>,
     agent_did: Option<&str>,
     session_id: &str,
     durable_messages: Vec<(Option<i64>, Message)>,
-    durable_message_count: usize,
     transcript_totals_exact: bool,
 ) -> SessionContextView {
     let agent = agent_did.and_then(|agent_did| {
@@ -139,6 +134,7 @@ pub(super) fn build_session_context_view(
             .then_with(|| left.compaction_key.cmp(&right.compaction_key))
     });
 
+    let durable_message_count = durable_messages.len();
     let durable_message_refs = durable_messages
         .iter()
         .map(|(_, message)| message)
@@ -256,7 +252,6 @@ pub(super) fn build_session_context_from_stores(
         agent_did,
         session_id,
         durable_messages,
-        durable_message_count,
         transcript_totals_exact && durable_message_count == observed_header_count,
     )
 }
@@ -306,7 +301,7 @@ pub fn attach_last_request_context(
 #[cfg(test)]
 mod order_profile_tests {
     use super::*;
-    use gents_desktop_core::client::ClientStoreRows;
+    use gents_observe::client_projection::store::ClientStoreRows;
     use gents_protocol::message::{AssistantContent, Reasoning, ReasoningContent};
 
     #[test]
@@ -355,7 +350,6 @@ mod order_profile_tests {
                 Some("agent"),
                 "session",
                 messages.clone(),
-                messages.len(),
                 true,
             )
         };

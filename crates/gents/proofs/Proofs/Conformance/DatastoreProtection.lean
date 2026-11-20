@@ -38,3 +38,9 @@ def pluginWrite : Family RefusalInput Bool where
 example : refused Identity.ClientAgentJournal.protectedCollection = true := by decide
 
 end Conformance.DatastoreProtection
+
+namespace Documents.DatastoreProtection
+
+attribute [conformance_function] writeDeclarationRefused
+
+end Documents.DatastoreProtection

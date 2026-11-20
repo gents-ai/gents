@@ -2041,6 +2041,8 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
     let dir = tempfile::tempdir()?;
     let runtime =
         gents_store::identity::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+    let operator =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("operator"), None)?;
     let user = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
     let creator =
         gents_store::identity::KeyIdentity::load_or_create(dir.path().join("creator"), None)?;
@@ -2054,13 +2056,28 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
+            .with_node_acp_owner(operator.did())
             .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .with_storage_backend(defra_node::StorageBackend::Regolith)
             .data_path(dir.path().join("database"))
             .build()
             .await?,
     );
+    let setup =
+        defra_core::RequestContext::default().with_identity(Some(operator.did().to_owned()));
+    for permission in [
+        NodePermission::CollectionPatch,
+        NodePermission::CollectionGet,
+        NodePermission::DacPolicyAdd,
+        NodePermission::NacRelationAdd,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        node.add_nac_actor_relationship_as(&setup, permission.as_str(), runtime.did())
+            .await?;
+    }
     node.add_dac_policy_with_counter_as(
         &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
         gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
@@ -2264,7 +2281,7 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
     let restarted = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
+            .with_node_acp_owner(operator.did())
             .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .with_storage_backend(defra_node::StorageBackend::Regolith)
             .data_path(dir.path().join("database"))

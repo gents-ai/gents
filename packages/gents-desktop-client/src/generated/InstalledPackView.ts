@@ -5,4 +5,12 @@ export type InstalledPackView = { pack: string, installed: string,
 /**
  * The installed archive's content digest, which a pack link pins.
  */
-digest?: string, source?: PackSource, latest: string | null, outdated: boolean | null, error: string | null, };
+digest?: string, source?: PackSource, latest: string | null, outdated: boolean | null, error: string | null,
+/**
+ * What the registry says the pack is, read with its latest version.
+ */
+description?: string,
+/**
+ * The registry account that published it.
+ */
+owner?: string, };

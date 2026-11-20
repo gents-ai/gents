@@ -1046,7 +1046,7 @@ async fn live_eval_target() -> Result<(String, String, Option<String>)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Result<()> {
-    use gents::support::snapshots::SnapshotReader;
+    use gents_store::test_support::snapshot_reader::SnapshotReader;
     use tokio::process::Child;
 
     struct ChildGuard(Option<Child>);
@@ -1334,17 +1334,11 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash_unrestricted"}}}}) {{lifecycle_state}} }}"#,
         escape_graphql_string(&session),
     );
-    gents::support::live_inference::wait_for_rows(
-        &access,
-        "AgentToolCall",
-        &query,
-        Duration::from_secs(300),
-        |rows| {
-            rows["AgentToolCall"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
-        },
-    )
+    gents::support::live_inference::rows_when(&access, "AgentToolCall", &query, |rows| {
+        rows["AgentToolCall"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
+    })
     .await;
     let active = graphql_query(
         &graphql,

@@ -1,11 +1,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents_desktop_core::client::{
-    client_store_from_other_version, client_store_key_missing, load_peer_records,
-    retire_stale_local_peers, set_aside_unreadable, set_aside_unreadable_peer_directory,
-    DesktopPaths,
-};
+use gents_desktop_core::client::journal::keys::client_store_from_other_version;
+use gents_desktop_core::client::journal::keys::client_store_key_missing;
 use gents_desktop_core::home_reset::{plan_home_reset, ClientBinding, HomeResetDisposition};
 use gents_desktop_core::preference::{
     read_home_identity, StoredManagedServer, MANAGED_SERVER_CONFIG,
@@ -14,6 +11,9 @@ use gents_protocol::operations::install_repair::{
     Blocker, ClientObservation, Finding, IncompatibleStore, IncompatibleStoreKind,
     RepairClientInput, RepairClientReceipt, RepairClientScope,
 };
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::runtime_directory::load_runtime_connections;
+use gents_store::client_journal::runtime_directory::RuntimeDirectory;
 
 use super::ClientExclusion;
 
@@ -54,12 +54,12 @@ pub async fn binding_from_paths(
         return Ok(ClientBinding::Unbound);
     };
     let configured = read_home_identity(node_home).await;
-    let peers = load_peer_records(paths.peer_directory_path())
+    let peers = load_runtime_connections(paths.runtime_directory_path())
         .await
         .unwrap_or_default();
     let local = peers
         .iter()
-        .find(|peer| peer.source.as_deref() == Some("local-standard"));
+        .find(|connection| connection.local_node_home.is_some());
     let stored = preference(paths).await?;
     let reviewed = stored.as_ref().and_then(|p| p.reviewed_for.as_ref());
     let reviewed_home = match reviewed {
@@ -181,26 +181,8 @@ async fn execute_inner(
     receipt: &mut RepairClientReceipt,
 ) -> Result<()> {
     let paths = DesktopPaths::from_root(input.root.clone());
-    if matches!(input.scope, RepairClientScope::All) {
-        if let Some(kept_at) =
-            set_aside_unreadable_peer_directory(paths.peer_directory_path()).await?
-        {
-            receipt
-                .findings
-                .push(Finding::ClientConnectionsSetAside { kept_at });
-        }
-        let pref_path = paths.root().join(MANAGED_SERVER_CONFIG);
-        if let Ok(bytes) = tokio::fs::read(&pref_path).await {
-            if serde_json::from_slice::<StoredManagedServer>(&bytes)
-                .is_err_and(|e| e.classify() == serde_json::error::Category::Data)
-            {
-                let kept_at = set_aside_unreadable(&pref_path).await?;
-                receipt
-                    .findings
-                    .push(Finding::ClientPreferenceSetAside { kept_at });
-            }
-        }
-    }
+    load_runtime_connections(paths.runtime_directory_path()).await?;
+    preference(&paths).await?;
     let binding = binding_from_paths(&paths, input.node_home.as_deref()).await?;
     let stale = match input.node_home.as_deref() {
         Some(home) => {
@@ -210,13 +192,16 @@ async fn execute_inner(
                 None
             } else {
                 let current = current.map(|h| h.reviewed.node_did);
-                load_peer_records(paths.peer_directory_path())
+                load_runtime_connections(paths.runtime_directory_path())
                     .await
                     .ok()
                     .filter(|peers| {
-                        peers
-                            .iter()
-                            .any(|peer| peer.is_stale_local_peer(home, current.as_deref()))
+                        peers.iter().any(|peer| {
+                            peer.local_node_home
+                                .as_deref()
+                                .is_some_and(|local| Path::new(local) == home)
+                                && current.as_deref() != Some(peer.node_did.as_str())
+                        })
                     })
                     .map(|_| current)
             }
@@ -227,13 +212,10 @@ async fn execute_inner(
     if stale.is_some() || binding == ClientBinding::Orphaned {
         exclusion = Some(lifecycle.exclude().await?);
         if let (Some(current), Some(home)) = (stale, input.node_home.as_deref()) {
-            let retired = retire_stale_local_peers(
-                paths.peer_directory_path(),
-                home,
-                current.as_deref(),
-                &paths.retired_local_peers_path(),
-            )
-            .await?;
+            let retired = RuntimeDirectory::open(paths.runtime_directory_path())
+                .await?
+                .retire_local_home(home, current.as_deref())
+                .await?;
             receipt.local_node_lost |= retired > 0;
             receipt.local_peers += retired;
         }

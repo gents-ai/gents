@@ -11,7 +11,6 @@ pub mod mailbox;
 pub mod message;
 pub mod origin;
 pub mod plugin_effect_rows;
-pub mod tool_call_state;
 pub mod tool_output_rows;
 pub mod tool_presentation;
 pub use archive::set_session_archived_on;
@@ -43,11 +42,11 @@ pub mod output_replay_fixture;
 #[cfg(test)]
 mod tests;
 #[cfg(any(test, feature = "test-fixtures"))]
-pub use history_fixture::import_history_observation;
-#[cfg(any(test, feature = "test-fixtures"))]
 pub use history_fixture::import_history_observation_as;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use history_fixture::publish_signed_history;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixture::{import_history_observation, HistoryObservation};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use history_fixture::{
     signed_claimed_authored_request, signed_claimed_authored_request_with_retry,
@@ -136,7 +135,7 @@ pub(crate) use sessions::{
 };
 pub use sessions::{
     ensure_session_in_txn, grant_created_session_relationships, max_sequence_as,
-    stage_created_session_relationships_in_txn,
+    stage_created_session_relationships_in_txn, NewAgentSession,
 };
 
 #[cfg(any(test, feature = "test-fixtures"))]

@@ -18,10 +18,11 @@ use gents_inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use gents_inference::backends::registry::backend_fields;
 use gents_inference::resolved::{
     ResolvedAgent, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_TITLE_TIMEOUT_SECS,
 };
 use gents_store::identity::{NodeIdentity, RuntimeNode};
-use gents_store::schema::migration;
-use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::FailurePolicy;
 use gents_tools::mcp::health::HealthCheckerOptions;
 use gents_tools::mcp::pool::McpPool;
 use gents_tools::surface::{
@@ -106,7 +107,7 @@ where
         ),
         background_tool_registry: gents_toolcalls::call::hook::BackgroundToolRegistry::default(),
         background_execution_registry:
-            gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+            gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
         startup_barrier: Arc::new(runtime::StartupBarrier::ready_for_test()),
         runtime_status,
         slot_generation: 1,
@@ -157,6 +158,14 @@ pub struct DocumentRuntimeOptions {
     pub hook_failure_policy: FailurePolicy,
     pub health_checker_options: HealthCheckerOptions,
     pub backend_prober_options: BackendProberOptions,
+    pub p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    pub p2p_network_id: Option<String>,
+    /// The host sends tracing to the system log (`gents server --system-log`),
+    /// so operator-local startup diagnostics are mirrored to stderr.
+    pub system_log: bool,
+    /// The pack registry Agents' pack commands resolve from
+    /// (`gents server --registry`); `None` is the public registry.
+    pub registry_url: Option<String>,
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -165,6 +174,7 @@ pub struct DocumentRuntimeOptions {
         Option<Arc<dyn crate::runtime::startup_readiness::StartupBuildFailureObserver>>,
     pub startup_readiness: crate::runtime::startup_readiness::StartupReadinessOptions,
     pub plugin_home: Option<PathBuf>,
+    pub native_executables: gents_tools::native::NativeExecutables,
     #[cfg(test)]
     pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
@@ -201,15 +211,6 @@ pub struct Gents {
     runtime_node: Arc<RuntimeNode>,
     agents: Vec<AgentWithTools>,
     unavailable_agents: RapidHashMap<String, UnavailableAgent>,
-    active_snapshot: Arc<
-        std::sync::RwLock<
-            Option<
-                watch::Receiver<
-                    Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
-                >,
-            >,
-        >,
-    >,
     document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
     local_hostname: String,
@@ -221,6 +222,10 @@ pub struct Gents {
     inference_observations: gents_inference::inference_observation::InferenceObservationRegistry,
     health_checker_options: HealthCheckerOptions,
     backend_prober_options: BackendProberOptions,
+    p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    p2p_network_id: String,
+    system_log: bool,
+    registry_url: Option<String>,
     backend_health: BackendHealthMap,
     storage_fault: crate::runtime::storage_fault::StorageFaultObservation,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
@@ -236,6 +241,7 @@ pub struct Gents {
         Arc<std::sync::RwLock<Option<gents_p2p::p2p_reconcile::EnrollmentAuthorityHandle>>>,
     operator_tool_root: Option<PathBuf>,
     plugins: Arc<gents_toolcalls::plugin::executor::PluginExecutor>,
+    native_executables: gents_tools::native::NativeExecutables,
 }
 
 pub(crate) fn plugin_executor(
@@ -270,7 +276,7 @@ impl Gents {
             .clone()
             .context("fresh backend protection provenance is required")?;
         backend_admission.validate(&node).await?;
-        migration::ensure_all_runtime_migrations(node.clone()).await?;
+        gents_store::schema::catalog::ensure_runtime_owned(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let plugin_models = gents_pack::plugin::model_binding::AccessModels(
             gents_store::config_client::ConfigAccess::local(node.clone()),
@@ -305,7 +311,6 @@ impl Gents {
             runtime_node,
             agents,
             unavailable_agents: resolved_snapshot.unavailable_agents,
-            active_snapshot: Default::default(),
             document_runtime_context: Some(document_runtime_context),
             mcp_pool: options.mcp_pool,
             local_hostname: options
@@ -319,6 +324,12 @@ impl Gents {
             inference_observations: Default::default(),
             health_checker_options: options.health_checker_options,
             backend_prober_options: options.backend_prober_options,
+            p2p_intervals: options.p2p_intervals,
+            p2p_network_id: options
+                .p2p_network_id
+                .unwrap_or_else(|| gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned()),
+            system_log: options.system_log,
+            registry_url: options.registry_url,
             backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: options.process_state_observer,
@@ -332,6 +343,7 @@ impl Gents {
             enrollment_authority: Arc::default(),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
             plugins,
+            native_executables: options.native_executables,
         })
     }
 
@@ -385,50 +397,6 @@ impl Gents {
 
     pub fn node_did(&self) -> &str {
         &self.runtime_node.node_did
-    }
-
-    /// Local runtime notices reuse mailbox ownership and canonical session
-    /// scope. The admission guard prevents publication racing retirement.
-    pub async fn publish_runtime_notice(
-        &self,
-        notice: gents_session::session::mailbox::RuntimeNotice,
-    ) -> Result<
-        gents_session::session::mailbox::MailboxItem,
-        gents_session::session::mailbox::RuntimeNoticeError,
-    > {
-        let _work = self
-            .service_admission()
-            .admit()
-            .map_err(anyhow::Error::new)?;
-        let identities = {
-            let snapshot = self
-                .active_snapshot
-                .read()
-                .map_err(|_| anyhow::anyhow!("runtime snapshot binding unavailable"))?;
-            if let Some(snapshot) = snapshot.as_ref() {
-                snapshot.borrow().watcher_identities()?
-            } else {
-                let mut identities: Vec<Arc<dyn NodeIdentity>> = self
-                    .agents
-                    .iter()
-                    .map(|agent| agent.agent.agent_identity.clone())
-                    .collect();
-                identities.extend(self.unavailable_agents.values().filter_map(|agent| {
-                    agent
-                        .watcher_identity
-                        .as_ref()
-                        .map(|identity| identity.0.clone())
-                }));
-                identities
-            }
-        };
-        gents_session::session::mailbox::publish_runtime_notice(
-            &self.node,
-            self.node_did(),
-            &identities,
-            notice,
-        )
-        .await
     }
 
     pub fn usage_cache(&self) -> &Arc<gents_inference::usage_observation::UsageCache> {
@@ -500,8 +468,16 @@ impl Gents {
             .configuration_fingerprint())
     }
 
+    pub(crate) fn registry_url(&self) -> Option<&str> {
+        self.registry_url.as_deref()
+    }
+
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {
         self.document_runtime_context.as_ref()
+    }
+
+    pub(crate) fn native_executables(&self) -> &gents_tools::native::NativeExecutables {
+        &self.native_executables
     }
 
     pub(crate) fn plugins(&self) -> &Arc<gents_toolcalls::plugin::executor::PluginExecutor> {
@@ -608,6 +584,11 @@ pub(crate) fn agent_config_from_documents(
         "provider_idle_timeout_secs",
         DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     )?;
+    let title_secs = positive_duration_secs_or_default(
+        execution.title_timeout_secs,
+        "title_timeout_secs",
+        DEFAULT_TITLE_TIMEOUT_SECS,
+    )?;
     let max_total_tokens = execution
         .max_total_tokens
         .map(|limit| {
@@ -620,6 +601,8 @@ pub(crate) fn agent_config_from_documents(
     }
     let backend = backend_fields(&inference.backend);
     let resolved_max_turns = inference.max_turns()?;
+    let max_invalid_tool_calls = inference.max_invalid_tool_calls()?;
+    let repeated_tool_failure_limit = inference.repeated_tool_failure_limit()?;
     anyhow::ensure!(
         agent_config.node_did == principal.node_did,
         "Agent {} belongs to a different runtime node",
@@ -658,6 +641,7 @@ pub(crate) fn agent_config_from_documents(
         backend_endpoint: backend.backend_endpoint,
         backend_auth: backend.backend_auth,
         claude_platform: backend.claude_platform,
+        client_version: backend.client_version,
         model_name: inference.profile.model_name.clone(),
         service_tier: inference.profile.service_tier,
         resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),
@@ -666,6 +650,8 @@ pub(crate) fn agent_config_from_documents(
         max_turns: resolved_max_turns.value,
         max_turns_provenance: resolved_max_turns.provenance,
         max_total_tokens,
+        max_invalid_tool_calls,
+        repeated_tool_failure_limit,
         system_prompt: context
             .and_then(|context| context.system_prompt.clone())
             .unwrap_or_default(),
@@ -674,6 +660,7 @@ pub(crate) fn agent_config_from_documents(
         stream_batch_ms,
         stream_liveness_timeout: Duration::from_secs(liveness_secs),
         provider_idle_timeout: Duration::from_secs(provider_idle_secs),
+        title_timeout: Duration::from_secs(title_secs),
         deadline_duration: Duration::from_secs(deadline_duration_secs),
         completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields {
             retry_max_transport: retry.max_transport_retries,

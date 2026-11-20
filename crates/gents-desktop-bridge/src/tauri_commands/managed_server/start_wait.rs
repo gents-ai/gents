@@ -1,5 +1,6 @@
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use std::future::Future;
 use std::sync::Arc;
 

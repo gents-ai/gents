@@ -1,7 +1,10 @@
 use chrono::{DateTime, Utc};
 use gents_p2p::p2p::observability::P2pSyncStatusSnapshot;
 
-use super::{format_metric_labels, rfc3339_timestamp};
+use super::exposition::{
+    format_metric_labels, push_metric_prelude, push_metric_prelude_with_type, push_metric_sample,
+    rfc3339_timestamp,
+};
 
 /// Per-peer families are labelled by peer, so a node that remembers many
 /// historical peers would otherwise grow scrape cardinality without bound.
@@ -89,6 +92,262 @@ impl Families {
             lines.push(format!("# HELP {} {}", family.name, family.help));
             lines.push(format!("# TYPE {} {}", family.name, family.kind));
             lines.extend(family.samples);
+        }
+    }
+}
+
+pub(super) fn render_p2p_sync_metrics(
+    lines: &mut Vec<String>,
+    status: Option<&gents_p2p::p2p::observability::P2pSyncStatusSnapshot>,
+) {
+    push_metric_prelude(
+        lines,
+        "gents_p2p_sync_status_available",
+        "1 when the pinned DefraDB live sync diagnostics snapshot was fetched and decoded.",
+    );
+    push_metric_sample(
+        lines,
+        "gents_p2p_sync_status_available",
+        &[],
+        i64::from(status.is_some()),
+    );
+
+    let status = status.cloned().unwrap_or_default();
+    let backlog = &status.push_backlog;
+    for (name, help, value) in [
+        (
+            "gents_p2p_push_queue_items",
+            "Live outbound push jobs waiting in the bounded DefraDB queue.",
+            backlog.queued_items,
+        ),
+        (
+            "gents_p2p_push_queue_item_capacity",
+            "Effective outbound push queue item capacity in DefraDB.",
+            backlog.queue_item_capacity,
+        ),
+        (
+            "gents_p2p_push_queue_bytes",
+            "Accounted bytes held by live outbound push jobs waiting in DefraDB.",
+            backlog.queued_bytes,
+        ),
+        (
+            "gents_p2p_push_queue_byte_capacity",
+            "Effective outbound push queue byte capacity in DefraDB.",
+            backlog.queue_byte_capacity,
+        ),
+        (
+            "gents_p2p_push_active_jobs",
+            "Outbound push jobs currently owned by DefraDB workers.",
+            backlog.active_jobs,
+        ),
+        (
+            "gents_p2p_push_worker_count",
+            "Fixed outbound push worker count in DefraDB.",
+            backlog.worker_count,
+        ),
+        (
+            "gents_p2p_push_per_peer_active_cap",
+            "Effective maximum active outbound push jobs for one peer.",
+            backlog.per_peer_active_cap,
+        ),
+        (
+            "gents_p2p_pending_dags",
+            "Live in-memory pending DAG registrations.",
+            status.pending_dags,
+        ),
+        (
+            "gents_p2p_pending_dag_capacity",
+            "Effective in-memory pending DAG capacity.",
+            status.pending_dag_capacity,
+        ),
+        (
+            "gents_p2p_persisted_pending_dags",
+            "Durable pending DAG registrations awaiting merge or retirement.",
+            status.persisted_pending_dags,
+        ),
+        (
+            "gents_p2p_persisted_pending_dag_capacity",
+            "Effective durable pending DAG registration capacity.",
+            status.persisted_pending_dag_capacity,
+        ),
+        (
+            "gents_p2p_quarantined_pending_dags",
+            "Pending DAG roots quarantined after a terminal merge rejection.",
+            status.quarantined_pending_dags,
+        ),
+        (
+            "gents_p2p_retained_background_tasks",
+            "DefraDB P2P background task handles retained for shutdown.",
+            status.retained_background_tasks,
+        ),
+    ] {
+        push_metric_prelude(lines, name, help);
+        push_metric_sample(lines, name, &[], value as i64);
+    }
+
+    push_metric_prelude(
+        lines,
+        "gents_p2p_pending_resync_in_flight",
+        "1 when DefraDB is reconciling durable pending DAG registrations.",
+    );
+    push_metric_sample(
+        lines,
+        "gents_p2p_pending_resync_in_flight",
+        &[],
+        i64::from(status.pending_resync_in_flight),
+    );
+
+    for (name, help, value) in [
+        (
+            "gents_p2p_push_enqueued_total",
+            "Outbound push jobs admitted by the bounded DefraDB queue.",
+            backlog.enqueued_total,
+        ),
+        (
+            "gents_p2p_push_coalesced_total",
+            "Duplicate outbound push jobs coalesced by DefraDB.",
+            backlog.coalesced_total,
+        ),
+        (
+            "gents_p2p_push_rejected_items_total",
+            "Outbound push admissions rejected at the item cap.",
+            backlog.rejected_items_total,
+        ),
+        (
+            "gents_p2p_push_rejected_bytes_total",
+            "Outbound push admissions rejected at the byte cap.",
+            backlog.rejected_bytes_total,
+        ),
+        (
+            "gents_p2p_push_completed_total",
+            "Outbound push jobs completed by DefraDB workers.",
+            backlog.completed_total,
+        ),
+        (
+            "gents_p2p_push_failed_total",
+            "Outbound push jobs failed by DefraDB workers.",
+            backlog.failed_total,
+        ),
+        (
+            "gents_p2p_push_stale_head_retirements_total",
+            "Stale outbound CID heads retired by DefraDB push coalescing.",
+            backlog.stale_head_retirements_total,
+        ),
+        (
+            "gents_p2p_push_peer_capacity_parks_total",
+            "Times a peer was parked because its receiver reported saturation.",
+            backlog.peer_capacity_parks_total,
+        ),
+        (
+            "gents_p2p_broadcast_coalesced_total",
+            "Redundant DefraDB broadcast updates coalesced before outbound push.",
+            status.broadcast_coalesced_total,
+        ),
+        (
+            "gents_p2p_push_updates_coalesced_total",
+            "Outbound push updates retired in favor of a newer CID head.",
+            status.push_updates_coalesced_total,
+        ),
+        (
+            "gents_p2p_missing_link_retries_total",
+            "Missing-link retry attempts recorded by DefraDB sync.",
+            status.missing_link_retries,
+        ),
+        (
+            "gents_p2p_pending_dag_resolved_total",
+            "Pending DAG registrations resolved by DefraDB sync.",
+            status.pending_dag_resolved,
+        ),
+        (
+            "gents_p2p_pending_dag_expired_total",
+            "Pending DAG registrations expired by DefraDB sync.",
+            status.pending_dag_expired,
+        ),
+        (
+            "gents_p2p_gossip_direction_filtered_total",
+            "Inbound gossip dropped by the replication-direction filter.",
+            status.gossip_direction_filtered_total,
+        ),
+        (
+            "gents_p2p_pending_dag_capacity_shed_total",
+            "Inbound roots shed because the pending-DAG registry was at capacity.",
+            status.pending_dag_capacity_shed,
+        ),
+        (
+            "gents_p2p_pending_dag_fetch_deferred_unavailable_total",
+            "Due pending DAG fetches deferred because no qualified provider was connected.",
+            status.pending_dag_fetch_deferred_unavailable,
+        ),
+        (
+            "gents_p2p_pending_dag_fetch_deferred_contention_total",
+            "Useful CAR ingests deferred behind an existing local storage owner.",
+            status.pending_dag_fetch_deferred_contention,
+        ),
+        (
+            "gents_p2p_pending_dag_fetch_deferred_busy_total",
+            "Due pending DAG fetches deferred because every provider answered busy.",
+            status.pending_dag_fetch_deferred_busy,
+        ),
+        (
+            "gents_p2p_single_flight_suppressed_total",
+            "Duplicate concurrent receives of the same CID suppressed by DefraDB sync.",
+            status.single_flight_suppressed,
+        ),
+        (
+            "gents_p2p_already_merged_fast_path_total",
+            "Receives skipped because the announced CID was already merged.",
+            status.already_merged_fast_path,
+        ),
+        (
+            "gents_p2p_pending_dag_terminal_quarantined_total",
+            "Pending DAG roots quarantined after a deterministic terminal merge rejection.",
+            status.pending_dag_terminal_quarantined,
+        ),
+    ] {
+        push_metric_prelude_with_type(lines, name, help, "counter");
+        push_metric_sample(lines, name, &[], value);
+    }
+
+    for (name, help) in [
+        (
+            "gents_p2p_peer_push_queue_items",
+            "Live outbound push jobs waiting for one peer.",
+        ),
+        (
+            "gents_p2p_peer_push_queue_bytes",
+            "Accounted outbound push queue bytes held for one peer.",
+        ),
+        (
+            "gents_p2p_peer_push_active_jobs",
+            "Outbound push jobs currently active for one peer.",
+        ),
+        (
+            "gents_p2p_peer_consecutive_failures",
+            "Consecutive outbound push failures recorded for one peer.",
+        ),
+        (
+            "gents_p2p_peer_cooldown_remaining_milliseconds",
+            "Remaining outbound push cooldown for one peer, in milliseconds.",
+        ),
+    ] {
+        push_metric_prelude(lines, name, help);
+    }
+    for peer in &backlog.per_peer {
+        let labels = &[("peer_id", peer.peer_id.clone())];
+        for (name, value) in [
+            ("gents_p2p_peer_push_queue_items", peer.queued_items as u64),
+            ("gents_p2p_peer_push_queue_bytes", peer.queued_bytes as u64),
+            ("gents_p2p_peer_push_active_jobs", peer.active_jobs as u64),
+            (
+                "gents_p2p_peer_consecutive_failures",
+                peer.consecutive_failures as u64,
+            ),
+            (
+                "gents_p2p_peer_cooldown_remaining_milliseconds",
+                peer.cooldown_remaining_ms,
+            ),
+        ] {
+            push_metric_sample(lines, name, labels, value);
         }
     }
 }

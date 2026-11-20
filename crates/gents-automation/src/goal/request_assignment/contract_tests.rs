@@ -1,7 +1,7 @@
 use super::*;
 use gents_lean_vocab::families::goal_request_assignment_contracts_signed_binding as signed_binding;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
@@ -64,10 +64,12 @@ pub(super) async fn entry(value: &Value, identities: &[KeyIdentity]) -> AgentReq
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         format!("request-{}", value["doc"]),
-        identity.did(),
-        identity.did(),
-        identity.did(),
-        format!("session-{}", value["session"]),
+        RequestScope::new(
+            identity.did(),
+            identity.did(),
+            identity.did(),
+            format!("session-{}", value["session"]),
+        ),
         "follow up",
         "interactive",
         "2026-10-21T00:00:00Z",

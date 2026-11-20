@@ -36,7 +36,7 @@ pub fn read_environment_file(path: &Path) -> Result<BTreeMap<String, String>> {
 }
 
 fn owned(key: &str) -> bool {
-    matches!(key, "PATH" | "GENTS_SYSTEM_LOG")
+    key == "PATH"
 }
 
 fn validate(environment: &BTreeMap<String, String>) -> Result<()> {

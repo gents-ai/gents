@@ -3,14 +3,11 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 use super::test_support::lookup_oauth_credential_by_id;
-use super::test_support::{one_shot_token_server, unsigned_jwt, TOKEN_URL_ENV};
+use super::test_support::{one_shot_token_server, unsigned_jwt};
 use super::*;
 use crate::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
 use crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
 use gents_store::config_client::ConfigAccess;
-
-const XAI_ENV: &str = crate::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV;
-const CHATGPT_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 
 fn token_response(access_claims: Value) -> &'static str {
     let body = json!({
@@ -53,14 +50,12 @@ async fn refresh_once(
     kind: OAuthRefreshKind,
     body: &'static str,
 ) -> OAuthCredential {
-    let (env, product) = match kind {
-        OAuthRefreshKind::ChatGpt => (CHATGPT_ENV, CHATGPT_OAUTH_PRODUCT),
-        _ => (XAI_ENV, XAI_OAUTH_PRODUCT),
+    let product = match kind {
+        OAuthRefreshKind::ChatGpt => CHATGPT_OAUTH_PRODUCT,
+        _ => XAI_OAUTH_PRODUCT,
     };
     let credential_id = oauth_credential_id(did, provider);
-    let _env = TOKEN_URL_ENV.lock().await;
     let (url, handle) = one_shot_token_server(200, body).await;
-    std::env::set_var(env, &url);
     let bearer = DbCredentialBearer::new(
         node.clone(),
         did,
@@ -69,9 +64,9 @@ async fn refresh_once(
         true,
         kind,
         product,
-    );
+    )
+    .with_token_url(url);
     let refreshed = bearer.current_bearer().await;
-    std::env::remove_var(env);
     handle.await.expect("server");
     refreshed.expect("refresh");
     lookup_oauth_credential_by_id(node, &credential_id)
@@ -142,12 +137,10 @@ where
     F: std::future::Future<Output = ()>,
 {
     let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
-    let _env = TOKEN_URL_ENV.lock().await;
     let (received_tx, received) = tokio::sync::oneshot::channel();
     let (release, release_rx) = tokio::sync::oneshot::channel();
     let (url, handle) =
         super::test_support::gated_token_server(200, body, Some((received_tx, release_rx))).await;
-    std::env::set_var(XAI_ENV, &url);
     let bearer = DbCredentialBearer::new(
         node.clone(),
         did,
@@ -156,13 +149,13 @@ where
         true,
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
-    );
+    )
+    .with_token_url(url);
     let (refreshed, ()) = tokio::join!(bearer.current_bearer(), async {
         received.await.expect("the owner asked for a refresh");
         change.await;
         release.send(()).expect("server waits");
     });
-    std::env::remove_var(XAI_ENV);
     handle.await.expect("server");
     refreshed.expect("the owner still serves its refreshed token");
     bearer
@@ -269,13 +262,11 @@ async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
         Some("user:principal-1")
     );
 
-    let _env = TOKEN_URL_ENV.lock().await;
     let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
     let (url, handle) = one_shot_token_server(200, body).await;
-    std::env::set_var(XAI_ENV, &url);
+    let bearer = bearer.with_token_url(url);
     bearer.invalidate().await;
     let refreshed = bearer.current_bearer().await;
-    std::env::remove_var(XAI_ENV);
     let request = handle.await.expect("server");
     refreshed.expect("second refresh");
     assert!(request.contains("refresh-signed-in"), "{request}");
@@ -350,22 +341,20 @@ async fn a_refresh_adopts_a_replaced_document() {
     removed.doc_id = Some("doc-removed".into());
     removed.refresh_token = "refresh-removed".into();
     removed.access_token_expires_at = Utc::now() - Duration::seconds(30);
-    let _env = TOKEN_URL_ENV.lock().await;
     let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
     let (url, handle) = one_shot_token_server(200, body).await;
-    std::env::set_var(XAI_ENV, &url);
-    let bearer = DbCredentialBearer::with_cache(
+    let bearer = DbCredentialBearer::new(
         node.clone(),
         did,
         XAI_OAUTH_PROVIDER,
         credential_id,
         true,
-        Some(removed),
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
-    );
+    )
+    .with_cache_seed(removed)
+    .with_token_url(url);
     let refreshed = bearer.current_bearer().await;
-    std::env::remove_var(XAI_ENV);
     let request = handle.await.expect("server");
     refreshed.expect("refresh");
     assert!(request.contains("refresh-TEST"), "{request}");

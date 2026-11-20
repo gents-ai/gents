@@ -3,8 +3,9 @@ use gents_inference::backends::setup::InferenceAuthMethod;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState, DesktopBridge, ProviderLoginWait};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 fn slot(
     bridge: &mut DesktopBridge,
@@ -88,10 +89,12 @@ where
     let signed = crate::accounts::login::sign_in(
         &state.pending_oauth_credentials,
         || core.operator_access(node_did),
-        node_did,
-        method,
-        provider,
-        label,
+        crate::accounts::login::SignInRequest {
+            node_did,
+            method,
+            credential_provider: provider,
+            label,
+        },
         &wait.cancel,
         async |url| {
             if wait.cancel.is_cancelled() || app.get_webview_window(window).is_none() {

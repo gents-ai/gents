@@ -78,7 +78,7 @@ async fn publish_hook_action(
             None,
             internal_id,
             &args.to_string(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     (action, published.message_doc_id)
@@ -105,7 +105,7 @@ async fn publish_hook_call(
 async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     gents_lean_vocab::snapshot().await;
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_session::request::lifecycle::{
         ClaimOutcome, RequestTerminalOutcome, TerminalizeResult,
@@ -128,10 +128,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         AgentRequestCreate::base(
             RequestPurpose::Normal,
             id,
-            runtime.did(),
-            user.did(),
-            agent.did(),
-            session,
+            RequestScope::new(runtime.did(), user.did(), agent.did(), session),
             "spawn",
             "interactive",
             &now,
@@ -291,10 +288,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let mut historical = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "scope-historical",
-        runtime.did(),
-        agent.did(),
-        agent.did(),
-        session,
+        RequestScope::new(runtime.did(), agent.did(), agent.did(), session),
         "historical",
         "interactive",
         &now,

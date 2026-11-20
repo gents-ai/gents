@@ -17,10 +17,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::live_inference::STALL_CEILING;
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
-use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::STALL_CEILING;
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
@@ -211,7 +211,8 @@ struct GoalBackgroundHandoff {
     runtime: crate::support::accepted_turn::AcceptedTurnRuntime,
     agent_identity: Arc<dyn NodeIdentity>,
     parent_doc_id: String,
-    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    background_executions:
+        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     process_tool_call_id: String,
     release: tokio::net::TcpStream,
 }
@@ -440,10 +441,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
                 }
                 changes.recv().await;
             }
-            runtime
-                .backend
-                .wait_for_request(objective, STALL_CEILING)
-                .await;
+            runtime.backend.wait_for_request(objective).await;
         })
         .await
         .expect("Goal wrapup did not reach its provider before the deadline");

@@ -14,16 +14,17 @@ use gents_pack::pack::{
 };
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::UNREACHED_DEADLINE;
 use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
-use crate::support::live_inference::STALL_CEILING;
 #[cfg(feature = "live-e2e")]
 use crate::support::live_inference::{live_target, InferenceTarget};
-use crate::support::snapshots::SnapshotReader;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
 use crate::support::{interrupt::BootedAgent, test_db, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
+use gents_store::test_support::STALL_CEILING;
 
 #[cfg(feature = "live-e2e")]
 const WORK_UNIT: &str = "change-unit:cycle-accepted";
@@ -126,39 +127,33 @@ async fn boot_cycle(cycle: &Cycle, root: &Path) -> BootedAgent {
         r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
         escape_graphql_string(&cycle.owner),
     );
-    crate::support::live_inference::wait_for_rows(
-        &cycle.access,
-        "NodeReadiness",
-        &query,
-        STALL_CEILING,
-        |data| {
-            let row = data["NodeReadiness"]
-                .as_array()
-                .and_then(|rows| rows.first())
-                .and_then(|row| {
-                    serde_json::from_value::<gents_protocol::node_readiness::NodeReadinessRow>(
-                        row.clone(),
-                    )
-                    .ok()
-                });
-            let projection = gents_protocol::node_readiness::project_node_readiness(
-                row.as_ref(),
-                &cycle.owner,
-                cycle
-                    .agents
-                    .values()
-                    .map(|binding| binding.agent_did.as_str()),
-                Some(cycle.agent(WRITER)),
-            );
-            projection.unknown_reason.is_none()
-                && projection.agents.values().all(|state| {
-                    matches!(
-                        state,
-                        gents_protocol::node_readiness::ProjectedAgentReadiness::Ready
-                    )
-                })
-        },
-    )
+    crate::support::live_inference::rows_when(&cycle.access, "NodeReadiness", &query, |data| {
+        let row = data["NodeReadiness"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(|row| {
+                serde_json::from_value::<gents_protocol::node_readiness::NodeReadinessRow>(
+                    row.clone(),
+                )
+                .ok()
+            });
+        let projection = gents_protocol::node_readiness::project_node_readiness(
+            row.as_ref(),
+            &cycle.owner,
+            cycle
+                .agents
+                .values()
+                .map(|binding| binding.agent_did.as_str()),
+            Some(cycle.agent(WRITER)),
+        );
+        projection.unknown_reason.is_none()
+            && projection.agents.values().all(|state| {
+                matches!(
+                    state,
+                    gents_protocol::node_readiness::ProjectedAgentReadiness::Ready
+                )
+            })
+    })
     .await;
     runtime
 }
@@ -180,7 +175,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_env_filter(tracing_subscriber::EnvFilter::new(
-            "gents=info,gents_migration=warn",
+            "gents=info,gents_store::schema::catalog=warn",
         ))
         .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;
@@ -410,7 +405,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_env_filter(tracing_subscriber::EnvFilter::new(
-            "gents=info,gents_migration=warn",
+            "gents=info,gents_store::schema::catalog=warn",
         ))
         .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;
@@ -528,7 +523,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_env_filter(tracing_subscriber::EnvFilter::new(
-            "gents=info,gents_migration=warn",
+            "gents=info,gents_store::schema::catalog=warn",
         ))
         .try_init();
     let _p2p = super::P2P_E2E_LOCK.lock().await;
@@ -556,10 +551,12 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
         &gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "workspace-cycle-lead-opening",
-            &owner,
-            cycle.user.did(),
-            &supervisor,
-            supervisor_session,
+            gents_protocol::request_admission::RequestScope::new(
+                &owner,
+                cycle.user.did(),
+                &supervisor,
+                supervisor_session,
+            ),
             "Supervise the change unit",
             "interactive",
             &created_at,
@@ -761,7 +758,7 @@ fn failure_inbox_backend() -> MockStreamingBackend {
 async fn install_inference(access: &ConfigAccess, owner: &str, source: InferenceSource<'_>) {
     let execution = json!({
         "node_did":owner,"execution_id":"workspace-cycle-execution","max_turns":8,
-        "deadline_duration_secs":60,"stream_liveness_timeout_secs":10,"stream_batch_ms":5
+        "deadline_duration_secs":UNREACHED_DEADLINE.as_secs(),"stream_batch_ms":5
     });
     let mut docs = vec![(Collection::InferenceExecution, execution)];
     let (backend, profile, sampling) = match source {
@@ -827,15 +824,19 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAg
         ),
     ]);
     let prepared = prepare_document_pack_archive(
-        access,
-        owner,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner,
+            plugin_home: None,
+        },
         &archive,
-        &inference,
-        &[],
+        &gents_pack::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &inference,
+            environment: &environment,
+            overrides: &Default::default(),
+        },
         InstalledVia::Operator,
-        None,
-        &environment,
-        &Default::default(),
     )
     .await
     .expect("prepare the change-unit pack as the User");
@@ -854,16 +855,20 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAg
         );
     }
     install_prepared_document_pack(
-        access,
-        owner,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner,
+            plugin_home: None,
+        },
         &archive,
         &[],
         &prepared,
-        None,
         false,
         InstalledVia::Operator,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        gents_pack::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
     .expect("canonical pack installer accepts the unit pack");
@@ -1372,14 +1377,19 @@ async fn wait_supervisor_inbox(access: &ConfigAccess, work_unit_id: &str) -> Val
 
 #[cfg(feature = "live-e2e")]
 async fn wait_request_completed(access: &ConfigAccess, request_id: &str) {
-    assert_eq!(
-        crate::support::live_inference::wait_for_request_terminal(
-            access,
-            request_id,
-            STALL_CEILING,
+    let query = format!(
+        "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ request_id lifecycle_state failure_reason }} }}",
+        escape_graphql_string(request_id)
+    );
+    let rows = crate::support::live_inference::rows_when(access, "AgentRequest", &query, |data| {
+        gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
+            data["AgentRequest"][0]["lifecycle_state"].as_str(),
         )
-        .await,
-        "completed"
+    })
+    .await;
+    assert_eq!(
+        rows["AgentRequest"][0]["lifecycle_state"], "completed",
+        "{rows:#}"
     );
 }
 

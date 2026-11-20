@@ -32,8 +32,6 @@ members = [
     "crates/gents-lean-contract",
     "crates/gents-lean-vocab",
     "crates/gents-loop",
-    "crates/gents-migration",
-    "crates/gents-lenses/fixture_add_label",
     "crates/gents-callbacks/fixture_create_workspace",
     "crates/gents-fs-runner",
     "crates/gents-protocol",
@@ -76,7 +74,6 @@ default-members = [
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
     "crates/gents-loop",
-    "crates/gents-migration",
     "crates/gents-protocol",
     "crates/gents-schemas",
     "crates/gents-shell",
@@ -93,7 +90,7 @@ gents-eval = { path = "crates/gents-eval" }
 anyhow = "1"
 base64 = "0.22"
 bytes = "1"
-cursor = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
+cursor = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
@@ -106,11 +103,11 @@ clap = { version = "4", features = ["derive", "env"] }
 # Branch-head reclamation must commit and head queries must avoid reclaimed
 # tombstone history (defradb.rs#1858, #1861, #1876–#1878; gents#2103).
 # The Regolith range bound also prevents scans from walking beyond their prefix.
-acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
-crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
-defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
-db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7", default-features = false, features = ["native"] }
-document = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
+acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false, features = ["native"] }
+document = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-store = { path = "crates/gents-store" }
 gents-documents = { path = "crates/gents-documents" }
@@ -139,14 +136,14 @@ gents-lean-vocab = { path = "crates/gents-lean-vocab" }
 gents-workspace-hack = { path = "crates/gents-workspace-hack" }
 # Keep DefraDB defaults off: Gents selects Iroh P2P and Lens execution without
 # SourceHub ACP or the legacy libp2p transport (defradb.rs#1431-#1435).
-defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7", default-features = false }
-defra-http = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
-defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7", default-features = false }
+defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false }
+defra-http = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false }
 dirs = "5"
-events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
+events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
 hostname = "0.4"
-identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
-lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7", default-features = false }
+identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554", default-features = false }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
@@ -159,15 +156,17 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
-query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
+p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
 rapidhash = { version = "4.5.1", features = ["unsafe"] }
-schema = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
-storage = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
-vera = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
-vera-embedded = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "46ce911e53bd50c422d0d1e72469e19c17f7acf7" }
+schema = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+storage = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+vera = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+vera-delegation = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
+vera-embedded = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9903e129dfd398c01ea89b91204c56aee526554" }
 # The revision DefraDB's vera-embedded builds the node from, for its start errors.
-vera-node = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
+vera-node = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }
+vera-crypto = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig-core = "0.35.0"
@@ -259,11 +258,11 @@ rig-core = { git = "https://github.com/jackzampolin/rig", rev = "b12a51c9c544e1b
 noq = { path = "third_party/noq" }
 # Temporary: the Vera crates DefraDB's embedded node is built from, at the
 # revision its vera-node is pinned to, until Vera publishes them.
-vera-acp = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
-vera-client = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
-vera-crypto = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
-vera-domain = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
-vera-identity = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
-vera-modules = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
-vera-permission = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
-vera-zanzibar = { git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" }
+vera-acp = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }
+vera-client = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }
+vera-crypto = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }
+vera-domain = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }
+vera-identity = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }
+vera-modules = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }
+vera-permission = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }
+vera-zanzibar = { git = "https://github.com/sourcenetwork/vera.rs", rev = "45cd086b9c58b5960f09aa14e3803dd26a125d16" }

@@ -58,7 +58,7 @@ async fn dispatch_with_lost_receipt(
             None,
             call_id,
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         ),
     )
     .await;
@@ -132,10 +132,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "cwd-parent",
-        &did,
-        &did,
-        "general",
-        &session,
+        gents_protocol::request_admission::RequestScope::new(&did, &did, "general", &session),
         "start agents",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -310,10 +307,12 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let mut incompatible = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "incompatible-head",
-        &did,
-        agent_signer.did(),
-        agent_signer.did(),
-        &caused_row.session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            &did,
+            agent_signer.did(),
+            agent_signer.did(),
+            &caused_row.session_id,
+        ),
         "work in another directory",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -351,7 +350,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
             None,
             "incompatible-steer",
             &args,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     let ToolCallHookAction::Skip { reason } = action else {

@@ -50,6 +50,8 @@ pub struct ReductionOptions {
     pub context_calibration: Option<crate::provider_input::budget::ContextCalibration>,
     /// Provider parameters of the requesting call that its summary calls carry too.
     pub provider_params: Option<serde_json::Value>,
+    /// What the summary calls carry: the requesting execution's admission.
+    pub provider_call: crate::provider_call::ProviderCall,
 }
 
 impl Default for ReductionOptions {
@@ -66,6 +68,7 @@ impl Default for ReductionOptions {
             sampling_seed: None,
             context_calibration: None,
             provider_params: None,
+            provider_call: Default::default(),
         }
     }
 }

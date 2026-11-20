@@ -1,7 +1,7 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::{Duration, Instant};
 
 use defra_node::Node as EmbeddedNode;
@@ -35,17 +35,20 @@ pub(super) struct StoreClaim {
 /// Embedded access plus a node-scoped store claim held across Gents-owned native operations.
 #[derive(Clone)]
 pub struct LocalConfigAccess {
-    pub(super) node: Arc<EmbeddedNode>,
+    pub(crate) node: Arc<EmbeddedNode>,
     pub(super) gate: Arc<MutationWriteGate>,
     pub(super) identity: Option<identity::Did>,
     pub(super) agent_signer: Option<crate::identity::ManagedAgentSigner>,
     pub(super) client_signed_writes: bool,
     /// The client-signed endpoint served by this same node; writes that
     /// require client signing travel through it as the endpoint's principal.
-    pub(super) client_endpoint: Option<crate::config_client::GraphqlEndpoint>,
+    pub(crate) client_endpoint: Option<crate::config_client::GraphqlEndpoint>,
     /// The runtime key's derivation proof, held only by an access its host
     /// built with that key; staging as an Agent requires it.
     pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,
+    pub(super) client_authorization:
+        Option<crate::config_client::client_authentication::ClientAuthorization>,
+    pub(super) presented_delegation: Option<crate::config_client::user_write::PresentedDelegation>,
 }
 
 impl LocalConfigAccess {
@@ -59,6 +62,8 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            client_authorization: None,
+            presented_delegation: None,
         }
     }
 
@@ -69,6 +74,20 @@ impl LocalConfigAccess {
         }
         self.agent_proof = Some(proof);
         true
+    }
+
+    pub(crate) fn with_presented_delegation(
+        mut self,
+        presented: crate::config_client::user_write::PresentedDelegation,
+    ) -> Self {
+        self.presented_delegation = Some(presented);
+        self
+    }
+
+    pub(crate) fn presented_delegation(
+        &self,
+    ) -> Option<crate::config_client::user_write::PresentedDelegation> {
+        self.presented_delegation.clone()
     }
 
     pub(crate) fn with_identity(mut self, identity: identity::Did) -> Self {
@@ -82,6 +101,24 @@ impl LocalConfigAccess {
         }
         self.agent_signer = Some(signer);
         self
+    }
+
+    pub(crate) fn attach_client_authorization(
+        &mut self,
+        authorization: crate::config_client::client_authentication::ClientAuthorization,
+    ) -> Result<()> {
+        if self.identity.as_ref() != Some(authorization.actor()) && self.agent_signer.is_none() {
+            return Err(ConfigClientError::TransactionActorMismatch);
+        }
+        self.client_authorization = Some(authorization);
+        Ok(())
+    }
+
+    pub(crate) fn request_context(&self) -> defra_core::RequestContext {
+        crate::config_client::client_authentication::ClientAuthorization::request_context(
+            self.client_authorization.as_ref(),
+            self.identity.clone(),
+        )
     }
 
     pub(crate) fn require_client_signed_writes(&mut self) {
@@ -116,14 +153,18 @@ impl LocalConfigAccess {
         self.agent_signer.clone()
     }
 
-    /// The node's own identity acts unsigned; any other local actor acts
-    /// only under its validated managed signer.
+    /// Native actor operations preserve the verified User delegation or the
+    /// Node/Agent's own signer. This does not authorize a document write.
     pub(crate) fn require_actor_signer(&self) -> Result<()> {
-        require_mutation_signer(
-            &self.node,
-            self.identity.as_ref(),
-            self.agent_signer.as_ref(),
-        )
+        if self
+            .client_authorization
+            .as_ref()
+            .is_some_and(|caller| self.identity.as_ref() == Some(caller.actor()))
+        {
+            return Ok(());
+        }
+
+        self.require_mutation_signer()
     }
 
     pub(crate) fn require_mutation_signer(&self) -> Result<()> {
@@ -151,6 +192,8 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            client_authorization: None,
+            presented_delegation: None,
         })
     }
 
@@ -562,32 +605,29 @@ impl MutationWriteGate {
     }
 }
 
-fn mutation_write_gates() -> &'static StdMutex<RapidHashMap<usize, Weak<MutationWriteGate>>> {
-    static GATES: OnceLock<StdMutex<RapidHashMap<usize, Weak<MutationWriteGate>>>> =
-        OnceLock::new();
-    GATES.get_or_init(|| StdMutex::new(RapidHashMap::new()))
-}
+/// The node's current write gate. Held weakly: the gate's store claim keeps
+/// the node and its store lock, which go with the gate's last owner.
+#[derive(Default)]
+struct MutationWriteGateSlot(StdMutex<Weak<MutationWriteGate>>);
 
-pub(super) fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
-    let node_key = node as *const EmbeddedNode as usize;
-    let mut gates = mutation_write_gates()
+pub(super) fn mutation_write_gate(node: &Arc<EmbeddedNode>) -> Arc<MutationWriteGate> {
+    let slot = crate::node_extension::attached_or_default::<MutationWriteGateSlot>(node);
+    let mut current = slot
+        .0
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(gate) = gates.get(&node_key).and_then(Weak::upgrade) {
+    if let Some(gate) = current.upgrade() {
         return gate;
     }
-
-    gates.retain(|_, gate| gate.strong_count() > 0);
     let gate = Arc::new(MutationWriteGate::new());
-    gates.insert(node_key, Arc::downgrade(&gate));
+    *current = Arc::downgrade(&gate);
     gate
 }
 
 pub(super) fn existing_mutation_write_gate(node: &EmbeddedNode) -> Option<Arc<MutationWriteGate>> {
-    let node_key = node as *const EmbeddedNode as usize;
-    mutation_write_gates()
+    crate::node_extension::attached::<MutationWriteGateSlot>(node)?
+        .0
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get(&node_key)
-        .and_then(Weak::upgrade)
+        .upgrade()
 }

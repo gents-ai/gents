@@ -1,16 +1,15 @@
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{stream, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use gents_inference::llm::message::{AssistantContent, ToolResultContent, UserContent};
+use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider};
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+use rig::completion::CompletionError;
 
 use gents_inference::llm::message::Message;
-use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
-use tokio::sync::Mutex;
+use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 
 use gents_loop::loop_stream::*;
 use gents_store::test_support::first_content;
@@ -19,174 +18,17 @@ use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
 use gents_inference::rendered_request::{AssemblyBuildPath, AssemblyTrace};
 
 use gents_inference::test_support::TestDb;
-use tokio::sync::Notify;
 
-#[derive(Default)]
-pub struct StreamEntryGate {
-    pub entered: Notify,
-    pub release: Notify,
-}
-
-pub enum ScriptedCall {
-    Turn(Vec<RawStreamingChoice<()>>),
-    FailStream(CompletionError),
-    TurnWithMidStreamError(Vec<RawStreamingChoice<()>>, CompletionError),
-}
-
-#[derive(Clone)]
-pub struct ScriptedModel {
-    pub calls: Arc<Mutex<VecDeque<ScriptedCall>>>,
-    seen_histories: Arc<Mutex<Vec<Vec<Message>>>>,
-    seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
-    seen_max_tokens: Arc<Mutex<Vec<Option<u64>>>>,
-    seen_requests: Arc<Mutex<Vec<CompletionRequest>>>,
-    stall_after_chunks: bool,
-    capture_requests: bool,
-    stream_entry_gate: Option<Arc<StreamEntryGate>>,
-    provider_observer: Option<Arc<dyn Fn(bool) + Send + Sync>>,
-}
-
-impl ScriptedModel {
-    pub fn new(chunks: Vec<RawStreamingChoice<()>>) -> Self {
-        Self::new_turns(vec![chunks])
-    }
-
-    pub fn new_turns(turns: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
-        Self::new_calls(turns.into_iter().map(ScriptedCall::Turn).collect())
-    }
-
-    pub fn new_calls(calls: Vec<ScriptedCall>) -> Self {
-        Self {
-            calls: Arc::new(Mutex::new(calls.into())),
-            seen_histories: Arc::new(Mutex::new(Vec::new())),
-            seen_tools: Arc::new(Mutex::new(Vec::new())),
-            seen_max_tokens: Arc::new(Mutex::new(Vec::new())),
-            seen_requests: Arc::new(Mutex::new(Vec::new())),
-            stall_after_chunks: false,
-            capture_requests: true,
-            stream_entry_gate: None,
-            provider_observer: None,
-        }
-    }
-
-    pub fn with_provider_observer(mut self, observer: Arc<dyn Fn(bool) + Send + Sync>) -> Self {
-        self.provider_observer = Some(observer);
-        self
-    }
-
-    pub fn with_stream_entry_gate(mut self, gate: Arc<StreamEntryGate>) -> Self {
-        self.stream_entry_gate = Some(gate);
-        self
-    }
-
-    pub fn without_capture(mut self) -> Self {
-        self.capture_requests = false;
-        self
-    }
-
-    pub fn new_stalling(chunks: Vec<RawStreamingChoice<()>>) -> Self {
-        let mut model = Self::new_calls(vec![ScriptedCall::Turn(chunks)]);
-        model.stall_after_chunks = true;
-        model
-    }
-
-    pub async fn seen_histories(&self) -> Vec<Vec<Message>> {
-        self.seen_histories.lock().await.clone()
-    }
-
-    pub async fn seen_tools(&self) -> Vec<Vec<String>> {
-        self.seen_tools.lock().await.clone()
-    }
-
-    pub async fn seen_max_tokens(&self) -> Vec<Option<u64>> {
-        self.seen_max_tokens.lock().await.clone()
-    }
-
-    pub async fn seen_requests(&self) -> Vec<CompletionRequest> {
-        self.seen_requests.lock().await.clone()
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for ScriptedModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self::new_turns(Vec::new())
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in loop_stream tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        if let Some(observer) = &self.provider_observer {
-            observer(true);
-        }
-        if let Some(gate) = &self.stream_entry_gate {
-            gate.entered.notify_one();
-            gate.release.notified().await;
-        }
-        if self.capture_requests {
-            gents_inference::test_support::capture_scripted_provider_request(
-                &request,
-                "test-model",
-            )
-            .await?;
-        }
-        self.seen_requests.lock().await.push(request.clone());
-        self.seen_histories.lock().await.push(
-            request
-                .chat_history
-                .iter()
-                .map(gents_inference::llm::rig_compat::from_rig_message)
-                .collect(),
-        );
-        self.seen_tools
-            .lock()
-            .await
-            .push(request.tools.iter().map(|tool| tool.name.clone()).collect());
-        self.seen_max_tokens.lock().await.push(request.max_tokens);
-        let call = self
-            .calls
-            .lock()
-            .await
-            .pop_front()
-            .unwrap_or_else(|| ScriptedCall::Turn(vec![RawStreamingChoice::FinalResponse(())]));
-        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = match call {
-            ScriptedCall::Turn(chunks) => chunks.into_iter().map(Ok).collect(),
-            ScriptedCall::FailStream(error) => return Err(error),
-            ScriptedCall::TurnWithMidStreamError(chunks, error) => {
-                let mut items: Vec<Result<RawStreamingChoice<()>, CompletionError>> =
-                    chunks.into_iter().map(Ok).collect();
-                items.push(Err(error));
-                items
-            }
-        };
-        let inner: rig::streaming::StreamingResult<()> = if self.stall_after_chunks {
-            Box::pin(stream::iter(items).chain(stream::pending()))
-        } else {
-            Box::pin(stream::iter(items))
-        };
-        let observer = self.provider_observer.clone();
-        let inner = inner.map(move |item| {
-            if let Some(observer) = &observer {
-                observer(false);
-            }
-            item
-        });
-        Ok(StreamingCompletionResponse::stream(Box::pin(inner)))
-    }
+/// The scripted provider as the owned-loop suites drive it: each call
+/// answers with the next of `replies`, then with a bare final response, and
+/// sends its OpenAI body through the capturing transport.
+pub fn scripted<R>(replies: impl IntoIterator<Item = R>) -> ScriptedProvider
+where
+    R: Into<Reply>,
+{
+    ScriptedProvider::new(replies.into_iter().map(Into::into))
+        .then_end()
+        .capturing_openai("test-model")
 }
 
 pub struct EchoTool {
@@ -309,6 +151,7 @@ pub fn tool_result_text(content: &ToolResultContent) -> &str {
 
 pub fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(
@@ -339,20 +182,69 @@ pub fn config(max_turns: usize) -> LoopConfig {
         provider_idle_timeout: None,
         deadline: None,
         max_turns,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
+        tool_context: gents_loop::tool::ToolCallEnvelope::default(),
     }
 }
 
+/// The envelope the tools of the claimed request `lifecycle` are called
+/// with: its identity, session and claimed deadline.
+pub fn request_call(
+    lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
+) -> gents_loop::tool::ToolCallEnvelope {
+    let request = lifecycle.request();
+    gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        identity: Some(
+            gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+                request.requester_did.clone(),
+                Some(request.node_did.clone()),
+                Some(request.agent_did.clone()),
+                Some(request.request_id.clone()),
+            ),
+        ),
+        session_id: Some(request.session_id.clone()),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            lifecycle.claimed_deadline_at(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+    }
+    .call()
+}
+
+/// [`owned_config`] for the claimed request `lifecycle`.
+pub fn owned_config_for(
+    max_turns: usize,
+    lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
+) -> LoopConfig {
+    let mut config = owned_config(max_turns);
+    config.tool_context = request_call(lifecycle);
+    config
+}
+
+/// A config whose calls are captured, into a sink that keeps nothing.
 pub fn owned_config(max_turns: usize) -> LoopConfig {
     let mut config = config(max_turns);
-    config.on_rendered_request = Some(
-        gents_inference::rendered_request::scope::ambient_arming_sink(
-            gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
-        ),
-    );
+    config.on_rendered_request = Some(gents_inference::rendered_request::scope::arming_sink(
+        gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
+    ));
+    config.provider_call.capture = Some(gents_inference::rendered_request::scope::test_scope(
+        gents_inference::rendered_request::RenderedRequestContext {
+            request_doc_id: "owned-test-doc".into(),
+            request_commit_cid: String::new(),
+            request_id: "owned-test-request".into(),
+            node_did: "did:test:node".into(),
+            requester_did: String::new(),
+            agent_did: "general".into(),
+            session_id: "owned-test-session".into(),
+            model_name: "test-model".into(),
+            provider_family: None,
+        },
+        Arc::new(|_| Box::pin(async { Ok(()) })),
+    ));
     config
 }
 
@@ -434,42 +326,7 @@ pub async fn collect_owned_scripted_stream<S>(
 where
     S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
 {
-    collect_owned_scripted_stream_with_capture_scope(stream, hook, writer, lifecycle, profile, None)
-        .await
-}
-
-pub async fn collect_owned_scripted_stream_with_capture_scope<S>(
-    stream: S,
-    hook: &DefraSessionHook,
-    writer: &gents_session::request::streaming::DefraStreamWriter,
-    lifecycle: &mut gents_session::request::lifecycle::RequestLifecycle,
-    profile: gents_loop::provider_input::ProviderInputProfile,
-    capture_scope: Option<Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
-) -> CollectedScriptedStream
-where
-    S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
-{
-    let scope = capture_scope.unwrap_or_else(|| {
-        let context = gents_inference::rendered_request::context_for_claimed_request(
-            lifecycle.request(),
-            "",
-            "test-model".into(),
-            None,
-        );
-        gents_inference::rendered_request::scope::test_scope(
-            context,
-            Arc::new(|_| Box::pin(async { Ok(()) })),
-        )
-    });
-    let deadline = lifecycle.claimed_deadline_at();
-    let request = lifecycle.request();
-    let session_id = request.session_id.clone();
-    let requester_did = request.requester_did.clone();
-    let node_did = request.node_did.clone();
-    let agent_did = request.agent_did.clone();
-    let request_id = request.request_id.clone();
-    let inherited = gents_tools::runtime_context::current_tool_runtime_context().is_some();
-    let collection = gents_inference::rendered_request::scope::scope_request(scope, async move {
+    let collection = async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
         let mut processor = gents_loop::stream_processor::StreamProcessor::new(
@@ -509,28 +366,8 @@ where
             }
         }
         collected
-    });
-    if inherited {
-        collection.await
-    } else {
-        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
-            Some(
-                gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
-                    requester_did,
-                    Some(node_did),
-                    Some(agent_did),
-                    Some(request_id),
-                ),
-            ),
-            deadline,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            Some(session_id),
-            collection,
-        )
-        .await
-    }
+    };
+    collection.await
 }
 
 pub async fn owned_test_hook() -> (

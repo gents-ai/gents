@@ -6,6 +6,15 @@ use crate::{
 };
 
 pub const SESSION_GOAL_CONTROL_VERSION: u8 = 1;
+pub const APPLY_GOAL_CONTROL_PATH: &str = "/goals/control/apply";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyGoalControl {
+    pub node_did: String,
+    pub command_doc_id: String,
+    pub agent_did: String,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum GoalControlError {
@@ -169,6 +178,11 @@ pub enum GoalOperation {
 pub struct GoalNativeEvidence {
     pub request: serde_json::Value,
     pub replacement_delete: Option<serde_json::Value>,
+    /// The request-bound credentials the first request's create carries for
+    /// its User on a home whose document access runs on Vera, one for each
+    /// policy command it sends (`Identity.UserDelegation.storedCreateCommands`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request_credentials: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -431,6 +445,7 @@ mod tests {
         original.native_evidence = Some(GoalNativeEvidence {
             request: json!({"public_key_hex": "user", "doc_id": "request", "signature": [1]}),
             replacement_delete: Some(json!({"doc_id": "goal", "signature": [2]})),
+            request_credentials: Vec::new(),
         });
         let payload = original.signing_payload().unwrap();
         let digest = original.computed_digest().unwrap();
@@ -507,4 +522,15 @@ mod tests {
         encoded["override"] = json!(true);
         assert!(serde_json::from_value::<SessionGoalObservation>(encoded).is_err());
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct GoalSubmissionReference {
+    pub command_id: String,
+    pub command_digest: String,
+    pub initial_request_id: Option<String>,
+    pub requester_did: String,
+    pub agent_did: String,
 }

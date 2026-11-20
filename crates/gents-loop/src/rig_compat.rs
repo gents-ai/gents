@@ -21,13 +21,15 @@ where
 }
 
 pub trait ProviderModel:
-    rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static> + 'static
+    rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static>
+    + crate::provider_call::ForCall
+    + 'static
 {
 }
 
 impl<M> ProviderModel for M
 where
-    M: rig::completion::CompletionModel + 'static,
+    M: rig::completion::CompletionModel + crate::provider_call::ForCall + 'static,
     M::Response: 'static,
     M::StreamingResponse: 'static,
 {
@@ -51,15 +53,9 @@ pub mod completion {
     pub use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 }
 
-/// The HTTP exchange types Rig's client hands a transport and takes back, for
-/// code that inspects or rewrites an exchange. `Request`, `Response` and `Uri`
-/// are the `http` crate's. Rig's client trait, its lazy body and its multipart
-/// form are deliberately absent: a module that implements the trait names Rig
-/// and stays on the ratchet's list.
-pub mod http {
-    pub use rig::http_client::sse::BoxedStream;
-    pub use rig::http_client::{Error, Request, Response, Result, StreamingResponse, Uri};
-}
+pub mod call;
+pub mod http;
+pub mod model;
 
 pub fn charged_usage_total(usage: rig::completion::Usage) -> u64 {
     usage.input_tokens.saturating_add(usage.output_tokens)
@@ -332,13 +328,13 @@ fn to_rig_image(image: &message::Image) -> rig::completion::message::Image {
         media_type: image.media_type.as_ref().map(|m| {
             use rig::completion::message::ImageMediaType as R;
             match m {
-                message::ImageMediaType::JPEG => R::JPEG,
-                message::ImageMediaType::PNG => R::PNG,
-                message::ImageMediaType::GIF => R::GIF,
-                message::ImageMediaType::WEBP => R::WEBP,
-                message::ImageMediaType::HEIC => R::HEIC,
-                message::ImageMediaType::HEIF => R::HEIF,
-                message::ImageMediaType::SVG => R::SVG,
+                message::ImageMediaType::Jpeg => R::JPEG,
+                message::ImageMediaType::Png => R::PNG,
+                message::ImageMediaType::Gif => R::GIF,
+                message::ImageMediaType::Webp => R::WEBP,
+                message::ImageMediaType::Heic => R::HEIC,
+                message::ImageMediaType::Heif => R::HEIF,
+                message::ImageMediaType::Svg => R::SVG,
             }
         }),
         detail: image.detail.as_ref().map(|d| {
@@ -359,15 +355,15 @@ fn to_rig_audio(audio: &message::Audio) -> rig::completion::message::Audio {
         media_type: audio.media_type.as_ref().map(|m| {
             use rig::completion::message::AudioMediaType as R;
             match m {
-                message::AudioMediaType::WAV => R::WAV,
-                message::AudioMediaType::MP3 => R::MP3,
-                message::AudioMediaType::AIFF => R::AIFF,
-                message::AudioMediaType::AAC => R::AAC,
-                message::AudioMediaType::OGG => R::OGG,
-                message::AudioMediaType::FLAC => R::FLAC,
-                message::AudioMediaType::M4A => R::M4A,
-                message::AudioMediaType::PCM16 => R::PCM16,
-                message::AudioMediaType::PCM24 => R::PCM24,
+                message::AudioMediaType::Wav => R::WAV,
+                message::AudioMediaType::Mp3 => R::MP3,
+                message::AudioMediaType::Aiff => R::AIFF,
+                message::AudioMediaType::Aac => R::AAC,
+                message::AudioMediaType::Ogg => R::OGG,
+                message::AudioMediaType::Flac => R::FLAC,
+                message::AudioMediaType::M4a => R::M4A,
+                message::AudioMediaType::Pcm16 => R::PCM16,
+                message::AudioMediaType::Pcm24 => R::PCM24,
             }
         }),
         additional_params: audio.additional_params.clone(),
@@ -380,11 +376,11 @@ fn to_rig_video(video: &message::Video) -> rig::completion::message::Video {
         media_type: video.media_type.as_ref().map(|m| {
             use rig::completion::message::VideoMediaType as R;
             match m {
-                message::VideoMediaType::AVI => R::AVI,
-                message::VideoMediaType::MP4 => R::MP4,
-                message::VideoMediaType::MPEG => R::MPEG,
-                message::VideoMediaType::MOV => R::MOV,
-                message::VideoMediaType::WEBM => R::WEBM,
+                message::VideoMediaType::Avi => R::AVI,
+                message::VideoMediaType::Mp4 => R::MP4,
+                message::VideoMediaType::Mpeg => R::MPEG,
+                message::VideoMediaType::Mov => R::MOV,
+                message::VideoMediaType::Webm => R::WEBM,
             }
         }),
         additional_params: video.additional_params.clone(),
@@ -397,14 +393,14 @@ fn to_rig_document(document: &message::Document) -> rig::completion::message::Do
         media_type: document.media_type.as_ref().map(|m| {
             use rig::completion::message::DocumentMediaType as R;
             match m {
-                message::DocumentMediaType::PDF => R::PDF,
-                message::DocumentMediaType::TXT => R::TXT,
-                message::DocumentMediaType::RTF => R::RTF,
-                message::DocumentMediaType::HTML => R::HTML,
-                message::DocumentMediaType::CSS => R::CSS,
-                message::DocumentMediaType::MARKDOWN => R::MARKDOWN,
-                message::DocumentMediaType::CSV => R::CSV,
-                message::DocumentMediaType::XML => R::XML,
+                message::DocumentMediaType::Pdf => R::PDF,
+                message::DocumentMediaType::Txt => R::TXT,
+                message::DocumentMediaType::Rtf => R::RTF,
+                message::DocumentMediaType::Html => R::HTML,
+                message::DocumentMediaType::Css => R::CSS,
+                message::DocumentMediaType::Markdown => R::MARKDOWN,
+                message::DocumentMediaType::Csv => R::CSV,
+                message::DocumentMediaType::Xml => R::XML,
                 message::DocumentMediaType::Javascript => R::Javascript,
                 message::DocumentMediaType::Python => R::Python,
             }
@@ -542,13 +538,13 @@ fn from_rig_image(image: &rig::completion::message::Image) -> message::Image {
         media_type: image.media_type.as_ref().map(|m| {
             use message::ImageMediaType as N;
             match m {
-                rig::completion::message::ImageMediaType::JPEG => N::JPEG,
-                rig::completion::message::ImageMediaType::PNG => N::PNG,
-                rig::completion::message::ImageMediaType::GIF => N::GIF,
-                rig::completion::message::ImageMediaType::WEBP => N::WEBP,
-                rig::completion::message::ImageMediaType::HEIC => N::HEIC,
-                rig::completion::message::ImageMediaType::HEIF => N::HEIF,
-                rig::completion::message::ImageMediaType::SVG => N::SVG,
+                rig::completion::message::ImageMediaType::JPEG => N::Jpeg,
+                rig::completion::message::ImageMediaType::PNG => N::Png,
+                rig::completion::message::ImageMediaType::GIF => N::Gif,
+                rig::completion::message::ImageMediaType::WEBP => N::Webp,
+                rig::completion::message::ImageMediaType::HEIC => N::Heic,
+                rig::completion::message::ImageMediaType::HEIF => N::Heif,
+                rig::completion::message::ImageMediaType::SVG => N::Svg,
             }
         }),
         detail: image.detail.as_ref().map(|d| match d {
@@ -560,7 +556,6 @@ fn from_rig_image(image: &rig::completion::message::Image) -> message::Image {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     match msg {
         rig::completion::Message::System { content } => message::Message::System {
@@ -577,7 +572,6 @@ pub fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_user_content(
     content: &rig::completion::message::UserContent,
 ) -> message::UserContent {
@@ -603,7 +597,6 @@ pub fn from_rig_user_content(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_assistant_content(
     content: &rig::completion::message::AssistantContent,
 ) -> message::AssistantContent {

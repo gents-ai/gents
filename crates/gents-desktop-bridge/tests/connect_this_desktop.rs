@@ -6,14 +6,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser as _;
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+use gents_desktop_bridge::resolve_policy;
 use gents_desktop_bridge::state::{current_core, DesktopAppState};
 use gents_desktop_bridge::tauri_commands::{lifecycle, managed_server};
-use gents_desktop_bridge::{
-    resolve_policy, BootstrapPolicy, BridgeConfig, BridgeError, BridgeErrorCode, HomePolicy,
-    ManagedServerPolicy, NodeHomePolicy, SnapshotGrants, StoreKeyCustodyChoice,
-};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PrincipalIdentity};
+use gents_desktop_bridge::BootstrapPolicy;
+use gents_desktop_bridge::BridgeConfig;
+use gents_desktop_bridge::HomePolicy;
+use gents_desktop_bridge::ManagedServerPolicy;
+use gents_desktop_bridge::NodeHomePolicy;
+use gents_desktop_bridge::SnapshotGrants;
+use gents_desktop_bridge::StoreKeyCustodyChoice;
 use gents_lean_vocab::families::connect_this_desktop_local_node as family;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::principal_identity::PrincipalIdentity;
 use tauri::test::MockRuntime;
 use tauri::Manager as _;
 
@@ -47,6 +55,10 @@ impl gents_host::serve::ServeClient for ReadyReport {
         gents_host::http::version::version_response()
     }
 
+    fn host_executable(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     async fn bound_root_agents(
         &self,
         root: &Path,
@@ -67,13 +79,14 @@ fn free_port() -> u16 {
 
 /// A home made by `gents init` (through the provisioning that runs its
 /// `init_home`), listening on its own loopback ports so it never answers for
-/// another node on this machine.
-fn terminal_home(home: &Path) {
+/// another node on this machine. Its administrator key is `desktop`'s CLI
+/// client, which the home records.
+fn terminal_home(home: &Path, desktop: &Path) {
     run(gents_server::server_host::ensure_standard_home(
         tauri::async_runtime::handle().inner(),
         gents_server::server_host::ProvisionOptions {
             home: home.to_path_buf(),
-            desktop_root: DesktopPaths::discover().unwrap().root().to_path_buf(),
+            desktop_root: desktop.to_path_buf(),
             node_name: "Anvil".to_owned(),
             tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
             tool_root: None,
@@ -198,9 +211,11 @@ fn desktop_did(desktop: &Path) -> Option<String> {
 }
 
 fn route_saved(desktop: &Path, node_did: &str) -> bool {
-    run(gents_desktop_core::client::load_peer_records(
-        DesktopPaths::from_root(desktop).peer_directory_path(),
-    ))
+    run(
+        gents_store::client_journal::runtime_directory::load_runtime_connections(
+            DesktopPaths::from_root(desktop).runtime_directory_path(),
+        ),
+    )
     .is_ok_and(|peers| peers.iter().any(|peer| peer.node_did == node_did))
 }
 
@@ -215,25 +230,19 @@ fn node_records(
         return (BTreeSet::new(), 0);
     };
     run(async {
-        let pending =
-            gents_service::server_host::pending_managed_enrollments(home, &served.graphql)
-                .await
-                .unwrap()
-                .into_iter()
-                .filter(|request| request.candidate_did == member)
-                .map(|request| request.request_id);
-        let members = gents_service::server_host::managed_enrollment_members(home, &served.graphql)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|request| request.candidate_did == member)
-            .map(|request| request.request_id);
-        let requests = pending.chain(members).collect();
         let owner = gents_store::config_client::ConfigAccess::Graphql(
             gents_service::home_state::home_graphql_endpoint(home, served.graphql.clone())
                 .await
                 .unwrap(),
         );
+        let requests =
+            gents_store::identity::client_access::list_requests(&owner, &served.node_did)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|request| request.client_did == member)
+                .map(|request| request.request_id)
+                .collect();
         let receipts = gents_store::identity::load_enrollment_grant_receipts(&owner, member)
             .await
             .unwrap()
@@ -264,11 +273,14 @@ fn enrolled(app: &tauri::App<MockRuntime>, node_did: &str) -> bool {
     let Some(core) = current_core(&app.state::<DesktopAppState>()) else {
         return false;
     };
-    run(core.peer_records()).iter().any(|peer| {
-        peer.node_did == node_did
-            && peer.is_enrollment()
-            && peer.is_managed_runtime()
-            && peer.is_enrollment_ready_at(chrono::Utc::now())
+    run(async {
+        let Ok(access) = core.operator_access(node_did) else {
+            return false;
+        };
+        access
+            .read_view(&gents_documents::views::config::NodeList::new(node_did))
+            .await
+            .is_ok_and(|rows| !rows.is_empty())
     })
 }
 
@@ -337,19 +349,14 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
     std::fs::create_dir_all(path("user/.local/share")).unwrap();
     std::fs::create_dir_all(path("user/.config")).unwrap();
     std::env::set_var("HOME", path("user"));
-    std::env::set_var("GENTS_HOME", path("default-home"));
-    std::env::set_var(
-        gents_desktop_core::client::DESKTOP_HOME_ENV,
-        path("desktop"),
-    );
     std::env::set_var("XDG_DATA_HOME", path("user/.local/share"));
     std::env::set_var("XDG_CONFIG_HOME", path("user/.config"));
     gents_desktop_bridge::install_runtime();
 
     let served_home = path("anvil");
     let stopped_home = path("stopped");
-    terminal_home(&served_home);
-    terminal_home(&stopped_home);
+    terminal_home(&served_home, &path("desktop"));
+    terminal_home(&stopped_home, &path("desktop"));
     let served = serve(&served_home);
     let agents_before = node_agents(&served_home, &served);
 
@@ -365,9 +372,9 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
         };
         let node_did = served.node_did.clone();
         if case.input.identity && !case.input.enrolled {
-            let core = run(ClientCore::start_with_paths_and_options(
+            let core = run(ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(&desktop),
-                ClientCoreOptions {
+                ClientRuntimeOptions {
                     store_key_custody: StoreKeyCustodyChoice::File,
                     ..Default::default()
                 },
@@ -450,19 +457,22 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
     let member = core.node_identity().did().to_owned();
     let (before, _) = node_records(&served_home, Some(&served), Some(&member));
     let old_request = before.iter().next().unwrap();
-    run(gents_service::enrollment_admin::submit_enrollment_decision(
-        &served_home,
-        &served.graphql,
-        old_request,
-        gents_protocol::enrollment::EnrollmentOperatorAction::Revoke,
-        0,
-    ))
-    .unwrap();
+    run(async {
+        gents_service::home_state::home_graphql_endpoint(&served_home, served.graphql.clone())
+            .await
+            .unwrap()
+            .decide_runtime_access(&gents_protocol::client_access::DecideClientAccess {
+                node_did: served.node_did.clone(),
+                request_id: old_request.clone(),
+                decision: gents_protocol::client_access::ClientAccessDecision::Revoke,
+            })
+            .await
+            .unwrap();
+    });
     let access = core.operator_access(&served.node_did).unwrap();
-    let unavailable = run(gents_desktop_core::client::load_node_snapshot_on(
-        &access,
-        &served.node_did,
-    ))
+    let unavailable = run(
+        gents_observe::client_projection::query::load_node_snapshot_on(&access, &served.node_did),
+    )
     .unwrap_err();
     assert!(unavailable.refused());
     assert!(run(core.refresh_node(&served.node_did)).is_err());
@@ -476,27 +486,28 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
         .operator_config_authoritative_node_dids
         .unwrap_or_default()
         .contains(&served.node_did));
-    let status = run(async {
-        reqwest::get(served.graphql.replace("/api/v0/graphql", "/status"))
-            .await
-            .unwrap()
-            .json::<serde_json::Value>()
-            .await
-            .unwrap()
-    });
-    let pending = run(core.request_status_enrollment_with_label(&status, Some("Anvil"))).unwrap();
+    let connection = core
+        .runtime_connections()
+        .into_iter()
+        .find(|connection| connection.node_did == served.node_did)
+        .unwrap();
+    let pending = run(core.request_runtime_access(connection)).unwrap();
     assert!(!before.contains(&pending.request_id));
-    let requests = run(gents_service::server_host::pending_managed_enrollments(
-        &served_home,
-        &served.graphql,
-    ))
-    .unwrap();
-    assert!(
-        requests
-            .iter()
-            .any(|request| request.request_id == pending.request_id
-                && request.candidate_did == member)
-    );
+    let requests = run(async {
+        let owner =
+            gents_service::home_state::home_graphql_endpoint(&served_home, served.graphql.clone())
+                .await
+                .unwrap();
+        gents_store::identity::client_access::list_requests(
+            &gents_store::config_client::ConfigAccess::Graphql(owner),
+            &served.node_did,
+        )
+        .await
+        .unwrap()
+    });
+    assert!(requests
+        .iter()
+        .any(|request| request.request_id == pending.request_id && request.client_did == member));
     connect(&app).unwrap();
     let restored = settings_as_the_desktop(&app, &served.node_did);
     assert!(restored

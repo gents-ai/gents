@@ -47,7 +47,7 @@ fn deployment(node_did: &str) -> EmbeddedVeraDeployment {
         created: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs()),
-        policies: gents_migration::NODE_POLICIES
+        policies: crate::schema::catalog::NODE_POLICIES
             .iter()
             .map(|policy| EmbeddedVeraPolicy {
                 definition: policy.definition.to_owned(),
@@ -148,6 +148,25 @@ pub(super) fn deployment_differs(error: &defra_node::Error) -> Option<&'static s
 pub(super) fn consensus_key(node: &defra_node::Node) -> Option<String> {
     node.embedded_vera_trust()
         .map(|deployment| deployment.consensus_key.clone())
+}
+
+pub(super) fn provider_time(node: &defra_node::Node) -> Option<u64> {
+    use acp::RemotePolicies as _;
+    node.vera_acp()?.light_client_status().ok()?.chain_time
+}
+
+pub(super) fn delegation_audience(
+    node: &defra_node::Node,
+) -> Option<gents_protocol::delegation_audience::DelegationAudience> {
+    use acp::RemotePolicies as _;
+    let audience = node.vera_acp()?.light_client_status().ok()?.delegation?;
+    Some(gents_protocol::delegation_audience::DelegationAudience {
+        worker: audience.worker,
+        deployment: audience.deployment,
+        genesis_id: audience
+            .genesis_id
+            .map(|genesis| format!("0x{}", hex::encode(genesis))),
+    })
 }
 
 pub(super) fn configure(

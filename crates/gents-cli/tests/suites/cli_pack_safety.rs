@@ -304,16 +304,17 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
                 "plugin-session",
                 "--inference-url",
                 &inference_url,
+                "--desktop-home",
+                &init_user_home,
             ],
-            &[("GENTS_DESKTOP_HOME", &init_user_home)],
+            &[],
         )
     })
     .await??;
     let owner = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let mut server =
-        spawn_server_with_env(&home, port, &[], &[("GENTS_DESKTOP_HOME", &user_home_arg)])?;
+    let mut server = spawn_server_with_env(&home, port, &[], &[])?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home, &graphql, Duration::from_secs(30)).await?;
@@ -338,12 +339,11 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
     let pack_arg = plugin_pack.to_string_lossy().into_owned();
     let node_home = home.join(".gents").to_string_lossy().into_owned();
     let client_home = home.clone();
-    let install_user_home = user_home_arg.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         run_cli_json_with_env(
             &client_home,
             &["config", "pack", "install", &pack_arg, "--home", &node_home],
-            &[("GENTS_DESKTOP_HOME", &install_user_home)],
+            &[],
         )
     })
     .await?;
@@ -363,8 +363,8 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
         .iter()
         .any(|op| op == "delete"));
     use gents_store::identity::NodeIdentity as _;
-    let user = gents_desktop_core::client::PrincipalIdentity::load_existing(
-        &gents_desktop_core::client::DesktopPaths::from_root(user_home.join("cli")),
+    let user = gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+        &gents_store::client_journal::paths::DesktopPaths::from_root(user_home.join("cli")),
     )?;
     anyhow::ensure!(
         user.did() != owner,

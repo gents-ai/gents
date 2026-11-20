@@ -45,7 +45,7 @@ async fn an_allow_listed_request_reaches_the_server_only_when_granted() {
         .call(
             &record,
             json!({"n": 1}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -68,7 +68,7 @@ async fn an_allow_listed_request_reaches_the_server_only_when_granted() {
         .call(
             &record,
             json!({"n": 1}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -119,7 +119,7 @@ async fn a_round_asking_both_services_is_bad_output() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -144,7 +144,7 @@ impl gents_pack::plugin::model_binding::ModelResolver for Endpoint {
                 api_key: None,
                 model: "m".into(),
                 max_concurrent: 1,
-                backend_key: "test".into(),
+                limiter: Arc::new(tokio::sync::Semaphore::new(1)),
                 connect_timeout: Duration::from_secs(1),
                 request_timeout: Duration::from_secs(1),
                 max_output_tokens: None,

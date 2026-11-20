@@ -4,14 +4,12 @@ use crate::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
 use rig::client::CompletionClient;
-use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
-};
-use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
+use rig::completion::CompletionRequest;
 
 use super::test_fixtures::*;
 use super::*;
 use gents_loop::provider_input::budget::can_dispatch;
+use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider};
 use gents_store::test_support::first_content;
 
 fn test_message_tokens(messages: &[Message]) -> usize {
@@ -53,6 +51,7 @@ fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
 
 fn gate_test_loop_config() -> gents_loop::loop_stream::LoopConfig {
     gents_loop::loop_stream::LoopConfig {
+        provider_call: Default::default(),
         replay: gents_loop::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(
@@ -83,10 +82,12 @@ fn gate_test_loop_config() -> gents_loop::loop_stream::LoopConfig {
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
+        tool_context: gents_loop::tool::ToolCallEnvelope::default(),
     }
 }
 
@@ -276,7 +277,7 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(150);
     let client =
-        crate::clients::inference_http::build_openai_chat_completions_client(
+        crate::llm::rig_compat::providers::build_openai_chat_completions_client(
             "no-key",
             &endpoint,
             crate::clients::inference_http::SessionTaggingHttpClient::<
@@ -495,121 +496,34 @@ fn assert_checkpoint_markers(summary: &str, markers: &[&str]) {
     }
 }
 
-#[derive(Clone, Default)]
-struct SentinelCheckpointModel {
-    requests: Arc<Mutex<Vec<CompletionRequest>>>,
-}
-
-#[derive(Clone, Default)]
-struct AdvancingFirstCheckpointModel {
-    calls: Arc<std::sync::atomic::AtomicUsize>,
-    now: Arc<Mutex<chrono::DateTime<chrono::Utc>>>,
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for AdvancingFirstCheckpointModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self::default()
+/// Answers each summary request with a checkpoint naming the sentinels its
+/// history carries.
+fn sentinel_checkpoint(request: &CompletionRequest) -> Reply {
+    let rendered = serde_json::to_string(&request.chat_history).unwrap();
+    let mut markers = Vec::new();
+    if rendered.contains("FIRST_SENTINEL") {
+        markers.push("FIRST_SENTINEL");
     }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        unreachable!("rolling compaction uses streaming completions")
+    if rendered.contains("LAST_SENTINEL") {
+        markers.push("LAST_SENTINEL");
     }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if call == 0 {
-            let mut now = self.now.lock().unwrap();
-            *now += chrono::Duration::seconds(2);
-        }
-        let checkpoint = serde_json::json!({
-            "goal": "preserve the bounded rolling prefix",
-            "next_actions": ["continue rolling"]
-        })
-        .to_string();
-        Ok(StreamingCompletionResponse::stream(Box::pin(
-            futures::stream::iter(vec![
-                Ok(RawStreamingChoice::Message(checkpoint)),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ]),
-        )))
-    }
-}
-
-impl SentinelCheckpointModel {
-    fn checkpoint_for(request: &CompletionRequest) -> String {
-        let rendered = serde_json::to_string(&request.chat_history).unwrap();
-        let mut markers = Vec::new();
-        if rendered.contains("FIRST_SENTINEL") {
-            markers.push("FIRST_SENTINEL");
-        }
-        if rendered.contains("LAST_SENTINEL") {
-            markers.push("LAST_SENTINEL");
-        }
+    Reply::text(
         serde_json::json!({
             "goal": format!("Preserve {}", markers.join(" and ")),
             "next_actions": ["Continue after rolling compaction."]
         })
-        .to_string()
-    }
+        .to_string(),
+    )
 }
 
-#[allow(refining_impl_trait)]
-impl CompletionModel for SentinelCheckpointModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self::default()
-    }
-
-    async fn completion(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        let response = Self::checkpoint_for(&request);
-        self.requests.lock().unwrap().push(request);
-        Ok(CompletionResponse {
-            choice: rig::one_or_many::OneOrMany::one(rig::completion::AssistantContent::Text(
-                rig::completion::message::Text { text: response },
-            )),
-            usage: Usage::new(),
-            raw_response: (),
-            message_id: None,
-        })
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let response = Self::checkpoint_for(&request);
-        self.requests.lock().unwrap().push(request);
-        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = vec![
-            Ok(RawStreamingChoice::Message(response)),
-            Ok(RawStreamingChoice::FinalResponse(())),
-        ];
-        Ok(StreamingCompletionResponse::stream(Box::pin(
-            futures::stream::iter(items),
-        )))
-    }
+fn sentinel_checkpoint_model() -> ScriptedProvider {
+    ScriptedProvider::responding(|dispatch| sentinel_checkpoint(&dispatch.request))
 }
 
 #[tokio::test]
 async fn oversized_prefix_rolls_through_positive_pair_safe_summary_requests() {
-    let model = SentinelCheckpointModel::default();
-    let observed = model.requests.clone();
+    let model = sentinel_checkpoint_model();
+    let observed = model.clone();
     let config = gate_test_loop_config();
     let counter = config.provider_input_counter.clone();
     let compactor = ProviderReductionEngine::new(Arc::new(model), config);
@@ -654,7 +568,7 @@ async fn oversized_prefix_rolls_through_positive_pair_safe_summary_requests() {
     assert!(summary.contains("FIRST_SENTINEL"));
     assert!(summary.contains("LAST_SENTINEL"));
 
-    let requests = observed.lock().unwrap();
+    let requests = observed.requests();
     assert!(requests.len() > 1);
     let first = serde_json::to_string(&requests.first().unwrap().chat_history).unwrap();
     let last = serde_json::to_string(&requests.last().unwrap().chat_history).unwrap();
@@ -680,11 +594,20 @@ async fn oversized_prefix_rolls_through_positive_pair_safe_summary_requests() {
 async fn rolling_compaction_rechecks_the_shared_deadline_before_each_chunk() {
     let started = chrono::Utc::now();
     let clock = Arc::new(Mutex::new(started));
-    let model = AdvancingFirstCheckpointModel {
-        calls: Arc::default(),
-        now: clock.clone(),
-    };
-    let calls = model.calls.clone();
+    let advance = clock.clone();
+    let model = ScriptedProvider::responding(move |dispatch| {
+        if dispatch.index == 0 {
+            *advance.lock().unwrap() += chrono::Duration::seconds(2);
+        }
+        Reply::text(
+            serde_json::json!({
+                "goal": "preserve the bounded rolling prefix",
+                "next_actions": ["continue rolling"]
+            })
+            .to_string(),
+        )
+    });
+    let calls = model.clone();
     let clock_for_compactor = clock.clone();
     let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config())
         .with_now(Arc::new(move || *clock_for_compactor.lock().unwrap()));
@@ -719,7 +642,7 @@ async fn rolling_compaction_rechecks_the_shared_deadline_before_each_chunk() {
         CompactionError::Reduction(ReductionError::DeadlineElapsed)
     ));
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls.calls(),
         1,
         "the expired shared deadline must prevent a second provider dispatch"
     );
@@ -727,8 +650,8 @@ async fn rolling_compaction_rechecks_the_shared_deadline_before_each_chunk() {
 
 #[tokio::test]
 async fn indivisible_oversized_tool_turn_fails_without_returning_a_partial_checkpoint() {
-    let model = SentinelCheckpointModel::default();
-    let observed = model.requests.clone();
+    let model = sentinel_checkpoint_model();
+    let observed = model.clone();
     let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
     let messages = vec![
         text_msg("user", "small prefix that fits as the first rolling chunk"),
@@ -768,7 +691,7 @@ async fn indivisible_oversized_tool_turn_fails_without_returning_a_partial_check
         })
     ));
     assert_eq!(
-        observed.lock().unwrap().len(),
+        observed.requests().len(),
         1,
         "the first in-memory checkpoint may succeed, but no partial result is returned"
     );
@@ -776,7 +699,7 @@ async fn indivisible_oversized_tool_turn_fails_without_returning_a_partial_check
 
 #[tokio::test]
 async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
-    let model = MockSummaryModel::new(
+    let model = mock_summary_model(
         &serde_json::json!({
             "goal": "Honor the provider input budget without losing task state.",
             "key_decisions": [],
@@ -829,10 +752,9 @@ async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
     assert!(!required_reduction(&result).compacted_prefix.is_empty());
 
     let request = observed_model
-        .last_request
-        .lock()
-        .unwrap()
-        .clone()
+        .requests()
+        .last()
+        .cloned()
         .expect("compaction summary request");
     assert!(
         matches!(
@@ -851,8 +773,8 @@ async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
 
 #[tokio::test]
 async fn stripping_alone_can_satisfy_an_admitted_complete_input() {
-    let model = SentinelCheckpointModel::default();
-    let observed = model.requests.clone();
+    let model = sentinel_checkpoint_model();
+    let observed = model.clone();
     let config = gate_test_loop_config();
     let messages = vec![
         text_msg("user", "inspect the large result"),
@@ -890,13 +812,13 @@ async fn stripping_alone_can_satisfy_an_admitted_complete_input() {
         .unwrap();
 
     assert_eq!(result.provider_messages().unwrap(), stripped_messages);
-    assert!(observed.lock().unwrap().is_empty());
+    assert!(observed.requests().is_empty());
 }
 
 #[tokio::test]
 async fn an_indivisible_prompt_still_over_threshold_after_stripping_cannot_fit() {
-    let model = SentinelCheckpointModel::default();
-    let observed = model.requests.clone();
+    let model = sentinel_checkpoint_model();
+    let observed = model.clone();
     let config = gate_test_loop_config();
     let messages = vec![text_msg("user", &"x".repeat(20_000))];
     let input_tokens = config
@@ -926,12 +848,12 @@ async fn an_indivisible_prompt_still_over_threshold_after_stripping_cannot_fit()
         .unwrap();
 
     assert!(result.cannot_fit());
-    assert!(observed.lock().unwrap().is_empty());
+    assert!(observed.requests().is_empty());
 }
 
 #[tokio::test]
 async fn summary_completion_uses_independent_output_cap() {
-    let model = MockSummaryModel::new(
+    let model = mock_summary_model(
         &serde_json::json!({
             "goal": "Continue the task."
         })
@@ -966,10 +888,9 @@ async fn summary_completion_uses_independent_output_cap() {
         .await
         .unwrap();
     let request = observed_model
-        .last_request
-        .lock()
-        .unwrap()
-        .clone()
+        .requests()
+        .last()
+        .cloned()
         .expect("summary request");
     assert_eq!(
         request.max_tokens,
@@ -983,7 +904,7 @@ async fn summary_completion_uses_independent_output_cap() {
 
 #[tokio::test]
 async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
-    let model = MockSummaryModel::new(
+    let model = mock_summary_model(
         &serde_json::json!({
             "goal": "Continue the task."
         })
@@ -1018,10 +939,9 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
         .unwrap();
 
     let request = observed_model
-        .last_request
-        .lock()
-        .unwrap()
-        .clone()
+        .requests()
+        .last()
+        .cloned()
         .expect("summary request");
     let effective_max = request
         .max_tokens
@@ -1045,7 +965,7 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
 
 #[tokio::test]
 async fn fifteen_thousand_paths_produce_a_bounded_summary() {
-    let model = MockSummaryModel::new(
+    let model = mock_summary_model(
         &serde_json::json!({
             "goal": "Complete the large task.",
             "key_decisions": ["Use the selected approach."],
@@ -1087,60 +1007,15 @@ async fn fifteen_thousand_paths_produce_a_bounded_summary() {
     assert_eq!(result.files_read.len(), 15_000);
 }
 
-#[derive(Clone)]
-struct CountingFailModel {
-    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    error: &'static str,
-}
-
-impl CountingFailModel {
-    fn new() -> Self {
-        Self::failing_with("transient compaction failure")
-    }
-
-    fn failing_with(error: &'static str) -> Self {
-        Self {
-            calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            error,
-        }
-    }
-
-    fn calls(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
-        self.calls.clone()
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for CountingFailModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self::new()
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(CompletionError::ProviderError(self.error.to_string()))
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(CompletionError::ProviderError(self.error.to_string()))
-    }
+/// Fails every call with `error`.
+fn counting_fail_model(error: &'static str) -> ScriptedProvider {
+    ScriptedProvider::responding(move |_| Reply::provider_error(error))
 }
 
 #[tokio::test(start_paused = true)]
 async fn transient_compaction_failures_follow_the_internal_immediate_policy() {
-    let model = CountingFailModel::new();
-    let calls = model.calls();
+    let model = counting_fail_model("transient compaction failure");
+    let calls = model.clone();
     let compactor =
         ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
@@ -1170,7 +1045,7 @@ async fn transient_compaction_failures_follow_the_internal_immediate_policy() {
         "the transient provider error should surface as a compaction error"
     );
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls.calls(),
         4,
         "transient failures consume exactly the internal ladder: 1 initial + 3 retries"
     );
@@ -1199,8 +1074,8 @@ fn protected_split_does_not_treat_retention_target_as_context_ceiling() {
 
 #[tokio::test]
 async fn protected_zero_prefix_rejects_before_summary_provider_call() {
-    let model = CountingFailModel::new();
-    let calls = model.calls();
+    let model = counting_fail_model("transient compaction failure");
+    let calls = model.clone();
     let compactor = ProviderReductionEngine::new(Arc::new(model), scheduled_origin_config());
     let error = compactor
         .reduce(
@@ -1220,17 +1095,14 @@ async fn protected_zero_prefix_rejects_before_summary_provider_call() {
         error,
         CompactionError::Reduction(ReductionError::CannotFit)
     ));
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(calls.calls(), 0);
 }
 
 #[tokio::test(start_paused = true)]
 async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
-    let model = ScriptedSummaryModel::new(vec![
-        ScriptedSummaryModel::empty_turn(),
-        ScriptedSummaryModel::summary_turn(),
-    ]);
-    let calls = model.calls.clone();
-    let requests = model.requests.clone();
+    let model = scripted_summary_model(vec![empty_turn(), summary_turn()]);
+    let calls = model.clone();
+    let requests = model.clone();
     let compactor =
         ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
@@ -1254,12 +1126,12 @@ async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
         "the resampled attempt's summary must be used"
     );
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls.calls(),
         2,
         "exactly one retract-and-resample: two provider calls"
     );
 
-    let requests = requests.lock().unwrap();
+    let requests = requests.requests();
     for request in requests.iter() {
         assert!(
             request.tools.is_empty(),
@@ -1278,12 +1150,9 @@ async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
 
 #[tokio::test(start_paused = true)]
 async fn malformed_structured_summary_is_retracted_and_resampled() {
-    let model = ScriptedSummaryModel::new(vec![
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::summary_turn(),
-    ]);
-    let calls = model.calls.clone();
-    let requests = model.requests.clone();
+    let model = scripted_summary_model(vec![malformed_summary_turn(), summary_turn()]);
+    let calls = model.clone();
+    let requests = model.clone();
     let compactor =
         ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
@@ -1304,12 +1173,12 @@ async fn malformed_structured_summary_is_retracted_and_resampled() {
 
     assert!(result.exact_reduction().is_some());
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls.calls(),
         2,
         "one invalid turn consumes exactly one retry"
     );
 
-    let requests = requests.lock().unwrap();
+    let requests = requests.requests();
     assert_eq!(requests.len(), 2);
     for request in requests.iter() {
         let schema = request
@@ -1335,11 +1204,8 @@ async fn malformed_structured_summary_is_retracted_and_resampled() {
 
 #[tokio::test(start_paused = true)]
 async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
-    let model = ScriptedSummaryModel::new(vec![
-        ScriptedSummaryModel::schema_invalid_summary_turn(),
-        ScriptedSummaryModel::summary_turn(),
-    ]);
-    let calls = model.calls.clone();
+    let model = scripted_summary_model(vec![schema_invalid_summary_turn(), summary_turn()]);
+    let calls = model.clone();
     let compactor =
         ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
@@ -1360,7 +1226,7 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
 
     assert!(result.exact_reduction().is_some());
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls.calls(),
         2,
         "schema-invalid JSON must consume exactly one retry"
     );
@@ -1368,15 +1234,15 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
 
 #[tokio::test(start_paused = true)]
 async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback() {
-    let model = ScriptedSummaryModel::new(vec![
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::summary_turn(),
+    let model = scripted_summary_model(vec![
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        summary_turn(),
     ]);
-    let calls = model.calls.clone();
-    let requests = model.requests.clone();
+    let calls = model.clone();
+    let requests = model.clone();
     let inherited_reasoning = serde_json::json!({
         "chat_template_kwargs": {
             "enable_thinking": true,
@@ -1418,11 +1284,11 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
         "the fallback must preserve the pending next action"
     );
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls.calls(),
         5,
         "guided output consumes 1 initial call + 3 retries, then one fallback"
     );
-    let requests = requests.lock().unwrap();
+    let requests = requests.requests();
     assert!(requests[..4]
         .iter()
         .all(|request| request.output_schema.is_some()));
@@ -1441,8 +1307,8 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
 
 #[tokio::test(start_paused = true)]
 async fn expired_deadline_stops_before_the_first_summary_provider_call() {
-    let model = ScriptedSummaryModel::new(vec![ScriptedSummaryModel::malformed_summary_turn()]);
-    let calls = model.calls.clone();
+    let model = scripted_summary_model(vec![malformed_summary_turn()]);
+    let calls = model.clone();
     let compactor =
         ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
@@ -1467,7 +1333,7 @@ async fn expired_deadline_stops_before_the_first_summary_provider_call() {
         "the failure must name the deadline, not budget exhaustion: {error}"
     );
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls.calls(),
         0,
         "no provider attempt may be taken once the deadline has passed"
     );
@@ -1475,14 +1341,14 @@ async fn expired_deadline_stops_before_the_first_summary_provider_call() {
 
 #[tokio::test(start_paused = true)]
 async fn repeated_empty_compaction_completions_use_non_guided_fallback() {
-    let model = ScriptedSummaryModel::new(vec![
-        ScriptedSummaryModel::empty_turn(),
-        ScriptedSummaryModel::empty_turn(),
-        ScriptedSummaryModel::empty_turn(),
-        ScriptedSummaryModel::empty_turn(),
-        ScriptedSummaryModel::summary_turn(),
+    let model = scripted_summary_model(vec![
+        empty_turn(),
+        empty_turn(),
+        empty_turn(),
+        empty_turn(),
+        summary_turn(),
     ]);
-    let calls = model.calls.clone();
+    let calls = model.clone();
     let compactor =
         ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
@@ -1506,7 +1372,7 @@ async fn repeated_empty_compaction_completions_use_non_guided_fallback() {
         "the strict fallback checkpoint must be used"
     );
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls.calls(),
         5,
         "empty guided turns consume the internal ladder plus one fallback"
     );
@@ -1514,14 +1380,14 @@ async fn repeated_empty_compaction_completions_use_non_guided_fallback() {
 
 #[tokio::test(start_paused = true)]
 async fn invalid_non_guided_fallback_is_a_distinct_bounded_provider_failure() {
-    let model = ScriptedSummaryModel::new(vec![
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
+    let model = scripted_summary_model(vec![
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        malformed_summary_turn(),
     ]);
-    let calls = model.calls.clone();
+    let calls = model.clone();
     let compactor =
         ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
@@ -1548,7 +1414,7 @@ async fn invalid_non_guided_fallback_is_a_distinct_bounded_provider_failure() {
         diagnostic.len() < 800,
         "diagnostic must remain bounded: {diagnostic}"
     );
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
+    assert_eq!(calls.calls(), 5);
 }
 
 #[test]
@@ -1979,8 +1845,8 @@ fn compaction_strategy_default_and_labels_share_one_vocabulary() {
 
 #[tokio::test]
 async fn selected_summary_provider_uses_its_context_and_output_ceiling() {
-    let model = SentinelCheckpointModel::default();
-    let requests = model.requests.clone();
+    let model = sentinel_checkpoint_model();
+    let requests = model.clone();
     let mut selected = gate_test_loop_config();
     selected.context_window = 6_000;
     let selected_counter = selected.provider_input_counter.clone();
@@ -2012,7 +1878,7 @@ async fn selected_summary_provider_uses_its_context_and_output_ceiling() {
         )
         .await
         .unwrap();
-    let requests = requests.lock().unwrap();
+    let requests = requests.requests();
     assert!(
         requests.len() > 1,
         "small selected summary context must roll the prefix"
@@ -2026,8 +1892,8 @@ async fn selected_summary_provider_uses_its_context_and_output_ceiling() {
 
 #[tokio::test]
 async fn selected_summary_provider_cannot_replace_exhausted_parent_budget() {
-    let model = SentinelCheckpointModel::default();
-    let requests = model.requests.clone();
+    let model = sentinel_checkpoint_model();
+    let requests = model.clone();
     let mut selected = gate_test_loop_config();
     selected.context_window = 6_000;
     selected.aggregate_token_budget =
@@ -2048,7 +1914,7 @@ async fn selected_summary_provider_cannot_replace_exhausted_parent_budget() {
         )
         .await;
     assert!(result.is_err());
-    assert!(requests.lock().unwrap().is_empty());
+    assert!(requests.requests().is_empty());
     assert_eq!(parent.snapshot().unwrap().used, 10);
 }
 
@@ -2069,8 +1935,8 @@ async fn rolling_summary_requests(
     calibration: Option<gents_loop::provider_input::budget::ContextCalibration>,
     source_model: Option<&str>,
 ) -> Vec<CompletionRequest> {
-    let model = SentinelCheckpointModel::default();
-    let observed = model.requests.clone();
+    let model = sentinel_checkpoint_model();
+    let observed = model.clone();
     let config = gate_test_loop_config();
     let mut compactor = ProviderReductionEngine::new(Arc::new(model), config);
     if let Some(source_model) = source_model {
@@ -2097,8 +1963,7 @@ async fn rolling_summary_requests(
         )
         .await
         .expect("the prefix rolls through bounded chunks");
-    let requests = observed.lock().unwrap().clone();
-    requests
+    observed.requests()
 }
 
 #[tokio::test]
@@ -2154,10 +2019,10 @@ async fn summary_chunks_are_sized_by_the_calibrated_estimate() {
 
 #[tokio::test(start_paused = true)]
 async fn summarizer_context_overflow_fails_without_reentering_compaction() {
-    let model = CountingFailModel::failing_with(
+    let model = counting_fail_model(
         r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"}}"#,
     );
-    let calls = model.calls();
+    let calls = model.clone();
     let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
 
     let error = tokio::time::timeout(
@@ -2184,7 +2049,7 @@ async fn summarizer_context_overflow_fails_without_reentering_compaction() {
     );
     let rendered = format!("{:#}", anyhow::Error::from(error));
     assert!(rendered.contains("prompt is too long"), "{rendered}");
-    let calls = calls.load(std::sync::atomic::Ordering::SeqCst);
+    let calls = calls.calls();
     assert!(
         (1..=1 + summary_worthy_messages().len().ilog2() as usize).contains(&calls),
         "each summary request is one provider call; only halving the chunk repeats it: {calls}"
@@ -2192,68 +2057,22 @@ async fn summarizer_context_overflow_fails_without_reentering_compaction() {
 }
 
 /// Fails its first `overflows` summary requests the way Claude rejects an
-/// over-window prompt, then answers like [`SentinelCheckpointModel`].
-#[derive(Clone)]
-struct OverflowingCheckpointModel {
-    inner: SentinelCheckpointModel,
-    overflows: Arc<Mutex<usize>>,
-    rejected: Arc<Mutex<Vec<CompletionRequest>>>,
-}
-
-impl OverflowingCheckpointModel {
-    fn new(overflows: usize) -> Self {
-        Self {
-            inner: SentinelCheckpointModel::default(),
-            overflows: Arc::new(Mutex::new(overflows)),
-            rejected: Arc::default(),
+/// over-window prompt, then answers like [`sentinel_checkpoint`].
+fn overflowing_checkpoint_model(overflows: usize) -> ScriptedProvider {
+    ScriptedProvider::responding(move |dispatch| {
+        if dispatch.index < overflows {
+            return Reply::provider_error(
+                r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 9000 tokens > 6000 maximum"}}"#,
+            );
         }
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for OverflowingCheckpointModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self::new(0)
-    }
-
-    async fn completion(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        self.inner.completion(request).await
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let overflow = {
-            let mut left = self.overflows.lock().unwrap();
-            let overflow = *left > 0;
-            *left = left.saturating_sub(1);
-            overflow
-        };
-        if overflow {
-            self.rejected.lock().unwrap().push(request);
-            return Err(CompletionError::ProviderError(
-                r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 9000 tokens > 6000 maximum"}}"#
-                    .to_string(),
-            ));
-        }
-        self.inner.stream(request).await
-    }
+        sentinel_checkpoint(&dispatch.request)
+    })
 }
 
 #[tokio::test(start_paused = true)]
 async fn overflowing_summary_chunk_is_halved_and_retried() {
-    let model = OverflowingCheckpointModel::new(1);
-    let rejected = model.rejected.clone();
-    let accepted = model.inner.requests.clone();
-    let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
+    let model = overflowing_checkpoint_model(1);
+    let compactor = ProviderReductionEngine::new(Arc::new(model.clone()), gate_test_loop_config());
 
     compactor
         .reduce(
@@ -2270,8 +2089,8 @@ async fn overflowing_summary_chunk_is_halved_and_retried() {
         .await
         .expect("the halved chunk fits and the prefix still rolls");
 
-    let rejected = rejected.lock().unwrap().clone();
-    let accepted = accepted.lock().unwrap().clone();
+    let requests = model.requests();
+    let (rejected, accepted) = requests.split_at(requests.len().min(1));
     assert_eq!(rejected.len(), 1);
     assert!(!accepted.is_empty());
     let chunk_messages = |request: &CompletionRequest| request.chat_history.len();
@@ -2285,9 +2104,8 @@ async fn overflowing_summary_chunk_is_halved_and_retried() {
 
 #[tokio::test(start_paused = true)]
 async fn summary_overflow_ends_once_no_smaller_chunk_exists() {
-    let model = OverflowingCheckpointModel::new(usize::MAX);
-    let rejected = model.rejected.clone();
-    let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
+    let model = overflowing_checkpoint_model(usize::MAX);
+    let compactor = ProviderReductionEngine::new(Arc::new(model.clone()), gate_test_loop_config());
 
     let error = compactor
         .reduce(
@@ -2308,7 +2126,7 @@ async fn summary_overflow_ends_once_no_smaller_chunk_exists() {
         matches!(error, CompactionError::SummaryContextOverflow { .. }),
         "{error:?}"
     );
-    let rejected = rejected.lock().unwrap();
+    let rejected = model.requests();
     assert!(
         rejected.len() <= 1 + rolling_prefix_messages().len().ilog2() as usize,
         "halving bounds the attempts: {}",
@@ -2332,13 +2150,13 @@ fn claude_summary_config() -> gents_loop::loop_stream::LoopConfig {
 
 #[tokio::test(start_paused = true)]
 async fn claude_guided_summary_retries_once_then_falls_back_with_the_same_system_prefix() {
-    let model = ScriptedSummaryModel::new(vec![
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::summary_turn(),
+    let model = scripted_summary_model(vec![
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        summary_turn(),
     ]);
-    let calls = model.calls.clone();
-    let requests = model.requests.clone();
+    let calls = model.clone();
+    let requests = model.clone();
     let compactor = ProviderReductionEngine::new(Arc::new(model), claude_summary_config());
 
     compactor
@@ -2357,11 +2175,11 @@ async fn claude_guided_summary_retries_once_then_falls_back_with_the_same_system
         .expect("the strict JSON fallback recovers");
 
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls.calls(),
         3,
         "Claude: 1 guided call + 1 guided retry, then the fallback"
     );
-    let requests = requests.lock().unwrap();
+    let requests = requests.requests();
     assert!(requests[..2]
         .iter()
         .all(|request| request.output_schema.is_some()));
@@ -2416,7 +2234,7 @@ fn loop_retention_target(ratio: u64, messages: &[Message], provider_budget: usiz
         summary_max_output_tokens: 32_000,
         ..Default::default()
     };
-    ProviderReductionEngine::new(Arc::new(SentinelCheckpointModel::default()), config)
+    ProviderReductionEngine::new(Arc::new(sentinel_checkpoint_model()), config)
         .retention_target(usize::MAX, messages, admission, &options, 1_000_000)
         .unwrap()
 }
@@ -2455,7 +2273,7 @@ fn summary_reserve_is_the_summary_calls_output_cap() {
     let counter = config.provider_input_counter.clone();
     let total_raw = counter.estimate_message_request(&messages).unwrap();
     let admission = ReductionAdmission::required(total_raw, 750_000);
-    let engine = ProviderReductionEngine::new(Arc::new(SentinelCheckpointModel::default()), config);
+    let engine = ProviderReductionEngine::new(Arc::new(sentinel_checkpoint_model()), config);
     let target = |summary_max_output_tokens, context_window| {
         engine
             .retention_target(
@@ -2518,7 +2336,7 @@ async fn reduced_request_lands_within_the_recovery_band() {
         let budget = total_raw * budget_share / 10_000;
         let admission = ReductionAdmission::required(total_raw, budget);
         let engine = ProviderReductionEngine::new(
-            Arc::new(SentinelCheckpointModel::default()),
+            Arc::new(sentinel_checkpoint_model()),
             gate_test_loop_config(),
         );
         let options = |keep_recent_tokens| ReductionOptions {

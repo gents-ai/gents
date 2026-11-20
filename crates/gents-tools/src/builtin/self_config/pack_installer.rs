@@ -9,6 +9,8 @@ pub struct PackInstaller {
     pub actor: Option<Arc<dyn NodeIdentity>>,
     /// `None` resolves from the registry in memory and installs no plugins.
     pub home: Option<std::path::PathBuf>,
+    /// The config tool call these commands serve.
+    pub envelope: gents_loop::tool::ToolCallEnvelope,
 }
 
 impl PackInstaller {
@@ -20,6 +22,7 @@ impl PackInstaller {
         NodePacks {
             access,
             node_did: self.core.node_did(),
+            registry_url: self.core.registry_url(),
             home: self.home.as_deref(),
             grants_authority: self.core.held_grants().pack_authority,
         }
@@ -73,7 +76,8 @@ impl PackInstaller {
             .pointer("/runtime_effective/effective/root")
             .and_then(Value::as_str)
             .context("local pack inspection requires an effective tool root")?;
-        let context = crate::native::ToolContext::new(root.into(), false)?;
+        let context = crate::native::ToolContext::new(root.into(), false)
+            .map(|context| context.for_call(&self.envelope))?;
         let requested = requested_path.to_str().context("pack path is not UTF-8")?;
         let path = context.resolve_path(requested)?;
         // Local built artifacts flow through the same installers as

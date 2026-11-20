@@ -735,13 +735,15 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
         &db.agent_access,
         &db.node,
         &parent,
-        "agent result",
-        "background-completion-notification:agent:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "agent result",
+            message_key: "background-completion-notification:agent:tool",
+            wake_content: "review notifications",
+            queue: background_hints(&parent),
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::CrossSession { cause_hop: 1 },
+        },
         &raised_tool,
-        gents_protocol::request_lifecycle::RequestHopCause::CrossSession { cause_hop: 1 },
     )
     .await
     .unwrap();
@@ -828,13 +830,15 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         &db.agent_access,
         &db.node,
         &parent,
-        "sleep done",
-        "background-completion-notification:sleep:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "sleep done",
+            message_key: "background-completion-notification:sleep:tool",
+            wake_content: "review notifications",
+            queue: background_hints(&parent),
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        },
         &native_tool,
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap();
@@ -843,13 +847,15 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         &db.agent_access,
         &db.node,
         &parent,
-        "B result",
-        "background-completion-notification:b:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "B result",
+            message_key: "background-completion-notification:b:tool",
+            wake_content: "review notifications",
+            queue: background_hints(&parent),
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Return,
+        },
         &returned_tool,
-        gents_protocol::request_lifecycle::RequestHopCause::Return,
     )
     .await
     .unwrap();
@@ -860,13 +866,17 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         &db.agent_access,
         &db.node,
         &parent,
-        "C message",
-        "background-completion-notification:c:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "C message",
+            message_key: "background-completion-notification:c:tool",
+            wake_content: "review notifications",
+            queue: background_hints(&parent),
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::CrossSession {
+                cause_hop: bound,
+            },
+        },
         &refused_tool,
-        gents_protocol::request_lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
     )
     .await
     .unwrap();
@@ -885,13 +895,15 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         &db.agent_access,
         &db.node,
         &parent,
-        "another B result",
-        "background-completion-notification:b-2:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "another B result",
+            message_key: "background-completion-notification:b-2:tool",
+            wake_content: "review notifications",
+            queue: background_hints(&parent),
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Return,
+        },
         &later_tool,
-        gents_protocol::request_lifecycle::RequestHopCause::Return,
     )
     .await
     .unwrap();

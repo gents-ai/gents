@@ -435,10 +435,12 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "trigger-worker-request",
-        identity.did(),
-        caller.agent_did.as_str(),
-        caller.agent_did.as_str(),
-        "correlated-worker",
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            caller.agent_did.as_str(),
+            caller.agent_did.as_str(),
+            "correlated-worker",
+        ),
         "spawn",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -476,17 +478,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     .unwrap()
     .unwrap();
     let mut send_call =
-        gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
-            node.clone(),
-            &mut caller_owner,
-            &caller.node_did,
-            1,
-            gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
-            "message-trigger-worker",
-            serde_json::json!({"session_id": "correlated-worker", "message": "continue shard R3a"}),
-            AwaitMode::Background,
-            false,
-        )
+        gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(node.clone(), &mut caller_owner, &caller.node_did, gents_toolcalls::call::lifecycle::admission_fixture::AcceptedFixtureCall { turn: 1, tool_name: gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME, tool_call_id: "message-trigger-worker", arguments: serde_json::json!({"session_id": "correlated-worker", "message": "continue shard R3a"}), await_mode: AwaitMode::Background, start_running: false })
         .await
         .unwrap();
     let cause = gents_protocol::request_lifecycle::SessionMessageCause {

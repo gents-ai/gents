@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents_observe::observe::run_timeline::{RunTimelineRows, TimelineToolCallRow};
+use gents_observe::observe::run_timeline::rows::{RunTimelineRows, TimelineToolCallRow};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 #[cfg(test)]
@@ -650,6 +650,7 @@ mod tests {
         use gents_store::identity::NodeIdentity;
         use gents_toolcalls::call::lifecycle::admission_fixture::{
             pending_client_fixture_request, publish_accepted_on_claimed_request,
+            AcceptedFixtureCall,
         };
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
         let db = crate::support::test_db_from_home(home);
@@ -674,10 +675,12 @@ mod tests {
         let create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "req-evidence",
-            &did,
-            user.did(),
-            &binding.agent_did,
-            "s-evidence",
+            gents_protocol::request_admission::RequestScope::new(
+                &did,
+                user.did(),
+                &binding.agent_did,
+                "s-evidence",
+            ),
             "x",
             "interactive",
             "2026-01-01T00:00:00Z".to_owned(),
@@ -709,12 +712,14 @@ mod tests {
             db.node.clone(),
             &mut request,
             &did,
-            0,
-            "fs_read",
-            "call-1",
-            serde_json :: json ! ({ "path" : "x" }),
-            AwaitMode::Foreground,
-            true,
+            AcceptedFixtureCall {
+                turn: 0,
+                tool_name: "fs_read",
+                tool_call_id: "call-1",
+                arguments: serde_json :: json ! ({ "path" : "x" }),
+                await_mode: AwaitMode::Foreground,
+                start_running: true,
+            },
         )
         .await
         .unwrap();

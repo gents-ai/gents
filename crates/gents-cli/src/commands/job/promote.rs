@@ -165,6 +165,9 @@ pub struct PromoteRequest<'a> {
     pub selector: &'a str,
     pub name: Option<&'a str>,
     pub agent: Option<&'a str>,
+    /// Where the promoted pack's dependencies resolve; `None` is the public
+    /// registry.
+    pub registry: Option<&'a str>,
 }
 
 /// Promotes the dynamic run `selector` names (its address
@@ -184,6 +187,7 @@ pub async fn promote(
         selector,
         name,
         agent,
+        registry,
     } = *request;
     report(PromoteStep::Javy);
     let javy = javy_version(javy)?;
@@ -267,7 +271,7 @@ pub async fn promote(
         },
         output: OutputFormat::Json,
         force_rebind_concrete_did: false,
-        registry: None,
+        registry: registry.map(str::to_owned),
         drift: PackDriftArgs::default(),
         grant_authority: true,
         wire: Vec::new(),
@@ -276,9 +280,12 @@ pub async fn promote(
         explicit: true,
     };
     let installed = async {
-        let source =
-            gents_pack::pack::resolved_pack::resolve_pack_source(&install.package, None, home)
-                .await?;
+        let source = gents_pack::pack::resolved_pack::resolve_pack_source(
+            &install.package,
+            install.registry.as_deref(),
+            home,
+        )
+        .await?;
         crate::commands::pack::install_documents_pack(access, actor, &source, &install, true)
             .await
             .map_err(gents_pack::pack::PackChangeError::into_anyhow)
@@ -320,7 +327,7 @@ pub async fn promote(
             dynamic_consent: false,
             tool_calls_consent: false,
         },
-        gents_service::home_state::load_held_user_identity,
+        gents_host::http::pack_wire_client::SIGNERS,
     )
     .await
     .with_context(|| format!("promote wire failed{recovery}"))?;
@@ -389,6 +396,7 @@ mod tests {
                 selector: "no-such-job",
                 name: None,
                 agent: None,
+                registry: None,
             },
             "/nonexistent/javy",
             &mut |step| steps.push(step),

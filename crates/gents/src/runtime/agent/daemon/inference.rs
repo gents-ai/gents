@@ -6,19 +6,28 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use tracing::Instrument;
 
+use super::request::prepare::{PreparedRequestInput, RequestInputs};
 #[cfg(test)]
 use super::ShutdownDrainFailure;
 use super::{AgentDaemon, HandleRequestOutcome};
-use crate::runtime::agent::loop_stream::{LoopReplayInput, TaggedMessage};
-use gents_inference::admission::{self, CallKind};
+use crate::runtime::agent::loop_stream::TaggedMessage;
 use gents_inference::llm::message::Message;
 use gents_inference::resolved::MaxTurnsProvenance;
 use gents_loop::error::LoopFailureCause;
+use gents_loop::provider_call::admission::{self, CallKind};
 use gents_protocol::row::AgentRequest;
 
 mod drive;
 mod prepare;
 type RequestDeadline = Option<DateTime<Utc>>;
+
+pub(super) struct RequestSignals<'a> {
+    pub(super) shutdown: &'a mut tokio::sync::watch::Receiver<bool>,
+    pub(super) interrupt_rx: &'a mut tokio::sync::watch::Receiver<
+        Option<gents_session::request::interrupt::InterruptIntent>,
+    >,
+    pub(super) request_token: &'a tokio_util::sync::CancellationToken,
+}
 
 const RETRY_CONTINUATION: &str = "Continue the failed request from the recorded progress. Use recorded tool outcomes; do not repeat completed actions.";
 
@@ -131,6 +140,7 @@ pub(super) fn render_request_context_message(
         frozen_instruction_manifest,
         gents_session::workspace::request_workspace_cwd(request).as_deref(),
         tool_config.host_tools().read_root(),
+        tool_config.max_instruction_chars(),
     ))
 }
 
@@ -138,11 +148,13 @@ fn assemble_request_context_message(
     frozen_instruction_manifest: Option<&str>,
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
+    max_instruction_chars: usize,
 ) -> Option<Message> {
     gents_session::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,
+        max_instruction_chars,
     )
     .map(|body| Message::user(format!("<context>\n{body}\n</context>")))
 }
@@ -180,30 +192,39 @@ impl<M> AgentDaemon<M>
 where
     M: gents_inference::llm::rig_compat::ProviderModel,
 {
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,
-        request: &gents_protocol::row::AgentRequest,
-        doc_id: &str,
-        history: &[TaggedMessage],
-        wake_notifications: &[TaggedMessage],
-        replay: LoopReplayInput,
         lifecycle: &mut gents_session::request::lifecycle::RequestLifecycle,
         stream_writer: &gents_session::request::streaming::DefraStreamWriter,
-        shutdown: &mut tokio::sync::watch::Receiver<bool>,
-        interrupt_rx: &mut tokio::sync::watch::Receiver<
-            Option<gents_session::request::interrupt::InterruptIntent>,
-        >,
-        request_token: &tokio_util::sync::CancellationToken,
-        aggregate_token_budget: Option<crate::runtime::agent::loop_stream::AggregateTokenBudget>,
-        effective_seed: Option<i64>,
-        mut workspace: gents_tools::runtime_context::ToolWorkspaceScope,
-        request_context_message: Option<gents_inference::llm::message::Message>,
-        resume_from_history: bool,
-        consumed_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
-        folded_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
-        context_calibration: crate::turn::provider_input::budget::ContextCalibration,
+        signals: RequestSignals<'_>,
+        inputs: RequestInputs<'_>,
+        prepared: PreparedRequestInput,
     ) -> Result<HandleRequestOutcome> {
+        let RequestSignals {
+            shutdown,
+            interrupt_rx,
+            request_token,
+        } = signals;
+        let RequestInputs {
+            request,
+            aggregate_token_budget,
+            context_calibration,
+            effective_seed,
+            resume_from_history,
+            admission,
+            capture,
+            ..
+        } = inputs;
+        let PreparedRequestInput {
+            mut workspace,
+            request_context_message,
+            built,
+            replay,
+            consumed_prompts,
+            folded_prompts,
+            wake_notifications,
+        } = prepared;
+        let doc_id = lifecycle.request().doc_id.clone();
         workspace.runtime_home = self.approval_home.clone();
         let request_deadline = lifecycle.claimed_deadline_at();
         let trigger_context = gents_session::request::lifecycle::TriggerExecutionContext::parse(
@@ -264,7 +285,7 @@ where
                 gents_tools::runtime_context::ToolHostContext {
                     workspace: Default::default(),
                     interactive: request.execution_origin.as_deref() == Some("interactive"),
-                    approval: approval_context.clone(),
+                    approval: approval_context,
                 },
             ),
             workspace.clone(),
@@ -295,16 +316,16 @@ where
                         request_deadline,
                         inference_observation: &inference_observation,
                         effective_seed,
-                        context_calibration: &context_calibration,
+                        context_calibration,
                         request_context_message: &request_context_message,
                         resume_from_history,
                         consumed_prompts: &consumed_prompts,
                         folded_prompts: &folded_prompts,
-                        history,
-                        wake_notifications,
+                        history: &built.messages,
+                        wake_notifications: &wake_notifications,
                     },
                     replay,
-                    aggregate_token_budget,
+                    aggregate_token_budget.clone(),
                 ));
                 let Some(prepared) =
                     super::request::prepare_unless_interrupted(interrupt_rx, prepared).await
@@ -332,12 +353,13 @@ where
                 let terminal_failure_reason = admission::terminal_failure_reason_observer();
                 let hook_for_start_interrupt = persistence_hook.clone();
                 let provider_profile = loop_config.provider_input_counter.profile();
-                let stream = admission::scope_call_with_token_and_failure_reason(
-                    CallKind::Inference,
-                    attempt_index,
-                    inference_token.clone(),
-                    terminal_failure_reason.clone(),
-                    async {
+                loop_config.provider_call.capture = capture.cloned();
+                loop_config.provider_call.admission = Some(
+                    admission
+                        .for_call(CallKind::Inference, attempt_index)
+                        .with_cancellation(inference_token.clone(), terminal_failure_reason.clone()),
+                );
+                let stream = async {
                         tokio::select! {
                             biased;
                             _ = shutdown.changed() => {
@@ -365,37 +387,29 @@ where
                                 loop_config,
                             ))) => Ok(stream)
                         }
-                    },
-                )
+                    }
                 .await?;
 
-                admission::scope_call_with_token_and_failure_reason(
-                    CallKind::Inference,
-                    attempt_index,
-                    inference_token.clone(),
-                    terminal_failure_reason.clone(),
-                    Box::pin(drive::drive_inference_stream(
+                Box::pin(drive::drive_inference_stream(
                         drive::StreamDrive {
                             persistence_hook: &persistence_hook,
                             stream_writer,
-                            doc_id,
+                            doc_id: &doc_id,
                             provider_profile,
                             request_token,
                             inference_token: &inference_token,
                             request_id: &request_id,
                             session_id: &session_id,
-                            trigger_correlation: &trigger_correlation,
-                            trigger_context: &trigger_context,
                             request_deadline,
                             terminal_failure_reason: &terminal_failure_reason,
                             max_turns_provenance,
+                            capture,
                         },
                         stream,
                         lifecycle,
                         shutdown,
                         interrupt_rx,
-                    )),
-                )
+                    ))
                 .await
             }
             .instrument(tracing::info_span!(
@@ -414,30 +428,7 @@ where
                 retry_attempt = false,
             )));
 
-        let outcome =
-            gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-                Some(
-                    gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
-                        request.requester_did.clone(),
-                        Some(request.node_did.clone()),
-                        Some(agent_did.to_string()),
-                        Some(request.request_id.clone()),
-                    ),
-                ),
-                request_deadline,
-                request_token.clone(),
-                workspace,
-                None,
-                Some(session_id.clone()),
-                trigger_correlation.clone(),
-                trigger_context.source_fields.clone(),
-                false,
-                gents_tools::plugin::approval::scope_interactive(
-                    request.execution_origin.as_deref() == Some("interactive"),
-                    gents_tools::plugin::approval::workspace::scope(approval_context, inference),
-                ),
-            )
-            .await;
+        let outcome = inference.await;
 
         if let Some(error) = reviewer.take_failure() {
             return Err(error);
@@ -463,27 +454,20 @@ pub(super) mod tests {
     use crate::runtime::agent::runtime::StartupBarrier;
     use crate::turn::prompt::LayeredPromptBuilder;
     use anyhow::Context;
-    use futures::stream;
     use gents_inference::backends::provider::BackendProviderKind;
     use gents_inference::resolved::MaxTurnsProvenance;
     use gents_inference::resolved::{ResolvedAgent, SamplingConfig};
     use gents_loop::completion_retry::CompletionRetryProfileFields;
     use gents_loop::error::LoopFailureCause;
+    use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
     use gents_loop::tool::ToolDyn;
     use gents_protocol::row::AgentRequest;
     use gents_store::identity::{NodeIdentity, RuntimeNode};
-    use gents_toolcalls::call::hook::{
-        BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-    };
+    use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+    use gents_toolcalls::call::hook::{BackgroundToolRegistry, FailurePolicy};
     use gents_tools::surface::AgentToolSurfaceConfig;
-    use rig::completion::{
-        CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
-    };
-    use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    };
+    use rig::completion::CompletionRequest;
+    use std::sync::{atomic::Ordering, Arc};
     use std::time::Duration;
     /// rig's own turn-exhaustion `Display`. Its `PromptError: MaxTurnError: `
     /// prefix is pinned by `agent/loop_stream/tests/streaming.rs`; the
@@ -510,51 +494,6 @@ pub(super) mod tests {
     }
 
     #[derive(Clone)]
-    struct RoutedReplyModel;
-
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for RoutedReplyModel {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            Self
-        }
-
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            Err(CompletionError::ProviderError(
-                "completion is unused in daemon lineage test".to_string(),
-            ))
-        }
-
-        async fn stream(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-                .await?;
-            let items = vec![
-                Ok(RawStreamingChoice::Message("routed reply".to_string())),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ];
-            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(items));
-            Ok(StreamingCompletionResponse::stream(inner))
-        }
-    }
-
-    #[derive(Clone)]
-    struct WakeInputModel {
-        provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
-        title_calls: Arc<AtomicUsize>,
-        title_shape_mismatches: Arc<AtomicUsize>,
-        successor: Option<WakeSuccessor>,
-    }
-
-    #[derive(Clone)]
     struct WakeSuccessor {
         node: Arc<defra_node::Node>,
         request_id: String,
@@ -563,95 +502,82 @@ pub(super) mod tests {
         runtime: Arc<dyn NodeIdentity>,
     }
 
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for WakeInputModel {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
+    /// Whether a wake-fixture request has the title request's shape, and
+    /// whether it carries the title owner's preamble.
+    fn wake_request_shape(request: &CompletionRequest) -> (bool, bool) {
+        let history =
+            serde_json::to_value(&request.chat_history).expect("serialize provider input");
+        let title_preamble = super::super::title::title_generation_preamble();
+        (
+            request.temperature == Some(0.0) && request.tools.is_empty(),
+            json_contains_text(&history, &title_preamble),
+        )
+    }
 
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            unreachable!("the wake test constructs its deterministic model directly")
-        }
-
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            Err(CompletionError::ProviderError(
-                "non-streaming completion is unused".into(),
-            ))
-        }
-
-        async fn stream(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-                .await?;
-            let history =
-                serde_json::to_value(&request.chat_history).expect("serialize provider input");
-            let title_preamble = super::super::title::title_generation_preamble();
-            let title_shape = request.temperature == Some(0.0) && request.tools.is_empty();
-            let title_preamble_present = json_contains_text(&history, &title_preamble);
-            let text = match (title_shape, title_preamble_present) {
-                (true, true) => {
-                    self.title_calls.fetch_add(1, Ordering::SeqCst);
-                    "background-completion-review"
-                }
-                (false, false) => {
-                    let first = {
-                        let mut inputs = self
-                            .provider_inputs
-                            .lock()
-                            .expect("wake provider input capture");
-                        inputs.push(
-                            serde_json::to_string(&request.chat_history)
-                                .expect("serialize provider input"),
-                        );
-                        inputs.len() == 1
-                    };
-                    if first {
-                        if let Some(WakeSuccessor {
-                            node,
-                            request_id,
-                            did,
-                            signer,
-                            runtime,
-                        }) = &self.successor
-                        {
-                            gents_toolcalls::call::lifecycle::admission_fixture::complete_child_managed_verified(
+    /// Answers the title owner and the main turn by request shape, failing a
+    /// request whose shape and preamble disagree; the first main turn first
+    /// completes `successor`.
+    fn wake_input_model(successor: Option<WakeSuccessor>) -> ScriptedProvider {
+        let successor = Arc::new(std::sync::Mutex::new(successor));
+        ScriptedProvider::new([])
+            .respond_async(move |dispatch| {
+                let successor = successor.clone();
+                async move {
+                    match wake_request_shape(&dispatch.request) {
+                        (true, true) => Reply::text("background-completion-review"),
+                        (false, false) => {
+                            let first = successor.lock().expect("wake successor").take();
+                            if let Some(WakeSuccessor {
                                 node,
                                 request_id,
-                                "successor native output",
+                                did,
                                 signer,
-                                runtime.clone(),
-                            )
-                            .await;
-                            assert_eq!(
-                                gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
-                                    node, &gents_store::config_client::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), &gents_automation::goal::session_message::SessionGoals, did
+                                runtime,
+                            }) = first
+                            {
+                                gents_toolcalls::call::lifecycle::admission_fixture::complete_child_managed_verified(
+                                    &node,
+                                    &request_id,
+                                    "successor native output",
+                                    &signer,
+                                    runtime.clone(),
                                 )
-                                .await
-                                .unwrap(),
-                                1
-                            );
+                                .await;
+                                assert_eq!(
+                                    gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
+                                        &node, &gents_store::config_client::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), &gents_automation::goal::session_message::SessionGoals, &did
+                                    )
+                                    .await
+                                    .unwrap(),
+                                    1
+                                );
+                            }
+                            Reply::text("wake handled")
                         }
+                        _ => Reply::provider_error(
+                            "wake fixture title shape and owner preamble disagree",
+                        ),
                     }
-                    "wake handled"
                 }
-                _ => {
-                    self.title_shape_mismatches.fetch_add(1, Ordering::SeqCst);
-                    return Err(CompletionError::ProviderError(
-                        "wake fixture title shape and owner preamble disagree".into(),
-                    ));
-                }
-            };
-            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
-                Ok(RawStreamingChoice::Message(text.to_string())),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ]));
-            Ok(StreamingCompletionResponse::stream(inner))
+            })
+            .capturing_openai("scripted")
+    }
+
+    /// The main turns' chat histories, the title calls and the shape
+    /// mismatches the wake fixture received.
+    fn wake_observations(model: &ScriptedProvider) -> (Vec<String>, usize, usize) {
+        let mut main = Vec::new();
+        let (mut titles, mut mismatches) = (0, 0);
+        for request in model.requests() {
+            match wake_request_shape(&request) {
+                (true, true) => titles += 1,
+                (false, false) => main.push(
+                    serde_json::to_string(&request.chat_history).expect("serialize provider input"),
+                ),
+                _ => mismatches += 1,
+            }
         }
+        (main, titles, mismatches)
     }
 
     fn json_contains_text(value: &serde_json::Value, expected: &str) -> bool {
@@ -694,36 +620,10 @@ pub(super) mod tests {
         .unwrap()
     }
 
-    #[derive(Clone)]
-    struct CountingReplyModel(Arc<AtomicUsize>);
-
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for CountingReplyModel {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            Self(Arc::new(AtomicUsize::new(0)))
-        }
-        async fn completion(
-            &self,
-            _request: CompletionRequest,
-        ) -> Result<CompletionResponse<()>, CompletionError> {
-            Err(CompletionError::ProviderError("unused".into()))
-        }
-        async fn stream(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-            gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-                .await?;
-            self.0.fetch_add(1, Ordering::SeqCst);
-            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
-                Ok(RawStreamingChoice::Message("admitted reply".to_string())),
-                Ok(RawStreamingChoice::FinalResponse(())),
-            ]));
-            Ok(StreamingCompletionResponse::stream(inner))
-        }
+    /// A provider that admits every call with a reply, so a test can count
+    /// them.
+    fn counting_reply_model() -> ScriptedProvider {
+        ScriptedProvider::responding(|_| Reply::text("admitted reply")).capturing_openai("scripted")
     }
 
     fn test_agent_with_binding(
@@ -753,6 +653,7 @@ pub(super) mod tests {
             openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             claude_platform: None,
+            client_version: None,
             backend_auth: gents_documents::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
             service_tier: None,
@@ -765,9 +666,15 @@ pub(super) mod tests {
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
+            max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+            repeated_tool_failure_limit:
+                gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
             stream_batch_ms: 0,
             stream_liveness_timeout: Duration::from_secs(5),
             deadline_duration: Duration::from_secs(30),
+            title_timeout: Duration::from_secs(
+                gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS,
+            ),
             provider_idle_timeout: Duration::from_secs(
                 gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
             ),
@@ -903,10 +810,12 @@ pub(super) mod tests {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("request-{suffix}"),
-            agent_config.node_did(),
-            member.did(),
-            &agent_config.agent_did,
-            format!("session-{suffix}"),
+            gents_protocol::request_admission::RequestScope::new(
+                agent_config.node_did(),
+                member.did(),
+                &agent_config.agent_did,
+                format!("session-{suffix}"),
+            ),
             "run enrolled request",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -996,7 +905,7 @@ pub(super) mod tests {
                         data: gents_inference::llm::message::DocumentSourceKind::String(
                             "fn main() {}".into(),
                         ),
-                        media_type: Some(gents_inference::llm::message::DocumentMediaType::TXT),
+                        media_type: Some(gents_inference::llm::message::DocumentMediaType::Txt),
                         additional_params: Some(
                             serde_json::json!({ "captured_context": { "kind": "selection" } }),
                         ),
@@ -1151,7 +1060,10 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config,
             provider_family: None,
-            model: Arc::new(RoutedReplyModel),
+            model: Arc::new(
+                ScriptedProvider::responding(|_| Reply::text("routed reply"))
+                    .capturing_openai("scripted"),
+            ),
             preamble,
             loop_tools,
             prompt_builder,
@@ -1319,27 +1231,20 @@ pub(super) mod tests {
             &[],
         );
         let preamble = prompt_builder.preamble().to_string();
-        let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let title_calls = Arc::new(AtomicUsize::new(0));
-        let title_shape_mismatches = Arc::new(AtomicUsize::new(0));
+        let model = wake_input_model(successor.map(|request_id| WakeSuccessor {
+            node: node.clone(),
+            request_id,
+            did: admission.node_did.clone(),
+            signer: signer.clone(),
+            runtime: admission.runtime.clone(),
+        }));
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(WakeInputModel {
-                provider_inputs: provider_inputs.clone(),
-                title_calls: title_calls.clone(),
-                title_shape_mismatches: title_shape_mismatches.clone(),
-                successor: successor.map(|request_id| WakeSuccessor {
-                    node: node.clone(),
-                    request_id,
-                    did: admission.node_did.clone(),
-                    signer: signer.clone(),
-                    runtime: admission.runtime.clone(),
-                }),
-            }),
+            model: Arc::new(model.clone()),
             preamble,
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -1415,18 +1320,17 @@ pub(super) mod tests {
 
         let diagnostic = persisted_request_by_doc_id(&admission.client, &wake.doc_id).await;
         {
-            let captured = provider_inputs.lock().expect("wake provider input capture");
+            let (captured, title_calls, title_shape_mismatches) = wake_observations(&model);
             assert_eq!(
                 captured.len(),
                 1,
                 "one deterministic main provider turn must run; title_calls={}, wake={:?}",
-                title_calls.load(Ordering::SeqCst),
+                title_calls,
                 diagnostic
             );
-            assert_eq!(title_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(title_calls, 0);
             assert_eq!(
-                title_shape_mismatches.load(Ordering::SeqCst),
-                0,
+                title_shape_mismatches, 0,
                 "title errors must not be hidden by the fallback"
             );
             let first_input: serde_json::Value =
@@ -1483,7 +1387,7 @@ pub(super) mod tests {
             "the scenario locates these headers in the provider input"
         );
         {
-            let captured = provider_inputs.lock().unwrap();
+            let (captured, _, _) = wake_observations(&model);
             assert_eq!(captured.len(), 2);
             let input = &captured[1];
             let answer = input
@@ -1585,7 +1489,7 @@ pub(super) mod tests {
             false,
             &[],
         );
-        let calls = Arc::new(AtomicUsize::new(0));
+        let calls = counting_reply_model();
         let runtime_status = crate::runtime::status::RuntimeStatusHandle::new(
             node.clone(),
             agent_config.node_did().to_string(),
@@ -1596,7 +1500,7 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(CountingReplyModel(calls.clone())),
+            model: Arc::new(calls.clone()),
             preamble: prompt_builder.preamble().to_string(),
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -1633,7 +1537,7 @@ pub(super) mod tests {
             .await
             .unwrap();
         assert!(
-            calls.load(Ordering::SeqCst) > 0,
+            calls.calls() > 0,
             "the admitted request must reach the provider before revocation"
         );
         let escaped_first_doc_id = gents_store::graphql::escape_graphql_string(&first_doc_id);
@@ -1654,7 +1558,7 @@ pub(super) mod tests {
             ),
             "the first request must select its published reply"
         );
-        let calls_before_revocation = calls.load(Ordering::SeqCst);
+        let calls_before_revocation = calls.calls();
 
         gents_tools::surface::set_workspace_root(
             &user_access,
@@ -1670,7 +1574,7 @@ pub(super) mod tests {
         let second_doc_id = second.doc_id.clone();
         daemon.process_request(second, shutdown_rx).await.unwrap();
         assert_eq!(
-            calls.load(Ordering::SeqCst),
+            calls.calls(),
             calls_before_revocation,
             "the revoked fresh request must fail before provider exposure"
         );
@@ -1733,7 +1637,7 @@ pub(super) mod tests {
             false,
             &[],
         );
-        let calls = Arc::new(AtomicUsize::new(0));
+        let calls = counting_reply_model();
         let runtime_status = crate::runtime::status::RuntimeStatusHandle::new(
             node.clone(),
             agent_config.node_did().to_string(),
@@ -1744,7 +1648,7 @@ pub(super) mod tests {
             tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
-            model: Arc::new(CountingReplyModel(calls.clone())),
+            model: Arc::new(calls.clone()),
             preamble: prompt_builder.preamble().to_string(),
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -1791,11 +1695,7 @@ pub(super) mod tests {
             .process_request(revoked.clone(), shutdown_rx.clone())
             .await
             .unwrap();
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            0,
-            "revoked work reached provider"
-        );
+        assert_eq!(calls.calls(), 0, "revoked work reached provider");
         assert_blocked(revoked.doc_id.clone()).await;
 
         let generation_two = fence(2, "enrollment-2");
@@ -1814,7 +1714,7 @@ pub(super) mod tests {
             .await
             .unwrap();
         assert_eq!(
-            calls.load(Ordering::SeqCst),
+            calls.calls(),
             0,
             "cross-actor replacement reached provider without atomic requester authorization"
         );

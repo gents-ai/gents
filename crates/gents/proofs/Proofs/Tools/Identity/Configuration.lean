@@ -560,13 +560,18 @@ def clientSignedUpdateSupported (collection : String) : Bool :=
   clientSignedCreateCollection collection
 
 /-- A client signs deletes only for bundled configuration schemas or the
-pack installation, Goal and GoalCreationClaim records. Native delete permission
-remains required; session deletion has a separate product owner. Pack evidence
-(create, update, delete) and pack relationship edits share this list. -/
+pack installation, Goal, GoalCreationClaim and EventSourceCursor records. Native
+delete permission remains required; session deletion has a separate product
+owner. Pack evidence (create, update, delete) and pack relationship edits share
+this list. A pack installing an EventSource seeds its cursor in the same
+User-signed configuration transaction and relates the cursor's `parent` and
+`writer`, so the cursor is listed here; it is a `configuration` resource like
+its EventSource, and document ACP decides its update and delete as for every
+other entry. -/
 def clientSignedDeleteCollection (collection : String) : Bool :=
   (clientSignedCreateCollection collection && collection != "InferenceBackend") ||
     ["PackInstallation", "InferenceBackendMetadata", "InferenceBackendObservation",
-      "BackendCredential", "Goal", "GoalCreationClaim"].contains collection
+      "BackendCredential", "Goal", "GoalCreationClaim", "EventSourceCursor"].contains collection
 
 /-- The operator stop (security review, 2026-11-10): the Node's user owner
 deletes any Agent's application pairing overlay through the signed client path,
@@ -580,6 +585,9 @@ def clientSignedOperatorDelete (collection : String) : Bool :=
 theorem client_delete_includes_goal : clientSignedDeleteCollection "Goal" = true := by decide
 
 theorem client_delete_includes_goal_claim : clientSignedDeleteCollection "GoalCreationClaim" = true := by decide
+
+theorem client_delete_includes_event_source_cursor :
+    clientSignedDeleteCollection "EventSourceCursor" = true := by decide
 
 theorem client_delete_excludes_session : clientSignedDeleteCollection "AgentSession" = false := by decide
 
@@ -1236,17 +1244,18 @@ def configurationPresent (state : State) (id : String) : Bool :=
 
 /-- Where a destructive admin decision learns which documents exist.
 `acpFiltered` is every read Gents has: an ordinary query, filtered by document
-ACP for its own actor. Native premise: DefraDB does not apply its DacBypass to
-ordinary reads, so the native admin (the client User key,
-`GrantSets.GrantSet.householdOwner`) does not see documents other actors own
-through them. The conformance evidence is the admin case of
-`crates/gents/src/pack/installation/tests.rs` on branch
-`aos/g20-admin-retire-refuted` (commit 43928b8f33), which refuted the earlier
-premise that "the admin can tell missing from hidden". An ACP-filtered read is
-therefore not a complete inventory for any actor, the admin included: a
-document it cannot read is not known to be absent. `complete` names a read
-that enumerates every document whatever its ACP; no such source exists yet,
-and until one does every destructive decision that needs it is refused. -/
+ACP for its own actor. Native premise, before defradb.rs #2744: DefraDB did not
+apply its DacBypass to ordinary reads, so the native admin (the client User
+key, `GrantSets.GrantSet.householdOwner`) did not see documents other actors
+own through them; the admin case of `crates/gents/src/pack/installation/tests.rs`
+on branch `aos/g20-admin-retire-refuted` (commit 43928b8f33) refuted the
+premise that "the admin can tell missing from hidden". Since #2744 the NAC
+owner and the native admin do read past document ACP
+(`NodeProvisioning.NacOwner`), but no conformance case evidences that such a
+read enumerates every document, so it is still `acpFiltered`: a document an
+actor cannot read is not known to be absent. `complete` names a read that
+enumerates every document whatever its ACP; no such source is evidenced yet,
+and until one is every destructive decision that needs it is refused. -/
 inductive InventoryRead where
   | acpFiltered
   | complete
@@ -1749,9 +1758,15 @@ the same selected backend, connection and native actor update authority in its w
 def backendDiscoveryMayPublish (actorAuthorized sameDocument sameConnection committed : Bool) : Bool :=
   actorAuthorized && sameDocument && sameConnection && committed
 
-/-- A completed probe cannot publish to a replacement document or connection. -/
-def backendProbeMayPublish (sameDocument sameConnection committed : Bool) : Bool :=
-  sameDocument && sameConnection && committed
+/-- A runtime probe needs the backend's native document-read grant in its
+publication transaction; native administrator query bypass does not replace
+that grant. A completed probe cannot publish to a replacement connection. -/
+def backendProbeMayPublish (nativeRead sameDocument sameConnection committed : Bool) : Bool :=
+  nativeRead && sameDocument && sameConnection && committed
+
+theorem backend_probe_requires_native_read (sameDocument sameConnection committed : Bool) :
+    backendProbeMayPublish false sameDocument sameConnection committed = false := by
+  simp [backendProbeMayPublish]
 
 theorem plugin_backend_requires_both_actor_reads :
     [pluginBackendMayUse pluginBackendFixture (some "agent"),
@@ -1897,20 +1912,21 @@ theorem agent_cannot_resolve_runtime_secret (access : BackendCredentialAccess)
     runtimeMayUseBackendCredential access currentSecret historicalSecret = false := by
   simp [runtimeMayUseBackendCredential, notRuntime]
 
-/-- The runtime's account-selection service reads only resolver metadata under
-native ACP in the Agent write's transaction. Its input is the runtime-visible
-credential set: a filtered empty set is absence, not evidence about hidden
+/-- The runtime's account-selection service reads only resolver metadata in
+the Agent write's transaction. Its input is the credential set the runtime may
+use (`Household.runtimeMayUse`), not the set its read past document ACP
+observes: a filtered empty set is absence, not evidence about hidden
 documents. The Agent receives no credential document or token. The configured
-runtime identity, same-Node binding, snapshot, and native read are premises. -/
+runtime identity, same-Node binding, snapshot, and use decision are premises. -/
 structure RuntimeDefaultAccountRead where
   runtimeActor : Bool
   sameNode : Bool
   sameSnapshot : Bool
-  nativeRead : Bool
+  mayUse : Bool
   deriving BEq, Repr
 
 def runtimeMayReadDefaultAccount (access : RuntimeDefaultAccountRead) : Bool :=
-  access.runtimeActor && access.sameNode && access.sameSnapshot && access.nativeRead
+  access.runtimeActor && access.sameNode && access.sameSnapshot && access.mayUse
 
 theorem foreign_default_account_refused (access : RuntimeDefaultAccountRead)
     (foreign : access.sameNode = false) : runtimeMayReadDefaultAccount access = false := by
@@ -1920,8 +1936,8 @@ theorem agent_cannot_read_runtime_default (access : RuntimeDefaultAccountRead)
     (notRuntime : access.runtimeActor = false) : runtimeMayReadDefaultAccount access = false := by
   simp [runtimeMayReadDefaultAccount, notRuntime]
 
-theorem default_account_requires_native_read (access : RuntimeDefaultAccountRead)
-    (denied : access.nativeRead = false) : runtimeMayReadDefaultAccount access = false := by
+theorem default_account_requires_use (access : RuntimeDefaultAccountRead)
+    (denied : access.mayUse = false) : runtimeMayReadDefaultAccount access = false := by
   simp [runtimeMayReadDefaultAccount, denied]
 
 /-- The runtime never sends a credential to an unapproved provider destination. -/
@@ -2032,12 +2048,12 @@ theorem hosting_runtime_reads_without_reader_grant :
      Household.nativeRead false 5 revoked "runtime" "sessions" "session"] =
     [true, true, true, false, false, false] := by native_decide
 
-/-- The desktop User, its key custody, and its P2P identity belong to the
+/-- The desktop User, its key custody, and its saved runtime connections belong to the
 client, independently of a managed runtime's Node identity. A runtime or
 binding reset can retire its local cache and binding; only an explicit full
 client reset retires the independent client identity. -/
 inductive DesktopResetAsset where
-  | cache | binding | upgrade | userKey | userMetadata | p2pKey | custody | peers
+  | cache | binding | upgrade | userKey | userMetadata | custody | connections
   deriving BEq, DecidableEq
 
 def desktopResetRetires (full : Bool) (asset : DesktopResetAsset) : Bool :=
@@ -2045,27 +2061,13 @@ def desktopResetRetires (full : Bool) (asset : DesktopResetAsset) : Bool :=
 
 theorem runtime_reset_preserves_client_identity :
     [desktopResetRetires false .userKey, desktopResetRetires false .userMetadata,
-     desktopResetRetires false .p2pKey, desktopResetRetires false .custody,
-     desktopResetRetires false .peers] = [false, false, false, false, false] := by
+     desktopResetRetires false .custody,
+     desktopResetRetires false .connections] = [false, false, false, false] := by
   decide
 
 theorem runtime_reset_retires_cache_and_binding :
     [desktopResetRetires false .cache, desktopResetRetires false .binding,
      desktopResetRetires false .upgrade] = [true, true, true] := by
   decide
-
-/-- Managed client route approval follows a verified request and the owning
-User's document grant plus native node permissions. Route admission alone is
-not document authority, and the runtime cannot substitute for the User. -/
-def managedClientMayApprove (requestMatches ownerGrant nodeGrant : Bool) : Bool :=
-  requestMatches && ownerGrant && nodeGrant
-
-theorem managed_approval_requires_user_and_node_grants (requestMatches nodeGrant : Bool) :
-    managedClientMayApprove requestMatches false nodeGrant = false := by
-  cases requestMatches <;> cases nodeGrant <;> decide
-
-theorem managed_approval_requires_matching_request (ownerGrant nodeGrant : Bool) :
-    managedClientMayApprove false ownerGrant nodeGrant = false := by
-  simp [managedClientMayApprove]
 
 end Identity.Configuration

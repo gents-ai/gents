@@ -356,13 +356,11 @@ async fn mcp_registration_requires_client_signed_transport_when_offline() -> Res
     let tempdir = tempfile::tempdir()?;
     let node_home = tempdir.path().join("node-home");
     let fixture = McpFixture::new(tempdir.path(), &node_home, "offline-mcp").await?;
-    let desktop = fixture.desktop_home.clone();
     fixture.node.shutdown().await?;
     drop(fixture);
     let cwd = tempdir.path().to_owned();
     let stderr = tokio::task::spawn_blocking(move || {
         let home = node_home.to_str().context("node home utf8")?;
-        let desktop = desktop.to_str().context("desktop home utf8")?;
         run_cli_failure_stderr_with_env(
             &cwd,
             &[
@@ -375,7 +373,7 @@ async fn mcp_registration_requires_client_signed_transport_when_offline() -> Res
                 "http://127.0.0.1:9213/mcp",
                 "offline-service",
             ],
-            &[("GENTS_DESKTOP_HOME", desktop)],
+            &[],
         )
     })
     .await??;
@@ -411,24 +409,25 @@ struct McpFixture {
     node_did: String,
     graphql: String,
     cwd: std::path::PathBuf,
-    desktop_home: std::path::PathBuf,
     _store_claim: gents_store::local::home::StoreLock,
     _runtime: gents_store::identity::KeyIdentity,
-    _client: gents_desktop_core::client::PrincipalIdentity,
+    _client: gents_store::client_journal::principal_identity::PrincipalIdentity,
 }
 
 impl McpFixture {
     async fn new(cwd: &std::path::Path, home: &std::path::Path, name: &str) -> Result<Self> {
         let cwd = cwd.to_owned();
         let home = home.to_owned();
-        let desktop_home = cwd.join("desktop");
+        let desktop_home = graphql::cli_client_paths(&cwd, &[])
+            .root()
+            .parent()
+            .context("the CLI client folder has a parent")?
+            .to_path_buf();
         let init_cwd = cwd.clone();
         let init_home = home.clone();
-        let init_desktop = desktop_home.clone();
         let name = name.to_owned();
         let init = tokio::task::spawn_blocking(move || {
             let home = init_home.to_str().context("home utf8")?;
-            let desktop = init_desktop.to_str().context("desktop home utf8")?;
             run_cli_json_with_env(
                 &init_cwd,
                 &[
@@ -440,27 +439,39 @@ impl McpFixture {
                     "--node-name",
                     &name,
                 ],
-                &[("GENTS_DESKTOP_HOME", desktop)],
+                &[],
             )
         })
         .await??;
         let node_did = node_did_from_init(&init)?;
         let runtime = identity_from_init(&init)?;
-        let client = gents_desktop_core::client::PrincipalIdentity::load_existing(
-            &gents_desktop_core::client::DesktopPaths::from_root(desktop_home.join("cli")),
-        )?;
+        let client =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+                &gents_store::client_journal::paths::DesktopPaths::from_root(
+                    desktop_home.join("cli"),
+                ),
+            )?;
         let data = gents_store::local::home::default_data_dir(&home);
         let claim = gents_store::local::home::lock_store(&home, &data)?;
         let store_key = gents_store::local::store_key::open_home_store_key(&home, &data).await?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+        let routes = gents_store::test_support::local_authentication_route(Arc::new(
+            identity_from_init(&init)?,
+        ));
         let node = Arc::new(
-            gents_store::local::store_key::persistent_builder(&data, &store_key)?
-                .with_node_identity_did(node_did.clone())
-                .with_node_acp_enabled()
-                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
-                .build()
-                .await?,
+            gents_store::local::store_key::persistent_builder(
+                &data,
+                &store_key,
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )?
+            .with_node_identity_did(node_did.clone())
+            .with_node_acp_enabled()
+            .with_http(
+                gents::defra_node::HttpConfig::with_listener(listener)?.with_extra_routes(routes),
+            )
+            .build()
+            .await?,
         );
         let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             client.private_key_bytes(),
@@ -476,7 +487,6 @@ impl McpFixture {
             node_did,
             graphql,
             cwd,
-            desktop_home,
             _store_claim: claim,
             _runtime: runtime,
             _client: client,
@@ -494,11 +504,9 @@ impl McpFixture {
             node_did.to_owned(),
         ]);
         let cwd = self.cwd.clone();
-        let desktop = self.desktop_home.clone();
         tokio::task::spawn_blocking(move || {
             std::process::Command::new(cli_bin())
                 .env("HOME", &cwd)
-                .env("GENTS_DESKTOP_HOME", desktop)
                 .env("RUST_LOG", "error")
                 .args(args)
                 .output()

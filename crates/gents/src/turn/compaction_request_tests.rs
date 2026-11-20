@@ -18,7 +18,7 @@ struct CompactionFixture {
 impl CompactionFixture {
     async fn new(name: &str, request_id: &str, session_id: &str) -> Self {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         use gents_store::identity::NodeIdentity;
         let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
@@ -28,10 +28,7 @@ impl CompactionFixture {
         let create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             request_id,
-            db.node_identity.did(),
-            user.did(),
-            agent.did(),
-            session_id,
+            RequestScope::new(db.node_identity.did(), user.did(), agent.did(), session_id),
             "compaction",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -81,22 +78,20 @@ impl CompactionFixture {
 
 #[tokio::test]
 async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
-    use gents_inference::rendered_request::scope::{
-        armed_labels, scope_request, test_scope, CaptureScopeKind,
-    };
+    use gents_inference::rendered_request::scope::{armed_labels, test_scope, CaptureScopeKind};
     use gents_inference::rendered_request::RenderedRequestCaptureSink;
 
-    let model = ScriptedSummaryModel::new(vec![
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::summary_turn(),
+    let model = scripted_summary_model(vec![
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        summary_turn(),
     ]);
     let mut config = scheduled_origin_config();
-    config.on_rendered_request = Some(
-        gents_inference::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Compaction),
-    );
+    config.on_rendered_request = Some(gents_inference::rendered_request::scope::arming_sink(
+        CaptureScopeKind::Compaction,
+    ));
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
     let mut fixture = CompactionFixture::new(
@@ -131,7 +126,8 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
             GROUPED_PROFILE,
         ));
 
-    let labels = scope_request(scope, async move {
+    let labels = async move {
+        let capture = scope;
         compactor
             .reduce(
                 summary_worthy_messages(),
@@ -140,14 +136,18 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
                     keep_recent_tokens: 50,
                     mode: ReductionMode::Summarize,
                     summary_max_output_tokens: 512,
+                    provider_call: gents_loop::provider_call::ProviderCall {
+                        capture: Some(capture.clone()),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 test_reduction_admission(),
             )
             .await
             .expect("the strict JSON fallback recovers");
-        armed_labels()
-    })
+        armed_labels(Some(&capture))
+    }
     .await;
 
     assert_eq!(
@@ -181,7 +181,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let agent_did = fixture.lifecycle.request().agent_did.clone();
     let access = fixture.access();
 
-    let model = MockSummaryModel::new(
+    let model = mock_summary_model(
         &serde_json::json!({
             "goal": "Continue inspecting the source files.",
             "completed_work": ["The agent repeatedly inspected the source files."],
@@ -191,6 +191,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .to_string(),
     );
     let config = gents_loop::loop_stream::LoopConfig {
+        provider_call: Default::default(),
         replay: gents_loop::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(
@@ -221,10 +222,12 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
-        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
+        tool_context: gents_loop::tool::ToolCallEnvelope::default(),
     };
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 

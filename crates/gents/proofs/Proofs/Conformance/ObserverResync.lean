@@ -4,8 +4,10 @@ import Lean
 /-! Executes `ObserverResync` and `ClientDataPublication` on the observer
 traces a native test serializes. Each node has its own store. After every
 operation it reports the slot of the operation's node; a finished load also
-reports its settlement and the patch fence's decision for its read. The final
-report adds every node's slot and every node's store rows. -/
+reports its settlement and the patch fence's decision for its read, and a
+finished collection reload its settlement. The final report adds every node's
+slot and every node's store rows: its sessions, which only a full load reads,
+and its backend observations, which a collection reload reads alone. -/
 namespace Conformance.ObserverResync
 open Lean
 open _root_.ClientDataPublication
@@ -28,19 +30,24 @@ structure Machine where
   slots : Nat → Slot
   reads : Nat → Option Read
   rows : Nat → List String
+  observations : Nat → List String
 
 def emptyStore : State :=
   { dataEpoch := 0, provenanceEpoch := 0, requestEventEpoch := 0, transcriptEpoch := 0 }
 
 def initialMachine : Machine :=
   { pubs := fun _ => emptyStore, slots := fun _ => initial, reads := fun _ => none,
-    rows := fun _ => [] }
+    rows := fun _ => [], observations := fun _ => [] }
 
 def update {α : Type} (f : Nat → α) (node : Nat) (value : α) : Nat → α :=
   fun other => if other = node then value else f other
 
-/-- The rows a load or direct reload of `node` reads from its runtime. -/
+/-- The rows a load or direct reload of `node` reads from its runtime. It
+reads no backend observation: a published load replaces every collection. -/
 def snapshot (node : Nat) : List String := [s!"session-{node}"]
+
+/-- The backend observations a collection reload of `node` reads. -/
+def observationRows (node : Nat) : List String := [s!"observation-{node}"]
 
 def onStore (m : Machine) (node : Nat) (step : State → State) : Machine :=
   { m with pubs := Fleet.on m.pubs node step }
@@ -50,7 +57,17 @@ def reloadNode (m : Machine) (read : Read) (node : Nat) (incoming : List String)
     Settlement × Machine :=
   let outcome := settlement (m.pubs node) read .rows
   if outcome = .published then
-    (outcome, { onStore m node dataChange with rows := update m.rows node incoming })
+    (outcome, { onStore m node dataChange with rows := update m.rows node incoming,
+                                                observations := update m.observations node [] })
+  else (outcome, m)
+
+/-- A collection reload of `node`'s backend observations, captured at `read`. -/
+def reloadCollections (m : Machine) (read : Read) (node : Nat) (result : LoadResult) :
+    CollectionSettlement × Machine :=
+  let outcome := collectionSettlement (m.pubs node) read result
+  if outcome = .published then
+    (outcome, { onStore m node dataChange with
+                observations := update m.observations node (observationRows node) })
   else (outcome, m)
 
 /-- The observer clears a refused node's store with a fresh capture. -/
@@ -67,6 +84,11 @@ def settlementName : Settlement → String
   | .superseded => "superseded"
   | .transportFailed => "transport_failed"
   | .refused => "refused"
+
+def collectionSettlementName : CollectionSettlement → String
+  | .published => "published"
+  | .superseded => "superseded"
+  | .failed => "failed"
 
 def statusName : Status → String
   | .connecting => "connecting"
@@ -101,6 +123,21 @@ def step (m : Machine) (op : Op) : Machine × Option Json :=
             reads := update m.reads n (some (beginRead (m.pubs n))) }, none)
       else (m, none)
   | "deliver" => (withSlot (onStore m n requestEvent) n (queue slot), none)
+  | "deliver_collection" =>
+      (withSlot (onStore m n requestEvent) n (queueCollection slot), none)
+  | "start_collections" =>
+      if collectionStartable slot then
+        ({ withSlot m n (startCollections slot) with
+            reads := update m.reads n (some (beginRead (m.pubs n))) }, none)
+      else (m, none)
+  | "finish_collections" =>
+      match slot.reloadingCollections, m.reads n with
+      | true, some read =>
+          let (outcome, next) := reloadCollections m read n (loadResult op.result)
+          (dropRead (withSlot next n (settleCollections slot outcome)) n,
+            some (Json.mkObj [("collection_settlement",
+              toJson (collectionSettlementName outcome))]))
+      | _, _ => (m, some Json.null)
   | "tool_call_event" => (onStore m n provenanceInvalidation, none)
   | "transcript_event" => (onStore m n transcriptInvalidation, none)
   | "stream_failed" =>
@@ -131,6 +168,8 @@ def step (m : Machine) (op : Op) : Machine × Option Json :=
 def slotJson (slot : Slot) : Json :=
   Json.mkObj [("pending", toJson slot.pending), ("waiting", toJson slot.waiting),
     ("loading", toJson slot.loading), ("armed", toJson slot.armed),
+    ("collections", toJson slot.collections),
+    ("reloading_collections", toJson slot.reloadingCollections),
     ("status", toJson (statusName slot.status)),
     ("presentation", toJson (presentationName (present slot)))]
 
@@ -144,7 +183,9 @@ def execute (trace : Trace) : Json := Id.run do
       ("result", result.getD Json.null)])
   return Json.mkObj [("steps", Json.arr steps),
     ("slots", Json.arr ((List.range trace.nodes).map (fun n => slotJson (machine.slots n))).toArray),
-    ("rows", Json.arr ((List.range trace.nodes).map (fun n => toJson (machine.rows n))).toArray)]
+    ("rows", Json.arr ((List.range trace.nodes).map (fun n => toJson (machine.rows n))).toArray),
+    ("observations",
+      Json.arr ((List.range trace.nodes).map (fun n => toJson (machine.observations n))).toArray)]
 
 end Conformance.ObserverResync
 

@@ -1,9 +1,9 @@
 use gents_protocol::job::{JobBudget, JobOutcome, JobProgress, JobState};
 
 use super::support::{seed_served_job_row, served_desktop};
-use crate::error::BridgeErrorCode;
 use crate::job_view::{job_view, jobs_list};
 use gents_protocol::operations::job::JobListInput;
+use gents_store::client_error::BridgeErrorCode;
 
 fn progress(state: JobState) -> JobProgress {
     JobProgress {

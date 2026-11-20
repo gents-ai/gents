@@ -474,6 +474,48 @@ fn tools_validation_reports_every_violation() {
 }
 
 #[test]
+fn host_limits_are_validated_between_one_and_their_ceiling() {
+    let violations = |host: serde_json::Value| {
+        serde_json::from_value::<Tools>(serde_json::json!({
+            "tools_id": "host-limits",
+            "node_did": "did:test:test",
+            "host": host
+        }))
+        .unwrap()
+        .validation_violations()
+    };
+    let background = gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
+    let instructions = crate::tool_limits::MAX_CONFIGURED_INSTRUCTION_CHARS;
+    assert!(violations(serde_json::json!({
+        "max_background_tool_calls": 1, "max_instruction_chars": 1
+    }))
+    .is_empty());
+    assert!(violations(serde_json::json!({
+        "max_background_tool_calls": background, "max_instruction_chars": instructions
+    }))
+    .is_empty());
+    assert_eq!(
+        violations(serde_json::json!({
+            "max_background_tool_calls": 0, "max_instruction_chars": 0
+        })),
+        [
+            "host.max_instruction_chars must be positive",
+            "host.max_background_tool_calls must be positive",
+        ]
+    );
+    assert_eq!(
+        violations(serde_json::json!({
+            "max_background_tool_calls": background + 1,
+            "max_instruction_chars": instructions + 1
+        })),
+        [
+            format!("host.max_instruction_chars must be at most {instructions}"),
+            format!("host.max_background_tool_calls must be at most {background}"),
+        ]
+    );
+}
+
+#[test]
 fn validate_rejects_undeclared_agent_target_reference() {
     let refs = ConfigReferences::from_documents(
         "did:test:test",

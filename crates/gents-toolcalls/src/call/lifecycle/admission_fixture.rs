@@ -74,6 +74,7 @@ pub fn fixture_job_pin() -> gents_protocol::job::JobPin {
 }
 
 /// Write [`fixture_job_pin`] onto the tool-call row `tool_doc_id`.
+#[cfg(test)]
 pub(crate) async fn write_fixture_job_pin(
     node: &Arc<EmbeddedNode>,
     tool_doc_id: &str,
@@ -86,7 +87,8 @@ pub(crate) async fn write_fixture_job_pin(
     write_fixture_job_pin_with_access(&access, &mutation).await
 }
 
-/// [`write_fixture_job_pin`] as `access`'s actor, for a row an Agent owns.
+/// Write [`fixture_job_pin`] onto the tool-call row `tool_doc_id` as
+/// `access`'s actor, for a row an Agent owns.
 pub async fn write_fixture_job_pin_as(
     access: &gents_store::config_client::ConfigAccess,
     tool_doc_id: &str,
@@ -112,21 +114,32 @@ async fn write_fixture_job_pin_with_access(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "shared fixture with call sites across many test modules"
-)]
+/// The one tool call a fixture provider turn publishes: the turn it is in,
+/// its tool name, id and arguments, how it is awaited, and whether it starts
+/// running once accepted.
+pub struct AcceptedFixtureCall<'a> {
+    pub turn: usize,
+    pub tool_name: &'a str,
+    pub tool_call_id: &'a str,
+    pub arguments: serde_json::Value,
+    pub await_mode: AwaitMode,
+    pub start_running: bool,
+}
+
 pub async fn publish_accepted_on_claimed_request(
     node: Arc<EmbeddedNode>,
     request: &mut RequestLifecycle,
     node_did: &str,
-    turn: usize,
-    tool_name: &str,
-    tool_call_id: &str,
-    arguments: serde_json::Value,
-    await_mode: AwaitMode,
-    start_running: bool,
+    call: AcceptedFixtureCall<'_>,
 ) -> anyhow::Result<ToolCallLifecycle> {
+    let AcceptedFixtureCall {
+        turn,
+        tool_name,
+        tool_call_id,
+        arguments,
+        await_mode,
+        start_running,
+    } = call;
     let writer =
         DefraStreamWriter::new_for_lifecycle(node.clone(), request, Duration::from_millis(1))?;
     if turn == 0 {
@@ -465,10 +478,12 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        identity.did(),
-        identity.did(),
-        identity.did(),
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            identity.did(),
+            identity.did(),
+            session_id,
+        ),
         "spawn",
         "interactive",
         now,
@@ -1311,17 +1326,21 @@ pub async fn materialize_session_at(
             let caused = caused.clone();
             let created_at = created_at.clone();
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
-                    txn,
-                    &caused.session_id,
-                    &caused.node_did,
-                    &caused.agent_did,
-                    caused.requester_did.as_deref(),
-                    None,
+                let provenance =
                     gents_session::request::lifecycle::materialize::created_session_provenance(
                         &caused,
-                    ),
-                    &created_at,
+                    );
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    gents_session::session::NewAgentSession {
+                        session_id: &caused.session_id,
+                        node_did: &caused.node_did,
+                        agent_did: &caused.agent_did,
+                        requester_did: caused.requester_did.as_deref(),
+                        title: None,
+                        provenance,
+                        created_at: &created_at,
+                    },
                 )
                 .await
             })
@@ -1351,7 +1370,7 @@ pub async fn set_state(
 mod lifecycle_tests {
     use super::*;
     use crate::call::lifecycle::FailureClass;
-    use gents_session::session::tool_call_state::CancelCause;
+    use gents_protocol::tool_call::CancelCause;
 
     /// Reads the admitted row through the owning Agent's access; ACP hides it from the node.
     async fn row(

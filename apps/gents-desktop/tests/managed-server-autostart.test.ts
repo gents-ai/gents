@@ -87,7 +87,7 @@ describe("managed server launch restoration", () => {
       shouldAutoStartDesktopClient(
         {
           bootstrap: {
-            savedPeers: [{ source: "local-standard" }],
+            savedRuntimes: [{ local: true }],
           },
           client: null,
         } as never,
@@ -101,7 +101,7 @@ describe("managed server launch restoration", () => {
       shouldAutoStartDesktopClient(
         {
           bootstrap: {
-            savedPeers: [{ source: "paired-remote" }],
+            savedRuntimes: [{ local: false }],
           },
           client: null,
         } as never,
@@ -116,7 +116,7 @@ describe("managed server launch restoration", () => {
         {
           bootstrap: {
             clientStateExists: true,
-            savedPeers: [],
+            savedRuntimes: [],
           },
           client: null,
         } as never,
@@ -131,7 +131,7 @@ describe("managed server launch restoration", () => {
         {
           bootstrap: {
             clientStateExists: false,
-            savedPeers: [],
+            savedRuntimes: [],
           },
           client: null,
         } as never,
@@ -142,12 +142,12 @@ describe("managed server launch restoration", () => {
   });
 
   it.each([
-    [{ clientStateExists: false, savedPeers: [{ source: "local-standard" }] }, false],
-    [{ clientStateExists: false, savedPeers: [{ source: "local-standard" }] }, true],
-    [{ clientStateExists: false, savedPeers: [{ source: "local-standard" }] }, null],
-    [{ clientStateExists: true, savedPeers: [] }, false],
-    [{ clientStateExists: false, savedPeers: [{ source: "paired-remote" }] }, false],
-    [{ clientStateExists: false, savedPeers: [] }, true],
+    [{ clientStateExists: false, savedRuntimes: [{ local: true }] }, false],
+    [{ clientStateExists: false, savedRuntimes: [{ local: true }] }, true],
+    [{ clientStateExists: false, savedRuntimes: [{ local: true }] }, null],
+    [{ clientStateExists: true, savedRuntimes: [] }, false],
+    [{ clientStateExists: false, savedRuntimes: [{ local: false }] }, false],
+    [{ clientStateExists: false, savedRuntimes: [] }, true],
   ])(
     "waits on the client exactly when autostart will start it (%j, local=%s)",
     (bootstrap, localServerAvailable) => {

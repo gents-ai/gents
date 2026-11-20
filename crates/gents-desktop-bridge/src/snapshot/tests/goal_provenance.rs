@@ -1,6 +1,6 @@
 use super::*;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -10,7 +10,7 @@ use gents_store::identity::NodeIdentity as _;
 /// A served runtime after every modeled opening-provenance case has been
 /// checked before transcript publication and after reload.
 struct GoalProvenance {
-    runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    runtime: gents::client_test_support::ServedRuntimeHome,
     access: ConfigAccess,
     opening_doc: String,
     observed: Vec<AgentRequestRow>,
@@ -20,7 +20,7 @@ struct GoalProvenance {
 async fn goal_provenance_cases() -> GoalProvenance {
     // A served runtime whose User published a real provisioned Agent; a
     // guest may write the Agent's sessions.
-    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start().await;
+    let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
     let binding = runtime.publish_chat_agent().await;
     let identity = runtime.runtime().clone();
     let user = runtime.user().clone();
@@ -54,10 +54,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
     let reservation = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "reservation",
-        identity.did(),
-        user.did(),
-        &binding.agent_did,
-        "session",
+        RequestScope::new(identity.did(), user.did(), &binding.agent_did, "session"),
         "reserve",
         "interactive",
         "2026-10-25T00:00:00Z",
@@ -108,10 +105,12 @@ async fn goal_provenance_cases() -> GoalProvenance {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("request-{index}"),
-            identity.did(),
-            if index == 12 { guest.did() } else { user.did() },
-            &binding.agent_did,
-            "session",
+            RequestScope::new(
+                identity.did(),
+                if index == 12 { guest.did() } else { user.did() },
+                &binding.agent_did,
+                "session",
+            ),
             "Review the changes",
             "interactive",
             "2026-10-25T00:00:00Z",
@@ -420,12 +419,14 @@ async fn goal_provenance_cases() -> GoalProvenance {
         ] {
             push_canonical_text_message_for_node(
                 &mut rows,
-                &format!("authored:{doc}:{suffix}"),
-                "session",
-                Some(&doc),
-                sequence,
-                role,
-                "Review the changes",
+                CanonicalText {
+                    doc_id: &format!("authored:{doc}:{suffix}"),
+                    session_id: "session",
+                    request_doc_id: Some(&doc),
+                    sequence,
+                    role,
+                    text: "Review the changes",
+                },
                 identity.did(),
                 Some(if index == 12 { guest.did() } else { user.did() }),
             );
@@ -538,8 +539,8 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
 /// still names its origin, so the marker follows it.
 #[tokio::test]
 async fn paged_native_forks_follow_goal_provenance() {
-    use crate::tests::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
     use crate::types::{GoalControlAction, GoalControlRequest};
+    use gents::support::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
 
     let desktop = crate::tests::support::RunningDesktop::start(vec![
         StreamPlan::current_authored_user(

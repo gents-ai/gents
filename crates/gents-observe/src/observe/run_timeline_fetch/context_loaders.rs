@@ -73,19 +73,21 @@ mod tests {
                     Box::pin(async move {
                         gents_session::session::ensure_session_in_txn(
                             txn,
-                            "shared-label",
-                            owner,
-                            &binding.agent_did,
-                            Some(user.did()),
-                            Some(SessionTitle {
-                                text: "A title".into(),
-                                source: SessionTitleSource::User,
-                            }),
-                            Some(SessionProvenance {
-                                task_id: Some("task".into()),
-                                ..Default::default()
-                            }),
-                            "2026-01-01T00:00:00Z",
+                            gents_session::session::NewAgentSession {
+                                session_id: "shared-label",
+                                node_did: owner,
+                                agent_did: &binding.agent_did,
+                                requester_did: Some(user.did()),
+                                title: Some(SessionTitle {
+                                    text: "A title".into(),
+                                    source: SessionTitleSource::User,
+                                }),
+                                provenance: Some(SessionProvenance {
+                                    task_id: Some("task".into()),
+                                    ..Default::default()
+                                }),
+                                created_at: "2026-01-01T00:00:00Z",
+                            },
                         )
                         .await?;
                         Ok::<_, anyhow::Error>(())

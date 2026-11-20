@@ -1,11 +1,17 @@
 use super::*;
 
+pub(super) struct SeededSession {
+    pub(super) access: gents_store::config_client::ConfigAccess,
+    pub(super) agent_doc: String,
+    pub(super) session_doc: String,
+}
+
 pub(super) async fn seed_agent_session(
     db: &support::TestDb,
     fixture: &support::ManagedAgentFixture,
     session_id: &str,
     created_at: &str,
-) -> (gents_store::config_client::ConfigAccess, String, String) {
+) -> SeededSession {
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
         fixture.agent.did().parse().unwrap(),
@@ -48,33 +54,38 @@ pub(super) async fn seed_agent_session(
             Ok::<_,anyhow::Error>(session_doc)
         })
     }).await.unwrap();
-    (access, agent_doc, session_doc)
+    SeededSession {
+        access,
+        agent_doc,
+        session_doc,
+    }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the signed fixture binds a request to its physical session and Agent"
-)]
 pub(super) async fn seed_agent_request(
     db: &support::TestDb,
     fixture: &support::ManagedAgentFixture,
-    access: &gents_store::config_client::ConfigAccess,
-    agent_doc: &str,
-    session_doc: &str,
+    session: &SeededSession,
     session_id: &str,
     request_id: &str,
     created_at: &str,
 ) -> String {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
+    let SeededSession {
+        access,
+        agent_doc,
+        session_doc,
+    } = session;
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        db.node_identity.did(),
-        fixture.agent.did(),
-        fixture.agent.did(),
-        session_id,
+        RequestScope::new(
+            db.node_identity.did(),
+            fixture.agent.did(),
+            fixture.agent.did(),
+            session_id,
+        ),
         "session control witness",
         "interactive",
         created_at,
@@ -145,15 +156,15 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     let fixture = support::managed_agent_fixture(&db).await;
     let node_did = db.node_identity.did();
 
-    let mut agent_doc = None;
+    let mut seeded_access = None;
     for interrupt_case in
         gents_lean_vocab::families::session_control_contracts_interrupt_idle::cases()
     {
         let interrupted_session = uuid::Uuid::new_v4().to_string();
         assert_eq!(interrupt_case.input.initial_pending_count, 0);
-        let (access, seeded_agent_doc, _) =
+        let SeededSession { access, .. } =
             seed_agent_session(&db, &fixture, &interrupted_session, "2026-10-20T10:00:00Z").await;
-        agent_doc = Some((access.clone(), seeded_agent_doc));
+        seeded_access = Some(access.clone());
         gents_automation::goal::seed_goal_from_access(
             &access,
             node_did,
@@ -194,11 +205,11 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
             },
         );
     }
-    let (access, agent_doc) = agent_doc.expect("the interrupt case seeds the Agent session");
+    let access = seeded_access.expect("the interrupt case seeds the Agent session");
 
     for stop_case in gents_lean_vocab::families::session_control_contracts_stop_drains::cases() {
         let stopped_session = uuid::Uuid::new_v4().to_string();
-        let (_, _, stopped_session_doc) =
+        let stopped =
             seed_agent_session(&db, &fixture, &stopped_session, "2026-10-20T10:00:01Z").await;
         let mut pending_ids = Vec::new();
         let mut pending_docs = Vec::new();
@@ -207,9 +218,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
             let pending_doc = seed_agent_request(
                 &db,
                 &fixture,
-                &access,
-                &agent_doc,
-                &stopped_session_doc,
+                &stopped,
                 &stopped_session,
                 &pending_id,
                 &format!("2026-10-20T10:00:{:02}Z", 2 + index),
@@ -311,9 +320,9 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
                 node_did,
                 &stopped_session,
                 Some(fixture.agent.did()),
-                std::sync::Arc::new(gents_toolcalls::call::hook::RuntimeExecutionWitness {
+                std::sync::Arc::new(gents_toolcalls::call::hook::background_executions::RuntimeExecutionWitness {
                     background_executions:
-                        gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
                     job_driver,
                 }),
             )
@@ -347,20 +356,18 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
         let fixture = support::managed_agent_fixture(&db).await;
         let node_did = db.node_identity.did();
         let session_id = uuid::Uuid::new_v4().to_string();
-        let (access, agent_doc, session_doc) =
-            seed_agent_session(&db, &fixture, &session_id, "2026-10-20T11:00:00Z").await;
+        let seeded = seed_agent_session(&db, &fixture, &session_id, "2026-10-20T11:00:00Z").await;
         let predecessor_id = uuid::Uuid::new_v4().to_string();
         let predecessor_doc = seed_agent_request(
             &db,
             &fixture,
-            &access,
-            &agent_doc,
-            &session_doc,
+            &seeded,
             &session_id,
             &predecessor_id,
             "2026-10-20T11:00:01Z",
         )
         .await;
+        let access = seeded.access;
         access.write("test.session_control.processing", &format!(
         "mutation {{ update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"processing\"}}) {{_docID}} }}",
         escape_graphql_string(&predecessor_doc),
@@ -409,9 +416,9 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
                 node_did,
                 &session_id,
                 Some(fixture.agent.did()),
-                std::sync::Arc::new(gents_toolcalls::call::hook::RuntimeExecutionWitness {
+                std::sync::Arc::new(gents_toolcalls::call::hook::background_executions::RuntimeExecutionWitness {
                     background_executions:
-                        gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
+                        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry::default(),
                     job_driver: job_driver.clone(),
                 }),
             )

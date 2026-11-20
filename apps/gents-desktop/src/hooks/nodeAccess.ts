@@ -1,5 +1,3 @@
-import type { EndedAccessView } from "@source-inc/gents-desktop-client";
-
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
@@ -26,20 +24,4 @@ export function leaseLeft(
         ? count(Math.floor(left / HOUR_MS), "hour")
         : count(Math.floor(left / DAY_MS), "day");
   return { text: `Access ends in ${text}`, soon: left < LEASE_SOON_MS, ended: false };
-}
-
-/** What ended a joined node's access, said as the person would put it. */
-export function endedAccessTitle(ended: EndedAccessView): string {
-  return ended.reason === "expired"
-    ? `Your access to ${ended.label} ran out`
-    : `Your access to ${ended.label} was revoked`;
-}
-
-/** What happened and what the person can do about it. */
-export function endedAccessDetail(ended: EndedAccessView): string {
-  const cause =
-    ended.reason === "expired"
-      ? "The time its owner allowed is over."
-      : "Its owner ended this app's access.";
-  return `${cause} To use ${ended.label} again, ask its owner to let you in, then add it again.`;
 }

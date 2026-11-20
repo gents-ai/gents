@@ -7,7 +7,7 @@ use crate::native::ToolSet;
 
 use super::build::{
     build_host_tools, dedupe_agent_targets, dedupe_strings, downgrade_bash, downgrade_file_tools,
-    enabled_mcp_service_ids, measured_available_mcp_service_ids,
+    enabled_mcp_service_ids, measured_available_mcp_service_ids, HostToolsRequest,
 };
 use super::modes::ToolCeiling;
 use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
@@ -20,6 +20,7 @@ use gents_documents::{BashMode, FileToolMode};
 pub struct AgentToolSurfaceConfig {
     host_tools: ToolSet,
     root_execution_guard: Option<super::RootExecutionGuard>,
+    max_instruction_chars: usize,
     enable_meta_tools: bool,
     enable_goal_tools: bool,
     enable_goal_creation: bool,
@@ -70,6 +71,7 @@ impl AgentToolSurfaceConfig {
         Self {
             host_tools: ToolSet::meta_only(),
             root_execution_guard: None,
+            max_instruction_chars: gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_goal_creation: false,
@@ -195,6 +197,7 @@ impl AgentToolSurfaceConfig {
             command_output_limits,
             timeouts,
             file_limits,
+            max_instruction_chars,
             enable_meta_tools: _,
             enable_goal_tools: _,
             enable_goal_creation: _,
@@ -202,6 +205,7 @@ impl AgentToolSurfaceConfig {
             remote_tools,
             required_mcp_service_ids,
             backgroundable_tool_names,
+            background_limit,
             enable_session_history_tool: _,
             enable_schema_tool: _,
             enable_p2p_tool: _,
@@ -227,20 +231,20 @@ impl AgentToolSurfaceConfig {
         let bash = downgrade_bash(agent_name, requested_bash, static_policy.bash.tool);
         let cli_tool_names = static_policy.filter_cli_names(cli_tool_names);
         let root_was_authored = file_tool_root.is_some();
-        let host_tools = build_host_tools(
+        let host_tools = build_host_tools(HostToolsRequest {
             agent_name,
             file_tools,
             bash,
             command_policy,
-            &static_policy.bash,
-            file_tool_root.as_deref(),
-            &cli_tool_names,
-            &command_output_limits,
-            &timeouts,
+            effective_bash: &static_policy.bash,
+            file_tool_root: file_tool_root.as_deref(),
+            cli_tool_names: &cli_tool_names,
+            output_limits: &command_output_limits,
+            timeouts: &timeouts,
             file_limits,
-            static_policy.lsp,
+            enable_lsp: static_policy.lsp,
             ceiling,
-        )?;
+        })?;
         let root_execution_guard = (file_tools != FileToolMode::Off
             || bash != BashMode::Off
             || !cli_tool_names.is_empty()
@@ -336,6 +340,7 @@ impl AgentToolSurfaceConfig {
         Ok(Self {
             host_tools,
             root_execution_guard,
+            max_instruction_chars,
             enable_meta_tools: static_policy.meta,
             enable_goal_tools: static_policy.include_goal_tools(),
             enable_goal_creation: static_policy.include_goal_creation(),
@@ -349,6 +354,7 @@ impl AgentToolSurfaceConfig {
             background_tools: BackgroundToolConfig {
                 allowlist: background_allowlist,
                 timeouts: timeouts.background.clone(),
+                limit: background_limit,
             },
             background_plugins,
             custom_tools,
@@ -388,6 +394,8 @@ impl AgentToolSurfaceConfig {
                     EndpointScope::All => None,
                     scope => Some(scope.keys().into_iter().collect()),
                 },
+                registry_url: None,
+                plugin_builder: None,
             },
             agent_policy,
             ceiling_policy,
@@ -399,6 +407,11 @@ impl AgentToolSurfaceConfig {
 
     pub fn host_tools(&self) -> &ToolSet {
         &self.host_tools
+    }
+
+    /// The workspace instruction text this Agent places in provider context.
+    pub fn max_instruction_chars(&self) -> usize {
+        self.max_instruction_chars
     }
 
     pub fn meta_tools_requested(&self) -> bool {
@@ -716,6 +729,7 @@ impl std::fmt::Debug for AgentToolSurfaceConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentToolSurfaceConfig")
             .field("host_tools", &self.host_tools)
+            .field("max_instruction_chars", &self.max_instruction_chars)
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("enable_goal_tools", &self.enable_goal_tools)
             .field("enable_goal_creation", &self.enable_goal_creation)

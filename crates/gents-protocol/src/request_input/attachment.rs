@@ -121,9 +121,9 @@ impl RequestAttachment {
             UserContent::Document(Document {
                 data,
                 media_type: Some(if self.media_type == "application/pdf" {
-                    DocumentMediaType::PDF
+                    DocumentMediaType::Pdf
                 } else {
-                    DocumentMediaType::TXT
+                    DocumentMediaType::Txt
                 }),
                 additional_params: metadata,
             })
@@ -142,10 +142,10 @@ impl RequestAttachment {
                         &i.data,
                         &i.additional_params,
                         match i.media_type {
-                            Some(ImageMediaType::PNG) => "image/png",
-                            Some(ImageMediaType::JPEG) => "image/jpeg",
-                            Some(ImageMediaType::GIF) => "image/gif",
-                            Some(ImageMediaType::WEBP) => "image/webp",
+                            Some(ImageMediaType::Png) => "image/png",
+                            Some(ImageMediaType::Jpeg) => "image/jpeg",
+                            Some(ImageMediaType::Gif) => "image/gif",
+                            Some(ImageMediaType::Webp) => "image/webp",
                             _ => return None,
                         },
                     ),
@@ -153,8 +153,8 @@ impl RequestAttachment {
                         &d.data,
                         &d.additional_params,
                         match d.media_type {
-                            Some(DocumentMediaType::PDF) => "application/pdf",
-                            Some(DocumentMediaType::TXT) => "text/plain",
+                            Some(DocumentMediaType::Pdf) => "application/pdf",
+                            Some(DocumentMediaType::Txt) => "text/plain",
                             _ => return None,
                         },
                     ),

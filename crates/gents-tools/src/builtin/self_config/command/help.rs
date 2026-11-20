@@ -331,7 +331,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "execution" => Page {
             what: "an InferenceExecution: the run limits (turns, deadline, tokens, stream timeouts) a profile selects (profile grant). EXECUTION_ID goes in target_id.",
             commands: &["execution list", "execution get EXECUTION_ID", "execution [preview] create|edit EXECUTION_ID  set: execution fields"],
-            notes: "deadline_duration_secs limits one request across model/tool turns; provider_idle_timeout_secs limits provider silence. Omitted fields use defaults, which agent get shows as execution_settings: max_total_tokens null means unlimited, retry_policy_id null uses the request-origin retry policy, stream_batch_ms batches persistence and stream_liveness_timeout_secs is the renewed execution lease, independent of provider output. A profile selects it through execution_id.",
+            notes: "deadline_duration_secs limits one request across model/tool turns; provider_idle_timeout_secs limits provider silence; title_timeout_secs limits one title-generation attempt. Omitted fields use defaults, which agent get shows as execution_settings: max_total_tokens null means unlimited, retry_policy_id null uses the request-origin retry policy, stream_batch_ms batches persistence and stream_liveness_timeout_secs is the renewed execution lease, independent of provider output. A profile selects it through execution_id.",
             next: "bind it as in the recipe, then read it back with profile get execution and options.agent.",
         },
         "agent" => Page {
@@ -392,10 +392,10 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "read back to confirm the targets are gone.",
         },
         "policy" => Page {
-            what: "node permissions and document relationships granted to or held by an identity, acting as this agent.",
+            what: "node permissions and document relationships and permissions granted to or held by an identity, acting as this agent.",
             commands: &[
                 "policy get  options: subject (self or an agent DID), collection and doc to list a document's relationships",
-                "policy check  options: subject, and permission NAME or collection, doc, relation",
+                "policy check  options: subject, and permission NAME (a node permission, or a relation or permission of this Node's document such as manage_agents), or collection, doc and relation or permission",
                 "policy explain  same options as check; when denied, names the grant that would allow it",
                 "policy grant | revoke  same options as check; acts as this agent",
             ],

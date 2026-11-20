@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_store::config_client::ConfigAccess;
@@ -22,10 +22,7 @@ pub async fn bind_signed_request(
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        identity.did(),
-        identity.did(),
-        identity.did(),
-        session,
+        RequestScope::new(identity.did(), identity.did(), identity.did(), session),
         "Goal control request",
         "interactive",
         "2026-10-21T00:00:00Z",

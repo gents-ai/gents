@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents::defra_node::EventName;
 use gents::support::accepted_turn::{
@@ -9,9 +8,10 @@ use gents::support::accepted_turn::{
 use gents::support::fixtures::configure_agent_tools_as;
 use gents::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse};
 use gents::support::{managed_agent_fixture, test_db};
-use gents_desktop_core::client::TranscriptWindow;
+use gents_observe::client_projection::query::TranscriptWindow;
 use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::STALL_CEILING;
 
 use super::*;
 
@@ -19,7 +19,6 @@ const BACKEND_ID: &str = "bridge-background-projection-backend";
 const MODEL: &str = "test-model";
 const SESSION_ID: &str = "bridge-background-projection-session";
 const QUOTED_MARKER: &str = "quoted by a person";
-const OBSERVE_TIMEOUT: Duration = Duration::from_secs(60);
 
 struct Observed {
     tool_doc_ids: Vec<String>,
@@ -42,7 +41,8 @@ async fn observe(
                     _docID message_key request_doc_id publication node_did requester_did
                 }}
                 AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{
-                    _docID request_id
+                    _docID request_id lifecycle_state failure_reason
+                    superseded_by_request superseded_by_request_doc_id
                 }}
             }}"#
         ))
@@ -72,8 +72,27 @@ async fn observe(
     if !delivered(&completed) || !delivered(&failed) {
         return None;
     }
-    let wake_request_doc_ids = response["data"]["AgentRequest"]
-        .as_array()?
+    let requests = response["data"]["AgentRequest"].as_array()?;
+    let published = |owner: (String, String)| {
+        messages.iter().any(|row| {
+            row["request_doc_id"].as_str() == Some(owner.0.as_str())
+                && row["message_key"].as_str() == Some(owner.1.as_str())
+        })
+    };
+    let submitted_inputs_published = submitted_request_ids.iter().all(|request_id| {
+        requests
+            .iter()
+            .filter(|row| row["request_id"].as_str() == Some(request_id))
+            .filter_map(|row| {
+                serde_json::from_value::<gents_protocol::row::AgentRequestRow>(row.clone()).ok()
+            })
+            .filter_map(|row| gents_session::request::lifecycle::input_message_owner(&row))
+            .any(published)
+    });
+    if !submitted_inputs_published {
+        return None;
+    }
+    let wake_request_doc_ids = requests
         .iter()
         .filter_map(|row| {
             let request_id = row["request_id"].as_str()?;
@@ -213,21 +232,13 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
 
     let submitted = [request_id, "lookalike-wake", "lookalike-envelope"];
     let mut updates = db.node.subscribe(&[EventName::Update]);
-    let observed = match tokio::time::timeout(OBSERVE_TIMEOUT, async {
-        loop {
-            if let Some(observed) = observe(&fixture.access, &submitted).await {
-                return observed;
-            }
-            updates
-                .recv()
-                .await
-                .expect("embedded-node update subscription closed");
+    let observed = loop {
+        if let Some(observed) = observe(&fixture.access, &submitted).await {
+            break observed;
         }
-    })
-    .await
-    {
-        Ok(observed) => observed,
-        Err(_) => {
+        if let Ok(update) = tokio::time::timeout(STALL_CEILING, updates.recv()).await {
+            update.expect("embedded-node update subscription closed");
+        } else {
             let session = escape_graphql_string(SESSION_ID);
             let rows = fixture
                 .access
@@ -235,14 +246,15 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
                     r#"{{
                         AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ tool_name lifecycle_state await_mode }}
                         AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ message_key publication }}
+                        AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id lifecycle_state }}
                     }}"#
                 ))
                 .await;
-            panic!("background completions were not produced; rows={rows:?}");
+            panic!("the session stalled for {STALL_CEILING:?} before the completions and every submitted input were published; rows={rows:?}");
         }
     };
 
-    let page = gents_desktop_core::client::load_session_transcript_window_on(
+    let page = gents_observe::client_projection::query::load_session_transcript_window_on(
         &fixture.access,
         SESSION_ID,
         Some(&observed.node_did),
@@ -383,7 +395,7 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
         user_messages
             .iter()
             .any(|text| text.contains(QUOTED_MARKER)),
-        "a person quoting a full envelope stays a user message: {user_messages:#?}"
+        "a person quoting a full envelope stays a user message: {user_messages:#?} tip={tip:#?}"
     );
 
     let background_tools = tip
@@ -402,7 +414,7 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
         "the originating tool calls still render as tool activity: {background_tools:#?}"
     );
 
-    let before = gents_desktop_core::client::load_session_transcript_window_on(
+    let before = gents_observe::client_projection::query::load_session_transcript_window_on(
         &fixture.access,
         SESSION_ID,
         Some(&observed.node_did),

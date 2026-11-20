@@ -52,9 +52,21 @@ struct ScopeState {
     last_auxiliary: Option<(gents_protocol::rendered_request::CaptureScope, usize, u32)>,
 }
 
-pub type AdmissionJoinLookup = Arc<dyn Fn(&str) -> Option<AdmissionJoin> + Send + Sync>;
+/// The join of the capture labelled by its first argument, from the admission
+/// of the call that sends it.
+pub type AdmissionJoinLookup = Arc<
+    dyn Fn(
+            &str,
+            Option<&crate::provider_call::admission::AdmissionCallContext>,
+        ) -> Option<AdmissionJoin>
+        + Send
+        + Sync,
+>;
 
-fn no_admission_join(_capture_scope: &str) -> Option<AdmissionJoin> {
+fn no_admission_join(
+    _capture_scope: &str,
+    _admission: Option<&crate::provider_call::admission::AdmissionCallContext>,
+) -> Option<AdmissionJoin> {
     None
 }
 
@@ -159,32 +171,14 @@ impl RequestCaptureScope {
     }
 }
 
-tokio::task_local! {
-    static CAPTURE_SCOPE: Arc<RequestCaptureScope>;
-}
-
-/// Poll and drop started work with its request capture scope. Large consumer
-/// futures must be heap-owned before callers embed this wrapper in other async
-/// or task-local frames. Unpolled work still drops in its caller's scope.
-pub fn scope_request<T>(
-    scope: Arc<RequestCaptureScope>,
-    future: impl std::future::Future<Output = T>,
-) -> impl std::future::Future<Output = T> {
-    let future = Box::pin(future);
-    async move { CAPTURE_SCOPE.scope(scope, future).await }
-}
-
-pub fn current_scope() -> Option<Arc<RequestCaptureScope>> {
-    CAPTURE_SCOPE.try_with(Arc::clone).ok()
-}
-
 pub fn arm(
+    scope: Option<&Arc<RequestCaptureScope>>,
     kind: CaptureScopeKind,
     turn_index: usize,
     attempt: u32,
     assembly_trace: AssemblyTrace,
 ) -> Option<String> {
-    let scope = current_scope()?;
+    let scope = scope.cloned()?;
     let capture_scope = scope.label_for(kind, turn_index, attempt);
     let pending = PendingCapture {
         capture_scope: capture_scope.clone(),
@@ -225,8 +219,10 @@ pub fn arm(
     Some(capture_scope)
 }
 
-pub fn current_audit_sender() -> Option<ProviderAuditSender> {
-    let scope = current_scope()?;
+pub fn current_audit_sender(
+    scope: Option<&Arc<RequestCaptureScope>>,
+) -> Option<ProviderAuditSender> {
+    let scope = scope.cloned()?;
     let state = scope.lock();
     let claimed = state.claimed.as_ref()?;
     let audit = state.audit.as_ref()?;
@@ -245,8 +241,12 @@ pub fn current_audit_sender() -> Option<ProviderAuditSender> {
     ))
 }
 
-pub fn take_audit_receiver(turn_index: usize, attempt: u32) -> Option<ProviderAuditReceiver> {
-    let scope = current_scope()?;
+pub fn take_audit_receiver(
+    scope: Option<&Arc<RequestCaptureScope>>,
+    turn_index: usize,
+    attempt: u32,
+) -> Option<ProviderAuditReceiver> {
+    let scope = scope.cloned()?;
     let state = scope.lock();
     state.audit.as_ref().and_then(|audit| {
         (audit.turn_index == turn_index && audit.attempt == attempt)
@@ -254,9 +254,11 @@ pub fn take_audit_receiver(turn_index: usize, attempt: u32) -> Option<ProviderAu
     })
 }
 
-pub async fn drain_ready_audit() -> Vec<ProviderAuditObservation> {
+pub async fn drain_ready_audit(
+    scope: Option<&Arc<RequestCaptureScope>>,
+) -> Vec<ProviderAuditObservation> {
     let receiver = {
-        let Some(scope) = current_scope() else {
+        let Some(scope) = scope.cloned() else {
             return Vec::new();
         };
         let state = scope.lock();
@@ -271,14 +273,17 @@ pub async fn drain_ready_audit() -> Vec<ProviderAuditObservation> {
     crate::provider_audit::drain_ready(&receiver)
 }
 
-pub fn auxiliary_output_sink() -> Option<AuxiliaryOutputSink> {
-    current_scope()?.auxiliary_output_sink.clone()
+pub fn auxiliary_output_sink(
+    scope: Option<&Arc<RequestCaptureScope>>,
+) -> Option<AuxiliaryOutputSink> {
+    scope.cloned()?.auxiliary_output_sink.clone()
 }
 
 pub async fn emit_auxiliary_output(
+    scope: Option<&Arc<RequestCaptureScope>>,
     observation: AuxiliaryOutputObservation,
 ) -> Result<(), AuxiliaryOutputError> {
-    let scope = current_scope().ok_or(AuxiliaryOutputError::NoRequestScope)?;
+    let scope = scope.cloned().ok_or(AuxiliaryOutputError::NoRequestScope)?;
     let sink = scope
         .auxiliary_output_sink
         .as_ref()
@@ -333,8 +338,10 @@ pub async fn emit_auxiliary_output(
     Ok(())
 }
 
-pub async fn flush_received_auxiliary_partial() -> Result<bool, AuxiliaryOutputError> {
-    let Some(scope) = current_scope() else {
+pub async fn flush_received_auxiliary_partial(
+    scope: Option<&Arc<RequestCaptureScope>>,
+) -> Result<bool, AuxiliaryOutputError> {
+    let Some(scope) = scope.cloned() else {
         return Ok(false);
     };
     let (identity, receiver) = {
@@ -358,20 +365,26 @@ pub async fn flush_received_auxiliary_partial() -> Result<bool, AuxiliaryOutputE
         if (audit.capture_scope, audit.turn, audit.attempt) != identity {
             return Err(AuxiliaryOutputError::QueuedAuditChangedSource);
         }
-        emit_auxiliary_output(AuxiliaryOutputObservation {
+        emit_auxiliary_output(
+            Some(&scope),
+            AuxiliaryOutputObservation {
+                capture_scope: identity.0,
+                turn: identity.1,
+                attempt: identity.2,
+                event: AuxiliaryOutputEvent::Audit(audit.event),
+            },
+        )
+        .await?;
+    }
+    emit_auxiliary_output(
+        Some(&scope),
+        AuxiliaryOutputObservation {
             capture_scope: identity.0,
             turn: identity.1,
             attempt: identity.2,
-            event: AuxiliaryOutputEvent::Audit(audit.event),
-        })
-        .await?;
-    }
-    emit_auxiliary_output(AuxiliaryOutputObservation {
-        capture_scope: identity.0,
-        turn: identity.1,
-        attempt: identity.2,
-        event: AuxiliaryOutputEvent::ClosePartial,
-    })
+            event: AuxiliaryOutputEvent::ClosePartial,
+        },
+    )
     .await?;
     Ok(true)
 }
@@ -386,8 +399,10 @@ pub enum CaptureClaim {
     Unexplained,
 }
 
-pub fn claim_pending() -> Option<(Arc<RequestCaptureScope>, CaptureClaim)> {
-    let scope = current_scope()?;
+pub fn claim_pending(
+    scope: Option<&Arc<RequestCaptureScope>>,
+) -> Option<(Arc<RequestCaptureScope>, CaptureClaim)> {
+    let scope = scope.cloned()?;
     let claim = {
         let mut state = scope.lock();
         match state.pending.take() {
@@ -407,12 +422,18 @@ pub fn claim_pending() -> Option<(Arc<RequestCaptureScope>, CaptureClaim)> {
     Some((scope, claim))
 }
 
-pub fn pending_is_armed() -> bool {
-    current_scope().is_some_and(|scope| scope.lock().pending.is_some())
+pub fn pending_is_armed(scope: Option<&Arc<RequestCaptureScope>>) -> bool {
+    scope
+        .cloned()
+        .is_some_and(|scope| scope.lock().pending.is_some())
 }
 
-pub(crate) fn armed_capture_scope(turn_index: usize, attempt: u32) -> Option<String> {
-    let scope = current_scope()?;
+pub(crate) fn armed_capture_scope(
+    scope: Option<&Arc<RequestCaptureScope>>,
+    turn_index: usize,
+    attempt: u32,
+) -> Option<String> {
+    let scope = scope.cloned()?;
     let state = scope.lock();
     state
         .pending
@@ -429,10 +450,11 @@ pub(crate) fn armed_capture_scope(turn_index: usize, attempt: u32) -> Option<Str
 }
 
 pub(crate) fn attempt_activity(
+    scope: Option<&Arc<RequestCaptureScope>>,
     turn_index: usize,
     attempt: u32,
 ) -> Option<Arc<crate::provider_activity::ProviderActivity>> {
-    let scope = current_scope()?;
+    let scope = scope.cloned()?;
     let state = scope.lock();
     state
         .pending
@@ -442,8 +464,10 @@ pub(crate) fn attempt_activity(
         .map(|capture| Arc::clone(&capture.activity))
 }
 
-pub fn current_attempt_activity() -> Option<Arc<crate::provider_activity::ProviderActivity>> {
-    let scope = current_scope()?;
+pub fn current_attempt_activity(
+    scope: Option<&Arc<RequestCaptureScope>>,
+) -> Option<Arc<crate::provider_activity::ProviderActivity>> {
+    let scope = scope.cloned()?;
     let state = scope.lock();
     state
         .pending
@@ -452,9 +476,17 @@ pub fn current_attempt_activity() -> Option<Arc<crate::provider_activity::Provid
         .map(|capture| Arc::clone(&capture.activity))
 }
 
-pub fn ambient_arming_sink(kind: CaptureScopeKind) -> RenderedRequestSink {
-    Arc::new(move |turn_index, attempt, _request, assembly_trace| {
-        let armed = arm(kind, turn_index, attempt, assembly_trace);
+/// Arms a capture of `kind` in the capture scope of the call each rendered
+/// request is for.
+pub fn arming_sink(kind: CaptureScopeKind) -> RenderedRequestSink {
+    Arc::new(move |call, turn_index, attempt, _request, assembly_trace| {
+        let armed = arm(
+            call.capture.as_ref(),
+            kind,
+            turn_index,
+            attempt,
+            assembly_trace,
+        );
         Box::pin(async move {
             if let Some(capture_scope) = armed {
                 tracing::trace!(
@@ -467,26 +499,6 @@ pub fn ambient_arming_sink(kind: CaptureScopeKind) -> RenderedRequestSink {
             Ok::<(), RenderedRequestError>(())
         })
     })
-}
-
-pub fn scope_from_factory(
-    context: RenderedRequestContext,
-    factory: Option<&super::RenderedRequestCaptureFactory>,
-) -> Option<Arc<RequestCaptureScope>> {
-    let factory = factory?;
-    let sink = factory(context.clone());
-    Some(Arc::new(RequestCaptureScope::new(context, sink)))
-}
-
-pub async fn scope_request_if_configured<T>(
-    context: RenderedRequestContext,
-    factory: Option<&super::RenderedRequestCaptureFactory>,
-    future: impl std::future::Future<Output = T>,
-) -> T {
-    match scope_from_factory(context, factory) {
-        Some(scope) => scope_request(scope, future).await,
-        None => future.await,
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -530,6 +542,7 @@ impl CaptureFailureStage {
 
 pub async fn capture_body(
     scope: &RequestCaptureScope,
+    admission: Option<&crate::provider_call::admission::AdmissionCallContext>,
     pending: PendingCapture,
     source: super::RenderedRequestSource,
     provider_endpoint: Option<String>,
@@ -539,7 +552,7 @@ pub async fn capture_body(
     let request_json: serde_json::Value =
         serde_json::from_slice(body).map_err(CaptureBodyError::DecodeBody)?;
     let components = super::RenderedRequestComponents::from_provider_body(request_json, source);
-    let admission_join = (scope.admission_join_lookup)(&pending.capture_scope);
+    let admission_join = (scope.admission_join_lookup)(&pending.capture_scope, admission);
     let capture_kind = pending
         .capture_scope
         .parse::<gents_protocol::rendered_request::CaptureScope>()
@@ -554,15 +567,19 @@ pub async fn capture_body(
     }
     let rendered = super::build_rendered_completion_request(
         &context,
-        &pending.capture_scope,
         source,
-        provider_endpoint,
-        provider_route_path_sha256,
-        pending.turn_index,
-        pending.attempt,
-        pending.assembly_trace,
+        super::ProviderRoute {
+            endpoint: provider_endpoint,
+            route_path_sha256: provider_route_path_sha256,
+        },
+        super::RenderedAttempt {
+            capture_scope: pending.capture_scope.clone(),
+            turn_index: pending.turn_index,
+            attempt: pending.attempt,
+            assembly_trace: pending.assembly_trace,
+            admission_join,
+        },
         components,
-        admission_join,
     )
     .map_err(CaptureBodyError::BuildFact)?;
 
@@ -590,8 +607,9 @@ pub fn test_scope(
     Arc::new(RequestCaptureScope::new(context, sink))
 }
 
-pub fn armed_labels() -> Vec<String> {
-    current_scope()
+pub fn armed_labels(scope: Option<&Arc<RequestCaptureScope>>) -> Vec<String> {
+    scope
+        .cloned()
         .map(|scope| scope.lock().armed_labels.clone())
         .unwrap_or_default()
 }
@@ -639,47 +657,45 @@ mod tests {
     #[tokio::test]
     async fn pending_generator_receive_does_not_hold_the_cancellation_drain_lock() {
         let scope = test_scope(context(), noop_sink());
-        scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 0, 0, trace()).unwrap();
-            claim_pending().expect("armed attempt");
-            let sender = current_audit_sender().expect("claimed audit sender");
-            let receiver = take_audit_receiver(0, 0).expect("audit receiver");
-            let mut pending_receive = Box::pin(recv_one(&receiver));
-            assert!(pending_receive.as_mut().now_or_never().is_none());
+        let scope = Some(&scope);
+        arm(scope, CaptureScopeKind::Inference, 0, 0, trace()).unwrap();
+        claim_pending(scope).expect("armed attempt");
+        let sender = current_audit_sender(scope).expect("claimed audit sender");
+        let receiver = take_audit_receiver(scope, 0, 0).expect("audit receiver");
+        let mut pending_receive = Box::pin(recv_one(&receiver));
+        assert!(pending_receive.as_mut().now_or_never().is_none());
 
-            let mut reservation = sender.reserve().await.expect("audit capacity");
-            reservation
-                .emit(ClaudeAuditEvent::BlockStart {
-                    index: 0,
-                    kind: ClaudeBlockKind::Thinking,
-                })
-                .unwrap();
-            reservation
-                .emit(ClaudeAuditEvent::Signature {
-                    index: 0,
-                    fragment: "received".into(),
-                })
-                .unwrap();
-            drop(reservation);
-            let first = try_recv_one(&receiver).expect("first audit observation");
-            assert!(matches!(
-                first.event,
-                ClaudeAuditEvent::BlockStart { index: 0, .. }
-            ));
-            let observed =
-                tokio::time::timeout(std::time::Duration::from_secs(2), drain_ready_audit())
-                    .await
-                    .expect("cancellation drain must not wait on a suspended receive");
-            assert!(matches!(
-                observed.as_slice(),
-                [ProviderAuditObservation {
-                    event: ClaudeAuditEvent::Signature { fragment, .. },
-                    ..
-                }] if fragment == "received"
-            ));
-            drop(pending_receive);
-        })
-        .await;
+        let mut reservation = sender.reserve().await.expect("audit capacity");
+        reservation
+            .emit(ClaudeAuditEvent::BlockStart {
+                index: 0,
+                kind: ClaudeBlockKind::Thinking,
+            })
+            .unwrap();
+        reservation
+            .emit(ClaudeAuditEvent::Signature {
+                index: 0,
+                fragment: "received".into(),
+            })
+            .unwrap();
+        drop(reservation);
+        let first = try_recv_one(&receiver).expect("first audit observation");
+        assert!(matches!(
+            first.event,
+            ClaudeAuditEvent::BlockStart { index: 0, .. }
+        ));
+        let observed =
+            tokio::time::timeout(std::time::Duration::from_secs(2), drain_ready_audit(scope))
+                .await
+                .expect("cancellation drain must not wait on a suspended receive");
+        assert!(matches!(
+            observed.as_slice(),
+            [ProviderAuditObservation {
+                event: ClaudeAuditEvent::Signature { fragment, .. },
+                ..
+            }] if fragment == "received"
+        ));
+        drop(pending_receive);
     }
 
     #[tokio::test]
@@ -698,163 +714,69 @@ mod tests {
             next_flush_deadline: Arc::new(|_, _, _| Box::pin(async { Ok(None) })),
             flush_pending: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
         });
-        scope_request(Arc::new(scope), async {
-            let label = arm(CaptureScopeKind::Compaction, 0, 0, trace()).unwrap();
-            claim_pending().expect("armed auxiliary attempt");
-            let capture_scope = label.parse().expect("capture scope");
-            emit_auxiliary_output(AuxiliaryOutputObservation {
+        let scope = Arc::new(scope);
+        let scope = Some(&scope);
+        let label = arm(scope, CaptureScopeKind::Compaction, 0, 0, trace()).unwrap();
+        claim_pending(scope).expect("armed auxiliary attempt");
+        let capture_scope = label.parse().expect("capture scope");
+        emit_auxiliary_output(
+            scope,
+            AuxiliaryOutputObservation {
                 capture_scope,
                 turn: 0,
                 attempt: 0,
                 event: AuxiliaryOutputEvent::AttemptStarted,
+            },
+        )
+        .await
+        .unwrap();
+        let sender = current_audit_sender(scope).expect("claimed audit sender");
+        let mut reservation = sender.reserve().await.expect("audit capacity");
+        reservation
+            .emit(ClaudeAuditEvent::BlockStart {
+                index: 0,
+                kind: ClaudeBlockKind::Thinking,
             })
-            .await
             .unwrap();
-            let sender = current_audit_sender().expect("claimed audit sender");
-            let mut reservation = sender.reserve().await.expect("audit capacity");
-            reservation
-                .emit(ClaudeAuditEvent::BlockStart {
-                    index: 0,
-                    kind: ClaudeBlockKind::Thinking,
-                })
-                .unwrap();
-            reservation
-                .emit(ClaudeAuditEvent::Signature {
-                    index: 0,
-                    fragment: "partial-signature".into(),
-                })
-                .unwrap();
-            drop(reservation);
-            assert!(tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                flush_received_auxiliary_partial(),
-            )
-            .await
-            .expect("bounded auxiliary cancellation drain")
-            .unwrap());
-            {
-                let events = observed
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                assert_eq!(events.len(), 4);
-                assert!(events.iter().all(|event| {
-                    (event.capture_scope, event.turn, event.attempt) == (capture_scope, 0, 0)
-                }));
-                assert!(matches!(
-                    events[0].event,
-                    AuxiliaryOutputEvent::AttemptStarted
-                ));
-                assert!(matches!(
-                    events[1].event,
-                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
-                ));
-                assert!(matches!(
-                    events[2].event,
-                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { .. })
-                ));
-                assert!(matches!(
-                    events[3].event,
-                    AuxiliaryOutputEvent::ClosePartial
-                ));
-            }
-            assert!(!flush_received_auxiliary_partial().await.unwrap());
-        })
-        .await;
-    }
-
-    struct DropScope(Arc<Mutex<Vec<Option<String>>>>);
-
-    impl Drop for DropScope {
-        fn drop(&mut self) {
-            self.0
-                .lock()
-                .unwrap()
-                .push(current_scope().map(|scope| scope.context().request_id.clone()));
-        }
-    }
-
-    fn named_scope(name: &str) -> Arc<RequestCaptureScope> {
-        let mut context = context();
-        context.request_id = name.to_owned();
-        test_scope(context, noop_sink())
-    }
-
-    #[tokio::test]
-    async fn nested_capture_scope_restores_parent_across_yields_and_completion() {
-        let parent = named_scope("parent");
-        let child = named_scope("child");
-        let dropped = Arc::new(Mutex::new(Vec::new()));
-        scope_request(parent.clone(), async {
-            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
-            let probe = DropScope(dropped.clone());
-            scope_request(child.clone(), async move {
-                let _probe = probe;
-                assert!(Arc::ptr_eq(&current_scope().unwrap(), &child));
-                tokio::task::yield_now().await;
-                assert!(Arc::ptr_eq(&current_scope().unwrap(), &child));
-                assert!(tokio::spawn(async { current_scope().is_none() })
-                    .await
-                    .unwrap());
+        reservation
+            .emit(ClaudeAuditEvent::Signature {
+                index: 0,
+                fragment: "partial-signature".into(),
             })
-            .await;
-            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
-        })
-        .await;
-        assert!(current_scope().is_none());
-        assert_eq!(*dropped.lock().unwrap(), vec![Some("child".to_owned())]);
-    }
-
-    #[tokio::test]
-    async fn cancelling_started_capture_work_drops_it_in_its_scope_without_leaking() {
-        let parent = named_scope("parent");
-        let dropped = Arc::new(Mutex::new(Vec::new()));
-        scope_request(parent.clone(), async {
-            let probe = DropScope(dropped.clone());
-            let mut work = Box::pin(scope_request(named_scope("child"), async move {
-                let _probe = probe;
-                std::future::pending::<()>().await;
+            .unwrap();
+        drop(reservation);
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            flush_received_auxiliary_partial(scope),
+        )
+        .await
+        .expect("bounded auxiliary cancellation drain")
+        .unwrap());
+        {
+            let events = observed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert_eq!(events.len(), 4);
+            assert!(events.iter().all(|event| {
+                (event.capture_scope, event.turn, event.attempt) == (capture_scope, 0, 0)
             }));
-            assert!(work.as_mut().now_or_never().is_none());
-            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
-            drop(work);
-            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
-        })
-        .await;
-        assert_eq!(*dropped.lock().unwrap(), vec![Some("child".to_owned())]);
-        assert!(current_scope().is_none());
-    }
-
-    #[tokio::test]
-    async fn dropping_unpolled_capture_work_never_enters_its_scope() {
-        let parent = named_scope("parent");
-        let dropped = Arc::new(Mutex::new(Vec::new()));
-        scope_request(parent.clone(), async {
-            let probe = DropScope(dropped.clone());
-            let work = scope_request(named_scope("never-entered"), async move {
-                let _probe = probe;
-                std::future::pending::<()>().await;
-            });
-            drop(work);
-            assert!(Arc::ptr_eq(&current_scope().unwrap(), &parent));
-        })
-        .await;
-        assert_eq!(*dropped.lock().unwrap(), vec![Some("parent".to_owned())]);
-        assert!(current_scope().is_none());
-    }
-
-    #[tokio::test]
-    async fn capture_scope_accepts_borrowed_non_send_work() {
-        let value = std::rc::Rc::new(std::cell::Cell::new(0));
-        let mut borrowed = 0;
-        scope_request(named_scope("borrowed"), async {
-            tokio::task::yield_now().await;
-            value.set(7);
-            borrowed = 9;
-            assert_eq!(current_scope().unwrap().context().request_id, "borrowed");
-        })
-        .await;
-        assert_eq!(value.get(), 7);
-        assert_eq!(borrowed, 9);
-        assert!(current_scope().is_none());
+            assert!(matches!(
+                events[0].event,
+                AuxiliaryOutputEvent::AttemptStarted
+            ));
+            assert!(matches!(
+                events[1].event,
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
+            ));
+            assert!(matches!(
+                events[2].event,
+                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { .. })
+            ));
+            assert!(matches!(
+                events[3].event,
+                AuxiliaryOutputEvent::ClosePartial
+            ));
+        }
+        assert!(!flush_received_auxiliary_partial(scope).await.unwrap());
     }
 }

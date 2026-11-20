@@ -14,23 +14,29 @@ use objc2_core_foundation::CGFloat;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 /// Sideways scroll room under each view's pointer: (left, right).
-static SCROLL_ROOM: Mutex<Option<RapidHashMap<String, (bool, bool)>>> = Mutex::new(None);
+#[derive(Default)]
+struct ScrollRoom(Mutex<RapidHashMap<String, (bool, bool)>>);
 
 #[tauri::command]
 pub fn swipe_scroll_edges(window: WebviewWindow, left: bool, right: bool) {
-    let mut room = SCROLL_ROOM
+    let Some(room) = window.try_state::<ScrollRoom>() else {
+        return;
+    };
+    room.0
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    room.get_or_insert_with(RapidHashMap::default)
+        .unwrap_or_else(|poison| poison.into_inner())
         .insert(window.label().to_owned(), (left, right));
 }
 
-fn scroll_room(label: &str) -> (bool, bool) {
-    let room = SCROLL_ROOM
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    room.as_ref()
-        .and_then(|room| room.get(label).copied())
+fn scroll_room(app: &AppHandle, label: &str) -> (bool, bool) {
+    app.try_state::<ScrollRoom>()
+        .and_then(|room| {
+            room.0
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .get(label)
+                .copied()
+        })
         .unwrap_or((false, false))
 }
 
@@ -41,6 +47,7 @@ struct SwipeProgress {
 }
 
 pub fn setup(app: AppHandle) {
+    app.manage(ScrollRoom::default());
     let monitor: RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent> =
         RcBlock::new(move |event: NonNull<NSEvent>| {
             let event = unsafe { event.as_ref() };
@@ -73,7 +80,7 @@ fn track(app: &AppHandle, event: &NSEvent) {
     else {
         return;
     };
-    let (left, right) = scroll_room(window.label());
+    let (left, right) = scroll_room(app, window.label());
     let delta = event.scrollingDeltaX();
     if (delta > 0.0 && left) || (delta < 0.0 && right) {
         return;
