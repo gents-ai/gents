@@ -84,6 +84,14 @@ async fn signed_pack_tool(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 ) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
+    signed_pack_tool_with_registry(label, plugins, None).await
+}
+
+async fn signed_pack_tool_with_registry(
+    label: &str,
+    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    registry_url: Option<String>,
+) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
@@ -91,6 +99,7 @@ async fn signed_pack_tool(
     let mut tool_config = config(&[]);
     tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
+    tool_config.registry_url = registry_url;
     let tools = fixture.tools_with_plugins(&tool_config, plugins);
     (fixture, tools)
 }
@@ -191,15 +200,15 @@ async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
         .contains("could not be opened"));
 }
 
-static PACK_REGISTRY_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 #[tokio::test]
 async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offline() {
-    let _registry_lock = PACK_REGISTRY_ENV.lock().await;
-    let _registry =
-        gents_store::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
-    let (_fixture, tools) = signed_pack_tool("pack-update-offline", plugins).await;
+    let (_fixture, tools) = signed_pack_tool_with_registry(
+        "pack-update-offline",
+        plugins,
+        Some("http://127.0.0.1:9".to_owned()),
+    )
+    .await;
     let error = config_call(
         &tools,
         &["pack", "preview", "update", "fixture/documents_fixture"],
@@ -3957,7 +3966,6 @@ async fn automation_read_preserves_native_selected_agent_visibility() {
 
 #[tokio::test]
 async fn pack_search_uses_registry_pagination_without_installing() {
-    let _registry_lock = PACK_REGISTRY_ENV.lock().await;
     let app = axum::Router::new().route("/api/v1/packs", axum::routing::get(
         |axum::extract::Query(query): axum::extract::Query<BTreeMap<String, String>>| async move {
             assert_eq!(query.get("q").map(String::as_str), Some("code review"));
@@ -3968,9 +3976,12 @@ async fn pack_search_uses_registry_pagination_without_installing() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let _registry =
-        gents_store::test_support::EnvVarGuard::set("GENTS_REGISTRY", format!("http://{address}"));
-    let (fixture, tools) = signed_pack_tool("registry-search", test_plugins()).await;
+    let (fixture, tools) = signed_pack_tool_with_registry(
+        "registry-search",
+        test_plugins(),
+        Some(format!("http://{address}")),
+    )
+    .await;
     let tool = tools.iter().find(|t| t.name() == CONFIG_TOOL_NAME).unwrap();
     let first: Value = serde_json::from_str(
         &tool

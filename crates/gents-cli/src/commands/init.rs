@@ -205,6 +205,7 @@ pub(crate) async fn init_home_with_core_packs(
     mut args: InitArgs,
     core_packs: default_packs::Archives<'_>,
 ) -> Result<Value> {
+    let registry = args.registry.clone();
     let started = Instant::now();
     let stage = |name: &'static str| {
         tracing::info!(
@@ -597,7 +598,8 @@ pub(crate) async fn init_home_with_core_packs(
             .as_str()
             .context("init reports no default agent")?
             .to_owned();
-        output["default_packs"] = default_packs::install(&home_dir, &engineer, core_packs).await;
+        output["default_packs"] =
+            default_packs::install(&home_dir, &engineer, core_packs, registry.as_deref()).await;
         default_packs::record_installed(&home_dir)?;
     }
     Ok(output)
@@ -3291,6 +3293,7 @@ mod tests {
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             no_default_packs: true,
+            registry: None,
         }
     }
 }

@@ -163,6 +163,9 @@ pub struct DocumentRuntimeOptions {
     /// The host sends tracing to the system log (`gents server --system-log`),
     /// so operator-local startup diagnostics are mirrored to stderr.
     pub system_log: bool,
+    /// The pack registry Agents' pack commands resolve from
+    /// (`gents server --registry`); `None` is the public registry.
+    pub registry_url: Option<String>,
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -230,6 +233,7 @@ pub struct Gents {
     p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
     p2p_network_id: String,
     system_log: bool,
+    registry_url: Option<String>,
     backend_health: BackendHealthMap,
     storage_fault: crate::runtime::storage_fault::StorageFaultObservation,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
@@ -333,6 +337,7 @@ impl Gents {
                 .p2p_network_id
                 .unwrap_or_else(|| gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned()),
             system_log: options.system_log,
+            registry_url: options.registry_url,
             backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: options.process_state_observer,
@@ -512,6 +517,10 @@ impl Gents {
         Ok(resolve_document_runtime_snapshot(&self.node, context)
             .await?
             .configuration_fingerprint())
+    }
+
+    pub(crate) fn registry_url(&self) -> Option<&str> {
+        self.registry_url.as_deref()
     }
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {

@@ -2536,7 +2536,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-pack/src/operations/pack.rs", 2, "pack variables whose declared source is the operator's environment; legitimately external"),
     ("crates/gents-pack/src/pack/install_flow.rs", 1, "pack variables whose declared source is the operator's environment; legitimately external"),
     ("crates/gents-pack/src/pack/interpolate.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
-    ("crates/gents-pack/src/pack/registry.rs", 1, "GENTS_REGISTRY: pack registry location override; becomes a --registry flag"),
     ("crates/gents-pack/src/plugin/host_imports.rs", 2, "passes the variables an installed plugin's consented env access names into its sandbox; the consent document decides, legitimately external"),
     ("crates/gents-service/src/lifecycle.rs", 2, "GENTS_CALLER_RUNTIME_HOME: caller provenance the agent command launcher sets on a shell-launched CLI; replacing it needs a transport across the shell (#1764)"),
     ("crates/gents-service/src/native_service.rs", 7, "HOME, XDG_CONFIG_HOME, PATH, APPDIR and APPIMAGE: platform discovery of the service unit paths and the AppImage probe; legitimately external"),

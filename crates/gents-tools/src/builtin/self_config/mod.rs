@@ -283,6 +283,7 @@ pub fn build_self_config_tools_with_runtime(
             )
             .with_runtime_identity(runtime_identity)
             .with_node_binding(node_binding)
+            .with_registry_url(config.registry_url.as_deref())
             .with_no_lockout(config.no_lockout)
             .with_process_ceiling(config.process_ceiling.clone())
             .with_held_grants(OperatorGrants {

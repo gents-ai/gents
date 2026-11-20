@@ -171,6 +171,9 @@ pub struct SelfConfigToolConfig {
     /// admits every plugin. `config plugin run` calls no plugin outside it,
     /// selected or not: an installed plugin runs with its installed grants.
     pub ceiling_plugins: Option<std::collections::BTreeSet<String>>,
+    /// The pack registry the host serves with (`gents server --registry`);
+    /// `None` is the public registry. Never taken from a tool call.
+    pub registry_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
@@ -555,6 +558,7 @@ impl ToolSurface {
                 runtime.identity.clone(),
                 &SelfConfigToolConfig {
                     selected_plugins: self.plugin_tools.clone(),
+                    registry_url: runtime.registry_url.clone(),
                     ..self.self_config.clone()
                 },
                 runtime.plugins.clone(),

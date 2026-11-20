@@ -88,6 +88,11 @@ pub struct ServeArgs {
         help = "Send diagnostics to the system log (os_log or journald) instead of stderr, which then carries only the exit error. The native service definition sets it"
     )]
     pub system_log: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL Agents' pack commands resolve and search from. Defaults to the public registry"
+    )]
+    pub registry: Option<String>,
     #[arg(skip)]
     pub keychain_startup_approval: bool,
     /// Startup waits after client access opens until this path opens for

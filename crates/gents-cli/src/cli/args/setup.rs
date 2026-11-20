@@ -239,6 +239,11 @@ pub(crate) struct InitArgs {
         help = "With --engineer: do not install the Engineer's core packs (install them later with `gents config pack starter --enable <pack>`)"
     )]
     pub(crate) no_default_packs: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL, used by the Engineer's core pack installs. Defaults to the public registry"
+    )]
+    pub(crate) registry: Option<String>,
 }
 
 impl InitArgs {
