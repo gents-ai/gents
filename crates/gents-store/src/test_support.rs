@@ -92,8 +92,6 @@ pub fn fixture_root() -> crate::identity::KeyIdentity {
 pub const FIXTURE_AGENT_NONCE: &str =
     "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
-/// The managed Agent the fixed root ([`PIN_FIXED_DID`]) derives for
-/// `creation_nonce`, with the signer its runtime resolves for it.
 pub fn fixture_agent(creation_nonce: &str) -> std::sync::Arc<dyn crate::identity::NodeIdentity> {
     let root = fixture_root();
     let binding = gents_protocol::agent_identity::AgentIdentityBinding {
