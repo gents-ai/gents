@@ -1,7 +1,7 @@
 use super::*;
 pub struct RepeatProbe {
     pub events: Vec<serde_json::Value>,
-    pub model: ScriptedModel,
+    pub model: ScriptedProvider,
     pub dispatched: Arc<std::sync::Mutex<Vec<usize>>>,
 }
 
@@ -29,7 +29,7 @@ impl ToolDyn for RepeatProbe {
         Box::pin(async move {
             use gents_loop::tool_call_lifecycle::FailureClass;
             let args: serde_json::Value = serde_json::from_str(&args).unwrap();
-            let turn = self.model.seen_requests().await.len() - 1;
+            let turn = self.model.requests().len() - 1;
             self.dispatched.lock().unwrap().push(turn);
             let event = &self.events[turn];
             assert_eq!(event["call"], args["call"], "dispatched out of model order");

@@ -11,7 +11,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
             let (db, hook, writer, mut lifecycle) = owned_test_hook_with_policy(policy).await;
             let node = db.node.clone();
             let calls = Arc::new(AtomicUsize::new(0));
-            let model = ScriptedModel::new_turns(vec![
+            let model = scripted(vec![
                 vec![
                     RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                         "dispatch-call".into(),
@@ -99,7 +99,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                 let node = db.node.clone();
                 let root = tempfile::tempdir().unwrap();
                 let denied = owner.denied_call(&node, root.path());
-                let model = ScriptedModel::new_turns(vec![
+                let model = scripted(vec![
                     vec![
                         RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                             "policy-call".into(),
@@ -252,7 +252,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         let mut config = owned_config(4);
         config.tool_context = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(Some(gents_store::test_support::unreached_deadline_at()), tokio_util::sync::CancellationToken::new()).call();
         let stream = run_loop_stream(
-            ScriptedModel::new_turns(plugin_call_then_text_turns()),
+            scripted(plugin_call_then_text_turns()),
             Some(hook.clone()),
             TaggedMessage::unassociated(Message::user("compose")),
             Vec::new(),

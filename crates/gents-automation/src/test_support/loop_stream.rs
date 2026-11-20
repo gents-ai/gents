@@ -1,17 +1,15 @@
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{stream, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use gents_inference::llm::message::{AssistantContent, ToolResultContent, UserContent};
-use gents_loop::provider_call::{ForCall, ProviderCall};
+use gents_loop::test_support::scripted_provider::{Reply, ScriptedProvider};
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
+use rig::completion::CompletionError;
 
 use gents_inference::llm::message::Message;
-use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
-use tokio::sync::Mutex;
+use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 
 use gents_loop::loop_stream::*;
 use gents_store::test_support::first_content;
@@ -20,190 +18,17 @@ use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
 use gents_inference::rendered_request::{AssemblyBuildPath, AssemblyTrace};
 
 use gents_inference::test_support::TestDb;
-use tokio::sync::Notify;
 
-#[derive(Default)]
-pub struct StreamEntryGate {
-    pub entered: Notify,
-    pub release: Notify,
-}
-
-pub enum ScriptedCall {
-    Turn(Vec<RawStreamingChoice<()>>),
-    FailStream(CompletionError),
-    TurnWithMidStreamError(Vec<RawStreamingChoice<()>>, CompletionError),
-}
-
-#[derive(Clone)]
-pub struct ScriptedModel {
-    pub calls: Arc<Mutex<VecDeque<ScriptedCall>>>,
-    seen_histories: Arc<Mutex<Vec<Vec<Message>>>>,
-    seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
-    seen_max_tokens: Arc<Mutex<Vec<Option<u64>>>>,
-    seen_requests: Arc<Mutex<Vec<CompletionRequest>>>,
-    stall_after_chunks: bool,
-    capture_requests: bool,
-    stream_entry_gate: Option<Arc<StreamEntryGate>>,
-    provider_observer: Option<ProviderObserver>,
-    call: ProviderCall,
-}
-
-/// Sees each dispatch (`true`) and stream poll (`false`) with the call it belongs to.
-pub type ProviderObserver = Arc<dyn Fn(bool, &ProviderCall) + Send + Sync>;
-
-impl ScriptedModel {
-    pub fn new(chunks: Vec<RawStreamingChoice<()>>) -> Self {
-        Self::new_turns(vec![chunks])
-    }
-
-    pub fn new_turns(turns: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
-        Self::new_calls(turns.into_iter().map(ScriptedCall::Turn).collect())
-    }
-
-    pub fn new_calls(calls: Vec<ScriptedCall>) -> Self {
-        Self {
-            calls: Arc::new(Mutex::new(calls.into())),
-            seen_histories: Arc::new(Mutex::new(Vec::new())),
-            seen_tools: Arc::new(Mutex::new(Vec::new())),
-            seen_max_tokens: Arc::new(Mutex::new(Vec::new())),
-            seen_requests: Arc::new(Mutex::new(Vec::new())),
-            stall_after_chunks: false,
-            capture_requests: true,
-            stream_entry_gate: None,
-            provider_observer: None,
-            call: ProviderCall::default(),
-        }
-    }
-
-    pub fn with_provider_observer(mut self, observer: ProviderObserver) -> Self {
-        self.provider_observer = Some(observer);
-        self
-    }
-
-    pub fn with_stream_entry_gate(mut self, gate: Arc<StreamEntryGate>) -> Self {
-        self.stream_entry_gate = Some(gate);
-        self
-    }
-
-    pub fn without_capture(mut self) -> Self {
-        self.capture_requests = false;
-        self
-    }
-
-    pub fn new_stalling(chunks: Vec<RawStreamingChoice<()>>) -> Self {
-        let mut model = Self::new_calls(vec![ScriptedCall::Turn(chunks)]);
-        model.stall_after_chunks = true;
-        model
-    }
-
-    pub async fn seen_histories(&self) -> Vec<Vec<Message>> {
-        self.seen_histories.lock().await.clone()
-    }
-
-    pub async fn seen_tools(&self) -> Vec<Vec<String>> {
-        self.seen_tools.lock().await.clone()
-    }
-
-    pub async fn seen_max_tokens(&self) -> Vec<Option<u64>> {
-        self.seen_max_tokens.lock().await.clone()
-    }
-
-    pub async fn seen_requests(&self) -> Vec<CompletionRequest> {
-        self.seen_requests.lock().await.clone()
-    }
-}
-
-impl ForCall for ScriptedModel {
-    fn for_call(&self, call: &ProviderCall) -> Self {
-        Self {
-            call: call.clone(),
-            ..self.clone()
-        }
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for ScriptedModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self::new_turns(Vec::new())
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        Err(CompletionError::ProviderError(
-            "completion is unused in loop_stream tests".to_string(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        if let Some(observer) = &self.provider_observer {
-            observer(true, &self.call);
-        }
-        if let Some(gate) = &self.stream_entry_gate {
-            gate.entered.notify_one();
-            gate.release.notified().await;
-        }
-        if self.capture_requests {
-            gents_inference::test_support::capture_scripted_provider_request(
-                &self.call,
-                &request,
-                "test-model",
-            )
-            .await?;
-        }
-        self.seen_requests.lock().await.push(request.clone());
-        self.seen_histories.lock().await.push(
-            request
-                .chat_history
-                .iter()
-                .map(gents_inference::llm::rig_compat::from_rig_message)
-                .collect(),
-        );
-        self.seen_tools
-            .lock()
-            .await
-            .push(request.tools.iter().map(|tool| tool.name.clone()).collect());
-        self.seen_max_tokens.lock().await.push(request.max_tokens);
-        let call = self
-            .calls
-            .lock()
-            .await
-            .pop_front()
-            .unwrap_or_else(|| ScriptedCall::Turn(vec![RawStreamingChoice::FinalResponse(())]));
-        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = match call {
-            ScriptedCall::Turn(chunks) => chunks.into_iter().map(Ok).collect(),
-            ScriptedCall::FailStream(error) => return Err(error),
-            ScriptedCall::TurnWithMidStreamError(chunks, error) => {
-                let mut items: Vec<Result<RawStreamingChoice<()>, CompletionError>> =
-                    chunks.into_iter().map(Ok).collect();
-                items.push(Err(error));
-                items
-            }
-        };
-        let inner: rig::streaming::StreamingResult<()> = if self.stall_after_chunks {
-            Box::pin(stream::iter(items).chain(stream::pending()))
-        } else {
-            Box::pin(stream::iter(items))
-        };
-        let observer = self.provider_observer.clone();
-        let call = self.call.clone();
-        let inner = inner.map(move |item| {
-            if let Some(observer) = &observer {
-                observer(false, &call);
-            }
-            item
-        });
-        Ok(StreamingCompletionResponse::stream(Box::pin(inner)))
-    }
+/// The scripted provider as the owned-loop suites drive it: each call
+/// answers with the next of `replies`, then with a bare final response, and
+/// sends its OpenAI body through the capturing transport.
+pub fn scripted<R>(replies: impl IntoIterator<Item = R>) -> ScriptedProvider
+where
+    R: Into<Reply>,
+{
+    ScriptedProvider::new(replies.into_iter().map(Into::into))
+        .then_end()
+        .capturing_openai("test-model")
 }
 
 pub struct EchoTool {

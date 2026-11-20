@@ -2,14 +2,15 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use gents_protocol::message::Message;
-use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
-use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
+use rig::completion::CompletionError;
+use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 
 use crate::backend_provider::BackendProviderKind;
 use crate::loop_stream::{run_loop_to_text, LoopConfig, TaggedMessage};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
 use crate::session_hook::SessionHook;
+use crate::test_support::scripted_provider::{Reply, ScriptedProvider, Step};
 use crate::tool::{Tool, ToolDefinition, ToolDyn};
 use crate::tool_call_lifecycle::ToolOutcome;
 use crate::{HookAction, ToolCallHookAction};
@@ -17,70 +18,19 @@ use crate::{HookAction, ToolCallHookAction};
 #[cfg(feature = "native")]
 mod provider_finish_tests;
 
-#[derive(Clone, Default)]
-struct ScriptedModel {
-    turns: Arc<Mutex<Vec<Vec<RawStreamingChoice<()>>>>>,
-    requests: Arc<Mutex<Vec<String>>>,
-    call: crate::provider_call::ProviderCall,
+/// The scripted provider as these tests drive it: each call claims its
+/// armed capture as a real send would.
+fn scripted(turns: Vec<Vec<RawStreamingChoice<()>>>) -> ScriptedProvider {
+    ScriptedProvider::turns(turns).claiming_capture()
 }
 
-impl ScriptedModel {
-    fn new(turns: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
-        Self {
-            turns: Arc::new(Mutex::new(turns.into_iter().rev().collect())),
-            requests: Arc::default(),
-            call: Default::default(),
-        }
-    }
-}
-
-impl crate::provider_call::ForCall for ScriptedModel {
-    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
-        Self {
-            call: call.clone(),
-            ..self.clone()
-        }
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for ScriptedModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
-        Self::default()
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        unreachable!("the owned loop only ever calls stream()")
-    }
-
-    async fn stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        self.requests
-            .lock()
-            .unwrap()
-            .push(serde_json::to_string(&request.chat_history).unwrap());
-        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
-        let items = self
-            .turns
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .pop()
-            .expect("scripted model called more times than it was scripted for");
-        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> =
-            items.into_iter().map(Ok).collect();
-        Ok(StreamingCompletionResponse::stream(Box::pin(
-            futures::stream::iter(items),
-        )))
-    }
+/// Each call's chat history as it was sent.
+fn sent_histories(model: &ScriptedProvider) -> Vec<String> {
+    model
+        .requests()
+        .iter()
+        .map(|request| serde_json::to_string(&request.chat_history).unwrap())
+        .collect()
 }
 
 struct EchoTool {
@@ -357,62 +307,9 @@ pub(crate) fn test_loop_config() -> LoopConfig {
 #[cfg(feature = "native")]
 #[tokio::test]
 async fn cancelling_a_pending_provider_stream_drops_it() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    struct PendingStream(Arc<AtomicBool>);
-    impl Drop for PendingStream {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-        }
-    }
-    impl futures::Stream for PendingStream {
-        type Item = Result<RawStreamingChoice<()>, CompletionError>;
-
-        fn poll_next(
-            self: std::pin::Pin<&mut Self>,
-            _: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Option<Self::Item>> {
-            std::task::Poll::Pending
-        }
-    }
-    #[derive(Clone)]
-    struct Model(Arc<AtomicBool>);
-    impl crate::provider_call::ForCall for Model {
-        fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
-            self.clone()
-        }
-    }
-
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for Model {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            unreachable!()
-        }
-
-        async fn completion(
-            &self,
-            _: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            unreachable!()
-        }
-
-        async fn stream(
-            &self,
-            _: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            Ok(StreamingCompletionResponse::stream(Box::pin(
-                PendingStream(self.0.clone()),
-            )))
-        }
-    }
-
-    let dropped = Arc::new(AtomicBool::new(false));
+    let model = ScriptedProvider::new([Reply::Stream(vec![Step::Pending])]);
     let mut completion = Box::pin(run_loop_to_text(
-        Model(dropped.clone()),
+        model.clone(),
         Message::user("hello"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -420,7 +317,9 @@ async fn cancelling_a_pending_provider_stream_drops_it() {
     ));
     assert!(futures::poll!(&mut completion).is_pending());
     drop(completion);
-    assert!(dropped.load(Ordering::SeqCst));
+    let records = model.records();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].closed);
 }
 
 /// TLA+ `InterruptPartialOutput`: a chunk the provider has handed to the
@@ -433,6 +332,8 @@ async fn a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use futures::StreamExt;
+    use rig::completion::{CompletionModel, CompletionRequest, CompletionResponse};
+    use rig::streaming::StreamingCompletionResponse;
 
     use crate::loop_stream::LoopStreamItem;
     use crate::session_hook::NoopSessionHook;
@@ -580,7 +481,7 @@ async fn cancelling_a_foreground_tool_keeps_its_request_and_drops_execution() {
 
     let dropped = Arc::new(AtomicBool::new(false));
     let observed = Arc::new(Mutex::new(None));
-    let model = ScriptedModel::new(vec![vec![
+    let model = scripted(vec![vec![
         scripted_tool_call(),
         RawStreamingChoice::FinalResponse(()),
     ]]);
@@ -618,7 +519,7 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
     use futures::StreamExt;
     for case in gents_lean_vocab::families::dispatch_observation_contracts_loop_election::cases() {
         let input = &case.input;
-        let model = ScriptedModel::new(vec![
+        let model = scripted(vec![
             vec![scripted_tool_call(), RawStreamingChoice::FinalResponse(())],
             vec![
                 RawStreamingChoice::Message("done".into()),
@@ -745,7 +646,7 @@ async fn cancelling_pending_settlement_drops_hook_in_the_callers_scope() {
         settlement_gate: Some(gate.clone()),
         ..Default::default()
     };
-    let model = ScriptedModel::new(vec![vec![
+    let model = scripted(vec![vec![
         scripted_tool_call(),
         RawStreamingChoice::FinalResponse(()),
     ]]);
@@ -790,10 +691,9 @@ async fn cancelling_pending_settlement_drops_hook_in_the_callers_scope() {
 async fn failed_input_publication_prevents_provider_dispatch() {
     use crate::loop_stream::{run_loop_stream, LoopStreamItem};
     use futures::StreamExt;
-    let model = ScriptedModel::new(Vec::new());
-    let requests = model.requests.clone();
+    let model = scripted(Vec::new());
     let stream = run_loop_stream(
-        model,
+        model.clone(),
         Some(RecordingHook::default()),
         TaggedMessage::unassociated(Message::user("must not dispatch")),
         Vec::new(),
@@ -812,7 +712,7 @@ async fn failed_input_publication_prevents_provider_dispatch() {
         .unwrap();
     let error = stream.next().await.unwrap().unwrap_err();
     assert!(error.to_string().contains("publication rejected"));
-    assert!(requests.lock().unwrap().is_empty());
+    assert_eq!(model.calls(), 0);
 }
 
 #[tokio::test]
@@ -829,7 +729,7 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
         String,
     >() {
         let name = case.input.name.as_str();
-        let model = ScriptedModel::new(vec![
+        let model = scripted(vec![
             vec![
                 RawStreamingChoice::Message("first ".into()),
                 RawStreamingChoice::Message("answer".into()),
@@ -840,9 +740,8 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
                 RawStreamingChoice::FinalResponse(()),
             ],
         ]);
-        let requests = model.requests.clone();
         let stream = run_loop_stream(
-            model,
+            model.clone(),
             Some(RecordingHook::default()),
             TaggedMessage::unassociated(Message::user("original request")),
             Vec::new(),
@@ -868,7 +767,7 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
                         chunks += 1;
                         pending = true;
                         assert!(!delivered, "{name}: unsafe stream boundary consumed input");
-                        assert_eq!(requests.lock().unwrap().len(), 1);
+                        assert_eq!(model.calls(), 1);
                     }
                 }
                 LoopStreamItem::ProviderTurnReady { .. } => {
@@ -905,12 +804,11 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
         assert!(delivered);
         assert!(!pending);
         assert_eq!(final_text.as_deref(), Some("corrected answer"));
-        let requests = requests.lock().unwrap();
+        let requests = sent_histories(&model);
         assert_eq!(requests.len(), 2);
         assert!(!requests[0].contains("late correction"));
         assert!(requests[1].contains("first answer"));
         assert!(requests[1].contains("late correction"));
-        drop(requests);
         case.check(
             gents_lean_vocab::families::fold_queue_contracts_publication_unsafe_boundary::UnsafeBoundaryObservation {
                 accepted: intake_while_streaming,
@@ -919,67 +817,18 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
     }
 }
 
-/// A final provider response that reports the provider request id as the
-/// documented top-level `request_id` field of its serialized form.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct RequestIdResponse {
-    request_id: Option<String>,
-}
-
-impl rig::completion::GetTokenUsage for RequestIdResponse {
-    fn token_usage(&self) -> Option<rig::completion::Usage> {
-        None
-    }
-}
-
-#[derive(Clone)]
-struct RequestIdModel {
-    call: crate::provider_call::ProviderCall,
-    request_id: Option<String>,
-}
-
-impl crate::provider_call::ForCall for RequestIdModel {
-    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
-        Self {
-            call: call.clone(),
-            ..self.clone()
-        }
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for RequestIdModel {
-    type Response = ();
-    type StreamingResponse = RequestIdResponse;
-    type Client = ();
-
-    fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
-        unreachable!("constructed directly")
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        unreachable!("the owned loop only ever calls stream()")
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
-        let items = vec![
-            Ok(RawStreamingChoice::Message("answer".into())),
-            Ok(RawStreamingChoice::MessageId("msg_1".into())),
-            Ok(RawStreamingChoice::FinalResponse(RequestIdResponse {
-                request_id: self.request_id.clone(),
-            })),
-        ];
-        Ok(StreamingCompletionResponse::stream(Box::pin(
-            futures::stream::iter(items),
-        )))
-    }
+/// Answers with text and a final response reporting `request_id` as the
+/// provider's response request id.
+fn request_id_model(request_id: Option<&str>) -> ScriptedProvider {
+    ScriptedProvider::new([Reply::Stream(vec![
+        Step::Chunk(RawStreamingChoice::Message("answer".into())),
+        Step::Chunk(RawStreamingChoice::MessageId("msg_1".into())),
+        Step::End(crate::rig_compat::model::StreamEnd {
+            request_id: request_id.map(str::to_owned),
+            ..Default::default()
+        }),
+    ])])
+    .claiming_capture()
 }
 
 #[tokio::test]
@@ -987,10 +836,7 @@ async fn the_accepted_assistant_message_records_the_final_responses_request_id()
     async {
         for reported in [Some("req_abc"), None] {
             let stream = crate::loop_stream::run_loop_stream(
-                RequestIdModel {
-                    call: Default::default(),
-                    request_id: reported.map(str::to_owned),
-                },
+                request_id_model(reported),
                 Some(RecordingHook::default()),
                 TaggedMessage::unassociated(Message::user("hello")),
                 Vec::new(),
@@ -1077,7 +923,7 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
                 choices.push(RawStreamingChoice::ToolCall(call));
             }
             choices.push(RawStreamingChoice::FinalResponse(()));
-            let model = ScriptedModel::new(vec![choices]);
+            let model = scripted(vec![choices]);
             let invoked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let tools: Arc<Vec<Box<dyn ToolDyn>>> =
                 Arc::new(vec![Box::new(ReadTool(invoked.clone()))]);
@@ -1162,18 +1008,17 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
 
 #[tokio::test]
 async fn empty_output_is_retried_through_the_owned_loop() {
-    let model = ScriptedModel::new(vec![
+    let model = scripted(vec![
         vec![RawStreamingChoice::FinalResponse(())],
         vec![
             RawStreamingChoice::Message("recovered".into()),
             RawStreamingChoice::FinalResponse(()),
         ],
     ]);
-    let requests = model.requests.clone();
     let mut config = test_loop_config();
     config.retry_policy.transport_backoff = vec![std::time::Duration::ZERO];
     let answer = run_loop_to_text(
-        model,
+        model.clone(),
         Message::user("hello"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -1182,48 +1027,7 @@ async fn empty_output_is_retried_through_the_owned_loop() {
     .await
     .expect("an empty provider response should be resampled");
     assert_eq!(answer, "recovered");
-    assert_eq!(requests.lock().unwrap().len(), 2);
-}
-
-#[derive(Clone)]
-struct UnavailableModel {
-    call: crate::provider_call::ProviderCall,
-}
-
-impl crate::provider_call::ForCall for UnavailableModel {
-    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
-        Self { call: call.clone() }
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for UnavailableModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
-        Self {
-            call: Default::default(),
-        }
-    }
-
-    async fn completion(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        unreachable!("the owned loop only uses streaming")
-    }
-
-    async fn stream(
-        &self,
-        _request: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
-        Err(CompletionError::ProviderError(
-            "HTTP status 503: unavailable".into(),
-        ))
-    }
+    assert_eq!(model.calls(), 2);
 }
 
 #[tokio::test]
@@ -1235,9 +1039,8 @@ async fn exhausted_backend_failure_retains_its_typed_availability_verdict() {
         _,
         crate::session_hook::NoopSessionHook,
     >(
-        UnavailableModel {
-            call: Default::default(),
-        },
+        ScriptedProvider::responding(|_| Reply::provider_error("HTTP status 503: unavailable"))
+            .claiming_capture(),
         None,
         TaggedMessage::unassociated(Message::user("hello")),
         Vec::new(),

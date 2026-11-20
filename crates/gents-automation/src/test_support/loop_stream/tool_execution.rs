@@ -165,7 +165,7 @@ pub async fn plugin_image_result_seen_by(
 ) -> Vec<ToolResultContent> {
     let (_home, tool) = plugin_image_tool(image_bytes);
     let tools: Vec<Box<dyn ToolDyn>> = vec![tool];
-    let model = ScriptedModel::new_turns(plugin_call_then_text_turns()).without_capture();
+    let model = ScriptedProvider::turns(plugin_call_then_text_turns()).then_end();
     let mut config = config(4);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
@@ -186,7 +186,7 @@ pub async fn plugin_image_result_seen_by(
         }
     }
     assert_eq!(final_text.as_deref(), Some("seen"));
-    let histories = model.seen_histories().await;
+    let histories = model.histories();
     first_tool_result(&histories[1]).expect("the second request carries the plugin's tool result")
 }
 
@@ -196,7 +196,7 @@ pub async fn owned_tool_result_threaded(
 ) -> Vec<ToolResultContent> {
     let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let node = db.node.clone();
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         echo_tool_turn(),
         vec![
             RawStreamingChoice::Message("ok".to_string()),
@@ -224,7 +224,7 @@ pub async fn owned_tool_result_threaded(
         "exactly one threaded tool result: {:?}",
         collected.tool_results
     );
-    let histories = model.seen_histories().await;
+    let histories = model.histories();
     node.shutdown().await.expect("node shutdown");
     first_tool_result(&histories[1]).expect("the second request carries the tool result")
 }
@@ -240,7 +240,7 @@ pub async fn persisted_plugin_image_result_replay(
     let mut config = owned_config_for(4, &lifecycle);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
-        ScriptedModel::new_turns(plugin_call_then_text_turns()),
+        scripted(plugin_call_then_text_turns()),
         Some(hook.clone()),
         TaggedMessage::unassociated(Message::user("draw it")),
         Vec::new(),
@@ -304,7 +304,7 @@ pub async fn terminalization_with_principal_output(
         output: "o".repeat(output_bytes),
     })];
     let stream = run_loop_stream(
-        ScriptedModel::new_turns(script),
+        scripted(script),
         Some(hook.clone()),
         TaggedMessage::unassociated(Message::user("run echo")),
         Vec::new(),
@@ -838,7 +838,7 @@ impl ToolDyn for ParallelReadProbe {
 }
 
 pub async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "first".into(),
@@ -878,7 +878,7 @@ pub async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
     })
     .await
     .expect("both calls must reach the gate");
-    let histories = model.seen_histories().await;
+    let histories = model.histories();
     let results: Vec<_> = histories[1]
         .iter()
         .flat_map(|message| match message {
