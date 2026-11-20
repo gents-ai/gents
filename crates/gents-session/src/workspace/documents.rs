@@ -161,13 +161,23 @@ where
     T: DeserializeOwned,
 {
     let response = access.read(&query.limit(2).render()).await?;
-    let rows = response
-        .get("data")
-        .and_then(|data| data.get(C::NAME))
-        .with_context(|| format!("{} query omitted rows", C::NAME))?;
-    let mut found: Vec<T> = serde_json::from_value(rows.clone())?;
+    let mut found: Vec<T> = decode_access_rows(&response, C::NAME)?;
     anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped {}", C::NAME);
     Ok(found.pop())
+}
+
+pub(super) fn decode_access_rows<T>(
+    response: &serde_json::Value,
+    collection: &str,
+) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let values = response
+        .get("data")
+        .and_then(|data| data.get(collection))
+        .with_context(|| format!("{collection} query omitted rows"))?;
+    Ok(serde_json::from_value(values.clone())?)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

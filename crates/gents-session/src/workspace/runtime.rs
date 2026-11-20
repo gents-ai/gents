@@ -18,10 +18,11 @@ use super::action_plan::{
 };
 use super::binding::{admit_workspace_binding, new_binding, release_binding, AdmitBinding};
 use super::documents::{
-    read_isolated_workspace_doc, read_workspace_placement_doc, workspace_cleanup_docs_mutation,
-    workspace_integrate_docs_mutation, workspace_seal_docs_mutation, IsolatedWorkspaceDoc,
-    MemoryWorkspaceDocuments, WorkspaceBindingDoc, WorkspaceDocuments, WorkspaceReceiptDoc,
-    LIFECYCLE_SEALED, RECEIPT_KIND_WRITER,
+    decode_access_rows, read_isolated_workspace_doc, read_workspace_placement_doc,
+    workspace_cleanup_docs_mutation, workspace_integrate_docs_mutation,
+    workspace_seal_docs_mutation, IsolatedWorkspaceDoc, MemoryWorkspaceDocuments,
+    WorkspaceBindingDoc, WorkspaceDocuments, WorkspaceReceiptDoc, LIFECYCLE_SEALED,
+    RECEIPT_KIND_WRITER,
 };
 use super::executor::cleanup::{execute_cleanup_workspace_plan, CleanupWorkspaceOutcome};
 use super::executor::integrate::{
@@ -790,17 +791,6 @@ pub(super) async fn load_docs_with_access(
         docs.write_receipt(receipt)?;
     }
     Ok(docs)
-}
-
-fn decode_access_rows<T>(response: &serde_json::Value, collection: &str) -> Result<Vec<T>>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let values = response
-        .get("data")
-        .and_then(|data| data.get(collection))
-        .with_context(|| format!("{collection} query omitted rows"))?;
-    Ok(serde_json::from_value(values.clone())?)
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
