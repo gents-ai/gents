@@ -164,3 +164,15 @@ fn the_settlement_timing_matches_the_lean_model() {
         }
     });
 }
+
+#[test]
+fn the_step_after_a_writes_own_grants_matches_the_lean_model() {
+    use crate::config_client::owed::{dependent_step, observed_grant, DependentStep, GrantWait};
+    gents_lean_vocab::families::identity_owed_registration_dependent_step::replay::<
+        DependentStep,
+        GrantWait,
+    >(|input| dependent_step(input.grant_wait));
+    gents_lean_vocab::families::identity_owed_registration_observed_grant::replay::<GrantWait>(
+        |input| observed_grant(input.external_provider, input.provider),
+    );
+}
