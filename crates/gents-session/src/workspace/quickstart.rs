@@ -43,7 +43,12 @@ async fn publish_repository_and_resolve_agents(
     operator: &ConfigAccess,
     repository: &RepositoryPlacementRef,
     selected: &WorkspaceProvisioningSelection,
-) -> Result<(String, String, Vec<super::WorkspaceReaderBinding>)> {
+) -> Result<(
+    String,
+    String,
+    Vec<super::WorkspaceReaderBinding>,
+    gents_store::config_client::owed::OwedAccessTicket,
+)> {
     let host_path = repository
         .host_path
         .to_str()
@@ -155,7 +160,12 @@ async fn publish_repository_and_resolve_agents(
                         agent_doc_id: Some(doc.clone()),
                     })
                     .collect();
-                Ok::<_, anyhow::Error>((targets[1].clone(), targets[2].clone(), readers))
+                Ok::<_, anyhow::Error>((
+                    targets[1].clone(),
+                    targets[2].clone(),
+                    readers,
+                    txn.owed_access_ticket()?,
+                ))
             })
         })
         .await
@@ -198,8 +208,9 @@ pub async fn provision_read_only_workspace(
         host_path: repository_path.clone(),
         enabled: true,
     };
-    let (writer_doc, integrator_doc, readers) =
+    let (writer_doc, integrator_doc, readers, granted) =
         publish_repository_and_resolve_agents(operator, &repository, selected).await?;
+    granted.require_settled().await?;
     let visible =
         super::runtime::load_repository_with_access(agent, &repository_id, &selected.node_did)
             .await?;
