@@ -557,7 +557,6 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
     struct StrictToolError;
     #[derive(serde::Deserialize)]
     struct StrictArgs {
-        #[allow(dead_code)]
         tool_name: String,
     }
     impl Tool for StrictTool {
@@ -574,10 +573,13 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         }
         async fn call(
             &self,
-            _args: Self::Args,
+            args: Self::Args,
             _context: &gents_loop::tool::ToolCallEnvelope,
         ) -> Result<Self::Output, Self::Error> {
-            panic!("the tool must not run on non-object arguments");
+            panic!(
+                "the tool must not run on non-object arguments; it parsed tool_name {:?}",
+                args.tool_name
+            );
         }
     }
 

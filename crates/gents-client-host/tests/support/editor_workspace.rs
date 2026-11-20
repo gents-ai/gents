@@ -5,8 +5,6 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub const PROMPT: &str = "Check the second project selection.";
-pub const REPLY: &str = "Second project context received.";
-pub const ATTACHMENT_ONLY_REPLY: &str = "Attached context received.";
 pub const CAPTURED: &str = "second project captured unsaved context\n";
 const LATER: &str = "second project later unsaved context\n";
 const DISK: &str = "second project disk context\n";

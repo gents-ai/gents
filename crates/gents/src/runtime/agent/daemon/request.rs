@@ -6,7 +6,7 @@ use gents_loop::loop_stream::TaggedMessage;
 use gents_loop::provider_call::admission::AdmissionCallContext;
 use gents_observe::observe::runtime_trace::RequestTraceAttrs;
 
-mod prepare;
+pub(super) mod prepare;
 
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
@@ -68,25 +68,31 @@ where
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner. The loop remains the
     /// sole final legality authority.
-    #[allow(clippy::too_many_arguments)]
     async fn estimate_initial_provider_input(
         &self,
-        request: &gents_protocol::row::AgentRequest,
-        preamble: String,
-        history: &[TaggedMessage],
-        skill_reminders: &[gents_inference::llm::message::Message],
-        request_context_message: Option<&gents_inference::llm::message::Message>,
-        folded_prompts: &[crate::runtime::agent::loop_stream::FoldedPrompt],
-        aggregate_token_budget: Option<crate::runtime::agent::loop_stream::AggregateTokenBudget>,
+        inputs: prepare::RequestInputs<'_>,
+        built: &crate::turn::prompt::BuiltPrompt,
+        assembly: prepare::PromptAssembly<'_>,
         replay: &gents_loop::loop_stream::LoopReplayInput,
-        resume_from_history: bool,
-        wake_notifications: &[TaggedMessage],
     ) -> Result<usize> {
-        let config = crate::turn::completion_factory::loop_config_for_request(
-            &self.agent_config,
-            preamble,
+        let prepare::RequestInputs {
             request,
             aggregate_token_budget,
+            resume_from_history,
+            ..
+        } = inputs;
+        let prepare::PromptAssembly {
+            skill_reminders,
+            request_context_message,
+            folded_prompts,
+            wake_notifications,
+        } = assembly;
+        let request_context_message = request_context_message.as_ref();
+        let config = crate::turn::completion_factory::loop_config_for_request(
+            &self.agent_config,
+            built.preamble.clone(),
+            request,
+            aggregate_token_budget.clone(),
             self.loop_tools.len(),
             self.account_hops,
         )?;
@@ -94,7 +100,7 @@ where
             .iter()
             .cloned()
             .map(TaggedMessage::unassociated)
-            .chain(history.iter().cloned())
+            .chain(built.messages.iter().cloned())
             .collect::<Vec<_>>();
         let (mut provider_history, prompt) = super::inference::request_entry(
             provider_history,
@@ -204,9 +210,8 @@ where
                     request_hop = trace_attrs.request_hop,
                 ))
                 .await?;
-            let preparation = self.prepare_request_input(prepare::RequestInputs {
+            let inputs = prepare::RequestInputs {
                 request: &request,
-                lifecycle: &*lifecycle,
                 request_commit_cid: &request_commit_cid,
                 agent_name: &agent_name,
                 trace_attrs: &trace_attrs,
@@ -217,7 +222,8 @@ where
                 resume_same_request,
                 admission: &admission_context,
                 capture: capture_scope.as_ref(),
-            });
+            };
+            let preparation = self.prepare_request_input(&*lifecycle, inputs);
             let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
             else {
                 flush_received_preparation_partial(
@@ -229,42 +235,21 @@ where
                     RequestInterruptionSource::Preparation,
                 ));
             };
-            let prepare::PreparedRequestInput {
-                workspace,
-                request_context_message,
-                built,
-                replay,
-                consumed_prompts,
-                folded_prompts,
-                wake_notifications,
-            } = prepared?;
-
-            let doc_id = lifecycle.request().doc_id.clone();
+            let prepared = prepared?;
 
             let inference_agent_did = lifecycle.agent_did().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
             let result = self
                 .run_inference(
-                    &request,
-                    &doc_id,
-                    &built.messages,
-                    &wake_notifications,
-                    replay,
                     lifecycle,
                     stream_writer,
-                    &mut shutdown,
-                    &mut interrupt_rx,
-                    &request_token,
-                    aggregate_token_budget,
-                    effective_seed,
-                    workspace,
-                    request_context_message,
-                    resume_from_history,
-                    consumed_prompts,
-                    folded_prompts,
-                    context_calibration,
-                    &admission_context,
-                    capture_scope.as_ref(),
+                    super::inference::RequestSignals {
+                        shutdown: &mut shutdown,
+                        interrupt_rx: &mut interrupt_rx,
+                        request_token: &request_token,
+                    },
+                    inputs,
+                    prepared,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",

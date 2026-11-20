@@ -11,7 +11,9 @@ use super::ClientRuntime;
 
 mod delivery;
 pub use delivery::RetainedGoalSubmission;
-use gents::client_operations::{prepare_request_submission, SubmitRequestOptions};
+use gents::client_operations::{
+    prepare_request_submission, RequestSubmission, SubmitRequestOptions,
+};
 
 impl ClientRuntime {
     pub(super) async fn prepare_goal_input(
@@ -121,19 +123,20 @@ impl ClientRuntime {
             let (_, request) = prepare_request_submission(
                 &self.session_queue_access(node_did)?,
                 snapshot.as_ref(),
-                session_id,
-                node_did,
-                &requester_did,
+                RequestSubmission {
+                    session_id,
+                    node_did,
+                    requester_did: &requester_did,
+                    agent_did,
+                    content: objective,
+                },
                 signer.as_ref(),
                 admission,
-                objective,
-                agent_did,
                 SubmitRequestOptions {
                     input,
                     retry_key: Some(format!("session-goal:{command_id}")),
                     ..Default::default()
                 },
-                None,
             )
             .await?;
             if session_doc_id.is_none() {

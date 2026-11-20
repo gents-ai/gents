@@ -21,10 +21,6 @@ impl ProcessHomes {
 
     /// The desktop home whose `cli` child holds the CLI client identity that
     /// `init` creates and later CLI commands sign with.
-    #[allow(
-        dead_code,
-        reason = "shared by test binaries that do not all sign as the CLI"
-    )]
     pub fn cli_identity(&self) -> DesktopPaths {
         DesktopPaths::from_root(self.root.join("desktop").join("cli"))
     }

@@ -313,9 +313,7 @@ async fn refused_tool_arguments_reach_the_model_and_the_row_as_the_lean_model_re
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct StrictArgs {
-        #[allow(dead_code)]
         report_type: String,
-        #[allow(dead_code)]
         findings: Vec<String>,
     }
     impl Tool for StrictArgsTool {
@@ -332,10 +330,13 @@ async fn refused_tool_arguments_reach_the_model_and_the_row_as_the_lean_model_re
         }
         async fn call(
             &self,
-            _args: Self::Args,
+            args: Self::Args,
             _context: &gents_loop::tool::ToolCallEnvelope,
         ) -> Result<Self::Output, Self::Error> {
-            panic!("the tool must not run on unparseable arguments");
+            panic!(
+                "the tool must not run on unparseable arguments; it parsed report_type {:?} and findings {:?}",
+                args.report_type, args.findings
+            );
         }
     }
 

@@ -1,7 +1,9 @@
 use anyhow::Result;
+use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_store::graphql::escape_graphql_string;
 use uuid::Uuid;
 
+use super::prepare::{prepare_request_submission, RequestSubmission};
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -12,19 +14,48 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
     let user = home.user().clone();
     let session_id = Uuid::new_v4().to_string();
     let result = async {
-        let submitted = super::submit_goal_backed_request(
-            &gents_observe::client_projection::store::ClientStore::default(),
-            &home.user_access(),
+        let access = home.user_access();
+        let node_did = home.node_did();
+        let mut options = SubmitRequestOptions {
+            retry_key: Some(format!("desktop-goal-request:{session_id}")),
+            ..SubmitRequestOptions::default()
+        };
+        options.input.goal_assignment = Some(gents_protocol::request_input::GoalAssignmentInput {
+            goal_id: gents_protocol::goal::deterministic_goal_id(node_did, &session_id),
+            root_request_doc_id: None,
+        });
+        options.input = gents_session::request::lifecycle::prepare_user_message_input(
+            &access,
+            node_did,
             &session_id,
-            home.node_did(),
-            user.did(),
+            options.input,
+            gents_protocol::request_input::QueueDelivery::Queue,
+        )
+        .await?;
+        let (submitted, create) = prepare_request_submission(
+            &access,
+            &gents_observe::client_projection::store::ClientStore::default(),
+            RequestSubmission {
+                session_id: &session_id,
+                node_did,
+                requester_did: user.did(),
+                agent_did: Some(&agent.agent_did),
+                content: "finish the task",
+            },
             user.as_ref(),
             AgentRequestAdmissionRecord::client(user.did()),
-            "finish the task",
-            Some(&agent.agent_did),
-            SubmitRequestOptions::default(),
-            "prove the desktop goal path",
-            Some(2_000),
+            options,
+        )
+        .await?;
+        gents_automation::operations::goal::start(
+            &access,
+            node_did,
+            &gents_protocol::operations::goal::GoalStartInput {
+                session_id: session_id.clone(),
+                objective: "prove the desktop goal path".to_owned(),
+                token_budget: Some(2_000),
+            },
+            &create,
         )
         .await?;
         let escaped_session = escape_graphql_string(&session_id);

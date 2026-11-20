@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use gents_pack::operations::pack::{admit_digest, parse_inference_slots};
 use gents_pack::pack::install_flow::{
     check_wire_target, has_plugin_references, install_documents_pack_resolved_inner, merge,
-    DocumentsInstallRequest, LocalPackAccess,
+    DocumentsInstallNode, DocumentsInstallRequest, LocalPackAccess,
 };
 use gents_pack::pack::installation_roots;
 use gents_pack::pack::plugin_wire::wire_pack_plugins;
@@ -127,6 +127,13 @@ async fn install_documents_pack_inner(
                 wire: Vec::new(),
                 ..request.clone()
             };
+            let approvals = super::wire::record_approvals(
+                owner,
+                std::iter::once(pack).chain(&dependencies),
+                &request.dependency_variables,
+                &request.bind_agents,
+            )
+            .await?;
             let mut output = gents_host::http::pack_install_client::install_remote(
                 endpoint,
                 owner,
@@ -143,6 +150,7 @@ async fn install_documents_pack_inner(
                     &request.home,
                     pack,
                     &request.wire,
+                    approvals.first(),
                     gents_host::http::pack_wire_client::SIGNERS,
                 )
                 .await?
@@ -152,13 +160,15 @@ async fn install_documents_pack_inner(
         }
     }
     install_documents_pack_resolved_inner(
-        access,
-        owner,
+        &DocumentsInstallNode {
+            access,
+            owner,
+            local,
+        },
         pack,
         &request,
         explicit,
         dependencies,
-        local,
         &gents_tools::surface::PackRoots,
         refuse_unapproved_root,
     )
@@ -351,6 +361,7 @@ pub(super) async fn install_documents_report(
                 &home,
                 pack,
                 &args.wire,
+                None,
                 gents_host::http::pack_wire_client::SIGNERS,
             )
             .await?
@@ -452,15 +463,38 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                         .await
                         .into_iter()
                         .collect::<Result<Vec<_>>>()?;
-                let result = gents_host::http::pack_install_client::install_remote(
+                let approvals = super::wire::record_approvals(
+                    owner,
+                    std::iter::once(&pack).chain(&dependencies),
+                    &args.dependency_variables,
+                    &args.bind_agents,
+                )
+                .await?;
+                let mut result = gents_host::http::pack_install_client::install_remote(
                     endpoint,
                     owner,
                     &pack,
                     &dependencies,
-                    &install_request(&args),
+                    &DocumentsInstallRequest {
+                        wire: Vec::new(),
+                        ..install_request(&args)
+                    },
                     true,
                 )
                 .await?;
+                if !args.wire.is_empty() && !args.preview {
+                    result["wired"] = wire_pack_plugins(
+                        &gents_store::config_client::ConfigAccess::Graphql(endpoint.clone()),
+                        owner,
+                        &home,
+                        &pack,
+                        &args.wire,
+                        approvals.first(),
+                        gents_host::http::pack_wire_client::SIGNERS,
+                    )
+                    .await?
+                    .into();
+                }
                 return Ok(crate::print_json(&result)?);
             }
             let notify_scope = notification_scope.clone();
@@ -469,8 +503,10 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 &home,
                 pack.archive(),
                 args.grant_authority,
-                slot_owner.as_deref(),
-                &requested,
+                gents_pack::pack::plugin_lifecycle::PluginSlotBindings {
+                    owner: slot_owner.as_deref(),
+                    bindings: &requested,
+                },
                 gents_pack::pack::InstalledVia::Operator,
                 pack.provenance(),
                 move |identity, changes| {
@@ -519,6 +555,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                     &home,
                     &pack,
                     &args.wire,
+                    None,
                     gents_host::http::pack_wire_client::SIGNERS,
                 )
                 .await?

@@ -476,25 +476,29 @@ async fn run_inner(
         )?;
         let overrides = gents_pack::operations::pack::dependency_overrides(&supplied);
         let mut prepared = gents_pack::pack::prepare_document_pack_archive(
-            &access,
-            &state.node_did,
-            received.root.archive(),
-            &requested,
-            &received
-                .dependencies
-                .iter()
-                .map(|source| source.archive())
-                .collect::<Vec<_>>(),
-            gents_pack::pack::InstalledVia::Operator,
-            Some(&home),
-            &|name| {
-                gents_pack::operations::pack::install_value(
-                    gents_protocol::operations::pack::PackActor::User,
-                    &supplied,
-                    name,
-                )
+            &gents_pack::pack::InstallTarget {
+                access: &access,
+                owner: &state.node_did,
+                plugin_home: Some(&home),
             },
-            &overrides,
+            received.root.archive(),
+            &gents_pack::pack::PackGraphInputs {
+                dependencies: &received
+                    .dependencies
+                    .iter()
+                    .map(|source| source.archive())
+                    .collect::<Vec<_>>(),
+                requested: &requested,
+                environment: &|name| {
+                    gents_pack::operations::pack::install_value(
+                        gents_protocol::operations::pack::PackActor::User,
+                        &supplied,
+                        name,
+                    )
+                },
+                overrides: &overrides,
+            },
+            gents_pack::pack::InstalledVia::Operator,
         )
         .await?;
         gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(

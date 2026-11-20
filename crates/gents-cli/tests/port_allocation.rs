@@ -1,6 +1,4 @@
-#[allow(dead_code)]
-#[path = "support/ports.rs"]
-mod ports;
+use gents::support::ports;
 
 #[test]
 fn unbound_port_is_reserved_across_test_processes() -> anyhow::Result<()> {

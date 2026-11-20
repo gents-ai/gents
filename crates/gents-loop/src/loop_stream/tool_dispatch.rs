@@ -573,9 +573,7 @@ mod tests {
     #[derive(Debug, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct ArgumentFixture {
-        #[allow(dead_code)]
         text: String,
-        #[allow(dead_code)]
         mode: Option<ArgumentMode>,
     }
 
@@ -602,10 +600,13 @@ mod tests {
 
         async fn call(
             &self,
-            _: Self::Args,
+            args: Self::Args,
             _context: &crate::tool::ToolCallEnvelope,
         ) -> Result<String, Self::Error> {
-            panic!("invalid arguments must never execute")
+            panic!(
+                "invalid arguments must never execute; parsed text {:?} in mode {:?}",
+                args.text, args.mode
+            )
         }
     }
 
@@ -1109,7 +1110,6 @@ mod tests {
         struct StrictToolError;
         #[derive(serde::Deserialize)]
         struct StrictArgs {
-            #[allow(dead_code)]
             text: String,
         }
         impl Tool for StrictArgsTool {
@@ -1126,11 +1126,11 @@ mod tests {
             }
             async fn call(
                 &self,
-                _args: Self::Args,
+                args: Self::Args,
                 _context: &crate::tool::ToolCallEnvelope,
             ) -> Result<Self::Output, Self::Error> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
-                Ok("ran".to_string())
+                Ok(format!("ran with {}", args.text))
             }
         }
 

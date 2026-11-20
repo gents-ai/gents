@@ -818,7 +818,7 @@ pub async fn selected_background_wake_with_successor(
     use gents_session::request::watcher::{DefraWatcher, Watcher};
     use gents_toolcalls::call::lifecycle::admission_fixture::{
         complete_child_managed_verified, publish_accepted_on_claimed_request,
-        published_session_message_with_owner,
+        published_session_message_with_owner, AcceptedFixtureCall,
     };
     use std::time::Duration;
 
@@ -840,12 +840,14 @@ pub async fn selected_background_wake_with_successor(
         node.clone(),
         &mut owner,
         did,
-        1,
-        gents_protocol::tool_names::LIST_PROCESSES_TOOL_NAME,
-        "completion-order-list",
-        json!({}),
-        AwaitMode::Foreground,
-        true,
+        AcceptedFixtureCall {
+            turn: 1,
+            tool_name: gents_protocol::tool_names::LIST_PROCESSES_TOOL_NAME,
+            tool_call_id: "completion-order-list",
+            arguments: json!({}),
+            await_mode: AwaitMode::Foreground,
+            start_running: true,
+        },
     )
     .await
     .unwrap();
@@ -854,12 +856,14 @@ pub async fn selected_background_wake_with_successor(
             node.clone(),
             &mut owner,
             did,
-            2,
-            gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
-            "completion-order-successor",
-            json!({"agent": "general", "prompt": "second work"}),
-            AwaitMode::Background,
-            false,
+            AcceptedFixtureCall {
+                turn: 2,
+                tool_name: gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
+                tool_call_id: "completion-order-successor",
+                arguments: json!({"agent": "general", "prompt": "second work"}),
+                await_mode: AwaitMode::Background,
+                start_running: false,
+            },
         )
         .await
         .unwrap();

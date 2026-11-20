@@ -352,22 +352,21 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
         node_binding: None,
     };
     let prepared = super::super::prepare_document_pack_archive_with_provisioner(
-        &local,
-        root.did(),
+        &crate::pack::InstallTarget {
+            access: &local,
+            owner: root.did(),
+            plugin_home: None,
+        },
         &root_archive,
-        &BTreeMap::from([("model".into(), "profile".into())]),
-        &[&dependency],
-        InstalledVia::Operator,
-        false,
-        None,
-        // A binding given to this install names a slot of the root pack: the
+        &crate::pack::PackGraphInputs { dependencies: &[&dependency], requested: &BTreeMap::from([("model".into(), "profile".into())]), environment: // A binding given to this install names a slot of the root pack: the
         // dependency's same-named slot does not inherit it, so this DID,
         // which is no Agent of the node, is never looked up.
         &|name| {
             (name == agent_binding_variable("worker")).then(|| "did:key:not-an-agent".to_owned())
-        },
+        }, overrides: &Default::default() },
+        InstalledVia::Operator,
+        false,
         Some(&provisioner),
-        &Default::default(),
     )
     .await
     .unwrap();
@@ -376,15 +375,19 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
     assert_eq!(prepared.config.tasks[0].agent_did, expected.agent_did);
     let expected_did = expected.agent_did.clone();
     let (report, _) = super::super::install_prepared_document_graph(
-        &access,
-        root.did(),
+        &crate::pack::InstallTarget {
+            access: &access,
+            owner: root.did(),
+            plugin_home: None,
+        },
         &root_archive,
         &prepared,
-        super::super::DriftPolicy::Refuse,
-        None,
+        crate::pack::DocumentGraphPolicy {
+            drift: super::super::DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
         false,
         true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();

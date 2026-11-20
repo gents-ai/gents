@@ -9,6 +9,7 @@ use identity::{FullIdentity as _, Identity as _, RawIdentity};
 pub mod agent;
 pub mod client_access;
 mod enrollment_approval;
+mod enrollment_gate;
 mod enrollment_grant;
 mod error;
 mod file_key;
@@ -29,6 +30,7 @@ pub use enrollment_approval::{
     approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep,
     EnrollmentApproval, EnrollmentApprovalError,
 };
+pub use enrollment_gate::enrollment_decision_gate;
 pub use enrollment_grant::{
     administration_owed, after_removal, grant_enrollment_authority, lapse_clock,
     load_enrollment_grant_receipts, membership_lapsed, owed_removals, permission_grant_admitted,
