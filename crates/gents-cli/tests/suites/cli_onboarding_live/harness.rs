@@ -137,7 +137,6 @@ impl LiveBox {
             .env("HOME", &self.root)
             .env("TERM", "xterm-256color")
             .env("RUST_LOG", "error")
-            .env_remove("GENTS_HOME")
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_RUNTIME_DIR");
         command

@@ -124,13 +124,8 @@ pub(super) async fn setup(
     eprintln!("Welcome to Gents. A few questions and this machine is ready.\n");
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let user_home = std::env::home_dir().context("resolving the user home directory")?;
-    let home_fixed = home_given.or_else(|| {
-        std::env::var_os("GENTS_HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    });
-    let folder_asked = home_fixed.is_none();
-    let home = match home_fixed {
+    let folder_asked = home_given.is_none();
+    let home = match home_given {
         Some(home) => crate::absolutize(home)?,
         None => {
             let default = crate::absolutize(resolve_home_dir(None))?;

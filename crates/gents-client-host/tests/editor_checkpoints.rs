@@ -21,7 +21,6 @@ impl Peer {
             .arg("--editor-checkpoints")
             .arg(directory)
             .envs(homes::ProcessHomes::under(directory.parent().unwrap()).env())
-            .env("GENTS_HOME", home)
             .env("GENTS_DESKTOP_HOME", home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

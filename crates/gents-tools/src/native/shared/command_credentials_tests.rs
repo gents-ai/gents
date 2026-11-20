@@ -313,7 +313,7 @@ fn runtime_test_credentials_are_isolated_from_unrelated_backup_trees() {
     let updates = account.path().join(".gents/service-updates/backup");
     std::fs::create_dir_all(&updates).unwrap();
     std::os::unix::fs::symlink("SingletonLock", updates.join("SingletonLock")).unwrap();
-    let sources = inactive_runtime_homes(&[account.path().to_owned()]);
+    let sources = inactive_runtime_homes(&[account.path().to_owned()]).unwrap();
     let paths = sources
         .iter()
         .flat_map(|home| standard_runtime_credentials(home));

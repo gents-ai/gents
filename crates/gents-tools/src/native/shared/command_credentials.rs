@@ -72,7 +72,7 @@ fn capture_native(
         .collect::<Vec<_>>();
     // Inactive homes may have a different configuration schema. Their standard
     // credential paths do not require decoding configuration or walking data.
-    for home in inactive_runtime_homes(&homes) {
+    for home in inactive_runtime_homes(&homes)? {
         paths.extend(standard_runtime_credentials(&home));
     }
     if let Some(config) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
@@ -89,28 +89,28 @@ fn capture_native(
     CredentialProtection::capture(paths)
 }
 
+/// Each account's `~/.gents` and the home the operator's commands open without
+/// `--home` (the remembered folder). An unreadable remembered file fails the
+/// capture rather than leaving that home unprotected. The runtime's own home
+/// adds its full credential set through `runtimes` in `capture_native`.
 #[cfg(not(any(test, feature = "test-home-guard")))]
-fn inactive_runtime_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
-    homes
+fn inactive_runtime_homes(homes: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    Ok(homes
         .iter()
         .map(|account| account.join(".gents"))
-        .chain(
-            std::env::var_os("GENTS_HOME")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from),
-        )
-        .collect()
+        .chain(Some(gents_store::local::home::default_home_dir()?))
+        .collect())
 }
 
 #[cfg(any(test, feature = "test-home-guard"))]
-fn inactive_runtime_homes(_homes: &[PathBuf]) -> Vec<PathBuf> {
+fn inactive_runtime_homes(_homes: &[PathBuf]) -> Result<Vec<PathBuf>> {
     static NAMESPACE: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
         tempfile::Builder::new()
             .prefix("gents-test-credentials-")
             .tempdir()
             .unwrap()
     });
-    vec![NAMESPACE.path().join("runtime")]
+    Ok(vec![NAMESPACE.path().join("runtime")])
 }
 
 fn runtime_credentials(home: &Path) -> Result<Vec<PathBuf>> {

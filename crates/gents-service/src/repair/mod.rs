@@ -13,7 +13,7 @@ use gents_store::local::home::default_data_dir;
 use gents_store::local::storage_backend::incompatible_store_kind;
 use tokio::time::Instant;
 
-use crate::home_state::{default_home_ignoring_env, read_runtime_state};
+use crate::home_state::{default_home, read_runtime_state};
 use crate::native_service::{
     NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceExit, ServiceHolder,
     ServiceRefusal,
@@ -620,7 +620,7 @@ async fn decision(home: &Path, why: HomeState, serving: Option<&Path>) -> Result
     Ok(HomeDecision {
         home: home.to_path_buf(),
         why,
-        default_home: tokio::task::spawn_blocking(default_home_ignoring_env).await??,
+        default_home: tokio::task::spawn_blocking(default_home).await??,
         serving_home: serving.map(Path::to_path_buf),
     })
 }

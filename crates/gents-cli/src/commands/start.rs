@@ -19,9 +19,7 @@ use tokio::runtime::Handle;
 use crate::cli::args::ShellArgs;
 use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
-use gents_service::home_state::{
-    default_home_ignoring_env, read_finished_init_config, resolve_home_dir,
-};
+use gents_service::home_state::{default_home, read_finished_init_config, resolve_home_dir};
 
 use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
@@ -488,18 +486,14 @@ fn answered(
     }
 }
 
-/// `--home` or `GENTS_HOME` naming the folder `gents` opens without them is
-/// not a choice of another folder.
+/// `--home` naming the folder `gents` opens without it is not a choice of
+/// another folder.
 fn home_choice(home_given: Option<&Path>) -> Result<HomeChoice> {
     let home = crate::absolutize(resolve_home_dir(home_given))?;
-    let given = home_given.is_some()
-        || std::env::var_os(gents_store::local::home::GENTS_HOME_ENV)
-            .is_some_and(|value| !value.is_empty());
     let canonical =
         |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let explicit = given
-        && !default_home_ignoring_env()
-            .is_ok_and(|default| canonical(&default) == canonical(&home));
+    let explicit = home_given.is_some()
+        && !default_home().is_ok_and(|default| canonical(&default) == canonical(&home));
     Ok(HomeChoice { home, explicit })
 }
 

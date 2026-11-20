@@ -145,7 +145,7 @@ fn parse_agent_did(value: &str) -> Result<String, String> {
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
-    /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
+    /// Node home to set up or open. Defaults to the folder chosen at setup, then ~/.gents.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
     /// Agent to open or message instead of the node's default. See `gents config agent list`.
@@ -355,7 +355,7 @@ pub(crate) enum DesktopCommand {
         about = "Preview or reset the managed home, desktop state, service and browser caches on this Mac; quit Gents first"
     )]
     Reset {
-        /// Managed home; defaults to GENTS_HOME, the desktop's reviewed home, then ~/.gents.
+        /// Managed home; defaults to the desktop's reviewed home, then ~/.gents.
         #[arg(long)]
         home: Option<PathBuf>,
         /// Desktop client state; defaults to GENTS_DESKTOP_HOME, then the platform's app data folder.
