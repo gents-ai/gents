@@ -380,7 +380,9 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         identity::Did::new(identity.did()).unwrap(),
     );
     for permission in [
+        gents_store::config_client::NodePermission::CollectionGet,
         gents_store::config_client::NodePermission::DocumentRead,
+        gents_store::config_client::NodePermission::CollectionGet,
         gents_store::config_client::NodePermission::DocumentUpdate,
         gents_store::config_client::NodePermission::DacRelationAdd,
     ] {
@@ -410,22 +412,24 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     let enqueued = crate::request::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         &node,
         ::identity::Did::new(agent.did().to_owned()).expect("fixture managed Agent DID"),
-        identity.did(),
-        agent.did(),
-        "continue the run",
-        crate::request::lifecycle::ExecutionOrigin::Scheduled,
-        crate::request::lifecycle::TriggerLineage {
-            trigger_id: Some("event-trigger-1".into()),
-            trigger_kind: Some("event".into()),
-            source_doc_id: Some(source_item.doc_id.clone()),
-            correlation: Some("run-1".into()),
-            trigger_context: Some(trigger_context),
+        crate::request::lifecycle::materialize::PendingAgentRequest {
+            node_did: identity.did(),
+            agent_did: agent.did(),
+            content: "continue the run",
+            execution_origin: crate::request::lifecycle::ExecutionOrigin::Scheduled,
+            trigger_lineage: crate::request::lifecycle::TriggerLineage {
+                trigger_id: Some("event-trigger-1".into()),
+                trigger_kind: Some("event".into()),
+                source_doc_id: Some(source_item.doc_id.clone()),
+                correlation: Some("run-1".into()),
+                trigger_context: Some(trigger_context),
+            },
+            conversation_title: None,
+            workspace_lineage: None,
+            requester_did,
+            trigger_doc_id: Some("event-trigger-config-doc-1"),
         },
         None,
-        None,
-        None,
-        requester_did,
-        Some("event-trigger-config-doc-1"),
         None,
         agent.as_ref(),
     )

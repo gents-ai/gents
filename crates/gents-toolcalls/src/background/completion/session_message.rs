@@ -288,14 +288,16 @@ pub(crate) async fn settle_session_message_row(
             append_background_tool_completion(
                 node,
                 &lifecycle.access()?,
-                lifecycle.session_id(),
-                &calling_request_id,
-                &doc_id,
-                lifecycle.tool_name(),
-                "failed",
-                reason,
-                Some(REASON),
-                gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                &crate::background::completion::BackgroundToolCompletion {
+                    parent_session_id: lifecycle.session_id(),
+                    parent_request_id: &calling_request_id,
+                    tool_call_doc_id: &doc_id,
+                    tool_name: lifecycle.tool_name(),
+                    status: "failed",
+                    result: reason,
+                    reason: Some(REASON),
+                    wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                },
             )
             .await?;
             return Ok(true);
@@ -330,14 +332,16 @@ pub(crate) async fn settle_session_message_row(
     append_background_tool_completion(
         node,
         &lifecycle.access()?,
-        lifecycle.session_id(),
-        &calling_request_id,
-        &doc_id,
-        lifecycle.tool_name(),
-        terminal.notification_status(),
-        terminal.output(),
-        handoff_reason,
-        gents_protocol::request_lifecycle::RequestHopCause::Return,
+        &crate::background::completion::BackgroundToolCompletion {
+            parent_session_id: lifecycle.session_id(),
+            parent_request_id: &calling_request_id,
+            tool_call_doc_id: &doc_id,
+            tool_name: lifecycle.tool_name(),
+            status: terminal.notification_status(),
+            result: terminal.output(),
+            reason: handoff_reason,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Return,
+        },
     )
     .await?;
     Ok(true)

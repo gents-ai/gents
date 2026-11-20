@@ -195,13 +195,15 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
                 Box::pin(async move {
                     gents_session::session::ensure_session_in_txn(
                         txn,
-                        "replacement-alternate-session",
-                        identity.did(),
-                        agent_did,
-                        Some(user.did()),
-                        None,
-                        None,
-                        "2026-01-01T00:00:01Z",
+                        gents_session::session::NewAgentSession {
+                            session_id: "replacement-alternate-session",
+                            node_did: identity.did(),
+                            agent_did,
+                            requester_did: Some(user.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-01-01T00:00:01Z",
+                        },
                     )
                     .await?;
                     gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
@@ -295,6 +297,7 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
             .await
             .unwrap(),
         ),
+        request_credentials: Vec::new(),
     });
     command.signature = fixture
         .user
@@ -372,7 +375,7 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
             .unwrap()
             .iter()
             .any(|row| row["request_id"] == "replacement-first"));
-        process_command(node, &identity, &doc_id, fixture.agent.as_ref())
+        process_command(node, &identity, &doc_id, fixture.agent.as_ref(), None)
             .await
             .unwrap();
         assert!(
@@ -406,7 +409,7 @@ async fn drive_replacement(c: &ReplacementInput<String, String>) -> ReplacementO
     }
     let doc_id = persist_command(&access, &command).await;
     let applied = if start.commit {
-        process_command(node, &identity, &doc_id, fixture.agent.as_ref())
+        process_command(node, &identity, &doc_id, fixture.agent.as_ref(), None)
             .await
             .unwrap();
         let result = receipt(&access, &doc_id).await;

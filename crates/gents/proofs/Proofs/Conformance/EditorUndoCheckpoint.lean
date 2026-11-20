@@ -1,8 +1,10 @@
 import Proofs.Session.Workspace.EditorUndoCheckpoint
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.EditorUndoCheckpoint
-open Workspace.EditorUndo Workspace.EditorUndo.Checkpoint Conformance.Contracts
+open Workspace.EditorUndo Workspace.EditorUndo.Checkpoint Lean
+
+deriving instance ToJson for State, SaveState, SaveMarker, Progress, Sequence, Operation
 
 private def target : Target :=
   {reference := "node/session/request/tool/root/file", actions := ["physical-action"],
@@ -285,112 +287,22 @@ def trace (world : World) : List Input → List (World × Output)
 theorem expected_traces :
     cases.all (fun c => (trace c.initial c.inputs).map Prod.snd == c.expected) = true := by native_decide
 
-private def boolJson (value : Bool) := if value then "true" else "false"
-private def object (fields : List (String × String)) :=
-  "{" ++ String.intercalate "," (fields.map fun (key, value) => jsonString key ++ ":" ++ value) ++ "}"
-private def stateJson : State → String
-  | .fresh => "\"fresh\"" | .pending => "\"pending\"" | .applied => "\"applied\""
-  | .rejected => "\"rejected\"" | .unknown => "\"unknown\""
-private def saveStateJson : SaveState → String
-  | .pending => "\"pending\"" | .saving => "\"saving\"" | .saved => "\"saved\""
-  | .conflict => "\"conflict\"" | .failed => "\"failed\"" | .unknown => "\"unknown\""
-private def saveJson (marker : SaveMarker) :=
-  object [("state", saveStateJson marker.state), ("exact", boolJson marker.exact)]
-private def effectJson : Effect → String
-  | .none => "\"none\"" | .restore => "\"restore\"" | .save => "\"save\""
-private def sequenceJson (sequence : Sequence) := object
-  [("items", jsonArray (sequence.items.map fun progress => object
-    [("reference", jsonString progress.reference), ("actions", jsonArray (progress.actions.map jsonString)),
-     ("uri", jsonString progress.uri), ("restore", stateJson progress.restore), ("save", saveJson progress.save)])),
-   ("closed", boolJson sequence.closed)]
-private def ledgerJson (ledger : Ledger) := jsonArray (ledger.map fun operation =>
-  object [("id", jsonString operation.id), ("sequence", sequenceJson operation.sequence)])
-private def storedJson : Stored → String
-  | .absent => object [("kind", "\"absent\"")]
-  | .present version ledger => object [("kind", "\"present\""), ("version", toString version), ("ledger", ledgerJson ledger)]
-  | .corrupt => object [("kind", "\"corrupt\"")]
-  | .unavailable => object [("kind", "\"unavailable\"")]
-private def proposalJson (proposal : Proposal) := object
-  [("ledger", ledgerJson proposal.ledger), ("effect", effectJson proposal.effect),
-   ("operation", (proposal.operation.map jsonString).getD "null")]
-private def holderJson (holder : Holder) := object
-  [("caller", toString holder.caller), ("loaded", boolJson holder.loaded),
-   ("refused", boolJson holder.refused), ("cancelled", boolJson holder.cancelled),
-   ("ledger", ledgerJson holder.ledger), ("operation", (holder.operation.map jsonString).getD "null"),
-   ("pending", (holder.pending.map proposalJson).getD "null"),
-   ("grant", effectJson holder.grant), ("running", effectJson holder.running)]
-private def detachedJson (value : Detached) := object
-  [("holder", holderJson value.holder), ("candidate", (value.candidate.map proposalJson).getD "null")]
-private def worldJson (world : World) := object
-  [("stored", storedJson world.stored), ("holder", (world.holder.map holderJson).getD "null"),
-   ("detached", jsonArray (world.detached.map detachedJson)),
-   ("orphans", jsonArray (world.orphans.map fun (caller, effect) =>
-     object [("caller", toString caller), ("effect", effectJson effect)]))]
-private def outputJson : Output → String
-  | .acquired => "\"acquired\"" | .busy => "\"busy\"" | .loaded => "\"loaded\""
-  | .checkpoint => "\"checkpoint\"" | .acknowledged => "\"acknowledged\"" | .refused => "\"refused\""
-  | .effect effect => object [("effect", effectJson effect)]
-  | .settled => "\"settled\"" | .cancelled => "\"cancelled\"" | .held => "\"held\"" | .released => "\"released\""
-  | .withdrawn => "\"withdrawn\""
-  | .guardLost => "\"guardLost\""
-  | .helperLost => "\"helperLost\"" | .orphanSettled => "\"orphanSettled\""
-private def targetJson (t : Target) := object
-  [("reference", jsonString t.reference), ("actions", jsonArray (t.actions.map jsonString)), ("uri", jsonString t.uri),
-   ("before", jsonString t.before), ("after", jsonString t.after), ("version", toString t.version),
-   ("encoding", jsonString t.encoding), ("eol", jsonString t.eol)]
-private def documentJson (d : Document) := object
-  [("uri", jsonString d.uri), ("content", jsonString d.content), ("version", toString d.version),
-   ("encoding", jsonString d.encoding), ("eol", jsonString d.eol), ("dirty", boolJson d.dirty),
-   ("closed", boolJson d.closed), ("writable", boolJson d.writable)]
-private def observationsJson (o : Observations) := object
-  [("trusted", boolJson o.trusted), ("selectionCurrent", boolJson o.selectionCurrent),
-   ("sourcesVerified", boolJson o.sourcesVerified), ("mappingsCurrent", boolJson o.mappingsCurrent),
-   ("preservesConflicts", boolJson o.preservesConflicts)]
-private def saveObservationsJson (o : SaveObservations) := object
-  [("preservesConflicts", boolJson o.preservesConflicts), ("documentCurrent", boolJson o.documentCurrent),
-   ("diskPostimageCurrent", boolJson o.diskPostimageCurrent), ("bufferRecoverable", boolJson o.bufferRecoverable)]
-private def actionJson : Action → String
-  | .startRestore index allowed persisted => object
-    [("kind", "\"startRestore\""), ("index", toString index), ("allowed", boolJson allowed), ("persisted", boolJson persisted)]
-  | .observeRestore index completion observed persisted => object
-    [("kind", "\"observeRestore\""), ("index", toString index), ("completion", stateJson (match completion with
-       | .applied => .applied | .rejected => .rejected | .unknown => .unknown)),
-     ("observed", boolJson observed), ("persisted", boolJson persisted)]
-  | .startSave index o persisted => object
-    [("kind", "\"startSave\""), ("index", toString index), ("observations", saveObservationsJson o), ("persisted", boolJson persisted)]
-  | .observeSave index result persisted => object
-    [("kind", "\"observeSave\""), ("index", toString index), ("result", saveJson result), ("persisted", boolJson persisted)]
-  | .observeSavedByEditor index result persisted => object
-    [("kind", "\"observeSavedByEditor\""), ("index", toString index), ("result", saveJson result), ("persisted", boolJson persisted)]
-private def inputJson : Input → String
-  | .acquire caller observation => object [("kind", "\"acquire\""), ("caller", toString caller),
-      ("observation", jsonString (match observation with | .acquired => "acquired" | .busy => "busy" | .unavailable => "unavailable"))]
-  | .load caller legacy => object [("kind", "\"load\""), ("caller", toString caller),
-      ("legacy", jsonString (match legacy with | .empty => "empty" | .records => "records" | .unavailable => "unavailable"))]
-  | .admit caller id targets documents o => object [("kind", "\"admit\""), ("caller", toString caller),
-      ("id", jsonString id), ("targets", jsonArray (targets.map targetJson)),
-      ("documents", jsonArray (documents.map documentJson)), ("observations", observationsJson o)]
-  | .advance caller action => object [("kind", "\"advance\""), ("caller", toString caller), ("action", actionJson action)]
-  | .finishWrite caller receipt => object [("kind", "\"finishWrite\""), ("caller", toString caller),
-      ("receipt", object [("installed", boolJson receipt.installed), ("durable", boolJson receipt.durable),
-       ("acknowledged", boolJson receipt.acknowledged)])]
-  | .launch caller => object [("kind", "\"launch\""), ("caller", toString caller)]
-  | .withdraw caller => object [("kind", "\"withdraw\""), ("caller", toString caller)]
-  | .settle caller => object [("kind", "\"settle\""), ("caller", toString caller)]
-  | .cancel caller => object [("kind", "\"cancel\""), ("caller", toString caller)]
-  | .release caller => object [("kind", "\"release\""), ("caller", toString caller)]
-  | .physicalLoss caller installed => object [("kind", "\"physicalLoss\""), ("caller", toString caller), ("candidateInstalled", boolJson installed)]
-  | .helperLost caller installed => object [("kind", "\"helperLost\""), ("caller", toString caller), ("candidateInstalled", boolJson installed)]
-  | .settleOrphan caller => object [("kind", "\"settleOrphan\""), ("caller", toString caller)]
-private def traceJson (world : World) : List Input → List String
-  | [] => []
-  | input :: rest =>
-    let next := Checkpoint.step world input
-    object [("world", worldJson world), ("input", inputJson input),
-      ("expected", worldJson next.1), ("output", outputJson next.2)] :: traceJson next.1 rest
+structure RoundTripInput where
+  version : Nat
+  ledger : Ledger
+  deriving DecidableEq, ToJson
 
-def casesJson := jsonArray (cases.map fun c => object
-  [("name", jsonString c.name), ("initial", worldJson c.initial), ("trace", jsonArray (traceJson c.initial c.inputs))])
+/-- Every present, current-version ledger the checkpoint model stores along its
+cases. The durable owner writes it, reopens, and reads back the same ledger. -/
+def storedLedgers : List RoundTripInput :=
+  (cases.flatMap fun c => (trace c.initial c.inputs).filterMap fun (world, _) =>
+    match world.stored with
+    | .present version ledger => if version == currentVersion then some ⟨version, ledger⟩ else none
+    | _ => none).eraseDups
+
+@[conformance_family]
+def roundTrip : Family RoundTripInput Ledger where
+  inputs := storedLedgers
+  model := fun i => i.ledger
+
 end Conformance.EditorUndoCheckpoint
-
-def main : IO Unit := IO.println Conformance.EditorUndoCheckpoint.casesJson

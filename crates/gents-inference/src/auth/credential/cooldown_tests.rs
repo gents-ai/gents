@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::test_support::lookup_oauth_credential_by_id;
 use super::test_support::{
-    one_shot_token_server, seed_credential, seed_credential_with_refresh_token, TOKEN_URL_ENV,
+    one_shot_token_server, seed_credential, seed_credential_with_refresh_token,
 };
 use super::*;
 
@@ -20,12 +20,6 @@ async fn failed_refresh_is_not_retried_during_the_cooldown() {
     let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
     seed_credential(&access, did, provider, Utc::now() - Duration::minutes(1)).await;
     let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
-    // Process-global; hold TOKEN_URL_ENV while it is set.
-    let _env = TOKEN_URL_ENV.lock().await;
-    std::env::set_var(
-        crate::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
-        &url,
-    );
     let bearer = DbCredentialBearer::new(
         node,
         did,
@@ -34,11 +28,11 @@ async fn failed_refresh_is_not_retried_during_the_cooldown() {
         true,
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
-    );
+    )
+    .with_token_url(&url);
     let first = bearer.current_bearer().await.expect_err("revoked");
     let request = handle.await.expect("server");
     let second = bearer.current_bearer().await.expect_err("cooldown");
-    std::env::remove_var(crate::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
 
     assert!(request.contains("grant_type=refresh_token"), "{request}");
     assert!(
@@ -61,12 +55,6 @@ async fn failed_refresh_keeps_the_bearer_forced_and_never_reserves_the_bad_token
     let provider = crate::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
     seed_credential(&access, did, provider, Utc::now() + Duration::hours(1)).await;
     let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
-    // Process-global; hold TOKEN_URL_ENV while it is set.
-    let _env = TOKEN_URL_ENV.lock().await;
-    std::env::set_var(
-        gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
-        &url,
-    );
     let bearer = DbCredentialBearer::new(
         node,
         did,
@@ -75,12 +63,12 @@ async fn failed_refresh_keeps_the_bearer_forced_and_never_reserves_the_bad_token
         true,
         OAuthRefreshKind::ChatGpt,
         CHATGPT_OAUTH_PRODUCT,
-    );
+    )
+    .with_token_url(&url);
     bearer.invalidate().await;
     let first = bearer.current_bearer().await;
     handle.await.expect("server");
     let second = bearer.current_bearer().await;
-    std::env::remove_var(gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR);
 
     let first = first.expect_err("rejected refresh");
     let second = second.expect_err("cooldown must not re-serve the rejected token");
@@ -133,17 +121,12 @@ async fn set_label(
         .unwrap();
 }
 
-async fn revoked_twice(bearer: &DbCredentialBearer) -> (String, String, String) {
+async fn revoked_twice(bearer: DbCredentialBearer) -> (String, String, String) {
     let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
-    let _env = TOKEN_URL_ENV.lock().await;
-    std::env::set_var(
-        crate::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
-        &url,
-    );
+    let bearer = bearer.with_token_url(url);
     let first = bearer.current_bearer().await.expect_err("revoked");
     let request = handle.await.expect("server");
     let second = bearer.current_bearer().await.expect_err("cooldown");
-    std::env::remove_var(crate::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     (first.to_string(), second.to_string(), request)
 }
 
@@ -161,7 +144,7 @@ async fn a_revoked_refresh_names_the_account() {
         let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
         seed_credential(&access, did, provider, Utc::now() - Duration::minutes(1)).await;
         set_label(&access, did, label).await;
-        let (first, second, _) = revoked_twice(&grok_bearer(node, did)).await;
+        let (first, second, _) = revoked_twice(grok_bearer(node, did)).await;
         for error in [&first, &second] {
             assert!(
                 error.starts_with(&format!(
@@ -204,7 +187,7 @@ async fn a_revoked_refresh_never_uses_another_account() {
     other.refresh_token = "refresh-B".into();
     other.access_token_expires_at = Utc::now() + Duration::hours(1);
     upsert_oauth_credential_on(&access, &other).await.unwrap();
-    let (_, _, request) = revoked_twice(&grok_bearer(node, did)).await;
+    let (_, _, request) = revoked_twice(grok_bearer(node, did)).await;
     assert!(request.contains("refresh-TEST"), "{request}");
     assert!(!request.contains("refresh-B"), "{request}");
 }
@@ -227,16 +210,16 @@ async fn a_reused_slot_names_the_new_account() {
         .await
         .unwrap()
         .unwrap();
-    let bearer = DbCredentialBearer::with_cache(
+    let bearer = DbCredentialBearer::new(
         node.clone(),
         did,
         provider,
         credential_id.clone(),
         true,
-        Some(cached),
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
-    );
+    )
+    .with_cache_seed(cached);
     access
         .transact_write("test.remove", |txn| {
             let credential_id = credential_id.clone();
@@ -253,7 +236,7 @@ async fn a_reused_slot_names_the_new_account() {
     )
     .await;
     set_label(&access, did, Some("label-new")).await;
-    let (first, _, request) = revoked_twice(&bearer).await;
+    let (first, _, request) = revoked_twice(bearer).await;
     assert!(request.contains("refresh-NEW"), "{request}");
     assert!(first.contains("\"label-new\""), "{first}");
     assert!(
@@ -280,16 +263,16 @@ async fn a_disabled_or_removed_row_names_the_account() {
         .await
         .unwrap()
         .unwrap();
-    let bearer = DbCredentialBearer::with_cache(
+    let bearer = DbCredentialBearer::new(
         node.clone(),
         did,
         provider,
         credential_id.clone(),
         true,
-        Some(cached),
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
-    );
+    )
+    .with_cache_seed(cached);
     set_account_enabled(&user_access, did, &credential_id, false)
         .await
         .unwrap();
@@ -342,7 +325,7 @@ async fn a_limit_like_label_is_not_a_limit() {
         let provider = crate::clients::xai_grok::XAI_OAUTH_PROVIDER;
         seed_credential(&access, did, provider, Utc::now() - Duration::minutes(1)).await;
         set_label(&access, did, Some(label)).await;
-        let (first, _, _) = revoked_twice(&grok_bearer(node, did)).await;
+        let (first, _, _) = revoked_twice(grok_bearer(node, did)).await;
         assert!(first.starts_with("Grok account \"Grok\""), "{first}");
         assert!(!first.contains(label), "{first}");
         assert!(

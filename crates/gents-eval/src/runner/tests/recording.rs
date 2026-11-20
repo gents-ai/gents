@@ -294,9 +294,11 @@ async fn a_crash_after_create_trial_is_repaired_by_resume() {
 
     let outcome = resume(
         &launching.access,
-        launching.owner(),
-        "run-1",
-        &launching.runs_dir(),
+        RunLocation {
+            owner: launching.owner(),
+            run_id: "run-1",
+            runs_dir: &launching.runs_dir(),
+        },
         &executor,
         &registry,
         CancellationToken::new(),

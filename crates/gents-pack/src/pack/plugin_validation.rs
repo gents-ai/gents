@@ -212,6 +212,18 @@ impl PackPlugin {
                     )
                 );
             }
+            if let Some(max_rounds) = limits.max_rounds {
+                anyhow::ensure!(
+                    (1..=gents_protocol::plugin::MAX_DECLARED_ROUNDS).contains(&max_rounds),
+                    "plugin {:?} declares max_rounds {max_rounds}, but it {}",
+                    self.name,
+                    limit_range_reason(
+                        max_rounds,
+                        gents_protocol::plugin::MAX_DECLARED_ROUNDS,
+                        "rounds"
+                    )
+                );
+            }
         }
         self.validate_job_manifest_fields()
     }

@@ -7,67 +7,43 @@ mod tool_presentation;
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
-use gents_desktop_core::client::{
-    load_peer_records, project_sync_health, ClientCore, DesktopPaths, P2PHealth, PeerRecord,
-    SyncHealth,
-};
+use crate::client_runtime::ClientRuntime;
+use gents_observe::client_projection::sync_health::{project_sync_health, SyncHealth};
+use gents_protocol::runtime_connection::RuntimeConnection;
+use gents_store::client_journal::paths::DesktopPaths;
+use gents_store::client_journal::runtime_directory::load_runtime_connections;
 
 use super::config::ResolvedBridgePolicy;
 use super::types::{
     normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, InitConfigStatus,
-    P2PHealthView, SavedPeerView, SyncHealthView,
+    SavedRuntimeView, SyncHealthView,
 };
 use projection::{project_client_snapshot, SnapshotGrants};
 
-fn to_health_view(health: &P2PHealth) -> P2PHealthView {
-    P2PHealthView {
-        status: health.status_label().to_string(),
-        connected_peer_count: health.connected_peer_count,
-        consecutive_failures: health.consecutive_failures,
-        last_error: health.last_error.clone(),
-        last_ok_at: system_time_rfc3339(health.last_ok_at),
-        last_failure_at: system_time_rfc3339(health.last_failure_at),
-    }
-}
-
 pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
     SyncHealthView {
-        state: health.state.as_str().to_string(),
-        cause: health.cause.map(|cause| cause.as_str().to_string()),
-        next_action: health.next_action.map(|action| action.as_str().to_string()),
-        last_error: health.last_error.clone(),
+        state: health.state.as_str().to_owned(),
+        cause: health.cause.map(|cause| cause.as_str().to_owned()),
+        next_action: health.next_action.map(|action| action.as_str().to_owned()),
         runtime_count: health.runtime_count,
         connected_runtime_count: health.connected_runtime_count,
-        activation_error_count: health.activation_error_count,
     }
 }
 
-/// Sync health over the owner's snapshot and each configured runtime's
-/// connection, read from the runtime connection observer.
-pub(crate) fn project_client_sync_health(core: &ClientCore) -> SyncHealthView {
-    let sync = core.sync_state();
-    let stores = core.stores();
-    let health = project_sync_health(
-        &sync,
-        sync.directory
+pub(crate) fn project_client_sync_health(core: &ClientRuntime) -> SyncHealthView {
+    to_sync_health_view(&project_sync_health(
+        core.runtime_connections()
             .iter()
-            .map(|record| stores.runtime_connection(&record.node_did)),
-    );
-    to_sync_health_view(&health)
-}
-
-pub(crate) fn system_time_rfc3339(value: Option<SystemTime>) -> Option<String> {
-    value.map(|value| DateTime::<Utc>::from(value).to_rfc3339())
+            .map(|connection| core.stores().runtime_connection(&connection.node_did)),
+    ))
 }
 
 async fn build_bootstrap_summary_raw(
     desktop_paths: &DesktopPaths,
     node_home: Option<&Path>,
 ) -> Result<DesktopBootstrapSummary, String> {
-    let peer_records = load_peer_records(desktop_paths.peer_directory_path())
+    let connections = load_runtime_connections(desktop_paths.runtime_directory_path())
         .await
         .map_err(|error| error.to_string())?;
     let (init, init_config_status) = node_home
@@ -101,24 +77,21 @@ async fn build_bootstrap_summary_raw(
             gents_desktop_core::home_reset::local_setup_unfinished(
                 home,
                 init.as_ref().map(|config| config.node_did.as_str()),
-                peer_records.iter().map(|peer| peer.node_did.as_str()),
+                connections.iter().map(|peer| peer.node_did.as_str()),
             )
         }),
-        saved_peers: saved_peer_views(&peer_records),
+        saved_runtimes: saved_runtime_views(&connections),
     })
 }
 
-pub(crate) fn saved_peer_views(peers: &[PeerRecord]) -> Vec<SavedPeerView> {
-    peers
+pub(crate) fn saved_runtime_views(connections: &[RuntimeConnection]) -> Vec<SavedRuntimeView> {
+    connections
         .iter()
-        .map(|peer| SavedPeerView {
-            peer_id: peer.peer_id.clone(),
-            label: peer.label.clone(),
-            node_did: peer.node_did.clone(),
-            addr: peer.addr.clone(),
-            source: peer.source.clone(),
-            graphql: peer.graphql.clone(),
-            local: peer.is_managed_runtime(),
+        .map(|connection| SavedRuntimeView {
+            node_did: connection.node_did.clone(),
+            label: connection.label.clone(),
+            graphql: Some(connection.graphql.clone()),
+            local: connection.local_node_home.is_some(),
         })
         .collect()
 }
@@ -246,7 +219,7 @@ pub(crate) use session::render_transcript_rows;
 pub(crate) use session::{attach_context_history_rows, render_transcript_rows_with_provenance};
 
 pub async fn build_client_snapshot_with_grants(
-    core: Option<&Arc<ClientCore>>,
+    core: Option<&Arc<ClientRuntime>>,
     policy: &ResolvedBridgePolicy,
     grants: SnapshotGrants,
 ) -> Result<DesktopClientSnapshot, String> {

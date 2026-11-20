@@ -9,6 +9,15 @@ fn archive(name: &str) -> Arc<PackArchive> {
 }
 
 fn body(root: &PackArchive, dependencies: &[Arc<PackArchive>], node_did: &str) -> Vec<u8> {
+    body_wiring(root, dependencies, node_did, Vec::new())
+}
+
+fn body_wiring(
+    root: &PackArchive,
+    dependencies: &[Arc<PackArchive>],
+    node_did: &str,
+    wire: Vec<String>,
+) -> Vec<u8> {
     encode_request(root, dependencies, |root, dependencies| InstallRequest {
         root_source: gents_pack::pack::PackSource::Local { file_name: None },
         dependency_sources: vec![
@@ -27,7 +36,7 @@ fn body(root: &PackArchive, dependencies: &[Arc<PackArchive>], node_did: &str) -
         force_rebind: false,
         grant_authority: false,
         explicit: true,
-        wire: Vec::new(),
+        wire,
     })
     .unwrap()
 }
@@ -202,4 +211,72 @@ fn archive_bytes_over_the_shared_pack_bound_are_refused_by_name() {
         MAX_BODY >= base64::encoded_len(MAX_ARCHIVE_BYTES, true).unwrap() + MAX_FIELD_BYTES,
         "the request body admits every archive closure within the shared bound"
     );
+}
+
+/// Install over a runtime of `document_acp` whose store does not answer, as
+/// a User asking to wire the pack into an agent.
+async fn install_wiring(
+    document_acp: gents_store::local::document_acp::DocumentAcp,
+    home: &std::path::Path,
+) -> (StatusCode, serde_json::Value) {
+    let state = RuntimeHttpState {
+        home: Some(home.display().to_string()),
+        document_acp,
+        ..crate::http::router::tests::state()
+    };
+    let node_did = state.node_did.clone();
+    let app = axum::Router::new()
+        .route(PATH, axum::routing::post(install_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let user =
+        tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("wiring-user"))
+            .await
+            .unwrap();
+    let endpoint =
+        crate::test_support::user_endpoint(&format!("http://{address}/api/v0/graphql"), &user);
+    let body = body_wiring(
+        &archive("documents_fixture"),
+        &[],
+        &node_did,
+        vec!["did:key:zAgentToWire".to_owned()],
+    );
+    let response = endpoint
+        .authorize(reqwest::Client::new().post(format!("http://{address}{PATH}")))
+        .unwrap()
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.json().await.unwrap())
+}
+
+#[tokio::test]
+async fn a_remote_install_carries_no_wiring_on_any_home() {
+    for document_acp in [
+        gents_store::local::document_acp::DocumentAcp::Vera,
+        gents_store::local::document_acp::DocumentAcp::Local,
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let (status, body) = install_wiring(document_acp, home.path()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{document_acp:?}: {body}");
+        assert_eq!(body["outcome"], "not_installed");
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("the client wires its plugins after it")),
+            "{body}"
+        );
+        assert_eq!(
+            std::fs::read_dir(home.path()).unwrap().count(),
+            0,
+            "{document_acp:?}: nothing was read from or written to the runtime's home"
+        );
+    }
 }

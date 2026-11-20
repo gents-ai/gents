@@ -76,9 +76,10 @@ pub struct InstalledPlugin {
     /// absent here can only be written natively by the runtime.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub data_collection_schemas: std::collections::BTreeMap<String, String>,
-    /// The owning pack manifest's `plugin_interface`; absent is interface 1.
+    /// The Gents release the owning pack's manifest declares it was built
+    /// for; absent counts as `core_packs::Release::BASELINE`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_interface: Option<u32>,
+    pub gents_version: Option<crate::pack::core_packs::Release>,
 }
 
 /// A plugin's data grant: the manifest's `data` declaration, the field names
@@ -102,8 +103,8 @@ impl InstalledPlugin {
         })
     }
 
-    /// Refuses to run this plugin when this runtime does not load the plugin
-    /// interface its pack was built for.
+    /// Refuses to run this plugin when this runtime does not load the Gents
+    /// release its pack was built for.
     pub fn check_interface(
         &self,
     ) -> std::result::Result<(), crate::pack::core_packs::InstalledInterfaceError> {
@@ -112,7 +113,12 @@ impl InstalledPlugin {
             .owner_pack_coordinate
             .clone()
             .unwrap_or_else(|| plugin.clone());
-        crate::pack::core_packs::check_installed_interface(&plugin, &pack, self.plugin_interface)
+        crate::pack::core_packs::check_installed_interface(
+            &plugin,
+            &pack,
+            &crate::pack::core_packs::runtime_release(),
+            self.gents_version.as_ref(),
+        )
     }
 
     pub fn ceiling(&self) -> crate::plugin::Manifold {
@@ -144,7 +150,7 @@ pub fn check_plugin_ownership(
 
 /// External premise: a missing record file reaches here only as a
 /// `std::io::Error` of kind `NotFound` in the erased chain.
-pub(crate) fn is_not_found(error: &anyhow::Error) -> bool {
+pub fn is_not_found(error: &anyhow::Error) -> bool {
     gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| {
         cause
             .downcast_ref::<std::io::Error>()
@@ -581,7 +587,7 @@ mod tests {
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
             data_collection_schemas: Default::default(),
-            plugin_interface: None,
+            gents_version: None,
         }
     }
 

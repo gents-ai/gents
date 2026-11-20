@@ -10,7 +10,7 @@ use gents_store::identity::NodeIdentity as _;
 /// A served runtime after every modeled opening-provenance case has been
 /// checked before transcript publication and after reload.
 struct GoalProvenance {
-    runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    runtime: gents::client_test_support::ServedRuntimeHome,
     access: ConfigAccess,
     opening_doc: String,
     observed: Vec<AgentRequestRow>,
@@ -20,7 +20,7 @@ struct GoalProvenance {
 async fn goal_provenance_cases() -> GoalProvenance {
     // A served runtime whose User published a real provisioned Agent; a
     // guest may write the Agent's sessions.
-    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start().await;
+    let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
     let binding = runtime.publish_chat_agent().await;
     let identity = runtime.runtime().clone();
     let user = runtime.user().clone();
@@ -307,7 +307,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
             .unwrap();
         if !omit_receipt {
             // The receipt's links are staged with it, as its owner publishes
-            // them; an Agent holds no `get-collection` outside a transaction.
+            // them.
             agent_access.transact_write("goal_provenance.receipt", |txn| Box::pin(async {
                 let result = txn.execute_with_variables(
                     "mutation($input: AgentSessionGoalReceiptMutationInputArg!) { create_AgentSessionGoalReceipt(input: $input) { _docID } }",
@@ -538,8 +538,8 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
 /// still names its origin, so the marker follows it.
 #[tokio::test]
 async fn paged_native_forks_follow_goal_provenance() {
-    use crate::tests::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
     use crate::types::{GoalControlAction, GoalControlRequest};
+    use gents::support::streaming_backend::{StreamPlan, StreamResponse, StreamScript};
 
     let desktop = crate::tests::support::RunningDesktop::start(vec![
         StreamPlan::current_authored_user(

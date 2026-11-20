@@ -1,10 +1,12 @@
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 
+use crate::client_runtime::ClientRuntime;
 use chrono::{DateTime, Utc};
-use gents_desktop_core::client::{
-    CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
+use gents_observe::client_projection::query::{
+    CanonicalTranscriptDependencies, SessionTranscriptQueryPage,
 };
+use gents_observe::client_projection::store::ClientStore;
 use gents_protocol::job::{JobOutcome, JobState};
 use gents_protocol::message::Message;
 use gents_protocol::output::rows::TranscriptMessageRow;
@@ -285,7 +287,7 @@ struct LoadedReduction {
 
 #[cfg(test)]
 pub fn build_session_snapshot_from_store(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
@@ -294,7 +296,7 @@ pub fn build_session_snapshot_from_store(
 
 #[cfg(test)]
 pub fn build_session_snapshot_from_store_for_node(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
@@ -318,7 +320,7 @@ pub fn build_session_snapshot_from_store_for_node(
 
 #[cfg(test)]
 pub async fn build_session_snapshot_for_node(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
@@ -352,7 +354,7 @@ pub async fn build_session_snapshot_for_node(
     reason = "projection inputs come from separate stores and request options"
 )]
 pub async fn build_session_snapshot_for_node_with_transcript(
-    core: &ClientCore,
+    core: &ClientRuntime,
     access: &ConfigAccess,
     node_did: Option<&str>,
     session_id: &str,
@@ -360,7 +362,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     transcript_store: Option<&ClientStore>,
     canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
     context_store: Option<&ClientStore>,
-    prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
+    prompt_ownership: Option<&gents_observe::client_projection::query::RequestPromptOwnership>,
     context_totals_exact: bool,
     include_live_tail: bool,
     request_projection: Option<&[AgentRequestRow]>,
@@ -533,27 +535,28 @@ pub(crate) async fn attach_context_history_rows(
         .iter()
         .map(|row| i64::from(row.message.sequence))
         .collect::<RapidHashSet<_>>();
-    let compactions = match gents_desktop_core::client::load_session_compaction_entries_on(
-        access,
-        session_id,
-        node_did,
-        requester_did,
-    )
-    .await
-    {
-        Ok(entries) => Some(entries),
-        Err(error) if error.permission_denied() => return Err(error),
-        Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                session_id,
-                node_did,
-                error = %error,
-                "loading session compaction history failed"
-            );
-            None
-        }
-    };
+    let compactions =
+        match gents_observe::client_projection::query::load_session_compaction_entries_on(
+            access,
+            session_id,
+            node_did,
+            requester_did,
+        )
+        .await
+        {
+            Ok(entries) => Some(entries),
+            Err(error) if error.permission_denied() => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    node_did,
+                    error = %error,
+                    "loading session compaction history failed"
+                );
+                None
+            }
+        };
     let reductions =
         match request_context::load_session_reductions(access, node_did, session_id, requester_did)
             .await
@@ -887,8 +890,8 @@ async fn fill_job_outcomes(
                 }
             }
             Err(gents_protocol::job::JobReadError::PermissionDenied) => {
-                return Err(crate::error::BridgeError::new(
-                    crate::error::BridgeErrorCode::PermissionDenied,
+                return Err(gents_store::client_error::BridgeError::new(
+                    gents_store::client_error::BridgeErrorCode::PermissionDenied,
                     "Access was denied. Check this client's permissions with the runtime owner.",
                 )
                 .into());
@@ -1153,7 +1156,7 @@ mod retry_eligibility_tests;
 #[cfg(test)]
 mod paging_coverage_tests {
     use super::*;
-    use gents_desktop_core::client::ClientStoreRows;
+    use gents_observe::client_projection::store::ClientStoreRows;
 
     #[test]
     fn many_reduction_rows_collapse_to_one_request_summary_that_pages() {
@@ -1281,7 +1284,8 @@ mod paging_coverage_tests {
                 });
             }
             let store = ClientStore::from_rows(rows);
-            let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+            let mut ownership =
+                gents_observe::client_projection::query::RequestPromptOwnership::default();
             if case.known {
                 let doc = if case.observed_request == 1 {
                     "request-doc"
@@ -1290,7 +1294,7 @@ mod paging_coverage_tests {
                 };
                 ownership.by_request_doc_id.insert(
                     doc.into(),
-                    gents_desktop_core::client::RequestPromptFact {
+                    gents_observe::client_projection::query::RequestPromptFact {
                         node_did: "node".into(),
                         session_id: "session".into(),
                         requester_did: None,

@@ -229,7 +229,6 @@ describe("recent session reads", () => {
       ({
         clientDid,
         deployments: nodeDids.map((nodeDid) => ({ nodeDid })),
-        endedAccess: [],
       }) as unknown as DesktopClientSnapshot["client"];
     t.reads.forgetWithdrawnReads(client("did:key:me", [NODE, OTHER_NODE]));
     await readAll(t, ["s-1"]);
@@ -254,7 +253,7 @@ describe("opening a recently read session in the app", () => {
   it("puts its transcript on screen in the same update as the selection", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const running = {
-      bootstrap: { clientStateExists: true, savedPeers: [] },
+      bootstrap: { clientStateExists: true, savedRuntimes: [] },
       client: {
         deployments: [
           node({

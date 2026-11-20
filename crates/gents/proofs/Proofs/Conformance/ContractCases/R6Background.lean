@@ -68,7 +68,7 @@ def r6NativeStepCase
 
 def r6BudgetCase (name : String) (preLiveCount : Nat) :
     R6BackgroundingCase :=
-  let legal := (Background.admitBackground preLiveCount).isSome
+  let legal := (Background.admitBackground (Background.backgroundLimit none) preLiveCount).isSome
   r6Case name "budget" "spawn_process" legal preLiveCount
     (if legal then "running" else "rejected")
     none none
@@ -80,7 +80,7 @@ def r6BatchCasesFrom (rows : List Background.BackgroundRowState)
   | 0 => []
   | remaining + 1 =>
     let live := Background.admittedBackgroundRows rows
-    match Background.admitFirstPending rows with
+    match Background.admitFirstPending (Background.backgroundLimit none) rows with
     | none => []
     | some (updated, admitted) =>
       r6Case

@@ -1,0 +1,3 @@
+---- MODULE MCClientRequestCredentials ----
+EXTENDS ClientRequestCredentials
+====

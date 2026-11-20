@@ -345,7 +345,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
             gents_tools::native::skills::LoadSkillArgs {
                 name: "Research".to_string(),
             },
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .expect("load_skill");
@@ -913,7 +913,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
         .get("trigger-resolve-active")
         .expect("trigger-resolve-active present in active_schedules");
     assert_eq!(resolved.schedule_id, "schedule-resolve-active");
-    assert_eq!(resolved.task_id, "task-resolve-active");
+    assert_eq!(resolved.task.task_id, "task-resolve-active");
     assert_eq!(resolved.task.agent_did, default_agent_did);
     assert_eq!(resolved.task.prompt_template, "do the thing");
     assert_eq!(
@@ -983,7 +983,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
         .get("trigger-active")
         .expect("trigger-active present in active_event_triggers");
     assert_eq!(resolved.trigger_id, "trigger-active");
-    assert_eq!(resolved.task_id, "task-trigger-active");
+    assert_eq!(resolved.task.task_id, "task-trigger-active");
     assert_eq!(resolved.task.agent_did, default_agent_did);
     assert_eq!(resolved.task.prompt_template, "do the thing on event");
     assert_eq!(resolved.source_collection, "CustomerSignup");

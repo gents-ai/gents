@@ -1,3 +1,4 @@
+pub mod journal;
 pub mod migration;
 
 #[cfg(test)]
@@ -177,23 +178,43 @@ mod legacy_backend_tests {
             }
             let key = crate::local::store_key::StoreKey::from_host(&[5; 32])?;
             let identity_path = home.join("node.key");
-            let did = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-                Ok(
-                    crate::identity::KeyIdentity::load_or_create(identity_path, None)?
-                        .did()
-                        .to_owned(),
-                )
+            let runtime = tokio::task::spawn_blocking(
+                move || -> anyhow::Result<std::sync::Arc<dyn NodeIdentity>> {
+                    Ok(std::sync::Arc::new(
+                        crate::identity::KeyIdentity::load_or_create(identity_path, None)?,
+                    ))
+                },
+            )
+            .await??;
+            let owner_path = home.join("owner.key");
+            let owner = tokio::task::spawn_blocking(move || -> anyhow::Result<identity::Did> {
+                Ok(identity::Did::new(
+                    crate::identity::KeyIdentity::load_or_create(owner_path, None)?.did(),
+                )?)
             })
             .await??;
+            let did = runtime.did().to_owned();
             let initialized = match FreshBackendStore::observe(&data, &lock).await {
-                Ok(fresh) => fresh.initialize(&key, Some(&did)).await.is_ok(),
+                Ok(fresh) => fresh
+                    .initialize(
+                        &key,
+                        &runtime,
+                        &owner,
+                        crate::local::document_acp::DocumentAcp::Local,
+                    )
+                    .await
+                    .is_ok(),
                 Err(_) => false,
             };
             let admitted = if initialized {
-                let node = crate::local::store_key::persistent_builder(&data, &key)?
-                    .with_node_identity_did(did)
-                    .build()
-                    .await?;
+                let node = crate::local::store_key::persistent_builder(
+                    &data,
+                    &key,
+                    crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+                )?
+                .with_node_identity_did(did)
+                .build()
+                .await?;
                 let collection = node
                     .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
                     .expect("fresh legacy schema");

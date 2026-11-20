@@ -7,6 +7,11 @@ repository.workspace = true
 description = "Out-of-process native filesystem runner for Gents"
 autotests = false
 
+[features]
+# The traversal blocker race tests use, in process and through the runner's
+# hidden `--block-*` flags. Enabled only from dev-dependencies.
+test-fixtures = []
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
@@ -18,3 +23,7 @@ ignore = "0.4"
 regex = "1"
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+gents-fs-runner = { path = ".", features = ["test-fixtures"] }
+

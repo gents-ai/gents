@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use crate::error::BridgeError;
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use gents_protocol::job::JobControlOutcome;
+use gents_store::client_error::BridgeError;
 
 use crate::types::DesktopJobControlRequest;
 
 /// Sends the authenticated client's control intent to the owning runtime.
 pub async fn job_control(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     request: &DesktopJobControlRequest,
 ) -> Result<JobControlOutcome, BridgeError> {
     let access = core
@@ -22,5 +22,5 @@ pub async fn job_control(
         request.action,
     )
     .await
-    .map_err(BridgeError::from)
+    .map_err(crate::error::control_send_error)
 }

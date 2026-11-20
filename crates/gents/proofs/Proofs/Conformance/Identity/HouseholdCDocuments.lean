@@ -109,18 +109,15 @@ def backendCredentialPublication : Family CredentialPublicationInput CredentialV
 no relation to `foreign`, which its sibling owns. For `granted := false` the
 served fixture disables the reading Agent: every live Agent holds
 `read-document` through its projected baseline (`GrantSets.projectedSets`),
-which the model's empty grant projection omits. Decision (maintainer,
-gents#3804, 2026-11-16): keep the disabled-Agent fixture rather than give
-this model the baseline. -/
+which the model's empty grant projection omits. A managed Agent's session-tool read remains subject to document ACP
+when it holds node administration. -/
 @[conformance_family]
 def sessionToolAccess : Family SessionToolInput Bool where
   inputs := sessionToolInputs.filter fun i => !i.nativeBypass
   model := sessionToolAllowed
 
-/-- model-production-gap: the session tool reads as the managed Agent, and
-managed-Agent signing never resolves native DAC bypass; only an HTTP request
-authenticated by a NAC owner's or administrator's own key does, and no session
-tool path makes one. -/
+/-- model-production-gap: the served scenario grants administration, but
+does not separately grant the managed Agent native DAC bypass. -/
 @[conformance_family]
 def sessionToolAccessUnreached : Family SessionToolInput Bool where
   inputs := sessionToolInputs.filter fun i => i.nativeBypass

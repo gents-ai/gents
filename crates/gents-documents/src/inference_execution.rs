@@ -18,6 +18,16 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_total_tokens: Option<i64>,
+    /// Invalid-argument, unknown-tool and policy-denied calls one execution
+    /// may make before it stops; default 8.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_invalid_tool_calls: Option<i64>,
+    /// Identical failing calls (same tool, arguments and error) dispatched
+    /// before the next repeat is refused; default 3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub repeated_tool_failure_limit: Option<i64>,
     /// Persistence batching cadence, not provider latency; default 1,000ms.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -30,6 +40,10 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub provider_idle_timeout_secs: Option<i64>,
+    /// Title-generation attempt timeout; default 10s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub title_timeout_secs: Option<i64>,
     /// Overall claimed-request duration, including tools; default 86,400s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -109,9 +123,20 @@ impl InferenceExecution {
                 "provider_idle_timeout_secs",
                 self.provider_idle_timeout_secs,
             ),
+            ("title_timeout_secs", self.title_timeout_secs),
             ("deadline_duration_secs", self.deadline_duration_secs),
         ] {
             if value.is_some_and(|value| value <= 0) {
+                violations.push(format!(
+                    "InferenceExecution {execution_id} {name} must be positive"
+                ));
+            }
+        }
+        for (name, limit) in [
+            ("max_invalid_tool_calls", self.invalid_tool_call_allowance()),
+            ("repeated_tool_failure_limit", self.repeated_failure_limit()),
+        ] {
+            if limit.is_none() {
                 violations.push(format!(
                     "InferenceExecution {execution_id} {name} must be positive"
                 ));
@@ -145,6 +170,33 @@ impl InferenceExecution {
         } else {
             anyhow::bail!(violations.join("; "))
         }
+    }
+
+    /// The owned loop's invalid-tool-call allowance; `None` is refused.
+    pub fn invalid_tool_call_allowance(&self) -> Option<usize> {
+        configured_loop_limit(
+            self.max_invalid_tool_calls,
+            gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        )
+    }
+
+    /// The owned loop's identical-failure limit; `None` is refused.
+    pub fn repeated_failure_limit(&self) -> Option<usize> {
+        configured_loop_limit(
+            self.repeated_tool_failure_limit,
+            gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+        )
+    }
+}
+
+/// A loop-guard limit as configured (Lean `InvalidToolProgress.configuredLimit`):
+/// unset takes `default`, a positive value is used as is, and any other value
+/// is refused.
+pub fn configured_loop_limit(configured: Option<i64>, default: usize) -> Option<usize> {
+    match configured {
+        None => Some(default),
+        Some(value) if value > 0 => usize::try_from(value).ok(),
+        Some(_) => None,
     }
 }
 
@@ -190,5 +242,7 @@ impl InferenceRetryPolicy {
     }
 }
 
+#[cfg(test)]
+mod configured_limit_tests;
 #[cfg(test)]
 mod pushdown_tests;

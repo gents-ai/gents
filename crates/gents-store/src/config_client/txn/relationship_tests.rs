@@ -689,10 +689,13 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
         rerun_notes: Vec::new(),
         owner_staged_revocations: Mutex::new(super::OwnerStagedRevocations::Send),
         agent_proof: None,
+        client_authorization: None,
         planned_replay_authorized: std::sync::atomic::AtomicBool::new(false),
         publication_observer: None,
         pack_approval: None,
         loopback_node: None,
+        presented_delegation: None,
+        stored_creates: Default::default(),
     };
     txn.add_resource_relationship("Agent", "owned", "parent", "nodes", "node")
         .await
@@ -863,15 +866,21 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
     let selected = crate::identity::resolve_agent_identity(&runtime, &selected_binding)?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+    let runtime = Arc::new(runtime);
+    let grants = crate::config_client::OwnerStagedRoute::new();
     let node = Arc::new(
         defra_node::Node::builder()
             .enable_signing()
             .with_node_identity_did(runtime.did())
             .with_node_acp_owner(user.did().to_owned())
-            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .with_http(
+                defra_node::HttpConfig::with_listener(listener)?
+                    .with_authenticated_routes(grants.router()),
+            )
             .build()
             .await?,
     );
+    grants.serve(&node, runtime.clone());
     let owner_context =
         defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
     let policy = node

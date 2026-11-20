@@ -2,8 +2,6 @@ mod support;
 
 #[path = "cli_config.rs"]
 mod cli_config;
-#[path = "cli_enrollment.rs"]
-mod cli_enrollment;
 #[cfg(feature = "live-e2e")]
 #[path = "cli_live_suite.rs"]
 mod cli_live_suite;

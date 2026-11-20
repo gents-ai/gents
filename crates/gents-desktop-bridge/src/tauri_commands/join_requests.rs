@@ -1,12 +1,13 @@
 use tauri::State;
 
 use super::managed_server::co_hosted_runtime;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{
     JoinHistoryView, JoinMemberView, JoinRequestDecideRequest, JoinRequestDecisionView,
     JoinRequestView,
 };
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 /// Join requests are decided with the operator identity of the runtime this
 /// desktop co-hosts; another node's requests are decided on that node.
@@ -126,7 +127,12 @@ fn query_error(error: anyhow::Error) -> BridgeError {
 }
 
 fn decision_error(error: anyhow::Error) -> BridgeError {
-    if crate::local_pairing::enrollment_request_is_not_visible_yet(&error) {
+    if gents_service::enrollment_admin::EnrollmentDecisionRejected::in_chain(error.as_ref())
+        .is_some_and(|rejected| {
+            rejected.code
+                == Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending)
+        })
+    {
         BridgeError::new(BridgeErrorCode::NotFound, NOT_PENDING)
     } else {
         BridgeError::untyped(format!("{error:#}"))

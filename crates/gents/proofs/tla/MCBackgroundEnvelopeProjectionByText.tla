@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundEnvelopeProjectionByText ----
+EXTENDS BackgroundEnvelopeProjection
+
+====

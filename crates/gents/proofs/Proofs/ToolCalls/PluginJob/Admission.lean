@@ -36,6 +36,8 @@ structure StepContext where
   within : String → String → Bool
   /-- The caller request's live background rows; read on step 0. -/
   liveBackground : Nat
+  /-- The caller Agent's resolved `Background.backgroundLimit`; read on step 0. -/
+  backgroundLimit : Nat
   /-- The host's cross-session ancestry walk; read on step 0. -/
   startedByJob : Bool
   /-- The sha256 (hex) of the call's non-empty `script`, computed by the host;
@@ -438,7 +440,8 @@ def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusa
       if (dynamicModeRefusal ctx.policy pin.origin (stepRow ctx job out) out).isSome then
         .error .policyDenied
       else if job.pin.isNone && ctx.live = Ceiling.empty then .error .notAvailable
-      else if job.pin.isNone && (Background.admitBackground ctx.liveBackground).isNone then
+      else if job.pin.isNone &&
+          (Background.admitBackground ctx.backgroundLimit ctx.liveBackground).isNone then
         .error .backgroundBudgetExceeded
       else if job.pin.isNone && ctx.startedByJob then .error .depthExceeded
       else admitJobOutput ctx pin { stepRow ctx job out with pin := some pin, consecutiveFailures := 0 } out
@@ -1061,11 +1064,13 @@ steps, and so its children, neither read nor take one. -/
 theorem job_row_consumes_one_background_slot (ctx : StepContext) (job job' : Job)
     (out : StepOutput) (p : Pin) (m : Nat) :
     (job.pin = none → admitStep ctx job out = .ok job' → stepPin ctx job out = some p →
-      Background.admitBackground ctx.liveBackground = some (ctx.liveBackground + 1)) ∧
+      Background.admitBackground ctx.backgroundLimit ctx.liveBackground =
+        some (ctx.liveBackground + 1)) ∧
       (job.pin = some p →
         admitStep { ctx with liveBackground := m } job out = admitStep ctx job out) := by
   refine ⟨fun hpin h hp => ?_, fun hpin => ?_⟩
-  · have hb : (Background.admitBackground ctx.liveBackground).isNone = false := by
+  · have hb :
+        (Background.admitBackground ctx.backgroundLimit ctx.liveBackground).isNone = false := by
       by_contra hnone
       simp only [Bool.not_eq_false] at hnone
       unfold admitStep at h

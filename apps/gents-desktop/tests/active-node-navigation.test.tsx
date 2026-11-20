@@ -11,7 +11,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 it("shows the active remote destination and opens its configuration", () => {
   const remote = node({
     nodeDid: "did:key:remote",
-    source: "peer",
+    local: false,
     label: "studio-1",
     node: { ...deployment.node, nodeDid: "did:key:remote", displayName: "Amy" },
   });
@@ -36,7 +36,7 @@ it("draws the active node in the collapsed rail by its label when it has no name
   const unnamed = (nodeDid: string, label: string) =>
     node({
       nodeDid,
-      source: nodeDid === "did:key:remote" ? "peer" : undefined,
+      local: nodeDid !== "did:key:remote",
       label,
       node: { ...deployment.node, nodeDid, displayName: null },
     });
@@ -71,7 +71,7 @@ it("names the number of nodes quietly, and only once there is more than one", ()
 
   const other = node({
     nodeDid: "did:key:other",
-    source: "peer",
+    local: false,
     node: { ...deployment.node, nodeDid: "did:key:other", displayName: "Amy" },
   });
   renderIn(

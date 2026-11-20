@@ -781,6 +781,42 @@ fn linux_refresh_keeps_the_installed_path() -> Result<()> {
 }
 
 #[test]
+fn a_definition_without_the_system_log_flag_is_refreshed_with_it() -> Result<()> {
+    for (platform, install, flag) in [
+        (
+            NativeServicePlatform::Macos,
+            vec![output(true, "501", ""), ok()],
+            "<string>--system-log</string>",
+        ),
+        (
+            NativeServicePlatform::Linux,
+            vec![ok(), ok()],
+            " \"--system-log\"",
+        ),
+    ] {
+        let temp = tempfile::tempdir()?;
+        let installed = config(temp.path(), "gents");
+        manager(
+            installed.clone(),
+            platform,
+            ScriptedRunner::with_outputs(install),
+        )
+        .install()?;
+        let path = installed.definition_path(platform);
+        let rendered = fs::read_to_string(&path)?;
+        assert_eq!(rendered.matches(flag).count(), 1, "{rendered}");
+        fs::write(&path, rendered.replace(flag, ""))?;
+        let manager = manager(installed.clone(), platform, ScriptedRunner::default());
+        assert_eq!(manager.installed_home()?, Some(installed.home.clone()));
+        assert!(!manager.definition_log_current()?);
+        assert!(manager.refresh_definition_file()?);
+        assert_eq!(fs::read_to_string(&path)?, rendered);
+        assert!(manager.definition_log_current()?);
+    }
+    Ok(())
+}
+
+#[test]
 fn refreshing_a_foreign_definition_is_refused() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let mut other = config(temp.path(), "gents");

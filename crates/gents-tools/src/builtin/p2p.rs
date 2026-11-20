@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
@@ -22,6 +22,8 @@ use gents_store::graphql::{
 };
 use gents_store::identity::NodeIdentity;
 
+use crate::guided_failure::GuidedFailure;
+
 pub const P2P_TOOL_NAME: &str = "p2p";
 const OVERLAY_SOURCE: &str = "engineer";
 
@@ -32,6 +34,8 @@ pub struct P2pTool {
     agent: Option<Arc<dyn NodeIdentity>>,
     mutate: bool,
     approver: Option<ConfigAccess>,
+    /// The call this copy serves; [`Tool::call`] sets it on its own copy.
+    envelope: gents_loop::tool::ToolCallEnvelope,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -101,24 +105,33 @@ impl P2pParams {
             if let Some(value) = value {
                 ensure!(
                     options.insert(key.to_owned(), value).is_none(),
-                    "{key} was sent twice, as a field and in options; send it once as a field; next call: p2p {{\"action\":\"help\"}}"
+                    guided(format!("{key} was sent twice, as a field and in options; send it once as a field"), json!({"action":"help"}))
                 );
             }
         }
         let Some(action) = self.action else {
             ensure!(
                 self.topic.is_none() && !self.argv.is_empty(),
-                "action is required, one of {ACTIONS:?}; next call: p2p {{\"action\":\"help\"}}"
+                guided(
+                    format!("action is required, one of {ACTIONS:?}"),
+                    json!({"action":"help"})
+                )
             );
             return Ok((self.argv, options));
         };
         ensure!(
             self.argv.is_empty(),
-            "send action or the legacy argv, not both; next call: p2p {{\"action\":\"help\"}}"
+            guided(
+                "send action or the legacy argv, not both",
+                json!({"action":"help"})
+            )
         );
         ensure!(
             ACTIONS.contains(&action.as_str()),
-            "unknown action {action:?}; actions: {ACTIONS:?}; next call: p2p {{\"action\":\"help\"}}"
+            guided(
+                format!("unknown action {action:?}; actions: {ACTIONS:?}"),
+                json!({"action":"help"})
+            )
         );
         if action == "help" {
             return Ok((
@@ -130,7 +143,10 @@ impl P2pParams {
         }
         ensure!(
             self.topic.is_none(),
-            "topic applies only to action help; next call: p2p {{\"action\":\"help\"}}"
+            guided(
+                "topic applies only to action help",
+                json!({"action":"help"})
+            )
         );
         Ok((action.splitn(2, '_').map(str::to_owned).collect(), options))
     }
@@ -169,6 +185,7 @@ impl P2pTool {
             agent,
             mutate,
             approver: None,
+            envelope: gents_loop::tool::ToolCallEnvelope::default(),
         }
     }
 
@@ -188,7 +205,7 @@ impl P2pTool {
             self.node.node_identity_did() == Some(identity.did()),
             "P2P administration requires the running node DID"
         );
-        if let Some(context) = crate::runtime_context::current_tool_runtime_context() {
+        if let Some(context) = crate::runtime_context::tool_runtime_context(&self.envelope) {
             ensure!(
                 context.node_did.as_deref() == Some(identity.did()),
                 "P2P tool node DID differs from the running request"
@@ -200,20 +217,27 @@ impl P2pTool {
     fn require_mutation(&self) -> Result<()> {
         ensure!(
             self.mutate,
-            "P2P mutations are disabled by the tool grant; read-only actions still work; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}"
+            guided(
+                "P2P mutations are disabled by the tool grant; read-only actions still work",
+                json!({"action":"help","topic":"scope"})
+            )
         );
         Ok(())
     }
 
     fn pairing_agent(&self, runtime: &dyn NodeIdentity) -> Result<Arc<dyn NodeIdentity>> {
-        let agent = self.agent.clone().context(
-            "pairing requires the running agent's own identity, and the Node identity must not stand in for it; run pairings from an agent session; next call: p2p {\"action\":\"help\",\"topic\":\"scope\"}",
-        )?;
+        let agent = self.agent.clone().with_context(|| guided(
+            "pairing requires the running agent's own identity, and the Node identity must not stand in for it; run pairings from an agent session",
+            json!({"action":"help","topic":"scope"}),
+        ))?;
         ensure!(
             agent.did() != runtime.did(),
-            "pairing requires the running agent's own identity, not the Node identity; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}"
+            guided(
+                "pairing requires the running agent's own identity, not the Node identity",
+                json!({"action":"help","topic":"scope"})
+            )
         );
-        if let Some(context) = crate::runtime_context::current_tool_runtime_context() {
+        if let Some(context) = crate::runtime_context::tool_runtime_context(&self.envelope) {
             ensure!(
                 context.agent_did.as_deref() == Some(agent.did()),
                 "P2P tool agent differs from the running request"
@@ -223,9 +247,7 @@ impl P2pTool {
     }
 
     async fn enrollment(&self, peer: &str, expected_did: Option<&str>) -> Result<ActiveEnrollment> {
-        defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
-            .map_err(anyhow::Error::msg)
-            .context("invalid transport peer ID; next call: p2p {\"action\":\"network_list\"}")?;
+        transport_peer(peer)?;
         let projection = GraphqlEnrollmentStore::new(self.node.clone(), self.actor()?)
             .load_projection()
             .await?;
@@ -234,8 +256,14 @@ impl P2pTool {
             "enrollment authority is conflicted"
         );
         let active = projection.active.into_iter().find(|entry| entry.request.candidate_peer == peer)
-            .context("peer has no current authorized enrollment in this node's network. A pairing applied here needs the peer to have joined this node: it ran enrollment_request with this node's offer and this node approved it. Joining the peer's network does not count; pairing both ways needs each node enrolled in the other's network, so mint an offer here for the peer or have the peer apply its pairing toward this node; next call: p2p {\"action\":\"enrollment_pending\"}")?;
-        ensure!(expected_did.is_none_or(|did| did == active.request.candidate_did), "peer DID does not match signed enrollment; next call: p2p {{\"action\":\"pairings_list\"}}");
+            .with_context(|| guided("peer has no current authorized enrollment in this node's network. A pairing applied here needs the peer to have joined this node: it ran enrollment_request with this node's offer and this node approved it. Joining the peer's network does not count; pairing both ways needs each node enrolled in the other's network, so mint an offer here for the peer or have the peer apply its pairing toward this node", json!({"action":"enrollment_pending"})))?;
+        ensure!(
+            expected_did.is_none_or(|did| did == active.request.candidate_did),
+            guided(
+                "peer DID does not match signed enrollment",
+                json!({"action":"pairings_list"})
+            )
+        );
         Ok(active)
     }
 
@@ -283,7 +311,10 @@ impl P2pTool {
         ensure!(
             row["actor_did"].as_str() == Some(agent.did())
                 && row["source"].as_str() == Some(OVERLAY_SOURCE),
-            "pairing overlay is managed by another owner; do not change its policy; next call: p2p {{\"action\":\"pairings_list\"}}"
+            guided(
+                "pairing overlay is managed by another owner; do not change its policy",
+                json!({"action":"pairings_list"})
+            )
         );
         Ok(())
     }
@@ -392,9 +423,12 @@ impl P2pTool {
         rows.first()
             .and_then(|row| row["_docID"].as_str())
             .map(str::to_owned)
-            .context(
-                "this node has no visible Node document; next call: p2p {\"action\":\"status\"}",
-            )
+            .with_context(|| {
+                guided(
+                    "this node has no visible Node document",
+                    json!({"action":"status"}),
+                )
+            })
     }
 
     async fn overlay_status(
@@ -466,17 +500,32 @@ impl P2pTool {
         &self,
         options: &Map<String, Value>,
     ) -> Result<(BTreeSet<String>, ReplicatedSchema)> {
-        let collections: BTreeSet<String> = serde_json::from_value(
-            options
-                .get("collections")
-                .cloned()
-                .context("collections is required for pairings_preview and pairings_apply; next call: p2p {\"action\":\"help\",\"topic\":\"pairings\"}")?,
-        )
-        .context("collections must be a list of application collection names; next call: p2p {\"action\":\"help\",\"topic\":\"pairings\"}")?;
-        ensure!(!collections.is_empty(), "collections must name application collections; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}");
+        let collections: BTreeSet<String> =
+            serde_json::from_value(options.get("collections").cloned().with_context(|| {
+                guided(
+                    "collections is required for pairings_preview and pairings_apply",
+                    json!({"action":"help","topic":"pairings"}),
+                )
+            })?)
+            .with_context(|| {
+                guided(
+                    "collections must be a list of application collection names",
+                    json!({"action":"help","topic":"pairings"}),
+                )
+            })?;
+        ensure!(
+            !collections.is_empty(),
+            guided(
+                "collections must name application collections",
+                json!({"action":"help","topic":"pairings"})
+            )
+        );
         ensure!(
             collections.len() <= 16,
-            "at most 16 application collections per pairing; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}"
+            guided(
+                "at most 16 application collections per pairing",
+                json!({"action":"help","topic":"pairings"})
+            )
         );
         for name in &collections {
             validate_collection_identifier(name)?;
@@ -486,16 +535,16 @@ impl P2pTool {
             Err(AppCollectionAdmissionError::Refused {
                 collection,
                 refusal: AppCollectionRefusal::Managed,
-            }) => Err(anyhow!("{collection} is a Gents protocol, runtime or credential collection. Those are never replicated as application data, and no tool grant or document ACP changes that; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}")),
+            }) => Err(guided(format!("{collection} is a Gents protocol, runtime or credential collection. Those are never replicated as application data, and no tool grant or document ACP changes that"), json!({"action":"help","topic":"scope"})).into()),
             Err(AppCollectionAdmissionError::Refused {
                 collection,
                 refusal: AppCollectionRefusal::PolicyProtected,
-            }) => Err(anyhow!("{collection} has a document access policy, so it cannot be paired: each replica is owned by its signer on the peer and the policy's grants do not replicate, so only that signer could read it there. Pair a collection without @policy, or keep this one on its home node and read it through authenticated query; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}")),
+            }) => Err(guided(format!("{collection} has a document access policy, so it cannot be paired: each replica is owned by its signer on the peer and the policy's grants do not replicate, so only that signer could read it there. Pair a collection without @policy, or keep this one on its home node and read it through authenticated query"), json!({"action":"help","topic":"pairings"})).into()),
             Err(AppCollectionAdmissionError::Refused {
                 collection,
                 refusal: AppCollectionRefusal::View,
-            }) => Err(anyhow!("{collection} is a view: it is derived from other collections and cannot carry its own document policy, so it is never paired. Pair the source collection if it has no policy; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}")),
-            Err(AppCollectionAdmissionError::NotRegistered { collection }) => Err(anyhow!("collection {collection} is not registered on this node; create it with the schema tool here and on the peer with the same collection definition; next call: p2p {{\"action\":\"help\",\"topic\":\"pairings\"}}")),
+            }) => Err(guided(format!("{collection} is a view: it is derived from other collections and cannot carry its own document policy, so it is never paired. Pair the source collection if it has no policy"), json!({"action":"help","topic":"pairings"})).into()),
+            Err(AppCollectionAdmissionError::NotRegistered { collection }) => Err(guided(format!("collection {collection} is not registered on this node; create it with the schema tool here and on the peer with the same collection definition"), json!({"action":"help","topic":"pairings"})).into()),
             Err(error) => Err(error.into()),
         }
     }
@@ -539,19 +588,30 @@ impl P2pTool {
                     json!({"action":"help"}),
                     |resource| json!({"action":"help","topic":resource}),
                 );
-                bail!("unknown P2P command; next call: p2p {next}")
+                bail!(guided("unknown P2P command", next))
             }
         };
         ensure!(
             options.keys().all(|key| allowed.contains(&key.as_str())),
-            "unexpected field for action {}; accepted fields: {allowed:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"{}\"}}", words.join("_"), words[0]
+            guided(
+                format!(
+                    "unexpected field for action {}; accepted fields: {allowed:?}",
+                    words.join("_")
+                ),
+                json!({"action":"help","topic":words[0]})
+            )
         );
         let text = |key: &str| {
             options
                 .get(key)
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
-                .with_context(|| format!("{key} must be a nonempty string; next call: p2p {{\"action\":\"help\",\"topic\":\"{}\"}}", words[0]))
+                .with_context(|| {
+                    guided(
+                        format!("{key} must be a nonempty string"),
+                        json!({"action":"help","topic":words[0]}),
+                    )
+                })
         };
         let details = options.get("details").map_or(Ok(false), |value| {
             value.as_bool().context("details must be true or false")
@@ -592,11 +652,7 @@ impl P2pTool {
             }
             ["network", "get"] => {
                 let peer = text("peer_id")?;
-                defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
-                    .map_err(anyhow::Error::msg)
-                    .context(
-                        "invalid transport peer ID; next call: p2p {\"action\":\"network_list\"}",
-                    )?;
+                transport_peer(peer)?;
                 let peers = self
                     .rows(
                         "PeerRegistry",
@@ -618,9 +674,7 @@ impl P2pTool {
             ["pairings", "list" | "get"] => {
                 let peer = (words[1] == "get").then(|| text("peer_id")).transpose()?;
                 if let Some(peer) = peer {
-                    defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
-                        .map_err(anyhow::Error::msg)
-                        .context("invalid transport peer ID; next call: p2p {\"action\":\"network_list\"}")?;
+                    transport_peer(peer)?;
                 }
                 let filter = peer.map(|peer| format!("{{peer_id: {{_eq: {}}}}}", quoted(peer)));
                 let desired = self
@@ -717,6 +771,10 @@ impl P2pTool {
             }
             ["enrollment", "offer"] => {
                 self.require_mutation()?;
+                gents_store::local::document_acp::ensure_enrollment(
+                    &self.node,
+                    gents_store::local::document_acp::EnrollmentRequest::Offer,
+                )?;
                 let projection = GraphqlEnrollmentStore::new(self.node.clone(), actor.clone())
                     .load_projection()
                     .await?;
@@ -727,7 +785,7 @@ impl P2pTool {
                 let network_id = projection.network_id.context(
                     "this node has no enrollment Network; the running server creates it at startup",
                 )?;
-                let p2p = gents_store::identity::node_p2p(&self.node)
+                let p2p = gents_p2p::node_access::operations(&self.node)
                     .context("P2P is not running on this node")?;
                 let validity = options.get("valid_for_secs").map_or(
                     Ok(gents_p2p::p2p_reconcile::enrollment_offer::DEFAULT_OFFER_VALIDITY),
@@ -877,6 +935,7 @@ impl P2pTool {
                             gents_store::identity::EnrollmentApproval {
                                 approver,
                                 runtime: &runtime,
+                                nac_owner: &runtime,
                                 node: actor.as_ref(),
                                 request: &request,
                                 expected: None,
@@ -905,13 +964,13 @@ impl P2pTool {
                             == gents_protocol::enrollment::EnrollmentDecisionRefusalCode::ChallengeReused
                     });
                     if reused {
-                        error.context("an offer token is single use: two nodes requested with one offer, so both requests are refused. Each joining node needs its own fresh offer; mint one per node and have each re-request; next call: p2p {\"action\":\"enrollment_offer\"}")
+                        error.context(guided("an offer token is single use: two nodes requested with one offer, so both requests are refused. Each joining node needs its own fresh offer; mint one per node and have each re-request", json!({"action":"enrollment_offer"})))
                     } else {
                         error
                     }
                 })?;
                 Ok(reply(
-                    json!({"request_id":result.request_id,"state":result.state,"delivery_pending":result.delivery_pending,"decision_doc_id":result.decision_doc_id,"revision_doc_id":result.revision_doc_id}),
+                    json!({"request_id":result.request_id,"state":result.state,"delivery_pending":result.delivery_pending,"administration_removal_pending":result.administration_removal_pending,"decision_doc_id":result.decision_doc_id,"revision_doc_id":result.revision_doc_id}),
                     Some(json!({"action":"enrollment_history"})),
                     Value::Null,
                 ))
@@ -1005,6 +1064,22 @@ fn peer_reference_matches(reference: &str, peer: &str) -> bool {
         || p2p::iroh::parse_public_peer_addr(reference).is_ok_and(|(id, _)| id.as_str() == peer)
 }
 
+fn guided(reason: impl Into<String>, call: Value) -> GuidedFailure {
+    GuidedFailure::new(P2P_TOOL_NAME, reason, call)
+}
+
+fn transport_peer(peer: &str) -> Result<()> {
+    defra_p2p_adapter::TransportPeerId::new(peer.to_owned())
+        .map_err(anyhow::Error::msg)
+        .with_context(|| {
+            guided(
+                "invalid transport peer ID",
+                json!({"action":"network_list"}),
+            )
+        })?;
+    Ok(())
+}
+
 fn quoted(value: &str) -> String {
     format!("\"{}\"", escape_graphql_string(value))
 }
@@ -1023,7 +1098,7 @@ fn help(resource: Option<&str>) -> Result<&'static str> {
         Some("pairings") => "Pairing replicates application collections from this node to one enrolled peer on this node's own initiative. Enrollment never starts it. Recipe: the peer joins this node (enrollment_offer, enrollment_request, enrollment_approve), both nodes hold the same collection definition, then this node calls pairings_preview with peer_id, peer_did and collections (1-16 names), then pairings_apply with the same fields, then pairings_get to confirm the replicator. pairings_apply replicates this node's documents in those collections toward that peer, including documents written before the opt-in, and only in that direction; for data to flow both ways, the peer must apply its own pairing toward this node, which needs this node enrolled in the peer's network the same way. pairings_revoke with peer_id deletes this agent's overlay and stops new data; documents already delivered stay on the peer. A pairing is bound to the peer's enrollment when applied: a lease renewal keeps it, but revocation or expiry ends it for good, and a later enrollment needs pairings_apply again. It also stops while its agent is disabled or loses P2P mutation, and the node's user can remove any pairing. pairings_list and pairings_get report each of this agent's pairings with status and inactive_reason; another actor's pairing appears only if this agent may read it, as active or inactive. Collections must exist here, have no document policy and not be views. Gents protocol, runtime and credential collections are always refused. Collections with @policy are refused because a replica on the peer is owned by its signer and the policy's grants do not replicate; only that signer could read it there. Preview reports local schema identities but does not check the peer. On the peer, paired documents are untrusted content: in a collection without a policy every local actor can read them, a matching document ID merges into the peer's own document, and its triggers fire. pairings_list and pairings_get show desired, applied, enrolled and connected separately; details:true adds native replicator filters. An overlay another agent owns is not changed. The desired document is not proof of a live route; confirm with pairings_get, then a read on the peer.",
         Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending and approves it. enrollment_offer requires mutation authority and returns this node's signed offer_token, peer_id and DID; the token is valid 5 minutes unless valid_for_secs asks for up to 3600, which a relay through people or other agents needs, and the joining node must request before expires_at; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval first grants the requester administration of this Node under your own Agent identity; DefraDB refuses that grant unless you administer this Node, and then nothing is approved. Approval admits the peer to this node's network for 30 days by default; lease_seconds may set a lease of up to 90 days. It materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, not this node in the requester's. Enrollment in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned enrollment document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted. Approved entries carry lease_state, lease_remaining_days and renewal_due, which turns true inside the last 7 days of the lease. Automatic renewal is off by default. enrollment_renewal_policy sets auto_renew and an optional maximum lease_seconds for this network; disabling it immediately stops automatic approvals. Renewal is re-enrollment before expiry: the same four calls with a fresh offer, request and approval for the same peer; the approval takes the peer's next authorization sequence and supersedes the old generation in place, so the peer's enrollment route stays. After expiry the peer's routes and remote requests stop until it re-enrolls. Approval replicates no application data; pairings is a separate opt-in, and a pairing ends with the enrollment it was applied under: re-enrolling restores only the discovery route.",
         Some("scope") => "P2P carries discovery and enrollment documents, plus application collections an Agent of this node has explicitly paired toward an enrolled peer. Enrollment alone starts no application sync, and a pairing is refused unless the Agent applying it holds the P2P mutation grant. Gents protocol, runtime and credential collections, views and collections with a document policy are never paired, whatever tool grants or document ACP say. Pairing writes an overlay owned by this agent's own DID; only that agent may change it, and the node's administration may delete it. The Node identity is never used in its place. Everything else stays on its home node; read it through query. Enrollment is a separate signed authority, and mutation authority gates offers, requests, decisions and pairings.",
-        Some(resource) => bail!("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}"),
+        Some(resource) => bail!(guided(format!("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}"), json!({"action":"help","topic":"scope"}))),
     })
 }
 
@@ -1063,24 +1138,27 @@ impl Tool for P2pTool {
     async fn call(
         &self,
         args: P2pParams,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> std::result::Result<String, P2pError> {
+        let tool = Self {
+            envelope: context.clone(),
+            ..self.clone()
+        };
         let (argv, options) = args
             .command()
             .map_err(|error| P2pError(format!("{error:#}")))?;
         if argv.len() > 4 || serde_json::to_vec(&options).map_or(true, |bytes| bytes.len() > 16_384)
         {
             return Err(P2pError(
-                "P2P call exceeds bounded parameters; next call: p2p {\"action\":\"help\"}".into(),
+                guided(
+                    "P2P call exceeds bounded parameters",
+                    json!({"action":"help"}),
+                )
+                .to_string(),
             ));
         }
-        let result = self.call_one(argv, options).await.map_err(|error| {
-            let message = format!("{error:#}");
-            P2pError(if message.contains("next call:") {
-                message
-            } else {
-                format!("{message}; next call: p2p {{\"action\":\"help\"}}")
-            })
+        let result = tool.call_one(argv, options).await.map_err(|error| {
+            P2pError(format!("{:#}", GuidedFailure::or_help(Self::NAME, error)))
         })?;
         serde_json::to_string(&result).map_err(|error| P2pError(error.to_string()))
     }

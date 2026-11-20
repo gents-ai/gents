@@ -20,12 +20,13 @@ pub(super) async fn glob_action(
     pattern: &str,
     timeout: std::time::Duration,
 ) -> Result<String, ToolError> {
+    let call = context.call();
     let action = req.action;
     if !matches!(action, LspAction::Diagnostics) {
         return Err(arg_invalid("globs are only valid for diagnostics"));
     }
     let runner = crate::native::native_runner::NativeFsRunner::new(context);
-    let paths = runner.glob_paths(pattern, MAX_GLOB_TARGETS).await?;
+    let paths = runner.glob_paths(call, pattern, MAX_GLOB_TARGETS).await?;
     if paths.is_empty() {
         return Ok("no files matched the diagnostic glob".into());
     }
@@ -53,6 +54,9 @@ pub(super) async fn glob_action(
             .request(
                 "textDocument/diagnostic",
                 json!({ "textDocument": { "uri": uri } }),
+                crate::runtime_context::tool_runtime_context(call)
+                    .map(|runtime| runtime.cancellation_token)
+                    .as_ref(),
             )
             .await
             .unwrap_or(Value::Null);
@@ -60,7 +64,7 @@ pub(super) async fn glob_action(
             "{display}:\n{}",
             format_result_with_limit(context, action, result, req.limit)
         );
-        if let Some(linter) = run_linter_diagnostics(config, servers, &path, timeout).await {
+        if let Some(linter) = run_linter_diagnostics(call, config, servers, &path, timeout).await {
             section = format!("{section}\n{linter}");
         }
         sections.push(section);
@@ -72,16 +76,17 @@ pub(super) async fn glob_action(
 }
 
 pub(crate) async fn run_linter_diagnostics(
+    call: &gents_loop::tool::ToolCallEnvelope,
     config: &super::super::LspToolConfig,
     servers: &[CatalogServer],
     path: &std::path::Path,
     timeout: std::time::Duration,
 ) -> Option<String> {
-    if super::super::artifact_scope_denied() {
+    if super::super::artifact_scope_denied(call) {
         return Some(super::super::ARTIFACT_SCOPE_DENIAL.into());
     }
-    let workspace = super::super::overlay_workspace_or(&config.workspace);
-    let constraints = super::super::overlay_lsp_constraints(&config.constraints);
+    let workspace = super::super::overlay_workspace_or(call, &config.workspace);
+    let constraints = super::super::overlay_lsp_constraints(call, &config.constraints);
     let linter = servers.iter().find(|server| {
         server.is_linter
             && marker_matches(&workspace, &server.root_markers)
@@ -103,16 +108,21 @@ pub(crate) async fn run_linter_diagnostics(
         ],
         _ => return None,
     };
-    let command =
-        crate::native::prepare_managed_command(&workspace, &argv[0], &argv[1..], &constraints)
-            .await
-            .ok()?;
+    let command = crate::native::prepare_managed_command(
+        call,
+        &workspace,
+        &argv[0],
+        &argv[1..],
+        &constraints,
+    )
+    .await
+    .ok()?;
     let mut full = vec![command.program.to_string_lossy().into_owned()];
     full.extend(command.args);
     // Best-effort supplementary probe; deliberately does not thread
     // live_output, which would interleave per-file linter noise into the
     // enclosing tool call's live output.
-    let bounds = crate::runtime_context::tool_execution_bounds(timeout);
+    let bounds = crate::runtime_context::tool_execution_bounds(call, timeout);
     let outcome = gents_session::exec::run_managed_exec(gents_session::exec::ManagedExecRequest {
         argv: full,
         cwd: workspace,
@@ -123,7 +133,7 @@ pub(crate) async fn run_linter_diagnostics(
         environment: Some(command.environment),
         tool_name: Some("lsp".into()),
         live_output: None,
-        process_recorder: None,
+        process_recorder: gents_session::exec::ownership::process_recorder(call),
     })
     .await;
     match outcome {

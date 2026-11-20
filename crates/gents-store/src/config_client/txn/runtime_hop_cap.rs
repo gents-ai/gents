@@ -17,16 +17,17 @@ pub enum RuntimeHopCapError {
 
 pub(super) fn runtime_hop_cap_query(node_did: &str) -> String {
     format!(
-        r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ max_request_hop }} }}"#,
+        r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ _docID max_request_hop }} }}"#,
         escape_graphql_string(node_did)
     )
 }
 
 impl ConfigApplyTxn<'_> {
-    /// The runtime Node's `max_request_hop` as the bound runtime reads it on
+    /// The runtime Node's `max_request_hop` as the bound runtime uses it on
     /// this Agent transaction's snapshot. The Agent's own Node visibility does
-    /// not decide the cap. `None` is a Node the runtime cannot read, which is
-    /// unavailable rather than an unset cap.
+    /// not decide the cap. `None` is a Node the runtime may not use
+    /// (`Identity.Household.runtimeMayUse`), which is unavailable rather than
+    /// an unset cap, though the hosting runtime still reads it.
     pub async fn runtime_max_request_hop(
         &self,
         node_did: &str,
@@ -39,10 +40,10 @@ impl ConfigApplyTxn<'_> {
                 | ConfigClientError::TransactionActorMismatch => RuntimeHopCapError::RuntimeScope,
                 error => RuntimeHopCapError::Access(error),
             })?;
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("Node"))
+        let response = crate::graphql::into_data_envelope(response.data);
+
+        let rows = response["data"]
+            .get("Node")
             .and_then(Value::as_array)
             .ok_or(RuntimeHopCapError::Decode)?;
         let row = match rows.as_slice() {

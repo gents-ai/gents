@@ -50,6 +50,12 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         &agent.agent_did,
     )
     .await?;
+    node.add_nac_actor_relationship_as(
+        &context,
+        acp::nac::NodePermission::CollectionGet.as_str(),
+        &agent.agent_did,
+    )
+    .await?;
     node.add_collection(gents_protocol::schemas::NODE).await?;
     node.add_collection(gents_protocol::schemas::SCHEDULE)
         .await?;
@@ -377,10 +383,8 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         trigger_doc_id: trigger_doc,
         schedule_doc_id: schedule_doc.clone(),
         schedule_id: "schedule".into(),
-        task_id: "task".into(),
         task,
         cadence: gents_documents::ScheduleCadence::Interval { interval_secs: 60 },
-        enabled: true,
         concurrency: gents_documents::ConcurrencyMode::Serial,
     };
     let snapshot = crate::triggers::engine::tests::snapshot_with_agent_and_schedules(

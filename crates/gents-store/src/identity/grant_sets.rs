@@ -7,7 +7,8 @@ use crate::config_client::{ConfigAccess, ConfigClientError, NodePermission};
 #[serde(rename_all = "kebab-case")]
 pub enum GrantSet {
     /// Projected from each live managed Agent document, never granted directly
-    /// in production.
+    /// in production. It holds `CollectionGet` because the pinned DefraDB
+    /// checks it before every document write (defradb.rs#2744).
     AgentBaseline,
     /// Granted to a User admitted by verified enrollment.
     OperatorUser,
@@ -41,6 +42,7 @@ impl GrantSet {
     pub fn permissions(self) -> &'static [NodePermission] {
         match self {
             Self::AgentBaseline => &[
+                NodePermission::CollectionGet,
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,
@@ -165,6 +167,24 @@ impl GrantSet {
         }
         Ok(())
     }
+}
+
+/// `Identity.GrantSets.nodeRuntimePermissions`: every native node permission
+/// but reading past document ACP and the enforcement switches, which the NAC
+/// owner grants the Node when its fresh store is first opened.
+pub fn node_runtime_permissions() -> impl Iterator<Item = NodePermission> {
+    NodePermission::all().iter().copied().filter(|permission| {
+        !matches!(
+            permission,
+            NodePermission::DacBypass
+                | NodePermission::DacEnable
+                | NodePermission::DacDisable
+                | NodePermission::DacPurge
+                | NodePermission::NacReEnable
+                | NodePermission::NacDisable
+                | NodePermission::NacPurge
+        )
+    })
 }
 
 /// Who receives grant sets (Lean `Identity.GrantSets.Recipient`). The init

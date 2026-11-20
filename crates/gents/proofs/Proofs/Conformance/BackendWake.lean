@@ -124,4 +124,13 @@ def resumedTurnIndex : Family ResumedTurnInput Nat where
 
 example : resumedTurnIndex.inputs.any fun i => resumedTurnIndex.model i > 1 := by native_decide
 
+structure ResumedCallSeqInput where
+  persisted : List Nat
+  deriving ToJson
+
+@[conformance_family]
+def resumedCallSeq : Family ResumedCallSeqInput Nat where
+  inputs := [[], [1], [1, 2, 3], [3, 1, 2], [2, 2], [7]].map fun persisted => { persisted }
+  model := fun i => RequestBackendWake.resumedCallSeq i.persisted
+
 end Conformance.BackendWake

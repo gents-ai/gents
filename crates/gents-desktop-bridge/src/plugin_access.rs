@@ -4,7 +4,8 @@ use gents_tools::plugin::approval;
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 #[derive(Debug, Serialize, TS)]
 pub struct AllowedFoldersView {

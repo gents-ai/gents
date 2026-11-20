@@ -1,10 +1,10 @@
+use crate::client_runtime::ClientRuntime;
 use anyhow::Result;
-use gents_desktop_core::client::ClientCore;
 
 use crate::types::DesktopBackgroundToolRequest;
 
 pub async fn background_tool(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: DesktopBackgroundToolRequest,
 ) -> Result<bool> {
     gents_toolcalls::background::status::request_foreground_backgrounding(
@@ -40,13 +40,17 @@ mod tests {
             .mount(&server)
             .await;
         let (core, temp) = crate::tests::support::boot_core().await;
-        let node = "did:test:runtime";
-        core.add_managed_enrollment_peer_for_test(
-            node,
-            &format!("{}/api/v0/graphql", server.uri()),
-            temp.path().join("runtime").to_str().unwrap(),
-            1,
-        )
+        let runtime = crate::client_test_support::runtime_key("background-runtime").await;
+        let node = runtime.did.as_str();
+        crate::client_test_support::runtime_metadata(&server, &runtime).await;
+        core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+            node_did: (node).to_string(),
+            label: ("Served runtime").to_string(),
+            graphql: format!("{}/api/v0/graphql", server.uri()),
+            local_node_home: Some((temp.path().join("runtime").to_str().unwrap()).to_string()),
+            access_request: None,
+            access_state: None,
+        })
         .await
         .unwrap();
         assert!(background_tool(

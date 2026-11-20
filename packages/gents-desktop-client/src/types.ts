@@ -1,10 +1,11 @@
 export type { AgentIdentityBinding } from "./generated/AgentIdentityBinding.js";
 export type {
   BootstrapSummary,
-  EnrollmentRequestView,
+  ClientAccessRequestView,
+  RuntimeAccessDecisionRequest,
+  RuntimeRemoveResponse,
+  SavedRuntimeView,
   InitSummary,
-  P2PHealth,
-  SavedPeer,
 } from "./types/bootstrap.js";
 export type {
   NodeView,
@@ -20,7 +21,7 @@ export type {
   SessionProvenance,
   SessionFork,
   DeploymentView,
-  EndedAccessView,
+  UnkeptChangeView,
   DesktopClientSnapshot,
   TriggerView,
   InferenceBackendView,
@@ -82,7 +83,7 @@ export type {
   InferenceProbeResult,
   InferenceProbeRequest,
   InferenceProfileSaveRequest,
-  EnrollmentStatusRequest,
+  RuntimeAccessConnectRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
   SkillDeleteRequest,

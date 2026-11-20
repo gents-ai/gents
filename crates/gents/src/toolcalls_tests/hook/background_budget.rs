@@ -46,17 +46,41 @@ async fn assert_background_rows(
     }
 }
 
+type AdmissionCase = gents_lean_vocab::family::Case<
+    gents_lean_vocab::families::contracts_background_admission_bound::ConfiguredBound,
+    gents_lean_vocab::families::contracts_background_admission_bound::AdmissionObservation,
+>;
+
 #[tokio::test]
 async fn generated_background_budget_uses_accepted_dispatch() {
     let cases = gents_lean_vocab::families::contracts_background_admission_bound::cases();
-    assert_eq!(cases.len(), 1);
-    let case = &cases[0];
-    let bound = usize::try_from(case.input.numeric_bound).unwrap();
+    assert!(cases.iter().any(|case| case.input.configured.is_none()));
+    for (index, case) in cases.iter().enumerate() {
+        admit_until_refused(index, case).await;
+    }
+}
+
+/// Fills one request with sequential background admissions under the Agent's
+/// configured `host.max_background_tool_calls`, as the production resolver
+/// reads it, until one is refused; the unset case then also replays the
+/// modeled admission schedule.
+async fn admit_until_refused(index: usize, case: &AdmissionCase) {
+    let limit = gents_protocol::job::BackgroundLimit::resolve(
+        case.input
+            .configured
+            .map(|configured| i64::try_from(configured).unwrap()),
+    );
     let executions = BackgroundExecutionRegistry::default();
-    let registry =
-        BackgroundToolRegistry::from_tools(vec![Box::new(PendingTool)], &["slow_tool".into()]);
+    let registry = BackgroundToolRegistry::from_config(
+        vec![Box::new(PendingTool)],
+        &gents_tools::surface::BackgroundToolConfig {
+            allowlist: vec!["slow_tool".into()],
+            limit,
+            ..Default::default()
+        },
+    );
     let fixture = budget_hook_fixture(
-        "background-budget",
+        &format!("background-budget-{index}"),
         registry,
         executions.clone(),
         gents_automation::lifecycle_hooks::composition(),
@@ -76,23 +100,27 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     let args = r#"{"tool_name":"slow_tool","args":{}}"#;
     let mut children = Vec::new();
     let mut admitted_modes = Vec::new();
-    for index in 0..bound {
-        let receipt = invoke(&hook, &format!("budget-{index}"), "spawn_process", args).await;
-        assert_eq!(receipt["status"], "running");
+    let mut denied = None;
+    for attempt in 0..=gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
+        let receipt = invoke(&hook, &format!("budget-{attempt}"), "spawn_process", args).await;
+        if receipt["status"] != "running" {
+            denied = Some(receipt);
+            break;
+        }
         let child = receipt["tool_call_id"].as_str().unwrap().to_owned();
         let row = tool_row(&access, &session, &child).await;
         assert_eq!(row["await_mode"], receipt["await_mode"]);
         admitted_modes.push(receipt["await_mode"].as_str().unwrap().to_owned());
-        assert_background_rows(&access, &request_id, index + 1, "running").await;
+        assert_background_rows(&access, &request_id, attempt + 1, "running").await;
         children.push(child);
     }
+    let denied = denied.expect("the host ceiling refuses an admission");
     admitted_modes.dedup();
-    assert_eq!(admitted_modes.len(), 1, "{admitted_modes:?}");
-    let denied = invoke(&hook, "budget-overflow", "spawn_process", args).await;
+    assert!(admitted_modes.len() <= 1, "{admitted_modes:?}");
     case.check(
         gents_lean_vocab::families::contracts_background_admission_bound::AdmissionObservation {
             kind_fields: [
-                ("await_mode", Some(admitted_modes[0].as_str())),
+                ("await_mode", admitted_modes.first().map(String::as_str)),
                 ("error_code_on_violation", denied["code"].as_str()),
             ]
             .into_iter()
@@ -109,6 +137,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
             max_backgrounded: denied["max_backgrounded"].as_u64().unwrap(),
         },
     );
+    let bound = children.len();
     assert_background_rows(&access, &request_id, bound, "running").await;
     for (index, child) in children.iter().enumerate() {
         let args = json!({"tool_call_id": child}).to_string();
@@ -117,6 +146,14 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         executions.wait_for_completion(child).await;
     }
     assert_background_rows(&access, &request_id, bound, "cancelled").await;
+    if case.input.configured.is_some() {
+        hook_execution_fixtures()
+            .lock()
+            .await
+            .remove(&hook_execution_fixture_key(&hook, &request_id));
+        node.shutdown().await.expect("shut down test node");
+        return;
+    }
     let batch = gents_lean_vocab::families::contracts_r6_admission::cases();
     let ids = (0..batch.len())
         .map(|index| format!("concurrent-budget-{index}"))
@@ -157,7 +194,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
                     None,
                     id,
                     args,
-                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &gents_loop::tool::ToolCallEnvelope::default(),
                 )
                 .await,
             );

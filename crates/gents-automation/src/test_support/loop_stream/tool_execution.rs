@@ -165,7 +165,7 @@ pub async fn plugin_image_result_seen_by(
 ) -> Vec<ToolResultContent> {
     let (_home, tool) = plugin_image_tool(image_bytes);
     let tools: Vec<Box<dyn ToolDyn>> = vec![tool];
-    let model = ScriptedModel::new_turns(plugin_call_then_text_turns()).without_capture();
+    let model = ScriptedProvider::turns(plugin_call_then_text_turns()).then_end();
     let mut config = config(4);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
@@ -186,7 +186,7 @@ pub async fn plugin_image_result_seen_by(
         }
     }
     assert_eq!(final_text.as_deref(), Some("seen"));
-    let histories = model.seen_histories().await;
+    let histories = model.histories();
     first_tool_result(&histories[1]).expect("the second request carries the plugin's tool result")
 }
 
@@ -196,7 +196,7 @@ pub async fn owned_tool_result_threaded(
 ) -> Vec<ToolResultContent> {
     let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let node = db.node.clone();
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         echo_tool_turn(),
         vec![
             RawStreamingChoice::Message("ok".to_string()),
@@ -204,7 +204,7 @@ pub async fn owned_tool_result_threaded(
         ],
     ]);
     let profile = counter.profile();
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
         model.clone(),
@@ -224,7 +224,7 @@ pub async fn owned_tool_result_threaded(
         "exactly one threaded tool result: {:?}",
         collected.tool_results
     );
-    let histories = model.seen_histories().await;
+    let histories = model.histories();
     node.shutdown().await.expect("node shutdown");
     first_tool_result(&histories[1]).expect("the second request carries the tool result")
 }
@@ -237,10 +237,10 @@ pub async fn persisted_plugin_image_result_replay(
     let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let node = db.node.clone();
     let profile = counter.profile();
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
-        ScriptedModel::new_turns(plugin_call_then_text_turns()),
+        scripted(plugin_call_then_text_turns()),
         Some(hook.clone()),
         TaggedMessage::unassociated(Message::user("draw it")),
         Vec::new(),
@@ -304,12 +304,12 @@ pub async fn terminalization_with_principal_output(
         output: "o".repeat(output_bytes),
     })];
     let stream = run_loop_stream(
-        ScriptedModel::new_turns(script),
+        scripted(script),
         Some(hook.clone()),
         TaggedMessage::unassociated(Message::user("run echo")),
         Vec::new(),
         Arc::new(tools),
-        owned_config(turns + 2),
+        owned_config_for(turns + 2, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -482,7 +482,7 @@ impl ToolDyn for ComposingParent {
         context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            let dispatcher = context.effects().expect("live dispatcher");
             let mut spawned = String::new();
             let mut session = String::new();
             for (ordinal, name, arguments) in &self.children {
@@ -491,11 +491,7 @@ impl ToolDyn for ComposingParent {
                     .replace(NEW_SESSION, &session);
                 // A child runs without the parent's dispatcher, as the plugin
                 // host's `tool_calls` service runs it (`children_cannot_delegate`).
-                let outcome = gents_loop::tool_effects::scope(
-                    None,
-                    dispatcher.call(context, *ordinal, name, &arguments),
-                )
-                .await;
+                let outcome = dispatcher.call(context, *ordinal, name, &arguments).await;
                 assert!(
                     !matches!(
                         outcome,
@@ -546,7 +542,11 @@ impl ToolDyn for AdmissionChild {
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         let args: serde_json::Value = serde_json::from_str(args).unwrap();
         if args.get("admit").is_none_or(|value| value == true) {
             return Ok(());
@@ -740,15 +740,12 @@ impl ToolDyn for StoppingParent {
         context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            let dispatcher = context.effects().expect("live dispatcher");
             // A script that exhausts its own allowance drops the child call it awaits.
             tokio::select! {
                 biased;
                 _ = self.0.notified() => {}
-                finished = gents_loop::tool_effects::scope(
-                    None,
-                    dispatcher.call(context, 1, "stall", "{}"),
-                ) => {
+                finished = dispatcher.call(context, 1, "stall", "{}") => {
                     panic!("the child outlives the script: {finished:?}")
                 }
             }
@@ -809,7 +806,11 @@ impl ToolDyn for ParallelReadProbe {
             }
         })
     }
-    fn footprint(&self, _: &str) -> gents_loop::tool::ToolFootprint {
+    fn footprint(
+        &self,
+        _: &str,
+        _: &gents_loop::tool::ToolCallEnvelope,
+    ) -> gents_loop::tool::ToolFootprint {
         gents_loop::tool::ToolFootprint::Read
     }
     fn call<'a>(
@@ -837,7 +838,7 @@ impl ToolDyn for ParallelReadProbe {
 }
 
 pub async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "first".into(),
@@ -877,7 +878,7 @@ pub async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
     })
     .await
     .expect("both calls must reach the gate");
-    let histories = model.seen_histories().await;
+    let histories = model.histories();
     let results: Vec<_> = histories[1]
         .iter()
         .flat_map(|message| match message {
@@ -929,7 +930,11 @@ impl ToolDyn for SerialReadMeasurement {
     ) -> BoxFuture<'a, gents_loop::tool::ToolDispatchResult> {
         self.0.call_with_receipt(args, context)
     }
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
-        self.0.admit(args)
+    fn admit(
+        &self,
+        args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
+        self.0.admit(args, context)
     }
 }

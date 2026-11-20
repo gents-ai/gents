@@ -61,4 +61,31 @@ theorem completed_turn_precedes_resumed (completed : List Nat) (turn : Nat)
 
 theorem unstarted_request_resumes_at_first_turn : resumedTurn [] = 0 := rfl
 
+/-- A resumed execution continues its request's provider call sequence: the
+counter starts at the largest `call_seq` the request durably recorded before
+it parked, so the next call is numbered after every earlier attempt. The call
+sequence is then the request's attempt history order across executions; a
+restart at zero made a resumed call sort among the parked execution's
+attempts. Executions of one request never overlap (park and wake are
+generation-fenced in `RequestExecutionLease`) and every call row is created
+before its provider dispatch, so the read at wake sees every earlier call. -/
+def resumedCallSeq : List Nat → Nat
+  | [] => 0
+  | seq :: rest => max seq (resumedCallSeq rest)
+
+theorem persisted_call_precedes_resumed (persisted : List Nat) (seq : Nat)
+    (h : seq ∈ persisted) : seq ≤ resumedCallSeq persisted := by
+  induction persisted with
+  | nil => simp at h
+  | cons first rest ih =>
+      simp only [List.mem_cons] at h
+      simp only [resumedCallSeq]
+      cases h with
+      | inl heq => subst seq; omega
+      | inr hrest =>
+          have bound := ih hrest
+          omega
+
+theorem unstarted_request_numbers_from_one : resumedCallSeq [] + 1 = 1 := rfl
+
 end RequestBackendWake
