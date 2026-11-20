@@ -60,6 +60,8 @@ env:
   # Cargo target tree.
   GENTS_CI_KEEP_TARGET_TREE: >-
     ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'merge_group' && startsWith(github.ref, 'refs/heads/gh-readonly-queue/main/')) ||
+    (github.event_name == 'schedule' && github.ref == 'refs/heads/main') ||
     (github.event_name == 'pull_request' &&
     github.event.pull_request.head.repo.full_name == github.repository) }}
   # A release compiles without the host's shared compiler cache.
