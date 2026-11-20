@@ -32,7 +32,6 @@ pub struct PluginBuildOutcome {
 /// asked, in one process under the command sandbox bash uses: writes confined
 /// to `root`, no network. The whole build runs inside it, source mirroring
 /// included, because a source tree can hold links this process must not follow.
-/// `host` is the runtime's executable that serves [`PLUGIN_BUILD_COMMAND`].
 pub async fn run_plugin_build(
     call: &gents_loop::tool::ToolCallEnvelope,
     root: &Path,

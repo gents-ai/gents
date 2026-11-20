@@ -124,8 +124,6 @@ impl ToolContext {
         })
     }
 
-    /// Native filesystem runners spawned from this context start from
-    /// `executables`.
     pub(crate) fn with_native_executables(mut self, executables: NativeExecutables) -> Self {
         self.native_executables = Arc::new(executables);
         self

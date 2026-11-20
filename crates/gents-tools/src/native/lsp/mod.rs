@@ -149,7 +149,6 @@ impl LspTool {
         })
     }
 
-    /// Diagnostic globs start their filesystem runner from `executables`.
     pub(crate) fn with_native_executables(
         mut self,
         executables: crate::native::NativeExecutables,

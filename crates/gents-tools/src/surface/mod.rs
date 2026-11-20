@@ -171,8 +171,6 @@ pub struct SelfConfigToolConfig {
     /// admits every plugin. `config plugin run` calls no plugin outside it,
     /// selected or not: an installed plugin runs with its installed grants.
     pub ceiling_plugins: Option<std::collections::BTreeSet<String>>,
-    /// The runtime's executable whose hidden `__plugin-build` command builds
-    /// plugin source.
     pub plugin_builder: Option<PathBuf>,
 }
 

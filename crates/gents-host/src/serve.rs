@@ -351,8 +351,6 @@ pub trait ServeClient: Send + Sync {
 
     fn version(&self) -> crate::http::version::VersionResponse;
 
-    /// This process's executable when it serves the hidden
-    /// `__native-fs-runner` and `__plugin-build` commands.
     fn host_executable(&self) -> Option<PathBuf>;
 
     async fn bound_root_agents(
