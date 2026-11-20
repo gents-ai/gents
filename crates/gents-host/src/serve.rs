@@ -23,7 +23,10 @@ use uuid::Uuid;
 
 use crate::args::*;
 use crate::defaults::*;
-use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
+use crate::http::router::{
+    EnrollmentHandles, RouterIdentity, RuntimeActivation, RuntimeActivationObservation,
+    ServeLifecycleHandle, ToolSurface,
+};
 use crate::http::runtime_contract_router;
 use crate::tool_ceiling::{format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg};
 use gents_protocol::row::{
@@ -715,38 +718,46 @@ async fn serve_foreground(
     )
     .with_client_signing_capability(identity.client_signing_capability()?)?;
     let runtime_routers = runtime_contract_router(
-        graphql_url.clone(),
-        runtime_graphql.clone(),
-        node_name.clone(),
-        identity.did().to_string(),
-        format_tool_ceiling(effective_tool_ceiling).to_string(),
-        effective_tool_root
-            .as_deref()
-            .map(|root| {
-                gents_session::workspace::root_resolution::resolve_configured_tool_root(root)
-                    .map(|resolved| resolved.to_string_lossy().into_owned())
-                    .map_err(|error| {
-                        format!("tool root {} does not resolve: {error:#}", root.display())
-                    })
-            })
-            .transpose(),
-        args.cli_tools.clone(),
-        Some(home_dir.to_string_lossy().into_owned()),
-        Some(data_dir.clone()),
-        mcp_options,
+        RouterIdentity {
+            graphql: graphql_url.clone(),
+            p2p_graphql: runtime_graphql.clone(),
+            node_name: node_name.clone(),
+            node_did: identity.did().to_string(),
+            node_identity: Some(identity.clone()),
+            document_acp: init_config
+                .as_ref()
+                .map(|config| config.document_acp)
+                .unwrap_or_default(),
+        },
+        ToolSurface {
+            tool_ceiling: format_tool_ceiling(effective_tool_ceiling).to_string(),
+            tool_root: effective_tool_root
+                .as_deref()
+                .map(|root| {
+                    gents_session::workspace::root_resolution::resolve_configured_tool_root(root)
+                        .map(|resolved| resolved.to_string_lossy().into_owned())
+                        .map_err(|error| {
+                            format!("tool root {} does not resolve: {error:#}", root.display())
+                        })
+                })
+                .transpose(),
+            cli_tools: args.cli_tools.clone(),
+            home: Some(home_dir.to_string_lossy().into_owned()),
+            store_dir: Some(data_dir.clone()),
+            mcp: mcp_options,
+        },
+        EnrollmentHandles {
+            offer_issuer: enrollment_offer_issuer.clone(),
+            decisions: enrollment_decisions.clone(),
+            p2p_admission: p2p_admission_state.clone(),
+        },
+        RuntimeActivation {
+            runtime: activation_runtime.clone(),
+            observation: activation_rx,
+            replicated_schema: replicated_schema.clone(),
+            serve_lifecycle: serve_lifecycle.clone(),
+        },
         Some(backend_health.clone()),
-        p2p_admission_state.clone(),
-        enrollment_offer_issuer.clone(),
-        enrollment_decisions.clone(),
-        activation_runtime.clone(),
-        activation_rx,
-        replicated_schema.clone(),
-        serve_lifecycle.clone(),
-        init_config
-            .as_ref()
-            .map(|config| config.document_acp)
-            .unwrap_or_default(),
-        Some(identity.clone()),
     );
     let scrape_state = runtime_routers.scrape_state;
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();

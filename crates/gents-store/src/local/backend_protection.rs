@@ -376,7 +376,6 @@ impl PreflightProtectedBackendStore<'_> {
     /// store's lease, and keeps the lease until this returns. The node is
     /// returned already carrying `composition`, so no caller can serve
     /// requests from a node its lifecycle points cannot find.
-    #[allow(clippy::too_many_arguments)]
     pub async fn start_node_with_projection(
         self,
         key: &StoreKey,
