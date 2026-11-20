@@ -1,6 +1,7 @@
 import React, { Profiler } from "react";
 import ReactDOM from "react-dom/client";
 
+import "./launchParams";
 import App from "../../src/App";
 import { setTimingForTests } from "../../src/hooks/timing";
 import { createDesktopUiHarness } from "./desktopHarness";
@@ -22,6 +23,7 @@ const harness =
     : createDesktopUiHarness({
         scenario: params.get("scenario"),
         compactionUnmarked: params.has("compactionUnmarked"),
+        starterPacks: params.has("packs"),
         compactionAt: params.has("compactionAt")
           ? Number(params.get("compactionAt"))
           : undefined,
