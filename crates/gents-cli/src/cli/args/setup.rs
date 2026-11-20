@@ -142,7 +142,7 @@ pub(crate) struct InitArgs {
     #[arg(
         long = "inference-url",
         value_name = "INFERENCE_URL",
-        help = "Inference backend base URL, usually including /v1. Falls back to INFERENCE_ENDPOINT, then the local llama-server default."
+        help = "Inference backend base URL, usually including /v1. Defaults to the local llama-server endpoint."
     )]
     pub(crate) inference_endpoint: Option<String>,
     #[arg(

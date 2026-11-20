@@ -1,12 +1,12 @@
 ---- MODULE TestPortReservation ----
 \* lean: none
-\* crates: gents-cli
+\* crates: gents, gents-cli
 (***************************************************************************)
 (* Two gents-cli integration tests on one host, each in its own test       *)
 (* process (nextest runs every test in a process of its own), each taking  *)
-(* a port from `allocate_port` (`tests/support/ports.rs`), starting a      *)
-(* `gents server` on it and waiting for it (`wait_for_port`,               *)
-(* `tests/support/process.rs`). They may belong to two CI jobs on two     *)
+(* a port from `allocate_port` (gents `tests/support/ports.rs`), starting  *)
+(* a `gents server` on it and waiting for it (`wait_for_port`, gents-cli   *)
+(* `tests/support/process.rs`). They may belong to two CI jobs on two      *)
 (* runners of one machine, which share the host's network namespace but  *)
 (* not their filesystem view: TMPDIR differs per runner, and each runner's *)
 (* systemd service has `PrivateTmp=yes`, so `/tmp` differs too.            *)

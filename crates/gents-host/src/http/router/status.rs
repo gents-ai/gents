@@ -276,7 +276,7 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
                 }
             },
             None => crate::http::enrollment::EnrollmentStatus::Unavailable {
-                reason: "runtime_not_ready",
+                reason: crate::http::enrollment::unavailable_reason(state.document_acp),
             },
         };
         map.insert("enrollment".to_string(), json!(enrollment));

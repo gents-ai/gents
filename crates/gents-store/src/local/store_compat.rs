@@ -191,10 +191,14 @@ pub(crate) async fn check_copy(
         path: data.clone(),
         source: Box::new(source),
     };
-    let node = crate::local::store_key::persistent_builder(&copied, key)?
-        .build()
-        .await
-        .map_err(opened)?;
+    let node = crate::local::store_key::persistent_builder(
+        &copied,
+        key,
+        crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )?
+    .build()
+    .await
+    .map_err(opened)?;
     let verdict = match crate::local::backend_protection::validate_policy_binding(&node).await {
         Err(BackendProtectionError::InvalidBinding) => {
             Ok(Some(IncompatibleStoreKind::OtherVersionSchema))

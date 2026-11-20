@@ -158,14 +158,16 @@ async fn finish_timed_out(ctx: FinishCtx<'_>, lifecycle: &mut ToolCallLifecycle)
         crate::background::completion::append_background_tool_completion(
             node,
             &lifecycle.access()?,
-            execution_session_id,
-            &execution_request_id,
-            execution_tool_doc_id,
-            execution_tool_name,
-            BACKGROUND_TIMEOUT_NOTIFICATION.0,
-            "",
-            Some(BACKGROUND_TIMEOUT_NOTIFICATION.1),
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            &crate::background::completion::BackgroundToolCompletion {
+                parent_session_id: execution_session_id,
+                parent_request_id: &execution_request_id,
+                tool_call_doc_id: execution_tool_doc_id,
+                tool_name: execution_tool_name,
+                status: BACKGROUND_TIMEOUT_NOTIFICATION.0,
+                result: "",
+                reason: Some(BACKGROUND_TIMEOUT_NOTIFICATION.1),
+                wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            },
         )
         .await
     })
@@ -209,14 +211,16 @@ async fn finish_cancelled(ctx: FinishCtx<'_>, lifecycle: &mut ToolCallLifecycle)
         crate::background::completion::append_background_tool_completion(
             node,
             &lifecycle.access()?,
-            execution_session_id,
-            &execution_request_id,
-            execution_tool_doc_id,
-            execution_tool_name,
-            "cancelled",
-            "",
-            Some(&cancel_reason),
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            &crate::background::completion::BackgroundToolCompletion {
+                parent_session_id: execution_session_id,
+                parent_request_id: &execution_request_id,
+                tool_call_doc_id: execution_tool_doc_id,
+                tool_name: execution_tool_name,
+                status: "cancelled",
+                result: "",
+                reason: Some(&cancel_reason),
+                wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            },
         )
         .await
     })
@@ -303,14 +307,16 @@ async fn finish_completed(ctx: FinishCtx<'_>, lifecycle: &mut ToolCallLifecycle,
         crate::background::completion::append_background_tool_completion(
             node,
             &lifecycle.access()?,
-            execution_session_id,
-            &execution_request_id,
-            execution_tool_doc_id,
-            execution_tool_name,
-            "completed",
-            &notification_result,
-            None,
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            &crate::background::completion::BackgroundToolCompletion {
+                parent_session_id: execution_session_id,
+                parent_request_id: &execution_request_id,
+                tool_call_doc_id: execution_tool_doc_id,
+                tool_name: execution_tool_name,
+                status: "completed",
+                result: &notification_result,
+                reason: None,
+                wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            },
         )
         .await
     })
@@ -402,14 +408,16 @@ async fn finish_failed(
         crate::background::completion::append_background_tool_completion(
             node,
             &lifecycle.access()?,
-            execution_session_id,
-            &execution_request_id,
-            execution_tool_doc_id,
-            execution_tool_name,
-            "failed",
-            &notification_result,
-            Some("tool_failed"),
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            &crate::background::completion::BackgroundToolCompletion {
+                parent_session_id: execution_session_id,
+                parent_request_id: &execution_request_id,
+                tool_call_doc_id: execution_tool_doc_id,
+                tool_name: execution_tool_name,
+                status: "failed",
+                result: &notification_result,
+                reason: Some("tool_failed"),
+                wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            },
         )
         .await
     })
@@ -453,14 +461,16 @@ async fn finish_panicked(
         crate::background::completion::append_background_tool_completion(
             node,
             &lifecycle.access()?,
-            execution_session_id,
-            &execution_request_id,
-            execution_tool_doc_id,
-            execution_tool_name,
-            "failed",
-            &reason,
-            Some("tool_panicked"),
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            &crate::background::completion::BackgroundToolCompletion {
+                parent_session_id: execution_session_id,
+                parent_request_id: &execution_request_id,
+                tool_call_doc_id: execution_tool_doc_id,
+                tool_name: execution_tool_name,
+                status: "failed",
+                result: &reason,
+                reason: Some("tool_panicked"),
+                wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            },
         )
         .await
     })

@@ -25,7 +25,6 @@ fn modeled_event_execution_generations_match_runtime_projection() {
             max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: value["trigger_doc"].as_str().unwrap().into(),
             trigger_id: trigger.trigger_id.clone(),
-            task_id: task.task_id.clone(),
             task: gents_documents::automation::resolved_task_from(&task),
             event_source_id: value["source_id"].as_str().unwrap().into(),
             event_source_doc_id: value["source_doc"].as_str().unwrap().into(),
@@ -33,7 +32,6 @@ fn modeled_event_execution_generations_match_runtime_projection() {
             source_collection: "Records".into(),
             event_kind: "created".into(),
             filter: None,
-            enabled: true,
             concurrency: trigger.concurrency.unwrap_or_default(),
             fire_mode: gents_documents::automation::EventTriggerFireMode::PerDocument,
             correlation_field: None,
@@ -101,7 +99,6 @@ fn modeled_event_source_generations_match_resolved_projection() {
             max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: "trigger-doc".into(),
             trigger_id: "trigger".into(),
-            task_id: "task".into(),
             task: gents_documents::automation::ResolvedTask {
                 emit_outcome: false,
                 task_id: "task".into(),
@@ -116,7 +113,6 @@ fn modeled_event_source_generations_match_resolved_projection() {
             source_collection: generation["collection"].as_str().unwrap().into(),
             event_kind: generation["event_kind"].as_str().unwrap().into(),
             filter: generation["filter"].as_str().map(str::to_owned),
-            enabled: true,
             concurrency: gents_documents::ConcurrencyMode::Parallel,
             fire_mode: if generation["grouped"] == true {
                 gents_documents::automation::EventTriggerFireMode::PerGroup

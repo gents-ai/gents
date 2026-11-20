@@ -666,11 +666,18 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
     }
     let foreign_access = p.db.client_access(&foreign);
     crate::support::agent_requests::submit_user_request_to(
-        &foreign_access, &foreign, &p.live.node_did, &p.primary,
-        "foreign-session", "foreign-read",
-        &format!("Call read_process with exactly {{\"tool_call_id\":{}}}. Do not list or search for another process. After the error, acknowledge briefly.", job["tool_call_id"]),
-        Default::default(),
-    ).await;
+        &foreign_access,
+        &foreign,
+        &p.live.node_did,
+        &p.primary,
+        crate::support::agent_requests::UserMessage {
+            session: "foreign-session",
+            id: "foreign-read",
+            text: &format!("Call read_process with exactly {{\"tool_call_id\":{}}}. Do not list or search for another process. After the error, acknowledge briefly.", job["tool_call_id"]),
+            delivery: Default::default(),
+        },
+    )
+    .await;
     assert_eq!(
         wait_for_request_terminal(&foreign_access, "foreign-read").await,
         "completed"

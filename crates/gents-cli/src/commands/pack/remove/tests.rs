@@ -764,8 +764,10 @@ async fn wiring_holds_store_lock_through_pin_commit() {
             home.path(),
             &archive,
             false,
-            Some(&owner),
-            &std::collections::BTreeMap::new(),
+            gents_pack::pack::plugin_lifecycle::PluginSlotBindings {
+                owner: Some(&owner),
+                bindings: &std::collections::BTreeMap::new(),
+            },
             gents_pack::pack::InstalledVia::Operator,
             gents_pack::pack::PackSource::Local { file_name: None },
             move |identity, _| async move {

@@ -10,6 +10,7 @@ use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegmen
 use gents_protocol::output::{OutputSegment, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::STALL_CEILING;
 use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
@@ -215,14 +216,6 @@ where
     .await;
     request_lifecycle(&rows, request_id).expect("terminal row carries lifecycle_state")
 }
-
-/// Hang detector for every wait without a deadline of its own: the longest a
-/// subscribed collection may stay unchanged before the wait fails with the
-/// rows it last read. It is one suite-wide ceiling, far above any host's
-/// scheduling delay, and never a per-test latency budget; the runtime has no
-/// quiescence notification to fail on instead, and a fixture that holds a
-/// provider response or a process is quiet by design.
-pub const STALL_CEILING: Duration = Duration::from_secs(600);
 
 /// Resolves with the first read of `query` that satisfies `predicate`,
 /// re-reading on each change to `collection`, and panics with the last rows
@@ -572,10 +565,12 @@ impl LiveUser {
             &self.user,
             &self.node_did,
             agent_did,
-            session_id,
-            request_id,
-            content,
-            gents_protocol::request_input::QueueDelivery::Queue,
+            crate::support::agent_requests::UserMessage {
+                session: session_id,
+                id: request_id,
+                text: content,
+                delivery: gents_protocol::request_input::QueueDelivery::Queue,
+            },
         )
         .await
     }

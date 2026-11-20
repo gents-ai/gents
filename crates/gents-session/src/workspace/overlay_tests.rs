@@ -247,7 +247,7 @@ fn live_tree_hash_drift_fails_closed() {
     workspace.seal_hash = Some("hash-1".into());
     let mut placed = placement(&placement_path);
     placed.observed_tree_hash = Some("hash-1".into());
-    let overlay = bind_workspace_overlay(
+    bind_workspace_overlay(
         &workspace,
         &placed,
         WorkspaceBindInput {
@@ -257,7 +257,6 @@ fn live_tree_hash_drift_fails_closed() {
         },
     )
     .unwrap();
-    assert_eq!(overlay.seal_hash.as_deref(), Some("hash-1"));
 
     let error = bind_workspace_overlay(
         &workspace,
@@ -337,7 +336,8 @@ fn empty_bound_overlay_does_not_live_walk_writer_tree() {
     assert!(crate::workspace::instruction_body_for_request(
         frozen,
         Some(&nested),
-        Some(&placement_path)
+        Some(&placement_path),
+        gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
     )
     .is_none());
 
@@ -345,10 +345,22 @@ fn empty_bound_overlay_does_not_live_walk_writer_tree() {
         super::frozen_instruction_manifest_from_overlay(None),
         Some(&nested),
         Some(&placement_path),
+        gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
     )
     .unwrap();
     assert!(live.contains("live-writer-instructions"));
     assert!(live.contains("nested-live-instructions"));
+
+    let bounded = crate::workspace::instruction_body_for_request(
+        None,
+        Some(&nested),
+        Some(&placement_path),
+        "live-writer".len(),
+    )
+    .unwrap();
+    assert!(bounded.contains("live-writer"));
+    assert!(!bounded.contains("live-writer-instructions"));
+    assert!(!bounded.contains("nested-live-instructions"));
 }
 
 #[test]
@@ -555,7 +567,14 @@ pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixtur
     assert_ne!(workspace_owner, did);
     let mut documents = MemoryWorkspaceDocuments::default();
     let mut context = HostExecutorContext {
-        owner_node_did: workspace_owner.clone(),
+        provenance: crate::workspace::WorkspaceProvenance {
+            owner_node_did: workspace_owner.clone(),
+            writer_principal: did.clone(),
+            integrator_principal: did.clone(),
+            caused_by_invocation_id: "artifact-invocation".into(),
+            caused_by_correlation: "artifact-correlation".into(),
+            route: Default::default(),
+        },
         repository: RepositoryPlacementRef {
             repository_id: "artifact-repo".into(),
             owner_node_did: workspace_owner.clone(),
@@ -568,12 +587,7 @@ pub async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixtur
             CAP_OBSERVE_DIRTY_BASE.to_owned(),
             CAP_SEAL_WORKSPACE.to_owned(),
         ]),
-        writer_principal: did.clone(),
-        integrator_principal: did.clone(),
-        caused_by_invocation_id: "artifact-invocation".into(),
-        caused_by_correlation: "artifact-correlation".into(),
         documents: &mut documents,
-        route: Default::default(),
     };
     let created = execute_create_workspace_plan(
         &emit_create_workspace_plan(CreateWorkspaceAction {

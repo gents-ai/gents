@@ -55,6 +55,7 @@ struct BackgroundToolRegistryInner {
     tools: RapidHashMap<String, Arc<dyn ToolDyn>>,
     allowlist: Vec<String>,
     timeouts: gents_tools::surface::BackgroundTimeouts,
+    limit: gents_protocol::job::BackgroundLimit,
 }
 
 impl BackgroundToolRegistry {
@@ -79,6 +80,7 @@ impl BackgroundToolRegistry {
                 tools: registry_tools,
                 allowlist,
                 timeouts: Default::default(),
+                limit: Default::default(),
             }),
         }
     }
@@ -93,6 +95,7 @@ impl BackgroundToolRegistry {
         Self {
             inner: Arc::new(BackgroundToolRegistryInner {
                 timeouts: config.timeouts.clone(),
+                limit: config.limit,
                 ..inner
             }),
         }
@@ -100,6 +103,11 @@ impl BackgroundToolRegistry {
 
     pub(crate) fn timeouts(&self) -> &gents_tools::surface::BackgroundTimeouts {
         &self.inner.timeouts
+    }
+
+    /// The Agent's resolved Tools `host.max_background_tool_calls`.
+    pub(crate) fn limit(&self) -> gents_protocol::job::BackgroundLimit {
+        self.inner.limit
     }
 
     pub(crate) fn get(&self, tool_name: &str) -> Option<Arc<dyn ToolDyn>> {
@@ -1096,18 +1104,7 @@ impl BackgroundExecutionRegistry {
                             ("failed", raw, Some("tool_failed"))
                         }
                     };
-                    crate::background::completion::append_background_tool_completion(
-                        lifecycle.node(),
-                        &lifecycle.access()?,
-                        lifecycle.session_id(),
-                        &calling_request_id,
-                        &doc,
-                        lifecycle.tool_name(),
-                        status,
-                        &output,
-                        reason,
-                        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
-                    )
+                    crate::background::completion::append_background_tool_completion(lifecycle.node(), &lifecycle.access()?, &crate::background::completion::BackgroundToolCompletion { parent_session_id: lifecycle.session_id(), parent_request_id: &calling_request_id, tool_call_doc_id: &doc, tool_name: lifecycle.tool_name(), status, result: &output, reason, wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation })
                     .await
                 }
                 .await;
@@ -1397,6 +1394,20 @@ enum PolicyDecision {
     Terminate(String),
 }
 
+/// A provider tool call the hook adopts for dispatch: its internal and
+/// provider call ids, the request and session it runs in, its tool name and
+/// arguments, and the request deadline it inherits.
+#[derive(Clone, Copy)]
+pub(crate) struct ToolDispatch<'a> {
+    pub(crate) internal_call_id: &'a str,
+    pub(crate) provider_call_id: Option<&'a str>,
+    pub(crate) request_id: &'a str,
+    pub(crate) session_id: &'a str,
+    pub(crate) tool_name: &'a str,
+    pub(crate) args: &'a str,
+    pub(crate) deadline_at: DateTime<Utc>,
+}
+
 impl DefraSessionHook {
     pub fn actor_access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         let actor = self
@@ -1466,18 +1477,20 @@ impl DefraSessionHook {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn adopt_accepted_tool_dispatch(
         &self,
-        internal_call_id: &str,
-        provider_call_id: Option<&str>,
-        request_id: &str,
-        session_id: &str,
-        tool_name: &str,
-        args: &str,
-        deadline_at: DateTime<Utc>,
+        dispatch: &ToolDispatch<'_>,
         await_mode: AwaitMode,
     ) -> anyhow::Result<ToolCallLifecycle> {
+        let ToolDispatch {
+            internal_call_id,
+            provider_call_id,
+            request_id,
+            session_id,
+            tool_name,
+            args,
+            deadline_at,
+        } = *dispatch;
         if let Some((lifecycle, recorded_arguments)) =
             self.effect_tool_calls.lock().await.remove(internal_call_id)
         {
@@ -1489,7 +1502,7 @@ impl DefraSessionHook {
                     && recorded_arguments == args,
                 "plugin effect dispatch does not match its admitted input"
             );
-            return Ok(lifecycle);
+            return Ok(lifecycle.with_background_limit(self.background_tool_registry.limit()));
         }
         let registered = self
             .state
@@ -1551,7 +1564,8 @@ impl DefraSessionHook {
             deadline_at,
             await_mode,
         )?
-        .with_selected_tool_identity(selected))
+        .with_selected_tool_identity(selected)
+        .with_background_limit(self.background_tool_registry.limit()))
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]

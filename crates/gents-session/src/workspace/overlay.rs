@@ -66,8 +66,6 @@ pub struct WorkspaceOverlay {
     pub cwd: PathBuf,
     pub authority: WorkspaceAuthority,
     pub instruction_manifest: String,
-    #[allow(dead_code)]
-    pub seal_hash: Option<String>,
 }
 
 pub fn frozen_instruction_manifest_from_overlay(
@@ -527,7 +525,6 @@ pub(crate) fn bind_workspace_overlay(
         cwd,
         authority: input.authority,
         instruction_manifest: workspace.instruction_manifest.clone(),
-        seal_hash: workspace.seal_hash.clone(),
     })
 }
 

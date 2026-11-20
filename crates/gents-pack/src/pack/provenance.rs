@@ -99,12 +99,12 @@ pub(super) async fn apply_pack_documents(
                     owner,
                     pack,
                     documents,
-                    policy,
+                    super::DocumentGraphPolicy {
+                        drift: policy,
+                        profiles: profile_policy,
+                    },
                     None,
-                    None,
-                    None,
-                    profile_policy,
-                    &[],
+                    &super::installation::StageRecord::default(),
                 )
                 .await
                 .map_err(super::PackChangeError::into_anyhow)?;

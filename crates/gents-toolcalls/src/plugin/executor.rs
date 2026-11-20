@@ -32,6 +32,18 @@ struct Admitted {
     bytes: u64,
 }
 
+/// What one plugin call is granted beyond its input: the folder bound to
+/// it, a dispatcher for the calling agent's tools, data and job calls, and
+/// the actor it runs as.
+#[derive(Default)]
+struct CallGrants {
+    bound: Option<BoundDir>,
+    tools: Option<super::tool_calls::Session>,
+    data: Option<DataCaller>,
+    jobs: Option<JobCaller>,
+    actor: Option<identity::Did>,
+}
+
 /// How a model tool call reaches a plugin: the tool's working root, the root
 /// the calling agent's file-writing tools write (Lean `ownFolderGrant`'s
 /// `ownFolder`), whether the plugin is granted `tool_calls`, and the envelope
@@ -569,11 +581,13 @@ impl PluginExecutor {
         self.run(
             record,
             input,
-            bound,
-            super::tool_calls::Session::for_call(tool_calls, call),
-            data,
-            jobs,
-            actor,
+            CallGrants {
+                bound,
+                tools: super::tool_calls::Session::for_call(tool_calls, call),
+                data,
+                jobs,
+                actor,
+            },
             call,
         )
         .await
@@ -648,7 +662,16 @@ impl PluginExecutor {
     ) -> (Result<PluginCall, RunError>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
-            .run(record, input, None, None, data, Some(jobs), None, context)
+            .run(
+                record,
+                input,
+                CallGrants {
+                    data,
+                    jobs: Some(jobs),
+                    ..CallGrants::default()
+                },
+                context,
+            )
             .await;
         let receipt = receipt_of(&result, refused);
         (result, receipt)
@@ -699,7 +722,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, None, None, None, context)
+        self.run(record, input, CallGrants::default(), context)
             .await
             .map_err(RunError::into_anyhow)
     }
@@ -713,9 +736,17 @@ impl PluginExecutor {
         caller: DataCaller,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, Some(caller), None, None, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                data: Some(caller),
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
     /// [`Self::call`] offering `job_calls` as `caller` when the plugin
@@ -727,9 +758,17 @@ impl PluginExecutor {
         caller: JobCaller,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, None, Some(caller), None, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                jobs: Some(caller),
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
     pub async fn call_bound(
@@ -739,9 +778,17 @@ impl PluginExecutor {
         bound: BoundDir,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, Some(bound), None, None, None, None, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                bound: Some(bound),
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
     /// [`Self::call`] granting `bound` and offering `data_calls.query` as
@@ -754,9 +801,18 @@ impl PluginExecutor {
         data: Option<DataCaller>,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, bound, None, data, None, None, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                bound,
+                data,
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
     pub async fn call_bound_data_as(
@@ -768,26 +824,35 @@ impl PluginExecutor {
         actor: Option<identity::Did>,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, bound, None, data, None, actor, context)
-            .await
-            .map_err(RunError::into_anyhow)
+        self.run(
+            record,
+            input,
+            CallGrants {
+                bound,
+                data,
+                actor,
+                ..CallGrants::default()
+            },
+            context,
+        )
+        .await
+        .map_err(RunError::into_anyhow)
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "call-scoped capabilities and actor travel together"
-    )]
     async fn run(
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        bound: Option<BoundDir>,
-        tools: Option<super::tool_calls::Session>,
-        data: Option<DataCaller>,
-        jobs: Option<JobCaller>,
-        actor: Option<identity::Did>,
+        grants: CallGrants,
         context: &ToolCallEnvelope,
     ) -> Result<PluginCall, RunError> {
+        let CallGrants {
+            bound,
+            tools,
+            data,
+            jobs,
+            actor,
+        } = grants;
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
             let coordinate = receipt.coordinate.clone();

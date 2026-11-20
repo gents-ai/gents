@@ -272,6 +272,26 @@ fn node_publication_matches_the_lean_model() {
     );
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Route {
+    Direct,
+    OwnerStaged,
+}
+
+#[test]
+fn configuration_grant_route_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_owner_staged_configuration_grant_route::replay::<
+        Provider,
+        Route,
+    >(|input| {
+        match super::configuration_grant_route(document_acp(input.provider), input.actor_owns) {
+            super::ConfigurationGrantRoute::Direct => Route::Direct,
+            super::ConfigurationGrantRoute::OwnerStaged => Route::OwnerStaged,
+        }
+    });
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Periodic {
@@ -302,6 +322,57 @@ fn periodic_publication_matches_the_lean_model() {
         match super::periodic(document_acp(input.provider), periodic) {
             super::PeriodicLoop::Beats => Loop::Beats,
             super::PeriodicLoop::Idle => Loop::Idle,
+        }
+    });
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Root {
+    Created,
+    Absent,
+}
+
+#[test]
+fn enrollment_root_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_node_publication_enrollment_root::replay::<Provider, Root>(
+        |input| match super::enrollment_root(document_acp(input.provider)) {
+            super::EnrollmentRoot::Created => Root::Created,
+            super::EnrollmentRoot::Absent => Root::Absent,
+        },
+    );
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EnrollmentRequest {
+    Offer,
+    Decision,
+    Pending,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Answer {
+    Served,
+    PeerNetworkingUnavailable,
+}
+
+#[test]
+fn enrollment_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_node_publication_enrollment::replay::<
+        Answer,
+        EnrollmentRequest,
+        Provider,
+    >(|input| {
+        let request = match input.enrollment_request {
+            EnrollmentRequest::Offer => super::EnrollmentRequest::Offer,
+            EnrollmentRequest::Decision => super::EnrollmentRequest::Decision,
+            EnrollmentRequest::Pending => super::EnrollmentRequest::Pending,
+        };
+        match super::enrollment(document_acp(input.provider), request) {
+            super::EnrollmentAnswer::Served => Answer::Served,
+            super::EnrollmentAnswer::PeerNetworkingUnavailable => Answer::PeerNetworkingUnavailable,
         }
     });
 }

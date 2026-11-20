@@ -109,8 +109,7 @@ pub(super) fn verify_goal_continuation_receipt(
             .content
             .as_deref()
             .context("continuation receipt lacks content")?,
-        sequence,
-        wrapup,
+        gents_protocol::request_input::GoalContinuationInput { sequence, wrapup },
         child
             .created_at
             .as_deref()

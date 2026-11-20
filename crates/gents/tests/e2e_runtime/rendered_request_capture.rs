@@ -19,11 +19,11 @@ use crate::support::builder_runtime::{
 use crate::support::interrupt::{
     wait_for_request_lifecycle_state, wait_for_request_terminal_state, BootedAgent,
 };
-use crate::support::live_inference::STALL_CEILING;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const CAPTURE_MODEL: &str = "capture-model";
 const CAPTURE_BACKEND_ID: &str = "capture-backend";

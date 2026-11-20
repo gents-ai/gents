@@ -267,11 +267,6 @@ impl ToolSurface {
         &self.plugin_resolutions
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn agent_tools(&self) -> &AgentToolConfig {
-        &self.agent_tools
-    }
-
     pub fn agent_targets(&self) -> &[AgentTargetDocument] {
         if self.agent_tools.enabled {
             &self.agent_tools.targets

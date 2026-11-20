@@ -54,13 +54,15 @@ impl DefraSessionHook {
             self.ensure_assistant_turn_sequence().await?;
         let mut parent_lifecycle = self
             .adopt_accepted_tool_dispatch(
-                internal_call_id,
-                tool_call_id.as_deref(),
-                &request_id,
-                &session_id,
-                SPAWN_PROCESS_TOOL_NAME,
-                args,
-                deadline_at,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id,
+                    provider_call_id: tool_call_id.as_deref(),
+                    request_id: &request_id,
+                    session_id: &session_id,
+                    tool_name: SPAWN_PROCESS_TOOL_NAME,
+                    args,
+                    deadline_at,
+                },
                 AwaitMode::Foreground,
             )
             .await?;
@@ -190,12 +192,16 @@ impl DefraSessionHook {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
                 match BackgroundSlotRefusal::in_failure(&error) {
-                    Some(BackgroundSlotRefusal::CapacityExceeded(admitted)) => {
+                    Some(BackgroundSlotRefusal::CapacityExceeded { admitted, limit }) => {
                         return complete_spawn_process_failure(
                             self,
                             &mut parent_lifecycle,
                             FailureClass::ServiceUnavailable,
-                            background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, *admitted),
+                            background_budget_exceeded_payload(
+                                SPAWN_PROCESS_TOOL_NAME,
+                                *admitted,
+                                *limit,
+                            ),
                             None,
                         )
                         .await;

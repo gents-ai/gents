@@ -5,6 +5,8 @@ use defra_node::Node as EmbeddedNode;
 use gents_protocol::network_token::EndpointRecord;
 use tokio_util::sync::CancellationToken;
 
+use super::intervals::P2pIntervals;
+
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 
@@ -146,18 +148,20 @@ pub async fn run_endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     graphql_url: Option<String>,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     if let Some(url) = &graphql_url {
         validate_advertised_graphql_url(url)?;
     }
-    endpoint_heartbeat(node, identity, graphql_url, cancel).await
+    endpoint_heartbeat(node, identity, graphql_url, intervals, cancel).await
 }
 
 async fn endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     graphql_url: Option<String>,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     if crate::peer_publication::idles(
@@ -177,7 +181,7 @@ async fn endpoint_heartbeat(
         return Ok(());
     };
 
-    let mut interval = tokio::time::interval(super::intervals::endpoint_interval());
+    let mut interval = tokio::time::interval(intervals.endpoint_heartbeat);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut published = None;
 

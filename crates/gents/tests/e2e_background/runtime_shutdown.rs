@@ -3,11 +3,12 @@ use crate::support::accepted_turn::{
     AcceptedTurnSpec,
 };
 use crate::support::fixtures::configure_agent_tools_as;
-use crate::support::live_inference::{rows_when, wait_for_request_terminal, STALL_CEILING};
+use crate::support::live_inference::{rows_when, wait_for_request_terminal};
 use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
 use gents_session::session::tool_call_state::CancelCause;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::STALL_CEILING;
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;

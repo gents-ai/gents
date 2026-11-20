@@ -6558,7 +6558,7 @@ dependencies = [
  "gents-eval",
  "gents-host",
  "gents-inference",
- "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-loop",
  "gents-observe",
  "gents-pack",
@@ -6865,6 +6865,7 @@ name = "gents-fs-runner"
 version = "1.0.0-rc2"
 dependencies = [
  "anyhow",
+ "gents-fs-runner",
  "globset",
  "ignore",
  "regex",
@@ -6916,6 +6917,7 @@ dependencies = [
  "include_dir",
  "iroh",
  "libc",
+ "notify",
  "p2p",
  "query",
  "rapidhash",

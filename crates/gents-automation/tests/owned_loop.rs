@@ -60,7 +60,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
         }),
     )));
     calls.push(RawStreamingChoice::FinalResponse(()));
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         calls,
         vec![
             RawStreamingChoice::Message("done".into()),
@@ -119,7 +119,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
         name: "echo".to_string(),
         output: "unreachable".to_string(),
     })];
-    let model = ScriptedModel::new_turns(vec![echo_tool_turn()]);
+    let model = scripted(vec![echo_tool_turn()]);
     let mut config = owned_config(4);
     config.tool_context = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
         Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
@@ -163,7 +163,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("use the echo tool");
 
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "call-1".to_string(),
@@ -202,7 +202,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
-    let dispatched = model.seen_histories().await;
+    let dispatched = model.histories();
     let fresh_result = dispatched[1]
         .iter()
         .find_map(|message| match message {
@@ -313,9 +313,7 @@ async fn refused_tool_arguments_reach_the_model_and_the_row_as_the_lean_model_re
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct StrictArgs {
-        #[allow(dead_code)]
         report_type: String,
-        #[allow(dead_code)]
         findings: Vec<String>,
     }
     impl Tool for StrictArgsTool {
@@ -332,10 +330,13 @@ async fn refused_tool_arguments_reach_the_model_and_the_row_as_the_lean_model_re
         }
         async fn call(
             &self,
-            _args: Self::Args,
+            args: Self::Args,
             _context: &gents_loop::tool::ToolCallEnvelope,
         ) -> Result<Self::Output, Self::Error> {
-            panic!("the tool must not run on unparseable arguments");
+            panic!(
+                "the tool must not run on unparseable arguments; it parsed report_type {:?} and findings {:?}",
+                args.report_type, args.findings
+            );
         }
     }
 
@@ -350,7 +351,7 @@ async fn refused_tool_arguments_reach_the_model_and_the_row_as_the_lean_model_re
             other => panic!("no arguments for {other}"),
         };
         let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
-        let model = ScriptedModel::new_turns(vec![
+        let model = scripted(vec![
             vec![
                 RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                     "call-1".to_string(),
@@ -471,7 +472,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
     )
     .call();
     let stream = run_loop_stream(
-        ScriptedModel::new_turns(plugin_call_then_text_turns()),
+        scripted(plugin_call_then_text_turns()),
         Some(hook.clone()),
         TaggedMessage::unassociated(Message::user("compose")),
         Vec::new(),
@@ -537,7 +538,7 @@ async fn a_script_that_stops_mid_child_settles_the_child_and_the_request_finishe
     )
     .call();
     let stream = run_loop_stream(
-        ScriptedModel::new_turns(plugin_call_then_text_turns()),
+        scripted(plugin_call_then_text_turns()),
         Some(hook.clone()),
         TaggedMessage::unassociated(Message::user("compose")),
         Vec::new(),
@@ -601,7 +602,7 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
         .build()
         .build_native_tools()
         .unwrap();
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "read-a".into(),

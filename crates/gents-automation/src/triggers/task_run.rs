@@ -157,25 +157,21 @@ pub async fn enqueue_task_run(
         text,
         source: gents_protocol::session::SessionTitleSource::Task,
     });
+    let target = TaskRunTarget {
+        node_did,
+        session_id: &session_id,
+        goal_backed: rendered_goal_objective.is_some(),
+        admitted: admitted.as_ref(),
+    };
     let input = prepare_task_run_input(
         access,
         signer,
-        node_did,
-        &session_id,
+        target,
         options.continue_session.is_some(),
-        rendered_goal_objective.is_some(),
-        admitted.as_ref(),
         input,
     )
     .await?;
-    let goal_id = prepare_task_run_goal_id(
-        access,
-        node_did,
-        &session_id,
-        rendered_goal_objective.is_some(),
-        admitted.as_ref(),
-    )
-    .await?;
+    let goal_id = prepare_task_run_goal_id(access, target).await?;
     let requester_did =
         gents_session::session::client_requester_scope(access, node_did, &session_id, &actor_did)
             .await?;
@@ -282,17 +278,29 @@ pub fn resolve_invocation_key(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The session a Task run targets, whether the Task declares a Goal, and the
+/// request already admitted under the run's fire key, if any.
+#[derive(Clone, Copy)]
+pub struct TaskRunTarget<'a> {
+    pub node_did: &'a str,
+    pub session_id: &'a str,
+    pub goal_backed: bool,
+    pub admitted: Option<&'a AgentRequestRow>,
+}
+
 pub async fn prepare_task_run_input(
     access: &ConfigAccess,
     verifier: &dyn NodeIdentity,
-    node_did: &str,
-    session_id: &str,
+    target: TaskRunTarget<'_>,
     continue_existing: bool,
-    goal_backed: bool,
-    admitted: Option<&AgentRequestRow>,
     input: RequestInput,
 ) -> Result<RequestInput> {
+    let TaskRunTarget {
+        node_did,
+        session_id,
+        goal_backed,
+        admitted,
+    } = target;
     if let Some(admitted) = admitted {
         let actor = access
             .actor_did()
@@ -315,11 +323,14 @@ pub async fn prepare_task_run_input(
 /// must not infer its original Task Goal identity from the current Goal row.
 pub async fn prepare_task_run_goal_id(
     access: &ConfigAccess,
-    node_did: &str,
-    session_id: &str,
-    goal_backed: bool,
-    admitted: Option<&AgentRequestRow>,
+    target: TaskRunTarget<'_>,
 ) -> Result<Option<String>> {
+    let TaskRunTarget {
+        node_did,
+        session_id,
+        goal_backed,
+        admitted,
+    } = target;
     if let Some(admitted) = admitted {
         return Ok(admitted
             .input

@@ -61,14 +61,20 @@ impl InstallError {
     }
 }
 
+/// The inference profiles a pack's plugin model slots bind to, and the node
+/// `owner` whose profiles they are.
+#[derive(Clone, Copy)]
+pub struct PluginSlotBindings<'a> {
+    pub owner: Option<&'a str>,
+    pub bindings: &'a super::PackInferenceBindings,
+}
+
 /// A local publication and its node notification share one owned task.
-#[allow(clippy::too_many_arguments)]
 pub async fn install<F>(
     home: &Path,
     archive: &crate::pack::archive::PackArchive,
     consent: bool,
-    owner: Option<&str>,
-    bindings: &BTreeMap<String, String>,
+    slots: PluginSlotBindings<'_>,
     installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
@@ -76,28 +82,17 @@ pub async fn install<F>(
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
-    install_final(
-        home,
-        archive,
-        consent,
-        owner,
-        bindings,
-        installed_via,
-        source,
-        notify,
-    )
-    .await
-    .map_err(InstallError::into_change_error)
+    install_final(home, archive, consent, slots, installed_via, source, notify)
+        .await
+        .map_err(InstallError::into_change_error)
 }
 
 /// [`install`], with a failure that says what it left ([`InstallError`]).
-#[allow(clippy::too_many_arguments)]
 pub async fn install_final<F>(
     home: &Path,
     archive: &crate::pack::archive::PackArchive,
     consent: bool,
-    owner: Option<&str>,
-    bindings: &BTreeMap<String, String>,
+    slots: PluginSlotBindings<'_>,
     installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
@@ -111,20 +106,9 @@ where
     ) {
         return Err(anyhow::anyhow!("expected a plugins or assets pack").into());
     }
-    install_owned(
-        home,
-        archive,
-        consent,
-        owner,
-        bindings,
-        installed_via,
-        source,
-        notify,
-    )
-    .await
+    install_owned(home, archive, consent, slots, installed_via, source, notify).await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn install_plugin<F>(
     home: &Path,
     archive: &crate::pack::archive::PackArchive,
@@ -143,8 +127,10 @@ where
         home,
         archive,
         consent,
-        None,
-        &BTreeMap::new(),
+        PluginSlotBindings {
+            owner: None,
+            bindings: &BTreeMap::new(),
+        },
         InstalledVia::Operator,
         source,
         notify,
@@ -153,13 +139,11 @@ where
     .map_err(|error| error.into_change_error().into_anyhow())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn install_owned<F>(
     home: &Path,
     archive: &crate::pack::archive::PackArchive,
     consent: bool,
-    owner: Option<&str>,
-    bindings: &BTreeMap<String, String>,
+    slots: PluginSlotBindings<'_>,
     installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
@@ -167,6 +151,7 @@ async fn install_owned<F>(
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
+    let PluginSlotBindings { owner, bindings } = slots;
     if !bindings.is_empty() && !owner.is_some_and(|owner| !owner.is_empty()) {
         return Err(anyhow::anyhow!("plugin slot bindings require an owner").into());
     }
@@ -505,8 +490,10 @@ pub mod tests {
             home.path(),
             &old_archive,
             false,
-            None,
-            &BTreeMap::new(),
+            PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new(),
+            },
             InstalledVia::Operator,
             local.clone(),
             |_, _| async { Ok(()) },
@@ -517,8 +504,10 @@ pub mod tests {
             home.path(),
             &new_archive,
             false,
-            None,
-            &BTreeMap::new(),
+            PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new(),
+            },
             InstalledVia::Operator,
             super::super::PackSource::Store,
             |_, _| async { Ok(()) },
@@ -542,8 +531,10 @@ pub mod tests {
             home.path(),
             &archive,
             false,
-            None,
-            &BTreeMap::from([("model".into(), "profile".into())]),
+            PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::from([("model".into(), "profile".into())]),
+            },
             InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { panic!("refused install must not notify") },
@@ -631,8 +622,10 @@ pub mod tests {
             home.path(),
             &archive,
             false,
-            None,
-            &BTreeMap::new(),
+            PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new(),
+            },
             InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async {
@@ -653,8 +646,10 @@ pub mod tests {
             home.path(),
             &refused,
             false,
-            None,
-            &BTreeMap::new(),
+            PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new(),
+            },
             InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async {
@@ -686,8 +681,10 @@ pub mod tests {
             home.path(),
             &archive,
             false,
-            None,
-            &BTreeMap::new(),
+            PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new(),
+            },
             InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
@@ -712,8 +709,10 @@ pub mod tests {
                     &home_path,
                     &updated,
                     false,
-                    None,
-                    &BTreeMap::new(),
+                    PluginSlotBindings {
+                        owner: None,
+                        bindings: &BTreeMap::new(),
+                    },
                     InstalledVia::Operator,
                     super::super::PackSource::Local { file_name: None },
                     move |_, _| async move {
@@ -754,8 +753,10 @@ pub mod tests {
             home.path(),
             &protected,
             false,
-            None,
-            &BTreeMap::new(),
+            PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new()
+            },
             InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }
@@ -768,8 +769,10 @@ pub mod tests {
             home.path(),
             &sealed,
             false,
-            None,
-            &BTreeMap::new(),
+            PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new(),
+            },
             InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
@@ -783,8 +786,10 @@ pub mod tests {
             home.path(),
             &sealed,
             false,
-            None,
-            &BTreeMap::new(),
+            PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new()
+            },
             InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }

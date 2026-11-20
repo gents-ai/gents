@@ -96,6 +96,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     let config = gents_tools::surface::BackgroundToolConfig {
         allowlist: vec!["bash".into(), remote_name.clone()],
         timeouts: gents_tools::surface::ToolTimeouts::from_document(&tools).background,
+        limit: Default::default(),
     };
     let hook = hook
         .with_background_tool_registry(BackgroundToolRegistry::from_config(
@@ -322,14 +323,16 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     gents_toolcalls::background::completion::append_background_tool_completion(
         &node,
         &access,
-        &session,
-        &request_id,
-        tool_doc_id,
-        "bash",
-        "completed",
-        &"x".repeat(100),
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        &gents_toolcalls::background::completion::BackgroundToolCompletion {
+            parent_session_id: &session,
+            parent_request_id: &request_id,
+            tool_call_doc_id: tool_doc_id,
+            tool_name: "bash",
+            status: "completed",
+            result: &"x".repeat(100),
+            reason: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        },
     )
     .await
     .expect("redrive after a budget change replays the published notice");

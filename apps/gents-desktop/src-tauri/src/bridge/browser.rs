@@ -21,7 +21,6 @@ pub struct Rect {
 }
 
 impl Rect {
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn contains(&self, x: f64, y: f64) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
     }
@@ -43,7 +42,6 @@ pub struct Placement {
 /// macOS virtual key code, from which the app derives the event's `code`.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct HandedKey {
     key: String,
     key_code: u16,
@@ -68,12 +66,10 @@ struct PageState {
 /// machine together with the folder its page may read, the file's own.
 /// A page asked for a window of its own: the app opens it in a new tab.
 #[derive(Clone, serde::Serialize)]
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct NewTab {
     url: String,
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) enum Target {
     Web(String),
     File {
@@ -84,7 +80,6 @@ pub(crate) enum Target {
 
 /// A web address (`http`, `https`), or a local file as a `file://` URL, an
 /// absolute path or one under `~/`.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 async fn target(text: &str) -> Result<Target, String> {
     let text = text.trim();
     let path = match tauri::Url::parse(text) {
