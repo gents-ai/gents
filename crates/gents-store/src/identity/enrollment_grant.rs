@@ -217,7 +217,7 @@ pub async fn load_enrollment_grant_receipts(
     .filter(Filter::eq(fields::MEMBER_DID, member))
     .render();
     let response = access
-        .read(&rendered)
+        .read_for_decision(&rendered)
         .await
         .map_err(EnrollmentGrantError::Read)?;
     decode_receipts(&response)

@@ -231,6 +231,10 @@ impl GraphqlEndpoint {
         }
     }
 
+    pub fn principal_did(&self) -> Option<&str> {
+        self.principal_did.as_deref()
+    }
+
     pub fn as_principal(url: impl Into<String>, principal_did: impl Into<String>) -> Self {
         Self {
             url: url.into(),
@@ -846,6 +850,18 @@ impl ConfigAccess {
                 }
             }
         })
+    }
+
+    /// A read a decision is taken on: the absence of a row it does not
+    /// return is acted upon (a receipt to withdraw, an owed removal, a
+    /// client access request). It is [`Self::read`] until the pinned DefraDB
+    /// can refuse a read whose access checks it could not complete; this is
+    /// where that refusal is asked for.
+    pub fn read_for_decision<'a>(
+        &'a self,
+        operation: &'a gents_protocol::document_query::Rendered,
+    ) -> BoxFuture<'a, Result<Value>> {
+        self.read(operation)
     }
 
     /// Execute a rendered read and return its envelope.

@@ -96,7 +96,7 @@ async fn owed_members(
     })
     .render();
     let response = runtime
-        .read(&rendered)
+        .read_for_decision(&rendered)
         .await
         .map_err(EnrollmentGrantError::Read)?;
     let mut members: Vec<String> = decode_receipts(&response)?
@@ -331,7 +331,7 @@ pub(crate) async fn owed_removal_receipts(
                 .and(Filter::not_null(fields::WITHDRAWAL_OWED_AT)),
         )
         .render();
-    let response = runtime.read(&rendered).await?;
+    let response = runtime.read_for_decision(&rendered).await?;
     Ok(
         gents_protocol::graphql::graphql_rows_from_response(&response, super::RECEIPT_COLLECTION)
             .iter()
