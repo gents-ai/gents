@@ -73,6 +73,17 @@ pub(super) enum EmbeddedTransactionPurpose {
 }
 
 impl<'a> ConfigApplyTxn<'a> {
+    /// The node's handle of this embedded transaction, which names what it
+    /// owes the document ACP provider once it commits.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn embedded_handle_for_test(&self) -> Option<TransactionHandle> {
+        match &self.backend {
+            TxnBackend::Embedded { handle, .. } => Some(handle.clone()),
+            TxnBackend::Http { .. } => None,
+        }
+    }
+
     fn local_node(&self) -> Option<&Arc<EmbeddedNode>> {
         match &self.backend {
             TxnBackend::Embedded { node, .. } => Some(node),
