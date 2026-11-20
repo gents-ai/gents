@@ -16,7 +16,7 @@ import {
   resetPackPreviews,
   resetSetAsideReview,
 } from "../src/ui/screens/packs/preview";
-import { renderRouted, testApp, withFlags } from "./app-fixture";
+import { renderRouted, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 vi.mock("../src/ui/contrib/runtime-door", () => ({
@@ -118,7 +118,6 @@ const routed = (route: Route) =>
   ) : null;
 
 function show(installPack: ReturnType<typeof bridge>, initial: Route) {
-  withFlags({ packs: true });
   rememberPacksView("installed");
   rememberPacksQuery("");
   rememberPacksAuthor(null);
