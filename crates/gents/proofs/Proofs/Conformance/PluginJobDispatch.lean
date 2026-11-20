@@ -39,7 +39,8 @@ private def context : StepContext :=
   , engineDigest := "engine-1", engineProvenanceOperator := true
   , maxHop := none, targetHop := fun _ => 0
   , cwdAllowed := fun _ => true, within := fun base cwd => base == cwd
-  , liveBackground := 0, startedByJob := false, adoptionFacts := facts
+  , liveBackground := 0, backgroundLimit := Background.backgroundLimit none
+  , startedByJob := false, adoptionFacts := facts
   , callerScope
   , controlTarget := fun d =>
       if d == "own" then some (callerScope, true)

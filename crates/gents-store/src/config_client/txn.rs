@@ -1,5 +1,6 @@
 mod apply_txn;
 mod auto_commit;
+mod configuration_reader;
 mod cursor;
 mod delete_confirmation;
 mod execute;

@@ -127,7 +127,6 @@ pub async fn spawn_server_with_ready_json(
     command
         .env("HOME", home)
         .env("RUST_LOG", "error")
-        .env_remove("GENTS_SYSTEM_LOG")
         .current_dir(home)
         .args(["server", "--http-port", &port.to_string()])
         .args(args)

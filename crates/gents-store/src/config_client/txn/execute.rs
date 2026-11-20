@@ -1296,8 +1296,15 @@ fn native_observation_error(error: query::error::QueryError) -> ConfigClientErro
     }
 }
 
+/// External premise: DefraDB refuses a relationship change by an actor that
+/// neither owns the document nor manages the relation with `acp::Error::NotOwner`
+/// or `acp::Error::NotManager`, on the node's own store and when staging for an
+/// external provider alike.
 pub(super) fn native_relationship_error(error: defra_node::Error) -> ConfigClientError {
     match error {
+        defra_node::Error::Acp(acp::Error::NotOwner { .. } | acp::Error::NotManager { .. }) => {
+            ConfigClientError::RelationshipNotManaged(Box::new(error))
+        }
         defra_node::Error::TransactionConflict
         | defra_node::Error::Query(query::error::QueryError::TransactionConflict(_)) => {
             retry::transaction_conflict(ConflictSource::TypedError)

@@ -65,6 +65,7 @@ pub(super) async fn choose(
         &spec.endpoint,
         connection.api_key.as_deref(),
         credential.as_ref(),
+        None,
     )
     .await;
     (connection.next_screen)();

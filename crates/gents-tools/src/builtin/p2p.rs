@@ -771,6 +771,10 @@ impl P2pTool {
             }
             ["enrollment", "offer"] => {
                 self.require_mutation()?;
+                gents_store::local::document_acp::ensure_enrollment(
+                    &self.node,
+                    gents_store::local::document_acp::EnrollmentRequest::Offer,
+                )?;
                 let projection = GraphqlEnrollmentStore::new(self.node.clone(), actor.clone())
                     .load_projection()
                     .await?;

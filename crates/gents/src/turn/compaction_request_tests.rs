@@ -84,12 +84,12 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     use gents_inference::rendered_request::scope::{armed_labels, test_scope, CaptureScopeKind};
     use gents_inference::rendered_request::RenderedRequestCaptureSink;
 
-    let model = ScriptedSummaryModel::new(vec![
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::malformed_summary_turn(),
-        ScriptedSummaryModel::summary_turn(),
+    let model = scripted_summary_model(vec![
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        malformed_summary_turn(),
+        summary_turn(),
     ]);
     let mut config = scheduled_origin_config();
     config.on_rendered_request = Some(gents_inference::rendered_request::scope::arming_sink(
@@ -184,7 +184,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let agent_did = fixture.lifecycle.request().agent_did.clone();
     let access = fixture.access();
 
-    let model = MockSummaryModel::new(
+    let model = mock_summary_model(
         &serde_json::json!({
             "goal": "Continue inspecting the source files.",
             "completed_work": ["The agent repeatedly inspected the source files."],
@@ -225,6 +225,8 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         provider_idle_timeout: None,
         deadline: None,
         max_turns: 0,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,

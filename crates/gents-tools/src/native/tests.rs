@@ -6,8 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use gents_store::test_support::EnvVarGuard;
-
 #[cfg(target_os = "macos")]
 mod workspace_artifact_admission;
 mod workspace_command_policy;
@@ -252,12 +250,14 @@ fn background_tool_names_are_gated_by_allowlist() {
     let disabled = BackgroundToolConfig {
         allowlist: Vec::new(),
         timeouts: Default::default(),
+        limit: Default::default(),
     };
     assert!(background_tool_names(&disabled).is_empty());
 
     let enabled = BackgroundToolConfig {
         allowlist: vec!["bash".to_string()],
         timeouts: Default::default(),
+        limit: Default::default(),
     };
     assert_eq!(
         background_tool_names(&enabled),
@@ -279,6 +279,7 @@ async fn spawn_process_decodes_only_its_advertised_schema() {
     let tools = build_background_tools(BackgroundToolConfig {
         allowlist: vec!["bash_unrestricted".to_string()],
         timeouts: Default::default(),
+        limit: Default::default(),
     });
     let spawn = tools[0].definition(String::new()).await;
     assert_eq!(spawn.name, SPAWN_PROCESS_TOOL_NAME);
@@ -409,7 +410,7 @@ fn ensure_native_fs_runner_for_test() {
             .expect("Cargo profile directory has a name");
         let profile = if profile == "debug" { "dev" } else { profile };
         let status = std::process::Command::new(cargo)
-            .args(["build", "-p", "gents-fs-runner"])
+            .args(["build", "-p", "gents-fs-runner", "--features", "test-fixtures"])
             .args(["--profile", profile])
             .arg("--target-dir")
             .arg(profile_dir.parent().expect("Cargo target directory"))
@@ -496,15 +497,26 @@ fn tool_outcome_state(outcome: &gents_loop::tool_call_lifecycle::ToolOutcome) ->
 #[tokio::test]
 async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
     ensure_native_fs_runner_for_test();
-    let _env = FS_RUNNER_BLOCK_ENV.lock().await;
+    let _env = FS_RUNNER_BLOCKERS.lock().await;
     for case in gents_lean_vocab::families::contracts_native_filesystem_boundary::cases() {
         let root = temp_root(&format!("gents-native-boundary-{}", case.input.tool_name));
         std::fs::write(root.join("first.txt"), "first request\n").unwrap();
         std::fs::write(root.join("second.txt"), "second request\n").unwrap();
         let context = ToolContext::new(root.clone(), false).unwrap();
 
-        let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
-        let (blocking_tool, blocking_args): (Box<dyn gents_loop::tool::ToolDyn>, &str) =
+        let blocking_tool = |entered: &Path,
+                             gate: &Path,
+                             released: &Path|
+         -> (Box<dyn gents_loop::tool::ToolDyn>, &'static str) {
+            let context = context
+                .clone()
+                .with_runner_blocker(gents_fs_runner::TraversalBlocker {
+                    dir: context.root(),
+                    entered: Some(entered.to_path_buf()),
+                    gate: Some(gate.to_path_buf()),
+                    pause: Duration::ZERO,
+                    released: Some(released.to_path_buf()),
+                });
             match case.input.tool_name.as_str() {
                 "list_files" => (
                     Box::new(ListFilesTool::new(
@@ -522,24 +534,24 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
                     r#"{"pattern":"request"}"#,
                 ),
                 other => panic!("no native filesystem tool named {other}"),
-            };
+            }
+        };
         let second_tool: Box<dyn gents_loop::tool::ToolDyn> =
-            Box::new(ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS));
+            Box::new(ReadFileTool::new(context.clone(), DEFAULT_MAX_FILE_CHARS));
 
         let control_entered = root.join("control-entered");
         let control_gate = root.join("control-gate");
         let control_released = root.join("control-released");
         let control_outcome = {
-            let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &control_entered);
-            let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &control_gate);
-            let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &control_released);
+            let (control_tool, blocking_args) =
+                blocking_tool(&control_entered, &control_gate, &control_released);
             let envelope = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
                 None,
                 tokio_util::sync::CancellationToken::new(),
             )
             .call();
             let call = crate::runtime_context::call_tool_managed(
-                blocking_tool.as_ref(),
+                control_tool.as_ref(),
                 blocking_args.to_string(),
                 &envelope,
             );
@@ -571,14 +583,12 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         );
 
         let gate = root.join("preempt-gate");
-        let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &gate);
         let mut deadline_ms = i64::try_from(case.input.request_deadline_ms).unwrap();
         let mut attempt = 0;
         let (released, terminal) = loop {
             let entered = root.join(format!("preempt-entered-{attempt}"));
             let released = root.join(format!("preempt-released-{attempt}"));
-            let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &entered);
-            let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &released);
+            let (attempt_tool, blocking_args) = blocking_tool(&entered, &gate, &released);
             let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(deadline_ms);
             let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
                 Some(deadline),
@@ -588,7 +598,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
             let outcome = tokio::time::timeout(
                 NATIVE_BLOCKER_HANG_BOUND,
                 crate::runtime_context::call_tool_managed(
-                    blocking_tool.as_ref(),
+                    attempt_tool.as_ref(),
                     blocking_args.to_string(),
                     &scope_call,
                 ),
@@ -2795,9 +2805,9 @@ async fn bash_tool_liveness_follows_the_lean_composed_model() {
     }
 }
 
-/// The filesystem runner's blocker reads process-wide environment at spawn, so
-/// tests that set it hold this lock for the whole blocked call.
-static FS_RUNNER_BLOCK_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Native executors register process-wide by tool name, so tests that hold a
+/// runner in its blocker take this lock for the whole blocked call.
+static FS_RUNNER_BLOCKERS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
 async fn native_tool_blocking_calls_register_their_managed_executor() {
@@ -2806,17 +2816,22 @@ async fn native_tool_blocking_calls_register_their_managed_executor() {
         .expect("native filesystem runner test binary")
         .to_string_lossy()
         .into_owned();
-    let _env = FS_RUNNER_BLOCK_ENV.lock().await;
+    let _env = FS_RUNNER_BLOCKERS.lock().await;
     for case in gents_lean_vocab::families::managed_exec_tool_route::cases::<String>() {
         let tool_name = case.input.tool_name.clone();
         let root = temp_root(&format!("gents-tool-route-{tool_name}"));
         std::fs::write(root.join("first.txt"), "first request\n").unwrap();
-        let context = ToolContext::new(root.clone(), false).unwrap();
         let gate = root.join("gate");
-        let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
-        let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", root.join("entered"));
-        let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &gate);
-        let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", root.join("released"));
+        let context = ToolContext::new(root.clone(), false).unwrap();
+        let context = context
+            .clone()
+            .with_runner_blocker(gents_fs_runner::TraversalBlocker {
+                dir: context.root(),
+                entered: Some(root.join("entered")),
+                gate: Some(gate.clone()),
+                pause: Duration::ZERO,
+                released: Some(root.join("released")),
+            });
         let (tool, args): (Box<dyn gents_loop::tool::ToolDyn>, String) = match tool_name.as_str() {
             "list_files" => (
                 Box::new(ListFilesTool::new(

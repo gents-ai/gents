@@ -279,11 +279,7 @@ pub(crate) fn served_home_dir(
     home_dir.join(".gents")
 }
 
-/// Foreground test servers must retain ordinary CLI stderr even when the test
-/// runner was launched from a native service environment; explicit fixture
-/// overrides are applied afterward so native logging remains testable.
 pub(crate) fn configure_foreground_server_env(command: &mut Command, envs: &[(&str, &str)]) {
-    command.env_remove("GENTS_SYSTEM_LOG");
     for (name, value) in envs {
         command.env(name, value);
     }

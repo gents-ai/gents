@@ -774,9 +774,18 @@ fn frozen_agents_md_is_used_instead_of_live_writer_tree() {
     assert!(agents.text.contains("frozen-base-instructions"));
     assert!(!agents.text.contains("live-writer-instructions"));
 
-    let section = instruction_context_section(&created.workspace.instruction_manifest).unwrap();
+    let section = instruction_context_section(
+        &created.workspace.instruction_manifest,
+        gents_documents::tool_limits::DEFAULT_MAX_INSTRUCTION_CHARS,
+    )
+    .unwrap();
     assert!(section.contains("frozen-base-instructions"));
     assert!(!section.contains("live-writer-instructions"));
+    let bounded =
+        instruction_context_section(&created.workspace.instruction_manifest, "frozen-base".len())
+            .unwrap();
+    assert!(bounded.contains("frozen-base"));
+    assert!(!bounded.contains("frozen-base-instructions"));
     let live = fs::read_to_string(dest.join("AGENTS.md")).unwrap();
     assert!(live.contains("live-writer-instructions"));
 

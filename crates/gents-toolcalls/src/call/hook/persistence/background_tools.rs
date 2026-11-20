@@ -192,12 +192,16 @@ impl DefraSessionHook {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
                 match BackgroundSlotRefusal::in_failure(&error) {
-                    Some(BackgroundSlotRefusal::CapacityExceeded(admitted)) => {
+                    Some(BackgroundSlotRefusal::CapacityExceeded { admitted, limit }) => {
                         return complete_spawn_process_failure(
                             self,
                             &mut parent_lifecycle,
                             FailureClass::ServiceUnavailable,
-                            background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, *admitted),
+                            background_budget_exceeded_payload(
+                                SPAWN_PROCESS_TOOL_NAME,
+                                *admitted,
+                                *limit,
+                            ),
                             None,
                         )
                         .await;

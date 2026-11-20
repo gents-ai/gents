@@ -1481,49 +1481,11 @@ async fn backend_removal_fails_queued_and_new_calls_clearly() {
     );
 }
 
-#[derive(Clone)]
-struct CountingProvider {
-    calls: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl gents_loop::provider_call::ForCall for CountingProvider {
-    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
-        self.clone()
-    }
-}
-
-#[allow(refining_impl_trait)]
-impl rig::completion::CompletionModel for CountingProvider {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-        Self {
-            calls: Arc::default(),
-        }
-    }
-
-    async fn completion(
-        &self,
-        _request: rig::completion::CompletionRequest,
-    ) -> Result<rig::completion::CompletionResponse<()>, rig::completion::CompletionError> {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(rig::completion::CompletionError::ProviderError(
-            "provider reached".into(),
-        ))
-    }
-
-    async fn stream(
-        &self,
-        _request: rig::completion::CompletionRequest,
-    ) -> Result<rig::streaming::StreamingCompletionResponse<()>, rig::completion::CompletionError>
-    {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(rig::completion::CompletionError::ProviderError(
-            "provider reached".into(),
-        ))
-    }
+/// A provider every call reaches and fails.
+fn counting_provider() -> gents_loop::test_support::scripted_provider::ScriptedProvider {
+    gents_loop::test_support::scripted_provider::ScriptedProvider::responding(|_| {
+        gents_loop::test_support::scripted_provider::Reply::provider_error("provider reached")
+    })
 }
 
 fn ping() -> rig::completion::CompletionRequest {
@@ -1587,11 +1549,9 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
         .await
         .unwrap();
 
-    let old_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let old_calls = counting_provider();
     let mut old_model = super::client::AdmittedCompletionModel::new(
-        CountingProvider {
-            calls: old_calls.clone(),
-        },
+        old_calls.clone(),
         registry.registry.clone(),
         old_connection.as_str(),
     );
@@ -1607,11 +1567,9 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
         2,
         &RapidHashMap::from_iter([(backend.to_string(), rewritten_connection(backend, 1, 2))]),
     );
-    let new_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let new_calls = counting_provider();
     let mut new_model = super::client::AdmittedCompletionModel::new(
-        CountingProvider {
-            calls: new_calls.clone(),
-        },
+        new_calls.clone(),
         registry.registry.clone(),
         new_connection.as_str(),
     );
@@ -1632,8 +1590,8 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
             .unwrap();
         assert!(result.unwrap_err().to_string().contains("provider reached"));
     }
-    assert_eq!(old_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert_eq!(new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(old_calls.calls(), 1);
+    assert_eq!(new_calls.calls(), 1);
     assert_eq!(
         attribution_of(&node, &registry.signer, "req-connection-old").await,
         Some(old_connection)

@@ -550,13 +550,17 @@ pub async fn read_account_usage(
                         crate::clients::chatgpt_codex::build_chatgpt_codex_headers(
                             credential.account_id.as_deref(),
                             credential.is_fedramp,
+                            backend.client_version.as_deref(),
                         )?,
                     ),
                     account_usage::codex_usage,
                 ),
                 Kind::XaiGrokOAuth => (
-                    http.get(&endpoints.grok_billing)
-                        .headers(crate::clients::xai_grok::build_xai_grok_oauth_headers()?),
+                    http.get(&endpoints.grok_billing).headers(
+                        crate::clients::xai_grok::build_xai_grok_oauth_headers(
+                            backend.client_version.as_deref(),
+                        )?,
+                    ),
                     account_usage::grok_billing,
                 ),
                 Kind::ClaudeCliSubscription => (

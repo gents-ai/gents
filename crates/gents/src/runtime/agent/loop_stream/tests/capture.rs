@@ -156,10 +156,10 @@ async fn rendered_capture_follows_the_lean_model() {
                 })
             }));
 
-        let model = ScriptedModel::new(vec![
+        let model = scripted([vec![
             RawStreamingChoice::Message("ok".to_string()),
             RawStreamingChoice::FinalResponse(()),
-        ]);
+        ]]);
         let stream = run_loop_stream(
             model.clone(),
             None::<gents_toolcalls::call::hook::DefraSessionHook>,
@@ -197,7 +197,7 @@ async fn rendered_capture_follows_the_lean_model() {
                 false
             }
         };
-        let provider_requests_observed = model.seen_histories().await.len() as u64;
+        let provider_requests_observed = model.histories().len() as u64;
 
         let rows = rendered_rows(&agent_access, &delivery_key).await;
         assert!(rows.len() <= 1, "one capture key binds at most one row");
@@ -255,27 +255,27 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen_for_observer = seen.clone();
         let expected_session = session.clone();
-        let model = ScriptedModel::new_calls(vec![
-            ScriptedCall::FailStream(transient_provider_error("affinity retry")),
-            ScriptedCall::Turn(vec![
+        let model = scripted(vec![
+            Reply::Fail(transient_provider_error("affinity retry")),
+            Reply::turn(vec![
                 RawStreamingChoice::ToolCall(
                     RawStreamingToolCall::new("fc-1".into(), "echo".into(), serde_json::json!({}))
                         .with_call_id("call-1".into()),
                 ),
                 RawStreamingChoice::FinalResponse(()),
             ]),
-            ScriptedCall::Turn(vec![
+            Reply::turn(vec![
                 RawStreamingChoice::Message("done".into()),
                 RawStreamingChoice::FinalResponse(()),
             ]),
         ])
-        .with_provider_observer(Arc::new(move |dispatch, call| {
+        .observed(Arc::new(move |observed, call| {
             let affinity = call
                 .routing_affinity
                 .as_ref()
                 .expect("main provider poll has execution affinity");
             assert_eq!(affinity.session(), expected_session);
-            if dispatch {
+            if observed == Observed::Dispatch {
                 let mut seen = seen_for_observer.lock().unwrap();
                 seen.push(affinity.token().map(str::to_owned));
                 affinity.observe(responses[seen.len() - 1].as_deref());
@@ -297,12 +297,12 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
         cfg.turn_compactor = Some(Arc::new(move |_| {
             let counter = auxiliary_counter.clone();
             Box::pin(async move {
-                let model = ScriptedModel::new(vec![
+                let model = ScriptedProvider::turn(vec![
                     RawStreamingChoice::Message("summary".into()),
                     RawStreamingChoice::FinalResponse(()),
                 ])
-                .without_capture()
-                .with_provider_observer(Arc::new(|_, call| {
+                .then_end()
+                .observed(Arc::new(|_, call| {
                     assert!(
                         call.routing_affinity.is_none(),
                         "compaction must not inherit main affinity"
