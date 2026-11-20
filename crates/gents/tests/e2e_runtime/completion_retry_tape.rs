@@ -4,9 +4,10 @@ use gents::Gents;
 use gents_loop::completion_retry::{CompletionRetryPolicy, CompletionRetryProfileFields};
 use gents_loop::execution_origin::ExecutionOrigin;
 use gents_observe::{
-    observe::run_timeline::build_run_timeline, observe::run_timeline::RunTimeline,
-    observe::run_timeline::RunTimelineRows, observe::run_timeline::TimelineInferenceCallRow,
-    observe::run_timeline::TimelineRequestRow,
+    observe::run_timeline::build::build_run_timeline, observe::run_timeline::events::RunTimeline,
+    observe::run_timeline::rows::RunTimelineRows,
+    observe::run_timeline::rows::TimelineInferenceCallRow,
+    observe::run_timeline::rows::TimelineRequestRow,
 };
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;

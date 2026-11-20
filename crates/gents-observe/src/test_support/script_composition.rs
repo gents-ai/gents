@@ -1,7 +1,7 @@
 use gents_store::identity::NodeIdentity;
 pub async fn timeline(
     fixture: &gents_toolcalls::test_support::background_hook::BudgetHookFixture,
-) -> Vec<crate::observe::run_timeline::TimelineToolCallRow> {
+) -> Vec<crate::observe::run_timeline::rows::TimelineToolCallRow> {
     crate::observe::run_timeline_fetch::load_session_tool_calls(
         &fixture.access,
         fixture.db.node_identity.did(),

@@ -443,7 +443,7 @@ pub async fn held_canonical_message(
 pub async fn canonical_run_timeline_rows(
     access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
-) -> gents_observe::observe::run_timeline::RunTimelineRows {
+) -> gents_observe::observe::run_timeline::rows::RunTimelineRows {
     gents_observe::observe::run_timeline_fetch::load_settled_run_timeline_rows(
         access,
         request_id,

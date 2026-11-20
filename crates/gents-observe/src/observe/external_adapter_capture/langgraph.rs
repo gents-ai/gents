@@ -8,7 +8,7 @@ use super::{
     ExternalAdapterCapture, ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterView,
     ImportedMessage,
 };
-use crate::observe::run_timeline::{TimelineRequestRow, TimelineToolCallRow};
+use crate::observe::run_timeline::rows::{TimelineRequestRow, TimelineToolCallRow};
 
 pub(super) fn import_langgraph_capture(
     capture: &ExternalAdapterCapture,
