@@ -46,7 +46,7 @@ pub(super) async fn auto_commit(
         None => serde_json::json!({"query": mutation}),
     };
     match auto_commit_once(endpoint, &body).await? {
-        (Err(refused), false) if recovers_window(endpoint, &refused).await => {
+        (Err(refused), false) if recovers_window(endpoint, &refused).await? => {
             auto_commit_once(endpoint, &body).await?.0
         }
         (answered, _) => answered,
@@ -57,12 +57,12 @@ pub(super) async fn auto_commit(
 /// endpoint recovers by minting it again at its home's clock and sending the
 /// request once more (`Identity.HeldAudience.resend`). External premise
 /// (defradb.rs#3006): such a write was refused before anything was written.
-async fn recovers_window(endpoint: &GraphqlEndpoint, error: &ConfigClientError) -> bool {
+async fn recovers_window(endpoint: &GraphqlEndpoint, error: &ConfigClientError) -> Result<bool> {
     match error.credential_answer() {
         Some(answer @ gents_protocol::delegation_audience::CredentialAnswer::OutsideWindow) => {
             endpoint.recovers(answer).await
         }
-        _ => false,
+        _ => Ok(false),
     }
 }
 
@@ -126,14 +126,15 @@ pub(super) async fn query_with_options(
         }
         _ => None,
     };
-    match (refused, &answered) {
-        (Some(status), _) if endpoint.recovers_refusal(status).await => {
-            query_once(endpoint, query, variables, options).await
-        }
-        (None, Err(error)) if recovers_window(endpoint, error).await => {
-            query_once(endpoint, query, variables, options).await
-        }
-        _ => answered,
+    let recovered = match (refused, &answered) {
+        (Some(status), _) => endpoint.recovers_refusal(status).await?,
+        (None, Err(error)) => recovers_window(endpoint, error).await?,
+        (None, Ok(_)) => false,
+    };
+    if recovered {
+        query_once(endpoint, query, variables, options).await
+    } else {
+        answered
     }
 }
 

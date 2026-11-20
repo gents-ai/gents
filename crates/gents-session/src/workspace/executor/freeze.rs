@@ -46,12 +46,12 @@ fn freeze_workspace_base_action(
         .load_placement(&action.workspace_id)
         .map_err(failed)?
         .ok_or_else(|| HostExecuteError::denied("base freeze placement is missing"))?;
-    if !(workspace.owner_node_did == ctx.owner_node_did
+    if !(workspace.owner_node_did == ctx.provenance.owner_node_did
         && ctx.repository.enabled
-        && ctx.repository.owner_node_did == ctx.owner_node_did
+        && ctx.repository.owner_node_did == ctx.provenance.owner_node_did
         && workspace.repository_id == ctx.repository.repository_id
         && placement.workspace_id == workspace.workspace_id
-        && placement.owner_node_did == ctx.owner_node_did
+        && placement.owner_node_did == ctx.provenance.owner_node_did
         && placement.repository_placement_id == ctx.repository.repository_id
         && placement.adapter == workspace.adapter)
     {

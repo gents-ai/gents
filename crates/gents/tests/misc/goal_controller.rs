@@ -17,10 +17,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::live_inference::STALL_CEILING;
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
 use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::STALL_CEILING;
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);

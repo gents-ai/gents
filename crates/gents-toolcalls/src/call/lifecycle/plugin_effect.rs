@@ -17,7 +17,7 @@ use gents_store::graphql::{created_doc_id, escape_graphql_string};
 use super::ToolCallLifecycle;
 use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 use gents_session::session::plugin_effect_rows::{
-    arguments_from_rows, receipt_from_rows, receipt_source, PluginEffectBinding,
+    arguments_from_rows, receipt_from_rows, receipt_source, PluginEffectBinding, PluginEffectCall,
 };
 use gents_session::session::tool_call_state::ToolCallState;
 
@@ -475,10 +475,12 @@ pub(super) async fn arguments_in_txn(
         &binding.session_id,
         binding.requester_did.as_deref(),
         &binding.request_doc_id,
-        child,
-        generation,
-        internal_id,
-        name,
+        PluginEffectCall {
+            tool_call_doc_id: child,
+            tool_call_id: internal_id,
+            tool_name: name,
+            execution_generation: generation,
+        },
     )
 }
 

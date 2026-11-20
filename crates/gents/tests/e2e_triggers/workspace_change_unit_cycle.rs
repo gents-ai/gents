@@ -19,12 +19,12 @@ use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
-use crate::support::live_inference::STALL_CEILING;
 #[cfg(feature = "live-e2e")]
 use crate::support::live_inference::{live_target, InferenceTarget};
 use crate::support::snapshots::SnapshotReader;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
 use crate::support::{interrupt::BootedAgent, test_db, TestDb};
+use gents_store::test_support::STALL_CEILING;
 
 #[cfg(feature = "live-e2e")]
 const WORK_UNIT: &str = "change-unit:cycle-accepted";

@@ -19,6 +19,8 @@ pub enum ConfigClientError {
     RuntimeAuthenticationIdentity,
     #[error("the runtime has not advertised usable client authentication; reconnect the runtime")]
     RuntimeAuthenticationUnavailable,
+    #[error("the home's status could not be authenticated: {0}")]
+    HomeStatusUnauthenticated(gents_protocol::home_attestation::HomeStatusRefusal),
     #[error("preparing the held client key for a runtime delegation")]
     ClientDelegationSigner(#[source] Box<vera::vera_rs::SignerError>),
     #[error("client delegation signing task failed")]
@@ -153,6 +155,14 @@ pub enum ConfigClientError {
     ManagedAgentSignerRequired,
     #[error("node access control has no owner to issue this change as")]
     NodeAcpOwnerUnknown,
+    #[error(
+        "{member}'s Node administration is still to be removed, so no node permission is \
+         granted to it; the removal completes when a client of the Node owner or a Node \
+         administrator connects"
+    )]
+    AdministrationRemovalPending { member: String },
+    #[error("the owed Node administration removal was not closed")]
+    OwedRemovalUnconfirmed,
     #[error("a document relationship requires an authenticated actor")]
     RelationshipActorRequired,
     #[error("invalid transaction owner observation response")]

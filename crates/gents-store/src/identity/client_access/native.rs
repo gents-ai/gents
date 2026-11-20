@@ -87,10 +87,26 @@ async fn vera_runtime() -> anyhow::Result<VeraRuntime> {
     let status = axum::Router::new().route(
         "/status",
         axum::routing::get({
-            let metadata = metadata.clone();
-            move || {
-                let metadata = metadata.clone();
-                async move { axum::Json(metadata.read().await.clone()) }
+            let (metadata, runtime) = (metadata.clone(), runtime.clone());
+            move |query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                let (metadata, runtime) = (metadata.clone(), runtime.clone());
+                async move {
+                    let mut status = metadata.read().await.clone();
+                    if let Some(nonce) = query
+                        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                        .and_then(|nonce| {
+                            gents_protocol::home_attestation::HomeNonce::parse(nonce).ok()
+                        })
+                    {
+                        crate::identity::home_status::attest(
+                            Some(runtime.as_ref()),
+                            &nonce,
+                            &mut status,
+                        )
+                        .await;
+                    }
+                    axum::Json(status)
+                }
             }
         }),
     );

@@ -48,9 +48,9 @@ fn images_preserve_permission_observations_and_refuse_symlink_content() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("source");
     std::fs::write(&path, "private bytes").unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o751)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o420)).unwrap();
     let value = serde_json::to_value(read_image(&path)).unwrap();
-    assert_eq!(value["permissions"]["unix_mode"], 0o751);
+    assert_eq!(value["permissions"]["unix_mode"], 0o420);
     assert_eq!(value["links"], 1);
     let link = root.path().join("link");
     symlink(&path, &link).unwrap();

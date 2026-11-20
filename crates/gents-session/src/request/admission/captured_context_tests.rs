@@ -101,13 +101,15 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
             Box::pin(async {
                 crate::session::ensure_session_in_txn(
                     txn,
-                    "capture-session",
-                    identity.did(),
-                    &binding.agent_did,
-                    Some(user.did()),
-                    None,
-                    None,
-                    "2026-10-20T00:00:00Z",
+                    crate::session::NewAgentSession {
+                        session_id: "capture-session",
+                        node_did: identity.did(),
+                        agent_did: &binding.agent_did,
+                        requester_did: Some(user.did()),
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-10-20T00:00:00Z",
+                    },
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(())

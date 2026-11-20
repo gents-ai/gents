@@ -8,11 +8,13 @@ pub mod wire_database;
 #[cfg(unix)]
 pub use executable_script::{copy_executable, hold_sibling, write_executable_script, HeldSibling};
 
-/// Hang detector for a test wait that has no deadline of its own: the longest
-/// the awaited owner may go without a change before the wait fails. It is one
-/// suite-wide ceiling far above any host's scheduling delay, never a per-test
-/// latency budget (TLA+ `WallClockBound`; the same value as the `gents`
-/// suites' `STALL_CEILING`).
+/// Hang detector for every wait without a deadline of its own: the longest a
+/// wait may observe no progress (no change to the documents it watches, no
+/// output from the process it waits on) before it fails with the state it
+/// last saw. It is the one suite-wide ceiling, far above any host's scheduling
+/// delay, never a per-test latency budget (TLA+ `WallClockBound`): the runtime
+/// has no quiescence notification to fail on instead, and a fixture that holds
+/// a provider response or a process is quiet by design.
 pub const STALL_CEILING: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// A fixture deadline the scenario does not exercise: beyond any run the hang
@@ -85,6 +87,74 @@ pub fn pin_fixed_signing_identity(dir: &std::path::Path) -> crate::identity::Key
 pub fn test_identity(name: &str) -> crate::identity::KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
     crate::identity::KeyIdentity::load_or_create(path, None).unwrap()
+}
+
+fn home_status_body(
+    node_did: &str,
+    reports: &gents_protocol::delegation_audience::ReportedDelegationAudience,
+    provider_time: Option<u64>,
+) -> serde_json::Value {
+    use gents_protocol::client_authentication::ClientAuthentication;
+    use gents_protocol::delegation_audience::ReportedDelegationAudience;
+    let authentication = match reports {
+        ReportedDelegationAudience::Named(audience) => ClientAuthentication::Vera {
+            worker: audience.worker.clone(),
+            deployment: audience.deployment,
+        },
+        ReportedDelegationAudience::Absent => ClientAuthentication::Local,
+        ReportedDelegationAudience::Unavailable => ClientAuthentication::Unavailable,
+    };
+    let mut status = serde_json::json!({
+        gents_protocol::delegation_audience::STATUS_NODE_DID_FIELD: node_did,
+        gents_protocol::client_authentication::STATUS_FIELD: authentication,
+    });
+    if let Some(reported) = reports.status_value() {
+        status[gents_protocol::delegation_audience::STATUS_DELEGATION_AUDIENCE_FIELD] = reported;
+    }
+    if let Some(time) = provider_time {
+        status[gents_protocol::delegation_audience::STATUS_PROVIDER_TIME_FIELD] = time.into();
+    }
+    status
+}
+
+pub async fn signed_home_status(
+    node: &dyn crate::identity::NodeIdentity,
+    reports: &gents_protocol::delegation_audience::ReportedDelegationAudience,
+    provider_time: Option<u64>,
+    nonce: &gents_protocol::home_attestation::HomeNonce,
+) -> serde_json::Value {
+    let mut status = home_status_body(node.did(), reports, provider_time);
+    crate::identity::home_status::attest(Some(node), nonce, &mut status).await;
+    status
+}
+
+pub fn local_home_status_now(
+    node_did: &str,
+    sign: &dyn Fn(&[u8]) -> Vec<u8>,
+    query: Option<&str>,
+) -> serde_json::Value {
+    use gents_protocol::home_attestation::{
+        HomeAttestation, HomeNonce, HomeStatement, HOME_NONCE_QUERY, STATUS_HOME_ATTESTATION_FIELD,
+    };
+    let mut status = home_status_body(
+        node_did,
+        &gents_protocol::delegation_audience::ReportedDelegationAudience::Absent,
+        None,
+    );
+    let nonce = query
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .find_map(|pair| {
+            let (name, value) = pair.split_once('=')?;
+            (name == HOME_NONCE_QUERY).then(|| HomeNonce::parse(value).ok())?
+        });
+    if let Some(nonce) = nonce {
+        let statement = HomeStatement::of_status(&status, &nonce);
+        let signature = sign(&statement.signing_payload());
+        status[STATUS_HOME_ATTESTATION_FIELD] =
+            serde_json::json!(HomeAttestation::signed(statement, &signature));
+    }
+    status
 }
 
 pub async fn delete_configuration_document(
@@ -272,20 +342,39 @@ pub async fn client_journal_node(
     Ok(node)
 }
 
-pub fn local_authentication_route(node_did: impl Into<String>) -> axum::Router {
-    let node_did = node_did.into();
+pub fn local_authentication_route(
+    node: std::sync::Arc<dyn crate::identity::NodeIdentity>,
+) -> axum::Router {
     axum::Router::new().route(
         "/status",
-        axum::routing::get(move || {
-            let node_did = node_did.clone();
-            async move {
-                axum::Json(serde_json::json!({
-                    "node_did": node_did,
-                    (gents_protocol::client_authentication::STATUS_FIELD):
-                        gents_protocol::client_authentication::ClientAuthentication::Local,
-                }))
-            }
-        }),
+        axum::routing::get(
+            move |query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                let node = node.clone();
+                async move {
+                    let nonce = query
+                        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                        .and_then(|nonce| {
+                            gents_protocol::home_attestation::HomeNonce::parse(nonce).ok()
+                        });
+                    axum::Json(match nonce {
+                        Some(nonce) => {
+                            signed_home_status(
+                                node.as_ref(),
+                                &gents_protocol::delegation_audience::ReportedDelegationAudience::Absent,
+                                None,
+                                &nonce,
+                            )
+                            .await
+                        }
+                        None => serde_json::json!({
+                            "node_did": node.did(),
+                            (gents_protocol::client_authentication::STATUS_FIELD):
+                                gents_protocol::client_authentication::ClientAuthentication::Local,
+                        }),
+                    })
+                }
+            },
+        ),
     )
 }
 

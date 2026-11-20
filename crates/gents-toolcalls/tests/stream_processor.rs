@@ -556,12 +556,14 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         &access,
         &node,
         &notification_request,
-        "<tool-notification status=\"completed\" />",
-        "background-completion-notification:concurrent-tool:tool",
-        "Review background completion",
-        queue,
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "<tool-notification status=\"completed\" />",
+            message_key: "background-completion-notification:concurrent-tool:tool",
+            wake_content: "Review background completion",
+            queue,
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        },
     )
     .await
     .unwrap();

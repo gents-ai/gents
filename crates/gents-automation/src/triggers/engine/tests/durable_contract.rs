@@ -1693,20 +1693,20 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
             max_fires_per_hour: budget,
         };
         let materialize = || {
-            materializer.materialize(
-                &task,
-                Some("handoff"),
-                TriggerKind::Schedule,
-                Some(&trigger_doc),
-                None,
-                None,
-                None,
-                "work",
-                None,
-                &prepared.receipt.fire_key,
-                Some(&prepared),
-                None,
-            )
+            materializer.materialize(FireMaterialization {
+                task: &task,
+                trigger_id: Some("handoff"),
+                trigger_kind: TriggerKind::Schedule,
+                trigger_doc_id: Some(&trigger_doc),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+                rendered_prompt: "work",
+                rendered_goal_objective: None,
+                durable_fire_key: &prepared.receipt.fire_key,
+                delivery: Some(&prepared),
+                prepared_ids: None,
+            })
         };
         if input.replay {
             materialize().await.unwrap();

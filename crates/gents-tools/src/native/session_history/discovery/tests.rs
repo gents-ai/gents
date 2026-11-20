@@ -269,27 +269,31 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
     ] {
         gents_session::session::import_history_observation(
             &node,
-            "physical-request",
-            "work",
-            owner.did(),
-            None,
-            text,
-            &format!("evidence-{sequence}"),
-            sequence,
-            None,
+            gents_session::session::HistoryObservation {
+                request_id: "physical-request",
+                session_id: "work",
+                node_did: owner.did(),
+                requester_did: None,
+                text,
+                message_key_suffix: &format!("evidence-{sequence}"),
+                sequence,
+                tool_call: None,
+            },
         )
         .await;
     }
     gents_session::session::import_history_observation(
         &node,
-        "foreign-request",
-        "foreign",
-        PIN_FIXED_DID,
-        Some("other-requester"),
-        "The retry secret is protected.",
-        "private-evidence",
-        1,
-        None,
+        gents_session::session::HistoryObservation {
+            request_id: "foreign-request",
+            session_id: "foreign",
+            node_did: PIN_FIXED_DID,
+            requester_did: Some("other-requester"),
+            text: "The retry secret is protected.",
+            message_key_suffix: "private-evidence",
+            sequence: 1,
+            tool_call: None,
+        },
     )
     .await;
     let tool = SessionHistoryTool::new(

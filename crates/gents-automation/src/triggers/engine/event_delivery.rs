@@ -638,7 +638,6 @@ mod tests {
             max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: "physical".into(),
             trigger_id: binding.binding_id.clone(),
-            task_id: "task".into(),
             task: gents_documents::automation::ResolvedTask {
                 emit_outcome: false,
                 task_id: "task".into(),
@@ -653,7 +652,6 @@ mod tests {
             source_collection: source.source_collection.clone(),
             event_kind: "created".into(),
             filter: None,
-            enabled: true,
             concurrency: gents_documents::ConcurrencyMode::Parallel,
             fire_mode: gents_documents::automation::EventTriggerFireMode::PerGroup,
             correlation_field: source.correlation_field.clone(),

@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 #[cfg(test)]
 use gents_automation::triggers::task_run::{
     lookup_request_by_retry_key, prepare_task_run_goal_id, prepare_task_run_input,
-    resolve_invocation_key,
+    resolve_invocation_key, TaskRunTarget,
 };
 use gents_protocol::operations::task::{TaskOperationError, TaskRunInput};
 #[cfg(test)]
@@ -207,11 +207,13 @@ mod tests {
             let actual = prepare_task_run_input(
                 &access,
                 &access.client_signer()?,
-                &source.node_did,
-                "chat",
+                TaskRunTarget {
+                    node_did: &source.node_did,
+                    session_id: "chat",
+                    goal_backed: case["captured"].is_object(),
+                    admitted: admitted.as_ref(),
+                },
                 case["existing"].as_bool().unwrap(),
-                case["captured"].is_object(),
-                admitted.as_ref(),
                 input,
             )
             .await?;

@@ -7,10 +7,10 @@ use gents_store::graphql::escape_graphql_string;
 use crate::support::agent_requests::RequestActors;
 use crate::support::builder_runtime::{seed_session_message, submit_request};
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, wait_for_assistant_answer,
-    wait_for_request_terminal, STALL_CEILING,
+    bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const PROFILE_SEED: i64 = 424_242;
 

@@ -275,8 +275,10 @@ pub async fn apply(
                 &scope.node_did,
                 &scope.session_id,
                 &scope.request_id,
-                backend_id,
-                *with_compaction,
+                gents_automation::goal::AccountMove {
+                    target_backend_id: backend_id,
+                    move_companions: *with_compaction,
+                },
                 &|_| Ok(Vec::new()),
             )
             .await

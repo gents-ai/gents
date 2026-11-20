@@ -158,25 +158,35 @@ pub struct GoalResumeOnReceipt {
     pub resume: GoalResumeReceipt,
 }
 
-/// Move the profile whose usage limit stopped `from_request_id` to
-/// `target_backend_id` (with `move_companions`, its companions), then resume
-/// the Goal from that request. A retry with the same `from_request_id` finds
-/// the profile already on the target and returns the same continuation.
-/// `plugin_slots` gives the plugins bound to the moved profile on the host.
-#[allow(clippy::too_many_arguments)]
+/// The account a usage-limited profile moves to, and whether its companions
+/// move with it.
+#[derive(Debug, Clone, Copy)]
+pub struct AccountMove<'a> {
+    pub target_backend_id: &'a str,
+    pub move_companions: bool,
+}
+
+/// Move the profile whose usage limit stopped `from_request_id` to the
+/// target account, then resume the Goal from that request. A retry with the
+/// same `from_request_id` finds the profile already on the target and
+/// returns the same continuation. `plugin_slots` gives the plugins bound to
+/// the moved profile on the host.
 pub async fn resume_goal_on_account<F>(
     access: &gents_store::config_client::ConfigAccess,
     identity: &dyn NodeIdentity,
     node_did: &str,
     session_id: &str,
     from_request_id: &str,
-    target_backend_id: &str,
-    move_companions: bool,
+    account: AccountMove<'_>,
     plugin_slots: &F,
 ) -> Result<GoalResumeOnReceipt>
 where
     F: Fn(&str) -> Result<Vec<String>> + Sync + ?Sized,
 {
+    let AccountMove {
+        target_backend_id,
+        move_companions,
+    } = account;
     use crate::goal::blocked_turn::{
         blocked_turn_from, stopped_request, BlockedReason, FailedCall,
     };
@@ -483,8 +493,7 @@ pub(super) fn decide_idle_resume(
         agent,
         &goal.goal_id,
         &content,
-        sequence,
-        wrapup,
+        gents_protocol::request_input::GoalContinuationInput { sequence, wrapup },
         &created_at,
         session_hop,
     )?;

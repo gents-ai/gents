@@ -63,13 +63,15 @@ async fn task_session(access: &ConfigAccess, owner: &str, agent: &str, session: 
         .transact_write("test.retained_task_session", |txn| {
             Box::pin(gents_session::session::ensure_session_in_txn(
                 txn,
-                session,
-                owner,
-                agent,
-                None,
-                None,
-                None,
-                "2026-10-21T00:00:00Z",
+                gents_session::session::NewAgentSession {
+                    session_id: session,
+                    node_did: owner,
+                    agent_did: agent,
+                    requester_did: None,
+                    title: None,
+                    provenance: None,
+                    created_at: "2026-10-21T00:00:00Z",
+                },
             ))
         })
         .await

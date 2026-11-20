@@ -34,7 +34,13 @@ pub async fn submit_pending_user_edit(
     submit_prepared_edit(access, signer, node_did, session_id, edit, replacements).await
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The queued message a steer delivers first, and the request id its
+/// replacement takes when the caller chose one.
+pub struct SteeredMessage<'a> {
+    pub request_doc_id: &'a str,
+    pub request_id: Option<&'a str>,
+}
+
 pub async fn submit_pending_user_steer(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
@@ -42,9 +48,12 @@ pub async fn submit_pending_user_steer(
     node_did: &str,
     session_id: &str,
     edit: PendingQueueEdit,
-    request_doc_id: &str,
-    request_id: Option<&str>,
+    steered: SteeredMessage<'_>,
 ) -> Result<SessionInputEditReceipt> {
+    let SteeredMessage {
+        request_doc_id,
+        request_id,
+    } = steered;
     anyhow::ensure!(
         edit.messages
             .first()
@@ -67,9 +76,11 @@ pub async fn submit_pending_user_steer(
         access,
         signer,
         admission,
-        node_did,
-        session_id,
-        &requester_did,
+        super::management::PendingEditActor {
+            node_did,
+            session_id,
+            requester_did: &requester_did,
+        },
         &edit,
         Some(&deliveries),
         request_id,

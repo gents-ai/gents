@@ -86,7 +86,7 @@ fn seal_workspace_action(
     ) {
         let outcome = load_written_seal(&action.workspace_id, action, ctx.documents)
             .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
-        if outcome.workspace.owner_node_did != ctx.owner_node_did {
+        if outcome.workspace.owner_node_did != ctx.provenance.owner_node_did {
             return Err(HostExecuteError::denied(
                 "receipt replay belongs to another agent",
             ));
@@ -123,10 +123,10 @@ fn seal_workspace_action(
                 None,
             )
         })?;
-    if workspace.owner_node_did != ctx.owner_node_did {
+    if workspace.owner_node_did != ctx.provenance.owner_node_did {
         return Err(HostExecuteError::denied(format!(
             "workspace {} is owned by {}, not executing node {}",
-            action.workspace_id, workspace.owner_node_did, ctx.owner_node_did
+            action.workspace_id, workspace.owner_node_did, ctx.provenance.owner_node_did
         )));
     }
 

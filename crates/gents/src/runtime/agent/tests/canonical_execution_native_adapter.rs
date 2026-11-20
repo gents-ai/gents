@@ -694,14 +694,16 @@ impl NativeCanonicalExecution {
                 &observed,
                 &symbolic_generation(expected_generation),
                 expiry,
-                symbolic_generation(fresh_generation),
-                self.fixture_time(now)?,
-                Some(choice),
-                Some(if outcome == "interrupted" {
-                    gents_protocol::request_lifecycle::RequestLifecycleState::Interrupted
-                } else {
-                    gents_protocol::request_lifecycle::RequestLifecycleState::Failed
-                }),
+                gents_session::request::lifecycle::RecoveryFacts {
+                    fresh_generation: symbolic_generation(fresh_generation),
+                    observed_now: self.fixture_time(now)?,
+                    selection_choice: Some(choice),
+                    expected_outcome: Some(if outcome == "interrupted" {
+                        gents_protocol::request_lifecycle::RequestLifecycleState::Interrupted
+                    } else {
+                        gents_protocol::request_lifecycle::RequestLifecycleState::Failed
+                    }),
+                },
             )
             .await;
         match result {
@@ -3370,10 +3372,12 @@ async fn renewal_then_recovery(
             &stale,
             &physical_generation,
             stale_expiry,
-            physical_fresh_generation,
-            native.fixture_time(*recovery_now).unwrap(),
-            Some(choice),
-            Some(target),
+            gents_session::request::lifecycle::RecoveryFacts {
+                fresh_generation: physical_fresh_generation,
+                observed_now: native.fixture_time(*recovery_now).unwrap(),
+                selection_choice: Some(choice),
+                expected_outcome: Some(target),
+            },
         )
         .await
         .unwrap();

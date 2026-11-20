@@ -14,10 +14,10 @@ use serde_json::Value;
 
 use crate::support::agent_requests::{canonical_now, submit_user_request, RequestActors};
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, terminal_assistant_answer,
-    wait_for_request_terminal, STALL_CEILING,
+    bind_target, boot_live_agent, live_target, terminal_assistant_answer, wait_for_request_terminal,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 async fn request_row(actors: &RequestActors, doc_id: &str) -> Value {
     let response = actors
@@ -149,8 +149,10 @@ async fn explicitly_promoted_queue_input_reaches_the_same_request_after_a_tool()
         actors.node_did(),
         SESSION,
         edit,
-        &selected,
-        Some("promote-steered"),
+        gents_session::request::lifecycle::SteeredMessage {
+            request_doc_id: &selected,
+            request_id: Some("promote-steered"),
+        },
     )
     .await
     .unwrap();
