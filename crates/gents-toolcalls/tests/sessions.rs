@@ -7,7 +7,9 @@ use gents_store::test_support::first_content;
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
     use gents_protocol::tool_call::AwaitMode;
     use gents_store::identity::NodeIdentity;
-    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        publish_accepted_on_claimed_request, AcceptedFixtureCall,
+    };
     let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
         "provider-history",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -36,12 +38,14 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
         db.node.clone(),
         &mut current,
         db.node_identity.did(),
-        0,
-        "fixture",
-        "call-current",
-        serde_json::json!({}),
-        AwaitMode::Foreground,
-        true,
+        AcceptedFixtureCall {
+            turn: 0,
+            tool_name: "fixture",
+            tool_call_id: "call-current",
+            arguments: serde_json::json!({}),
+            await_mode: AwaitMode::Foreground,
+            start_running: true,
+        },
     )
     .await
     .unwrap();

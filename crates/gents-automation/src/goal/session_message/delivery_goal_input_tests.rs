@@ -6,12 +6,12 @@ use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
-use gents_protocol::request_lifecycle::SessionMessageCause;
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
-use gents_toolcalls::background::job::effects::stage_request_fixture;
+use gents_toolcalls::background::job::effects::{stage_request_fixture, StagedRequest};
 use serde_json::{json, Value};
 
 fn reference(value: &Value, name: &str, roots: &[String; 2]) -> Option<GoalAssignmentInput> {
@@ -85,15 +85,19 @@ async fn deliver(
                         txn,
                         &SessionGoals,
                         cause,
-                        f.identity.did(),
-                        f.agent.did(),
-                        session.into(),
-                        "Delivery work",
-                        None,
-                        retry_key,
-                        1,
-                        None,
-                        case["existing"] == true,
+                        StagedRequest {
+                            target: SessionMessageTarget {
+                                node_did: f.identity.did().into(),
+                                agent_did: f.agent.did().into(),
+                                session_id: session.into(),
+                            },
+                            content: "Delivery work",
+                            title: None,
+                            retry_key,
+                            hop: 1,
+                            cwd: None,
+                            existing_destination: case["existing"] == true,
+                        },
                     )
                     .await
                 })
@@ -463,15 +467,19 @@ async fn staging_into_another_runtime_is_refused_before_any_write() {
                         txn,
                         &SessionGoals,
                         cause,
-                        "did:key:z6MkpeerRuntimeThatIsNotThisOne",
-                        agent,
-                        job_session_id("remote-staging", "worker", 1),
-                        "Delivery work",
-                        None,
-                        retry_key,
-                        1,
-                        None,
-                        existing,
+                        StagedRequest {
+                            target: SessionMessageTarget {
+                                node_did: "did:key:z6MkpeerRuntimeThatIsNotThisOne".into(),
+                                agent_did: agent.into(),
+                                session_id: job_session_id("remote-staging", "worker", 1),
+                            },
+                            content: "Delivery work",
+                            title: None,
+                            retry_key,
+                            hop: 1,
+                            cwd: None,
+                            existing_destination: existing,
+                        },
                     )
                     .await
                 })

@@ -56,15 +56,19 @@ async fn apply_pack(
     policy: DriftPolicy,
 ) -> Result<InstallReport> {
     super::super::super::install_prepared_document_graph(
-        access,
-        owner,
+        &crate::pack::InstallTarget {
+            access,
+            owner,
+            plugin_home: None,
+        },
         archive,
         prepared,
-        policy,
-        None,
+        crate::pack::DocumentGraphPolicy {
+            drift: policy,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
         false,
         true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .map(|(report, _)| report)
@@ -75,24 +79,20 @@ async fn apply_pack(
 async fn reinstall_and_upgrade_preserve_the_live_host_root() {
     let (directory, runtime, node, access) =
         super::super::super::agent_bindings::tests::fixture().await;
+    let on = GraphNode {
+        access: &access,
+        node: &node,
+        runtime: &runtime,
+    };
     let broad = directory.path().to_str().unwrap();
     let narrow = directory.path().join("project");
     let later = narrow.join("private");
     std::fs::create_dir_all(&later).unwrap();
     installer_root(&access, &node, &runtime, broad).await;
     let (_guard, first) = rootless_archive("1.0.0", None);
-    let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
-        &first,
-        &[],
-        &|_| None,
-        &Default::default(),
-        None,
-    )
-    .await
-    .unwrap();
+    let prepared = prepare_graph(&on, &first, &[], &|_| None, &Default::default(), None)
+        .await
+        .unwrap();
     assert_eq!(
         prepared.config.tools[0]
             .host
@@ -122,18 +122,9 @@ async fn reinstall_and_upgrade_preserve_the_live_host_root() {
         (&first, DriftPolicy::Refuse),
         (&upgrade, DriftPolicy::Overwrite),
     ] {
-        let prepared = prepare_graph(
-            &access,
-            &node,
-            &runtime,
-            archive,
-            &[],
-            &|_| None,
-            &Default::default(),
-            None,
-        )
-        .await
-        .unwrap();
+        let prepared = prepare_graph(&on, archive, &[], &|_| None, &Default::default(), None)
+            .await
+            .unwrap();
         assert_eq!(
             prepared.config.tools[0]
                 .host
@@ -162,9 +153,7 @@ async fn reinstall_and_upgrade_preserve_the_live_host_root() {
     let (_guard, dependency_upgrade) = rootless_archive("3.0.0", None);
     let overrides = BTreeMap::from([("fixture/dependee_fixture".to_owned(), BTreeMap::new())]);
     let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
+        &on,
         &dependent,
         &[&dependency_upgrade],
         &|_| None,
@@ -191,9 +180,7 @@ async fn reinstall_and_upgrade_preserve_the_live_host_root() {
     );
 
     let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
+        &on,
         &dependency_upgrade,
         &[],
         &|_| None,
@@ -221,9 +208,7 @@ async fn reinstall_and_upgrade_preserve_the_live_host_root() {
     tools["host"]["root"] = Value::Null;
     write_dependee_tools(&access, &tools).await;
     let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
+        &on,
         &dependency_upgrade,
         &[],
         &|_| None,
@@ -258,22 +243,18 @@ async fn reinstall_and_upgrade_preserve_the_live_host_root() {
 async fn unchanged_inherited_roots_keep_failed_grant_recovery_and_explicit_variables_win() {
     let (directory, runtime, node, access) =
         super::super::super::agent_bindings::tests::fixture().await;
+    let on = GraphNode {
+        access: &access,
+        node: &node,
+        runtime: &runtime,
+    };
     let broad = directory.path().to_str().unwrap();
     installer_root(&access, &node, &runtime, broad).await;
     let (_guard, archive) = rootless_archive("1.0.0", None);
     for _ in 0..2 {
-        let prepared = prepare_graph(
-            &access,
-            &node,
-            &runtime,
-            &archive,
-            &[],
-            &|_| None,
-            &Default::default(),
-            None,
-        )
-        .await
-        .unwrap();
+        let prepared = prepare_graph(&on, &archive, &[], &|_| None, &Default::default(), None)
+            .await
+            .unwrap();
         assert_eq!(prepared.installer_root_agents(archive.manifest()).len(), 1);
         apply_pack(
             &access,
@@ -289,18 +270,9 @@ async fn unchanged_inherited_roots_keep_failed_grant_recovery_and_explicit_varia
     let explicit = directory.path().join("chosen");
     let environment =
         |name: &str| (name == "ROOT").then(|| explicit.to_string_lossy().into_owned());
-    let prepared = prepare_graph(
-        &access,
-        &node,
-        &runtime,
-        &authored,
-        &[],
-        &environment,
-        &Default::default(),
-        None,
-    )
-    .await
-    .unwrap();
+    let prepared = prepare_graph(&on, &authored, &[], &environment, &Default::default(), None)
+        .await
+        .unwrap();
     assert_eq!(
         prepared.config.tools[0]
             .host

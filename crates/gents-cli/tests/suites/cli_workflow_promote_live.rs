@@ -10,7 +10,6 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-#[allow(dead_code)]
 #[path = "../support/failure_artifacts.rs"]
 mod failure_artifacts;
 use failure_artifacts::FailureArtifacts;

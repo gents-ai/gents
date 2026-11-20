@@ -790,15 +790,21 @@ fn binding_slots_survives_a_reinstall_and_unbinding_clears_it() {
         store::read_bytes(home.path(), record.digest.strip_prefix("sha256:").unwrap()).unwrap();
     gents_pack::plugin::install::install_from_pack(
         home.path(),
-        "team",
-        "team/pack",
-        "2.0.0",
-        "sha256:p2",
-        &read().declaration,
-        &artifact,
-        None,
-        Default::default(),
-        Default::default(),
+        &gents_pack::plugin::install::OwningPack {
+            namespace: "team",
+            coordinate: "team/pack",
+            version: "2.0.0",
+            digest: "sha256:p2",
+            gents_version: None,
+        },
+        gents_pack::plugin::install::ShippedPlugin {
+            declaration: &read().declaration,
+            artifact: &artifact,
+            instructions: None,
+            data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
+            data_collection_schemas: Default::default(),
+        },
         false,
     )
     .unwrap();

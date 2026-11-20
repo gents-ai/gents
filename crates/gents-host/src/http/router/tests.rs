@@ -310,189 +310,6 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     drop(server);
 }
 
-#[tokio::test]
-async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
-    use gents_lean_vocab::families::contracts_pack_installation_operator_wire as operator_wire;
-    use gents_pack::pack::plugin_wire::{WireCommand, WireRequest, WIRE_PATH};
-    let home = crate::test_support::ClientHome::new().await;
-    let identity = home.home.identity.clone();
-    let owner = identity.did().to_owned();
-    let binding = home.agent("fixture").await;
-    home.mark_backend_healthy(&binding).await;
-    let configuration: gents_documents::PackConfig = serde_json::from_value(json!({
-        "node": {"node_did": owner},
-        "tools": [{"node_did": owner, "tools_id": "wire-tools"}],
-        "contexts": [{"node_did": owner, "context_id": "wire-context", "tools_id": "wire-tools"}],
-        "agents": [{"node_did": owner, "agent_did": binding.agent_did,
-            "creation_nonce": binding.creation_nonce, "context_id": "wire-context",
-            "inference_profile_id": format!("{}:inference", binding.agent_did), "enabled": true}]
-    }))
-    .unwrap();
-    let plan = gents_documents::DesiredStateApplyPlan::from_pack_config(&configuration).unwrap();
-    home.access
-        .transact_write("test.wire.context", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-    let runtime = gents::Gents::builder()
-        .node(home.node().clone())
-        .backend_admission(home.home.backend_admission())
-        .identity(identity.clone())
-        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
-        .agent("fixture")
-        .identity_binding(binding.clone())
-        .backend_id(format!("{}:backend", binding.agent_did))
-        .model_name("test-model")
-        .done()
-        .build()
-        .await
-        .unwrap();
-    let plugin_home = tempfile::tempdir().unwrap();
-    let user = gents_service::home_state::load_held_user_identity(plugin_home.path())
-        .await
-        .unwrap();
-    let native = gents_store::config_client::ConfigAccess::local_as(
-        home.node().clone(),
-        identity::Did::new(&owner).unwrap(),
-    );
-    gents_store::identity::GrantSet::HouseholdOwner
-        .grant(&native, &identity::Did::new(user.did()).unwrap())
-        .await
-        .unwrap();
-    let roots = home.access.execute("{ Node { _docID } }").await.unwrap();
-    home.access
-        .add_actor_relationship(
-            "Node",
-            roots["data"]["Node"][0]["_docID"].as_str().unwrap(),
-            "administrator",
-            &identity::Did::new(user.did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    let (mut plugin, artifact) = gents_pack::plugin::test_fixtures::build_plugin_pack(
-        "wire_acceptance",
-        &gents_pack::plugin::test_fixtures::constant_output_wat(br#"{}"#),
-        None,
-    );
-    plugin.name = "tool".into();
-    let installed = gents_pack::plugin::install::install_from_pack(
-        plugin_home.path(),
-        "acme",
-        "acme/wire_acceptance",
-        "1.0.0",
-        &format!("sha256:{}", "a".repeat(64)),
-        &plugin,
-        &artifact,
-        None,
-        Default::default(),
-        Default::default(),
-        false,
-    )
-    .unwrap();
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    for case in gents_lean_vocab::families::contracts_pack_installation_operator_wire::cases() {
-        let (activation_runtime, activation_observation) = empty_activation_state();
-        if case.input.ready {
-            assert!(activation_runtime.set(runtime.clone()).is_ok());
-        }
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let graphql = format!("http://{addr}/api/v0/graphql");
-        let app = runtime_contract_router(
-            graphql.clone(),
-            GraphqlEndpoint::anonymous(graphql.clone()),
-            "operator-wire".into(),
-            owner.clone(),
-            "readwrite".into(),
-            Ok(None),
-            Vec::new(),
-            case.input
-                .home
-                .then(|| plugin_home.path().display().to_string()),
-            None,
-            None,
-            None,
-            None,
-            crate::http::enrollment::empty_issuer_handle(),
-            crate::http::enrollment::empty_decision_service_handle(),
-            activation_runtime,
-            activation_observation,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-            None,
-        )
-        .contract;
-        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        }));
-        let request = client
-            .post(format!("http://{addr}{WIRE_PATH}"))
-            .json(&WireCommand {
-                node_did: owner.clone(),
-                request: WireRequest {
-                    plugin: "acme/tool".into(),
-                    agent: binding.agent_did.clone(),
-                    targets_from: Vec::new(),
-                    remove: false,
-                    preview: false,
-                    dynamic_consent: false,
-                    tool_calls_consent: false,
-                },
-            });
-        let request = if case.input.operator {
-            GraphqlEndpoint::as_principal(&graphql, identity.did())
-                .with_client_signing_capability(identity.client_signing_capability().unwrap())
-                .unwrap()
-                .authorize_runtime(request)
-                .await
-                .unwrap()
-        } else {
-            request
-        };
-        let response = request.send().await.unwrap();
-        let status = response.status();
-        if case.input.operator && case.input.ready && case.input.home {
-            let report: Value = response.json().await.unwrap();
-            assert_eq!(status, StatusCode::OK, "{report}");
-            assert_eq!(report["preview"], false);
-            let rows = home
-                .access
-                .execute("{ Tools { integrations } }")
-                .await
-                .unwrap();
-            assert!(
-                rows["data"]["Tools"].as_array().unwrap().iter().any(|row| {
-                    row["integrations"]["plugins"]
-                        .as_array()
-                        .is_some_and(|plugins| {
-                            plugins.iter().any(|entry| {
-                                entry["plugin"] == "acme/tool"
-                                    && entry["digest"] == installed.digest
-                            })
-                        })
-                }),
-                "{rows}"
-            );
-        }
-        case.check(operator_wire::OperatorWireOutput {
-            allowed: !matches!(
-                status,
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::SERVICE_UNAVAILABLE
-            ),
-        });
-    }
-}
-
 /// The home's GraphQL beside the contract routes, as one runtime serves
 /// both: the request keeps its `Host`, which its credential names.
 fn forward_graphql(
@@ -522,6 +339,252 @@ fn forward_graphql(
     }
 }
 
+/// The home's native node explanation beside the contract routes, as one
+/// runtime serves both, so a private reader's admin observation reaches it.
+fn forward_explain(
+    upstream: String,
+) -> impl Fn(
+    axum::http::HeaderMap,
+    axum::extract::RawQuery,
+) -> futures::future::BoxFuture<'static, axum::response::Response>
+       + Clone
+       + Send
+       + Sync
+       + 'static {
+    move |headers, query| {
+        let upstream = upstream.clone();
+        Box::pin(async move {
+            let url = match query.0 {
+                Some(query) => format!("{upstream}?{query}"),
+                None => upstream,
+            };
+            let mut request = reqwest::Client::new().get(url);
+            for name in [header::AUTHORIZATION, header::HOST] {
+                if let Some(value) = headers.get(&name) {
+                    request = request.header(name, value);
+                }
+            }
+            let response = request.send().await.unwrap();
+            let status = response.status();
+            let bytes = response.bytes().await.unwrap();
+            (status, bytes).into_response()
+        })
+    }
+}
+
+fn demo_subject(digest: &str, name: &str) -> gents_pack::pack::wire_subject::WireSubject {
+    gents_pack::pack::wire_subject::WireSubject {
+        owner_pack_digest: digest.into(),
+        owner_pack_coordinate: "acme/demo".into(),
+        namespace: "acme".into(),
+        name: name.into(),
+        version: "1.0.0".into(),
+        digest: format!("sha256:{}", "a".repeat(64)),
+        declaration: gents_pack::pack::PackPlugin {
+            name: name.into(),
+            description: "Runs".into(),
+            artifact: format!("plugins/{name}.wasm"),
+            language: "rust".into(),
+            input_schema: json!({"type": "object"}),
+            ..gents_pack::pack::PackPlugin::default()
+        },
+    }
+}
+
+fn demo_approval(
+    digest: &str,
+    version: &str,
+    plugins: &[&str],
+    tools: &[&str],
+    agent_targets: &[&str],
+) -> gents_pack::pack::approvals::PackApproval {
+    use gents_pack::pack::wire_subject::IdPart;
+    let ids = |ids: &[&str]| {
+        ids.iter()
+            .map(|id| vec![IdPart::Text((*id).to_owned())])
+            .collect()
+    };
+    gents_pack::pack::approvals::PackApproval {
+        digest: digest.into(),
+        coordinate: "acme/demo".into(),
+        version: version.into(),
+        kind: gents_pack::pack::PackKind::Plugins,
+        approved_at: "2026-11-19T00:00:00Z".into(),
+        subjects: plugins
+            .iter()
+            .map(|name| demo_subject(digest, name))
+            .collect(),
+        yields: Some(gents_pack::pack::approvals::PackYield {
+            tools: ids(tools),
+            agent_targets: ids(agent_targets),
+            ..Default::default()
+        }),
+    }
+}
+
+#[tokio::test]
+async fn a_runtime_answering_with_what_the_client_did_not_approve_gets_nothing_signed() {
+    use gents_pack::pack::plugin_wire::WireRequest;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let user =
+        tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("unvouched"))
+            .await
+            .unwrap();
+    let (older, newer, unapproved) = (
+        format!("sha256:{}", "e".repeat(64)),
+        format!("sha256:{}", "f".repeat(64)),
+        format!("sha256:{}", "9".repeat(64)),
+    );
+    let served = std::sync::Arc::new(std::sync::Mutex::new(json!({})));
+    let installation = std::sync::Arc::new(std::sync::Mutex::new(json!({})));
+    let sessions = std::sync::Arc::new(AtomicUsize::new(0));
+    let (record, installed, opened) = (served.clone(), installation.clone(), sessions.clone());
+    let app = Router::new()
+        .route(
+            gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH,
+            get(move || {
+                let record = record.clone();
+                async move { axum::Json(record.lock().unwrap().clone()) }
+            }),
+        )
+        .route(
+            "/api/v0/graphql",
+            post(move || {
+                let installed = installed.clone();
+                async move {
+                    axum::Json(
+                        json!({"data": {"PackInstallation": [installed.lock().unwrap().clone()]}}),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/packs/install/session",
+            get(move || {
+                opened.fetch_add(1, Ordering::SeqCst);
+                async { StatusCode::BAD_REQUEST }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let endpoint =
+        crate::test_support::user_endpoint(&format!("http://{address}/api/v0/graphql"), &user);
+    let owner = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    let approvals_root = tempfile::tempdir().unwrap();
+    let approvals = gents_pack::pack::approvals::Approvals::under(approvals_root.path());
+    for approval in [
+        demo_approval(
+            &older,
+            "0.9.0",
+            &["tool"],
+            &["old-tools"],
+            &["a", "old-target"],
+        ),
+        demo_approval(&newer, "1.0.0", &["tool", "other"], &[], &["a"]),
+    ] {
+        approvals.record(owner, approval).await.unwrap();
+    }
+    let install = |digest: &str, documents: &[(&str, &str)]| {
+        *installation.lock().unwrap() = json!({
+            "_docID": "bae-demo",
+            "digest": digest,
+            "documents": documents
+                .iter()
+                .map(|(collection, id)| json!({
+                    "collection": collection, "id": id, "digest": "", "created": true
+                }))
+                .collect::<Vec<_>>(),
+        });
+    };
+    let request = WireRequest {
+        plugin: "acme/tool".into(),
+        agent: "did:key:agent".into(),
+        targets_from: vec!["acme/demo".into()],
+        remove: false,
+        preview: false,
+        dynamic_consent: false,
+        tool_calls_consent: false,
+    };
+    let wire = |request: WireRequest| {
+        let (endpoint, approvals, root) = (endpoint.clone(), &approvals, approvals_root.path());
+        async move {
+            let plan =
+                crate::http::pack_wire_client::served_plan(&endpoint, owner, &request, approvals)
+                    .await?;
+            crate::http::pack_wire_client::wire_as_client(
+                endpoint,
+                owner.to_owned(),
+                root.to_owned(),
+                request,
+                Some(plan),
+            )
+            .await
+        }
+    };
+
+    *served.lock().unwrap() =
+        serde_json::to_value(demo_subject(&newer, "other").installed()).unwrap();
+    let another = wire(request.clone())
+        .await
+        .expect_err("another approved plugin's record plans nothing for the one asked for");
+    assert!(
+        format!("{another:#}").contains("gents config pack approve"),
+        "{another:#}"
+    );
+
+    *served.lock().unwrap() =
+        serde_json::to_value(demo_subject(&newer, "tool").installed()).unwrap();
+    for (digest, documents, refusal, why) in [
+        (
+            &newer,
+            vec![("AgentTarget", "a"), ("AgentTarget", "rogue")],
+            "does not yield",
+            "an AgentTarget no approved version yields",
+        ),
+        (
+            &newer,
+            vec![("AgentTarget", "a"), ("AgentTarget", "old-target")],
+            "does not yield",
+            "an AgentTarget only the older approved version yields",
+        ),
+        (
+            &newer,
+            vec![("Tools", "old-tools"), ("AgentTarget", "a")],
+            "does not yield",
+            "a Tools document only the older approved version yields",
+        ),
+        (
+            &unapproved,
+            vec![("AgentTarget", "a")],
+            "did not approve",
+            "a version neither approval names",
+        ),
+    ] {
+        install(digest, &documents);
+        let refused = wire(request.clone()).await.expect_err(why);
+        assert!(
+            format!("{refused:#}").contains(refusal),
+            "{why}: {refused:#}"
+        );
+        assert_eq!(
+            sessions.load(Ordering::SeqCst),
+            0,
+            "{why}: nothing reached a pack session"
+        );
+    }
+
+    install(&newer, &[("AgentTarget", "a")]);
+    let _ = wire(request.clone()).await;
+    assert_eq!(
+        sessions.load(Ordering::SeqCst),
+        1,
+        "the newer version's own documents wire as far as the pack session"
+    );
+}
+
 /// A User wires an installed plugin through the runtime of a home whatever
 /// decides its access: the runtime holds the plugin store and runs the
 /// transaction, the client signs each write with its own key, and the
@@ -530,7 +593,7 @@ fn forward_graphql(
 async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself() {
     use gents_pack::pack::plugin_wire::WireRequest;
     use gents_store::local::document_acp::DocumentAcp;
-    let home = crate::test_support::ClientHome::new().await;
+    let home = crate::test_support::ClientHome::owned_by_user().await;
     let identity = home.home.identity.clone();
     let owner = identity.did().to_owned();
     let binding = home.agent("fixture").await;
@@ -582,15 +645,21 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
         let plugin_home = tempfile::tempdir().unwrap();
         let installed = gents_pack::plugin::install::install_from_pack(
             plugin_home.path(),
-            "acme",
-            "acme/client_wire",
-            "1.0.0",
-            &format!("sha256:{}", "b".repeat(64)),
-            &plugin,
-            &artifact,
-            None,
-            Default::default(),
-            Default::default(),
+            &gents_pack::plugin::install::OwningPack {
+                namespace: "acme",
+                coordinate: "acme/client_wire",
+                version: "1.0.0",
+                digest: &format!("sha256:{}", "b".repeat(64)),
+                gents_version: None,
+            },
+            gents_pack::plugin::install::ShippedPlugin {
+                declaration: &plugin,
+                artifact: &artifact,
+                instructions: None,
+                data_unique_keys: Default::default(),
+                data_collection_fields: Default::default(),
+                data_collection_schemas: Default::default(),
+            },
             false,
         )
         .unwrap();
@@ -627,23 +696,133 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
             post(forward_graphql(
                 home.home.graphql_endpoint().unwrap().to_owned(),
             )),
+        )
+        .route(
+            "/api/v0/acp/node/explain",
+            get(forward_explain(
+                home.home
+                    .graphql_endpoint()
+                    .unwrap()
+                    .replace("/api/v0/graphql", "/api/v0/acp/node/explain"),
+            )),
         );
         let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         }));
-        let report = crate::http::pack_wire_client::wire_as_client(
+        let request = WireRequest {
+            plugin: "acme/tool".into(),
+            agent: binding.agent_did.clone(),
+            targets_from: Vec::new(),
+            remove: false,
+            preview: false,
+            dynamic_consent: false,
+            tool_calls_consent: false,
+        };
+        let client_home = tempfile::tempdir().unwrap();
+        let unplanned = crate::http::pack_wire_client::wire_as_client(
             crate::test_support::user_endpoint(&graphql, &home.user),
             owner.clone(),
-            plugin_home.path().to_owned(),
-            WireRequest {
-                plugin: "acme/tool".into(),
-                agent: binding.agent_did.clone(),
-                targets_from: Vec::new(),
-                remove: false,
-                preview: false,
-                dynamic_consent: false,
-                tool_calls_consent: false,
+            client_home.path().to_owned(),
+            request.clone(),
+            None,
+        )
+        .await
+        .expect_err("a client whose own home holds no record has nothing to plan from");
+        assert!(
+            format!("{unplanned:#}").contains("is not installed"),
+            "{unplanned:#}"
+        );
+        let sent = gents_pack::pack::wire_subject::WireSubject::of_record(&installed)
+            .expect("an installed pack plugin names its pack");
+        let endpoint = crate::test_support::user_endpoint(&graphql, &home.user);
+        let approvals_root = tempfile::tempdir().unwrap();
+        let approvals = gents_pack::pack::approvals::Approvals::under(approvals_root.path());
+        let approve = |subject: gents_pack::pack::wire_subject::WireSubject| {
+            gents_pack::pack::approvals::PackApproval {
+                digest: subject.owner_pack_digest.clone(),
+                coordinate: subject.owner_pack_coordinate.clone(),
+                version: subject.version.clone(),
+                kind: gents_pack::pack::PackKind::Plugins,
+                approved_at: "2026-11-19T00:00:00Z".into(),
+                subjects: vec![subject],
+                yields: Some(Default::default()),
+            }
+        };
+        let refused = |error: anyhow::Error| {
+            let error = format!("{error:#}");
+            assert!(
+                error.contains("gents config pack approve"),
+                "{document_acp:?}: {error}"
+            );
+        };
+        refused(
+            crate::http::pack_wire_client::served_plan(&endpoint, &owner, &request, &approvals)
+                .await
+                .expect_err("a client that approved nothing plans nothing"),
+        );
+        for unrelated in [
+            gents_pack::pack::wire_subject::WireSubject {
+                owner_pack_digest: format!("sha256:{}", "c".repeat(64)),
+                ..sent.clone()
             },
+            gents_pack::pack::wire_subject::WireSubject {
+                owner_pack_coordinate: "acme/other".into(),
+                ..sent.clone()
+            },
+        ] {
+            let other_root = tempfile::tempdir().unwrap();
+            let other = gents_pack::pack::approvals::Approvals::under(other_root.path());
+            other.record(&owner, approve(unrelated)).await.unwrap();
+            refused(
+                crate::http::pack_wire_client::served_plan(&endpoint, &owner, &request, &other)
+                    .await
+                    .expect_err("a record of a pack this client never approved plans nothing"),
+            );
+        }
+        let mut altered = sent.clone();
+        altered.declaration.description = "altered after approval".into();
+        let altered_root = tempfile::tempdir().unwrap();
+        let altered_approvals = gents_pack::pack::approvals::Approvals::under(altered_root.path());
+        altered_approvals
+            .record(&owner, approve(altered.clone()))
+            .await
+            .unwrap();
+        refused(
+            crate::http::pack_wire_client::served_plan(
+                &endpoint,
+                &owner,
+                &request,
+                &altered_approvals,
+            )
+            .await
+            .expect_err("a record other than the one the approved digest yields plans nothing"),
+        );
+        let plan = if document_acp == DocumentAcp::Vera {
+            approvals
+                .record(&owner, approve(sent.clone()))
+                .await
+                .unwrap();
+            crate::http::pack_wire_client::served_plan(&endpoint, &owner, &request, &approvals)
+                .await
+                .unwrap()
+        } else {
+            gents_pack::pack::wire_subject::wire_plan_record(
+                &request.plugin,
+                &[],
+                gents_pack::pack::wire_subject::WireRecord::SentPack(sent.clone()),
+            )
+            .map(|record| gents_pack::pack::plugin_wire::ClientPlan {
+                record,
+                approvals: None,
+            })
+            .unwrap()
+        };
+        let report = crate::http::pack_wire_client::wire_as_client(
+            endpoint.clone(),
+            owner.clone(),
+            client_home.path().to_owned(),
+            request.clone(),
+            Some(plan),
         )
         .await
         .unwrap();
@@ -666,6 +845,34 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
                         })
             }),
             "{document_acp:?}: {rows}"
+        );
+        let outside = crate::http::pack_wire_client::wire_as_client(
+            endpoint.clone(),
+            owner.clone(),
+            client_home.path().to_owned(),
+            request.clone(),
+            Some(gents_pack::pack::plugin_wire::ClientPlan {
+                record: gents_pack::pack::wire_subject::WireSubject {
+                    digest: format!("sha256:{}", "d".repeat(64)),
+                    ..sent.clone()
+                }
+                .installed(),
+                approvals: None,
+            }),
+        )
+        .await;
+        assert!(
+            outside.is_err(),
+            "{document_acp:?}: a write the runtime proposes outside the client's plan is not signed"
+        );
+        let after = home
+            .access
+            .execute("{ Tools { tools_id integrations } }")
+            .await
+            .unwrap();
+        assert_eq!(
+            after, rows,
+            "{document_acp:?}: the refused wire wrote nothing"
         );
     }
 }

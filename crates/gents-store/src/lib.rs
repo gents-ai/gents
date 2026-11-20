@@ -13,6 +13,5 @@ pub mod service;
 pub mod subscription_source;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
-#[allow(dead_code)]
 pub mod test_support;
 pub mod views;

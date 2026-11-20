@@ -478,20 +478,22 @@ pub async fn install_remote(
         &access,
         owner,
         pack.archive(),
-        &requested,
-        &dependencies
-            .iter()
-            .map(gents_pack::pack::resolved_pack::ResolvedPack::archive)
-            .collect::<Vec<_>>(),
-        &|name| {
-            gents_pack::operations::pack::install_value(
-                gents_protocol::operations::pack::PackActor::User,
-                &supplied,
-                name,
-            )
+        &gents_pack::pack::PackGraphInputs {
+            dependencies: &dependencies
+                .iter()
+                .map(gents_pack::pack::resolved_pack::ResolvedPack::archive)
+                .collect::<Vec<_>>(),
+            requested: &requested,
+            environment: &|name| {
+                gents_pack::operations::pack::install_value(
+                    gents_protocol::operations::pack::PackActor::User,
+                    &supplied,
+                    name,
+                )
+            },
+            overrides: &overrides,
         },
         &preparation,
-        &overrides,
     )
     .await?;
     gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(
