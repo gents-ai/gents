@@ -133,20 +133,32 @@ describe("things to try, after the starter packs", () => {
     expect(screen.queryByTestId("things-to-try-card")).toBeNull();
   });
 
-  it("says a topic works best with a starter pack only when this node lacks it", async () => {
-    withFlags({ "get-started": true });
-    const topic = TOPICS_TO_TRY.find((one) => one.pack)!;
-    const name = topic.pack!.id.split("/")[1]!;
-    const lacking = harness([pack(name, { state: "unavailable" })]);
-    renderIn(local(lacking.api), <StarterPacksCard />);
-    const tries = await screen.findByTestId("things-to-try-card");
-    await click(within(tries).getByRole("button", { name: topic.title }));
-    expect(
-      await within(tries).findByText(
-        new RegExp(`the ${topic.pack!.name} starter pack`),
-      ),
-    ).toBeVisible();
-  });
+  it.each([
+    ["missing", /starter pack, which isn’t installed on this node yet\./],
+    [
+      "not_enabled",
+      /starter pack, which is installed on this node but not turned on\./,
+    ],
+    ["unavailable", /starter pack, which can’t be installed by this build of Gents\./],
+    ["installed", null],
+  ] as const)(
+    "says what a topic's %s starter pack lacks, and nothing once it is installed and on",
+    async (state, note) => {
+      withFlags({ "get-started": true });
+      const topic = TOPICS_TO_TRY.find((one) => one.pack)!;
+      const name = topic.pack!.id.split("/")[1]!;
+      const { api } = harness([pack(name, { state })]);
+      renderIn(local(api), <StarterPacksCard />);
+      if (state === "missing")
+        await click(within(await card()).getByRole("button", { name: "Not now" }));
+      const tries = await screen.findByTestId("things-to-try-card");
+      await click(within(tries).getByRole("button", { name: topic.title }));
+      await within(tries).findByRole("button", { name: topic.prompts[0]! });
+      const said = new RegExp(`Works best with the ${topic.pack!.name} starter pack`);
+      if (note === null) expect(within(tries).queryByText(said)).toBeNull();
+      else expect(within(tries).getByText(said)).toHaveTextContent(note);
+    },
+  );
 });
 
 describe("the starter packs card", () => {
