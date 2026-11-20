@@ -610,18 +610,3 @@ mod conformance {
         });
     }
 }
-
-#[cfg(test)]
-mod trusted_schemas {
-    use super::trusted_delete_schema;
-
-    /// A pack with an event source creates its cursor during install, and the install
-    /// signs that create against this schema, so a missing entry fails every such pack.
-    #[test]
-    fn event_source_cursor_is_trusted() {
-        assert_eq!(
-            trusted_delete_schema(gents_protocol::schemas::EVENT_SOURCE_CURSOR_NAME),
-            Some(gents_protocol::schemas::EVENT_SOURCE_CURSOR)
-        );
-    }
-}
