@@ -428,16 +428,15 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
 fn the_reconcile_deadline_matches_the_lean_model() {
     let base = tokio::time::Instant::now();
     let at = |millis: u64| base + Duration::from_millis(millis);
-    for case in gents_lean_vocab::families::control_debounce_due::cases::<u64>() {
-        let input = &case.input;
+    gents_lean_vocab::families::control_debounce_due::replay(|input| {
         let due = super::super::control_watcher::due(
             at(input.first_wake),
             at(input.now),
             Duration::from_millis(input.delay),
             Duration::from_millis(input.ceiling),
         );
-        case.check(u64::try_from((due - base).as_millis()).unwrap());
-    }
+        u64::try_from((due - base).as_millis()).unwrap()
+    });
 }
 
 /// TLA `ControlDebounce` (`MCControlDebounceGreen`; without the ceiling,
