@@ -300,6 +300,7 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
         home.node.clone(),
         home.identity.clone(),
         Some(active_agents(&home).await),
+        gents_p2p::p2p_reconcile::intervals::DEFAULT_SWEEP,
         cancel.clone(),
     ));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -403,6 +404,7 @@ async fn reconcile_until_verified(
         home.node.clone(),
         home.identity.clone(),
         Some(active_agents(home).await),
+        gents_p2p::p2p_reconcile::intervals::DEFAULT_SWEEP,
         cancel.clone(),
     ));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);

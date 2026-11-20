@@ -11,6 +11,15 @@ use super::{home, stored, Home};
 const INTERVAL: Duration = Duration::from_millis(200);
 const OBSERVED: Duration = Duration::from_secs(3);
 
+fn intervals() -> gents_p2p::p2p_reconcile::intervals::P2pIntervals {
+    gents_p2p::p2p_reconcile::intervals::P2pIntervals::with_overrides(
+        Some(INTERVAL),
+        Some(INTERVAL),
+        Some(INTERVAL),
+        Some(INTERVAL * 3),
+    )
+}
+
 /// Start `home` with the peer-to-peer transport its heartbeats publish for.
 async fn start_with_transport(
     home: &Home,
@@ -76,18 +85,21 @@ async fn publish(document_acp: DocumentAcp) -> anyhow::Result<Published> {
         tokio::spawn(gents_p2p::p2p_reconcile::run_registry_heartbeat(
             node.clone(),
             node_did.clone(),
-            gents_p2p::p2p_reconcile::resolve_network_id(),
+            gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned(),
+            intervals(),
             cancel.child_token(),
         )),
         tokio::spawn(gents_p2p::p2p_reconcile::run_endpoint_heartbeat(
             node.clone(),
             home.node.clone(),
             None,
+            intervals(),
             cancel.child_token(),
         )),
         tokio::spawn(gents_p2p::directory_projection::run_directory_projection(
             node.clone(),
             node_did.clone(),
+            intervals(),
             cancel.child_token(),
         )),
     ];
@@ -126,14 +138,6 @@ async fn publish(document_acp: DocumentAcp) -> anyhow::Result<Published> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_vera_homes_heartbeats_stay_idle_and_a_local_homes_beat_as_before() -> anyhow::Result<()>
 {
-    for (key, value) in [
-        ("GENTS_REGISTRY_HEARTBEAT_MS", INTERVAL),
-        ("GENTS_ENDPOINT_HEARTBEAT_MS", INTERVAL),
-        ("GENTS_PAIRING_SWEEP_MS", INTERVAL),
-        ("GENTS_REGISTRY_STALE_MS", INTERVAL * 3),
-    ] {
-        std::env::set_var(key, value.as_millis().to_string());
-    }
     let local = publish(DocumentAcp::Local).await?;
     assert!(
         local.registry_updates.iter().any(|rows| !rows.is_empty()),

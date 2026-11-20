@@ -4,6 +4,14 @@ use std::path::PathBuf;
 use clap::ValueEnum;
 use gents_service::args::{P2pDiscoveryArg, P2pRelayModeArg, ToolCeilingArg};
 
+fn parse_network_id(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("network id cannot be blank".to_string());
+    }
+    Ok(value.to_string())
+}
+
 pub fn parse_env_var_name(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
@@ -223,6 +231,41 @@ pub struct ServeArgs {
         help = "Per-peer P2P rate-limit refill rate in tokens per second (must be finite and > 0)"
     )]
     pub p2p_rate_limit_rate: Option<f64>,
+    #[arg(
+        long,
+        value_name = "MS",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "P2P registry heartbeat interval in milliseconds (must be > 0). Defaults to 30000"
+    )]
+    pub p2p_registry_heartbeat_ms: Option<u64>,
+    #[arg(
+        long,
+        value_name = "MS",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "P2P pairing, enrollment, directory and session-command sweep interval in milliseconds (must be > 0). Defaults to 30000"
+    )]
+    pub p2p_pairing_sweep_ms: Option<u64>,
+    #[arg(
+        long,
+        value_name = "MS",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "P2P endpoint heartbeat interval in milliseconds (must be > 0). Defaults to the registry heartbeat"
+    )]
+    pub p2p_endpoint_heartbeat_ms: Option<u64>,
+    #[arg(
+        long,
+        value_name = "MS",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "P2P registry staleness threshold in milliseconds (must be > 0). Defaults to three registry heartbeats"
+    )]
+    pub p2p_registry_stale_ms: Option<u64>,
+    #[arg(
+        long,
+        value_name = "ID",
+        value_parser = parse_network_id,
+        help = "P2P registry network this node publishes into. Defaults to `default`"
+    )]
+    pub p2p_network_id: Option<String>,
     #[arg(
         long = "apply-root",
         value_name = "ROOT",

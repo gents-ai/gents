@@ -191,12 +191,14 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         server.node.clone(),
         server.node_identity.clone(),
         server_owner,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let pairing_task = tokio::spawn(run_pairing_reconciler(
         server.node.clone(),
         server.node_identity.clone(),
         server_authority,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let mut changes = gents_store::subscription_source::subscribe_collections(
@@ -236,6 +238,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         member.node.clone(),
         member.node_identity.clone(),
         member_owner,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let deadline = Instant::now() + Duration::from_secs(110);
@@ -306,6 +309,7 @@ async fn re_enrolling_an_active_member_renews_its_lease_in_place() {
         server.node.clone(),
         server.node_identity.clone(),
         owner,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
 

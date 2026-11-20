@@ -31,6 +31,7 @@ pub async fn run_pairing_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     enrollment: EnrollmentAuthorityHandle,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     if node.p2p_arc().is_none() {
@@ -46,7 +47,15 @@ pub async fn run_pairing_reconciler(
         gents_store::subscription_source::subscribe_collections(&node, PAIRING_STATE_COLLECTIONS)?;
     let connections = node.subscribe(&[events::EventName::PeerConnection]);
 
-    run_pairing_reconciler_loop(&admin, &store, subscription, connections, &cancel).await;
+    run_pairing_reconciler_loop(
+        &admin,
+        &store,
+        subscription,
+        connections,
+        intervals.pairing_sweep,
+        &cancel,
+    )
+    .await;
     Ok(())
 }
 
@@ -55,9 +64,10 @@ pub(super) async fn run_pairing_reconciler_loop(
     store: &dyn PairingStateStore,
     mut subscription: events::DocumentChangeSubscription,
     mut connections: events::Subscription,
+    sweep_interval: std::time::Duration,
     cancel: &CancellationToken,
 ) {
-    let mut interval = tokio::time::interval(super::super::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(sweep_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::<String>::new();

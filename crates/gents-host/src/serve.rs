@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use axum::{routing::get, Router};
 use gents::defra_node::Node as EmbeddedNode;
 use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState};
+use gents_p2p::p2p_reconcile::intervals::P2pIntervals;
 use gents_store::{identity::KeyIdentity, identity::NodeIdentity};
 use gents_tools::mcp::pool::McpPool;
 use serde_json::{json, Value};
@@ -874,6 +875,8 @@ async fn serve_foreground(
                 tool_ceiling,
                 plugin_home: Some(home_dir.clone()),
                 backend_health: Some(backend_health.clone()),
+                p2p_intervals: p2p_intervals(&args),
+                p2p_network_id: args.p2p_network_id.clone(),
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,
@@ -1673,6 +1676,16 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
 }
 
+fn p2p_intervals(args: &ServeArgs) -> P2pIntervals {
+    let millis = |value: Option<u64>| value.map(Duration::from_millis);
+    P2pIntervals::with_overrides(
+        millis(args.p2p_registry_heartbeat_ms),
+        millis(args.p2p_pairing_sweep_ms),
+        millis(args.p2p_endpoint_heartbeat_ms),
+        millis(args.p2p_registry_stale_ms),
+    )
+}
+
 fn block_cache_bytes(mib: Option<u64>) -> Result<usize> {
     let Some(mib) = mib else {
         return Ok(gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES);
@@ -1696,6 +1709,33 @@ mod server_key_tests {
         match cli.command {
             Some(Command::Server(args)) => args,
             _ => panic!("expected `server`"),
+        }
+    }
+
+    #[test]
+    fn p2p_flags_default_derive_and_refuse_zero_or_blank() {
+        assert_eq!(p2p_intervals(&parse_server(&[])), P2pIntervals::default());
+        let overridden = p2p_intervals(&parse_server(&[
+            "--p2p-registry-heartbeat-ms",
+            "1000",
+            "--p2p-pairing-sweep-ms",
+            "500",
+        ]));
+        assert_eq!(overridden.pairing_sweep, Duration::from_millis(500));
+        assert_eq!(overridden.endpoint_heartbeat, Duration::from_millis(1000));
+        assert_eq!(overridden.registry_stale_after, Duration::from_millis(3000));
+        assert_eq!(
+            parse_server(&["--p2p-network-id", " lab "]).p2p_network_id,
+            Some("lab".to_string())
+        );
+        for refused in [
+            ["--p2p-pairing-sweep-ms", "0"],
+            ["--p2p-registry-stale-ms", "0"],
+            ["--p2p-network-id", " "],
+        ] {
+            let mut argv = vec!["gents", "server"];
+            argv.extend(refused);
+            assert!(Cli::try_parse_from(argv).is_err(), "{refused:?}");
         }
     }
 

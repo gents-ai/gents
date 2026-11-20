@@ -2540,8 +2540,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-lean-contract/src/lib.rs", 2, "CARGO_MANIFEST_DIR and CARGO_MANIFEST_PATH: Cargo's anchor for the Lean sources in a crate that links only into tests (optional, enabled only by test-fixtures); legitimately external"),
     ("crates/gents-lean-vocab/src/family.rs", 1, "GENTS_FAMILY_MUTATION: mutation-testing switch in a crate that links only into tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("crates/gents-lean-vocab/src/lib.rs", 1, "GENTS_SNAPSHOT_MUTATION: mutation-testing switch in a crate that links only into tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("crates/gents-p2p/src/p2p_reconcile/intervals.rs", 1, "GENTS_REGISTRY_HEARTBEAT_MS and GENTS_PAIRING_SWEEP_MS: become serve flags (#1764)"),
-    ("crates/gents-p2p/src/p2p_reconcile/registry.rs", 1, "GENTS_NETWORK_ID partitions the P2P registry; becomes a serve flag"),
     ("crates/gents-pack/src/operations/pack.rs", 2, "pack variables whose declared source is the operator's environment; legitimately external"),
     ("crates/gents-pack/src/pack/install_flow.rs", 1, "pack variables whose declared source is the operator's environment; legitimately external"),
     ("crates/gents-pack/src/pack/interpolate.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
@@ -5517,8 +5515,7 @@ fn error_holder_fence_reads_holdings_and_wire_names() {
 /// Every other integration test is a module of that binary: each extra target
 /// relinks the crate's whole dependency graph. This allowlist only shrinks.
 const SEPARATE_TEST_TARGETS: &[(&str, &str)] = &[
-    // Sets GENTS_PAIRING_SWEEP_MS for the process, changing the sweep cadence
-    // of every runtime started after it.
+    // Its scenarios serialise on the process-global embedded P2P transport.
     ("gents", "e2e_triggers"),
     // A source scanner that links no runtime crate; run alone while editing ratchets.
     ("gents", "write_owner_structure"),

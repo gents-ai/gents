@@ -157,6 +157,8 @@ pub struct DocumentRuntimeOptions {
     pub hook_failure_policy: FailurePolicy,
     pub health_checker_options: HealthCheckerOptions,
     pub backend_prober_options: BackendProberOptions,
+    pub p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    pub p2p_network_id: Option<String>,
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -221,6 +223,8 @@ pub struct Gents {
     inference_observations: gents_inference::inference_observation::InferenceObservationRegistry,
     health_checker_options: HealthCheckerOptions,
     backend_prober_options: BackendProberOptions,
+    p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    p2p_network_id: String,
     backend_health: BackendHealthMap,
     storage_fault: crate::runtime::storage_fault::StorageFaultObservation,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
@@ -319,6 +323,10 @@ impl Gents {
             inference_observations: Default::default(),
             health_checker_options: options.health_checker_options,
             backend_prober_options: options.backend_prober_options,
+            p2p_intervals: options.p2p_intervals,
+            p2p_network_id: options
+                .p2p_network_id
+                .unwrap_or_else(|| gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned()),
             backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: options.process_state_observer,
