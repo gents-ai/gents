@@ -10,18 +10,6 @@ pub const DEFAULT_DISCOVERY_TIMEOUT_SECS: i64 = 10;
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: i64 = 120;
 pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
 
-impl crate::InferenceBackend {
-    pub fn effective_connect_timeout_secs(&self) -> i64 {
-        self.connect_timeout_secs
-            .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS)
-    }
-
-    pub fn effective_discovery_timeout_secs(&self) -> i64 {
-        self.discovery_timeout_secs
-            .unwrap_or(DEFAULT_DISCOVERY_TIMEOUT_SECS)
-    }
-}
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
