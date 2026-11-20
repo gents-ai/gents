@@ -457,19 +457,12 @@ pub async fn build_backend_client(
                 })
                 .map_err(anyhow::Error::from),
             };
-            let (route, bearer) = built
-                .map(|(route, bearer)| {
-                    (
-                        route.with_backend_id(agent.backend_id.as_deref().unwrap_or("")),
-                        bearer,
-                    )
-                })
-                .with_context(|| {
-                    format!(
-                        "building the {kind} completion client for agent {}",
-                        agent.agent_did
-                    )
-                })?;
+            let (route, bearer) = built.with_context(|| {
+                format!(
+                    "building the {kind} completion client for agent {}",
+                    agent.agent_did
+                )
+            })?;
             Ok(BackendClient::AnthropicApiKey(
                 crate::clients::claude_subscription::ClaudeSubscriptionClient::with_platform(
                     agent.node_did(),

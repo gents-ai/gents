@@ -19,7 +19,6 @@ use rapidhash::{HashSetExt, RapidHashSet};
 use rig::completion::CompletionError;
 use rig::streaming::RawStreamingChoice;
 
-use super::bedrock::clear_profile_cache_for_test;
 use super::lock_fixtures_for_test;
 use super::route::ClaudeRoute;
 use super::send::{stream_messages_routed, MessagesAccount};
@@ -130,7 +129,7 @@ fn account() -> crate::clients::claude_subscription::AccountIdentity {
     AccountIdentity::of_platform("did:key:z6MkBedrock", "backend-bedrock")
 }
 
-fn bedrock_route(server: &Server, region: &str, backend: &str, signed: bool) -> ClaudeRoute {
+fn bedrock_route(server: &Server, region: &str, signed: bool) -> ClaudeRoute {
     let endpoint = format!("http://127.0.0.1:{}", server.port);
     let settings = settings(region);
     let route = if signed {
@@ -148,7 +147,7 @@ fn bedrock_route(server: &Server, region: &str, backend: &str, signed: bool) -> 
             BEARER,
         )
     };
-    route.expect("bedrock route").with_backend_id(backend)
+    route.expect("bedrock route")
 }
 
 /// Sends the echo request and collects the events and the first failure.
@@ -306,7 +305,7 @@ async fn a_signed_bedrock_request_is_the_sdk_request_for_a_listed_profile() {
         answer(&sse),
     ])
     .await;
-    let route = bedrock_route(&server, "eu-west-1", "list-1", true);
+    let route = bedrock_route(&server, "eu-west-1", true);
     let (events, failure) = run(&route, MODEL).await;
     assert_eq!(failure, None);
     assert_eq!(text_of(&events), "bedrock hello");
@@ -368,7 +367,7 @@ async fn the_bedrock_body_is_the_planned_body_without_model_and_stream() {
     let _guard = lock_fixtures_for_test().await;
     let sse = crate::clients::claude_messages::sse_fixture_final_text("hi");
     let server = Server::start(vec![profiles(&[], None), answer(&sse)]).await;
-    let route = bedrock_route(&server, "us-west-2", "body-1", true);
+    let route = bedrock_route(&server, "us-west-2", true);
     let (_, failure) = run(&route, MODEL).await;
     assert_eq!(failure, None);
     let wire = &server.requests()[1];
@@ -447,7 +446,7 @@ async fn the_event_stream_parses_into_the_events_of_the_sse_path() {
     let _guard = lock_fixtures_for_test().await;
     let sse = crate::clients::claude_messages::sse_fixture_final_text("same events");
     let server = Server::start(vec![profiles(&[], None), answer(&sse)]).await;
-    let route = bedrock_route(&server, "us-east-1", "parse-1", true);
+    let route = bedrock_route(&server, "us-east-1", true);
     let (events, failure) = run(&route, MODEL).await;
     assert_eq!(failure, None);
 
@@ -476,7 +475,7 @@ async fn an_in_stream_exception_surfaces_as_the_stream_error() {
         raw_reply(EVENT_STREAM, leak(bytes)),
     ])
     .await;
-    let route = bedrock_route(&server, "us-east-1", "exception-1", true);
+    let route = bedrock_route(&server, "us-east-1", true);
     let (events, failure) = run(&route, MODEL).await;
     assert_eq!(text_of(&events), "partial");
     let failure = failure.expect("the exception ends the stream with an error");
@@ -503,7 +502,7 @@ async fn a_damaged_event_stream_and_a_truncated_one_fail_loud() {
         raw_reply(EVENT_STREAM, leak(early)),
     ])
     .await;
-    let route = bedrock_route(&server, "us-east-1", "damaged-1", true);
+    let route = bedrock_route(&server, "us-east-1", true);
     for expected in [
         "checksum",
         "ended inside a frame",
@@ -523,7 +522,7 @@ async fn a_response_that_is_not_an_event_stream_is_refused() {
         reply("200 OK", r#"{"type":"message"}"#),
     ])
     .await;
-    let route = bedrock_route(&server, "us-east-1", "wrong-type-1", true);
+    let route = bedrock_route(&server, "us-east-1", true);
     let (_, failure) = run(&route, MODEL).await;
     let failure = failure.expect("failure");
     assert!(failure.contains("not an event stream"), "{failure}");
@@ -542,7 +541,7 @@ async fn the_region_prefix_rewrites_the_catalog_model_id() {
         let sse = crate::clients::claude_messages::sse_fixture_final_text("ok");
         // No listed profile for the model: the catalog id with the region's prefix.
         let server = Server::start(vec![profiles(&[], None), answer(&sse)]).await;
-        let route = bedrock_route(&server, region, &format!("prefix-{region}"), true);
+        let route = bedrock_route(&server, region, true);
         let (_, failure) = run(&route, MODEL).await;
         assert_eq!(failure, None, "{region}");
         assert_eq!(
@@ -559,7 +558,6 @@ async fn the_region_prefix_rewrites_the_catalog_model_id() {
 #[tokio::test]
 async fn discovery_pages_through_the_list_and_is_cached_per_backend() {
     let _guard = lock_fixtures_for_test().await;
-    clear_profile_cache_for_test();
     let sse = crate::clients::claude_messages::sse_fixture_final_text("cached");
     let server = Server::start(vec![
         profiles(
@@ -571,11 +569,11 @@ async fn discovery_pages_through_the_list_and_is_cached_per_backend() {
         answer(&sse),
     ])
     .await;
-    let route = bedrock_route(&server, "ca-central-1", "cache-1", true);
+    let route = bedrock_route(&server, "ca-central-1", true);
     let (_, failure) = run(&route, MODEL).await;
     assert_eq!(failure, None);
-    let (_, failure) = run(&route, MODEL).await;
-    assert_eq!(failure, None, "the second request reads the cached list");
+    let (_, failure) = run(&route.clone(), MODEL).await;
+    assert_eq!(failure, None, "a clone of the route reads the cached list");
 
     let requests = server.requests();
     assert_eq!(
@@ -619,7 +617,7 @@ async fn a_listing_that_cannot_be_read_falls_back_to_the_rewritten_id_and_is_not
         answer(&sse),
     ])
     .await;
-    let route = bedrock_route(&server, "us-east-1", "denied-1", true);
+    let route = bedrock_route(&server, "us-east-1", true);
     for _ in 0..2 {
         let (events, failure) = run(&route, MODEL).await;
         assert_eq!(failure, None);
@@ -649,7 +647,7 @@ async fn an_application_inference_profile_arn_is_sent_as_given_without_a_listing
     let sse = crate::clients::claude_messages::sse_fixture_final_text("arn");
     // Only the invoke is served: a listing would find no server.
     let server = Server::start(vec![answer(&sse)]).await;
-    let route = bedrock_route(&server, "us-west-2", "arn-1", true);
+    let route = bedrock_route(&server, "us-west-2", true);
     let (events, failure) = run(&route, arn).await;
     assert_eq!(failure, None);
     assert_eq!(text_of(&events), "arn");
@@ -678,7 +676,7 @@ async fn a_bearer_token_authenticates_bedrock_without_signing() {
     let _guard = lock_fixtures_for_test().await;
     let sse = crate::clients::claude_messages::sse_fixture_final_text("bearer");
     let server = Server::start(vec![profiles(&[], None), answer(&sse)]).await;
-    let route = bedrock_route(&server, "us-east-1", "bearer-1", false);
+    let route = bedrock_route(&server, "us-east-1", false);
     let (events, failure) = run(&route, MODEL).await;
     assert_eq!(failure, None);
     assert_eq!(text_of(&events), "bearer");
@@ -709,8 +707,8 @@ async fn bedrock_tool_streaming_matches_the_lean_model() {
         replies.push(answer(&sse));
     }
     let server = Server::start(replies).await;
-    for (index, case) in cases.iter().enumerate() {
-        let base = bedrock_route(&server, "us-east-1", &format!("eager-{index}"), true);
+    for case in &cases {
+        let base = bedrock_route(&server, "us-east-1", true);
         let route = ClaudeRoute {
             target: base.target.at_default_endpoint(case.input.default_endpoint),
             ..base

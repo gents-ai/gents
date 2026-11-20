@@ -8,6 +8,7 @@
 //! headers are built; a [`BedrockRoute`] also rewrites the URL, the body and
 //! the response for the Bedrock runtime API.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use gents_claude::attribution;
@@ -61,8 +62,9 @@ pub(crate) struct BedrockRoute {
     /// Where `ListInferenceProfiles` is asked: the control plane of the region,
     /// or the custom endpoint when the runtime has one.
     pub(crate) control_url: String,
-    /// The backend whose profile list is cached; empty when unbound.
-    pub(crate) backend_id: String,
+    /// The account's inference profiles, listed once while fresh and shared by
+    /// every clone of the route, so by every request of the client that holds it.
+    pub(crate) profiles: super::bedrock::ProfileCache,
 }
 
 /// The Google Vertex AI predict API of a project and region: the model is in
@@ -95,6 +97,8 @@ pub(crate) struct ClaudeRoute {
     /// A signed-in gateway: its `cc_gateway` mark follows the current JWT, so the
     /// token is read before the request is planned.
     pub(crate) gateway_mark_from_token: bool,
+    /// Set once the API rejects a gzip body; every clone of the route then sends plain.
+    pub(crate) gzip_off: Arc<AtomicBool>,
 }
 
 impl ClaudeRoute {
@@ -113,6 +117,7 @@ impl ClaudeRoute {
             vertex: None,
             quota_project: None,
             gateway_mark_from_token: false,
+            gzip_off: Arc::default(),
         }
     }
 
@@ -158,15 +163,6 @@ impl ClaudeRoute {
     pub(crate) fn with_quota_project(mut self, quota_project: Option<&str>) -> Self {
         if self.vertex.is_some() {
             self.quota_project = quota_project.map(str::to_owned);
-        }
-        self
-    }
-
-    /// The same route with the backend whose Bedrock profile list it caches.
-    #[must_use]
-    pub(crate) fn with_backend_id(mut self, backend_id: &str) -> Self {
-        if let Some(bedrock) = &mut self.bedrock {
-            backend_id.clone_into(&mut bedrock.backend_id);
         }
         self
     }
@@ -238,6 +234,7 @@ impl ClaudeRoute {
             vertex: None,
             quota_project: None,
             gateway_mark_from_token: false,
+            gzip_off: Arc::default(),
         };
         if signer.is_some()
             && !matches!(
@@ -292,7 +289,7 @@ impl ClaudeRoute {
                     bedrock: Some(BedrockRoute {
                         region,
                         control_url,
-                        backend_id: String::new(),
+                        profiles: super::bedrock::ProfileCache::default(),
                     }),
                     ..route(Provider::Bedrock, None, Credential::Bearer)
                 }
