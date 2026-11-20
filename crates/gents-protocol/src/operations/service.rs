@@ -51,6 +51,23 @@ pub enum ServiceLifecycleDecision {
     UpdateInProgress,
 }
 
+/// Lean `ServiceLifecycle.CallerObservation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceLifecycleCallerObservation {
+    NoRuntime,
+    Ancestor,
+    NotAncestor,
+    Unobservable,
+}
+
+impl ServiceLifecycleCallerObservation {
+    /// Lean `ServiceLifecycle.CallerObservation.callerRunsOnTarget`.
+    pub fn caller_runs_on_target(self) -> bool {
+        matches!(self, Self::Ancestor | Self::Unobservable)
+    }
+}
+
 /// Lean `ServiceLifecycle.admission`.
 pub fn decide(
     action: ServiceLifecycleAction,

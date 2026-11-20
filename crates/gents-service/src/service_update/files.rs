@@ -249,12 +249,6 @@ pub(super) struct Changes {
 }
 impl Changes {
     pub(super) async fn watch(path: &Path) -> Result<Self> {
-        Self::watch_mode(path, false).await
-    }
-    pub(super) async fn operations(path: &Path) -> Result<Self> {
-        Self::watch_mode(path, true).await
-    }
-    async fn watch_mode(path: &Path, operations: bool) -> Result<Self> {
         use notify::Watcher as _;
         let path = path.to_owned();
         tokio::task::spawn_blocking(move || -> Result<Self> {
@@ -270,19 +264,6 @@ impl Changes {
                     let _ = send.try_send(event);
                 })?;
             watcher.watch(&path, notify::RecursiveMode::NonRecursive)?;
-            if operations {
-                for entry in fs::read_dir(&path)? {
-                    let entry = entry?;
-                    if entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
-                        && entry.path().is_dir()
-                    {
-                        watcher.watch(&entry.path(), notify::RecursiveMode::NonRecursive)?;
-                    }
-                }
-            }
             Ok(Self {
                 _watcher: watcher,
                 receive,
