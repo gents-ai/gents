@@ -244,6 +244,7 @@ fn initialize_fixture_identity(plan: &mut Plan) {
             tool_ceiling: crate::args::ToolCeilingArg::Readwrite,
             tool_root: Some(plan.home.to_string_lossy().into_owned()),
             store_encryption: None,
+            document_acp: Default::default(),
         },
     )
     .unwrap();

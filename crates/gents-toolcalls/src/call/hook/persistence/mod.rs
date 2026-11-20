@@ -20,8 +20,6 @@ use gents_tools::native::background_args::{
 
 use super::DefraSessionHook;
 
-use gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
-
 mod background_control;
 mod background_tools;
 mod foreground_handoff;

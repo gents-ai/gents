@@ -25,25 +25,22 @@ async fn archive(host: &ClientHost, node: &str, archived: bool, revision: &str) 
 
 #[tokio::test]
 async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+    use crate::client_runtime::ClientRuntime;
+    use gents_store::client_journal::paths::DesktopPaths;
     for case in gents_lean_vocab::families::contracts_archive_receipts::cases() {
         // The session lives on the served runtime; the desktop holds no replica,
         // so a reopened client reads the archive state back from its runtime.
         let home = tempfile::tempdir().unwrap();
         let core = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(home.path()),
-                ClientCoreOptions::local_only(),
+                crate::client_test_support::file_journal_options(),
             )
             .await
             .unwrap(),
         );
         core.stop_observer_for_test().await;
-        let (runtime, agent) = crate::tests::support::served_runtime_for(
-            &core,
-            crate::tests::support::ServedRoute::CoHosted,
-        )
-        .await;
+        let (runtime, agent) = crate::tests::support::served_runtime_for(&core).await;
         let node = runtime.node_did().to_owned();
         crate::tests::support::submit_request(&core, &runtime, &agent, "shared-archive", "opening")
             .await;
@@ -118,13 +115,13 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
         drop(second);
         core.shutdown().await.unwrap();
         drop(core);
-        let reopened = ClientCore::start_with_paths_and_options(
+        let reopened = ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(home.path()),
-            ClientCoreOptions::local_only(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap();
-        runtime.connect(&reopened).await;
+        crate::client_test_support::connect_runtime(&runtime, &reopened).await;
         reopened.refresh_node(&node).await.unwrap();
         assert_eq!(
             reopened

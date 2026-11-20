@@ -1,0 +1,4 @@
+---- MODULE MCObserverCollectionReloadDropFailure ----
+EXTENDS ObserverCollectionReload
+
+====

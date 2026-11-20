@@ -85,6 +85,8 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
             node_did: did.clone(),
             execution_id: execution_id.clone(),
             max_turns: Some(8),
+            max_invalid_tool_calls: Some(2),
+            repeated_tool_failure_limit: Some(5),
             stream_batch_ms: Some(500),
             stream_liveness_timeout_secs: Some(45),
             deadline_duration_secs: Some(120),
@@ -146,6 +148,8 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     assert_eq!(behavior.agent.context_window, 32768);
     assert_eq!(behavior.agent.max_output_tokens, 4096);
     assert_eq!(behavior.agent.max_turns, 8);
+    assert_eq!(behavior.agent.max_invalid_tool_calls, 2);
+    assert_eq!(behavior.agent.repeated_tool_failure_limit, 5);
     assert_eq!(behavior.agent.system_prompt, "You are precise.");
     assert!(matches!(
         behavior.agent.compaction_strategy(),

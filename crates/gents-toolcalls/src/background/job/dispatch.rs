@@ -51,7 +51,6 @@ use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_pack::plugin::store::InstalledPlugin;
 use gents_pack::plugin::store::PluginData;
 use gents_pack::plugin::PluginVerdict;
-use gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 use gents_protocol::job_settings::effective_ceiling;
 use gents_protocol::request_lifecycle::SessionMessageCause;
 use gents_protocol::tool_call::AwaitMode;
@@ -144,6 +143,7 @@ pub async fn run_step0(
             serde_json::to_value(&input)?,
             crate::plugin::executor::ToolInvocation {
                 tool_root: runtime.tool_root.as_deref(),
+                own_folder: None,
                 tool_calls: binding.plugin.tool_calls,
                 context,
             },
@@ -231,9 +231,12 @@ pub async fn run_step0(
         let (class, message, next) = step0_refusal(
             refusal.refusal,
             refusal.detail,
-            binding,
-            &installed,
-            &runtime.home,
+            RefusedCall {
+                binding,
+                installed: &installed,
+                home: &runtime.home,
+                background_limit: lifecycle.background_limit(),
+            },
             matches!(output, JobStepOutput::Effects { .. }),
             None,
         );
@@ -704,9 +707,12 @@ pub async fn adopt_step0(
             let (class, message, next) = step0_refusal(
                 refusal,
                 detail,
-                binding,
-                installed,
-                &runtime.home,
+                RefusedCall {
+                    binding,
+                    installed,
+                    home: &runtime.home,
+                    background_limit: lifecycle.background_limit(),
+                },
                 false,
                 resume.map(|row| (row, resumed_by.as_deref())),
             );
@@ -809,17 +815,30 @@ async fn refuse(
     Ok(payload)
 }
 
+/// The step-0 call a refusal names: its binding, the installed plugin and the
+/// caller Agent's background limit.
+struct RefusedCall<'a> {
+    binding: &'a JobBinding,
+    installed: &'a InstalledPlugin,
+    home: &'a Path,
+    background_limit: gents_protocol::job::BackgroundLimit,
+}
+
 /// The failure class, message and next call of a step 0 refusal. `resume` is
 /// the row a step-0 resume named and the address of the row that resumed it.
 fn step0_refusal(
     refusal: Refusal,
     detail: Option<PolicyDenialDetail>,
-    binding: &JobBinding,
-    installed: &InstalledPlugin,
-    home: &Path,
+    call: RefusedCall<'_>,
     effects: bool,
     resume: Option<(&str, Option<&str>)>,
 ) -> (FailureClass, String, String) {
+    let RefusedCall {
+        binding,
+        installed,
+        home,
+        background_limit,
+    } = call;
     let tool = binding.tool_name.as_str();
     let coordinate = binding.plugin.plugin.as_str();
     if refusal == Refusal::PolicyDenied {
@@ -850,7 +869,7 @@ fn step0_refusal(
         ),
         Refusal::BackgroundBudgetExceeded => (
             FailureClass::ServiceUnavailable,
-            format!("{tool} cannot be admitted because the parent request has reached the concurrent background capacity ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT})"),
+            format!("{tool} cannot be admitted because the parent request has reached the concurrent background capacity ceiling ({})", background_limit.get()),
             format!("Next: wait for a background completion notification, then retry `{tool}`"),
         ),
         Refusal::DynamicCodeDisabled => {
@@ -929,6 +948,7 @@ fn step0_context(
         target_hops: Vec::new(),
         target_ids: Vec::new(),
         live_background: 0,
+        background_limit: lifecycle.background_limit(),
         started_by_job: caller.started_by_job,
         cwd_allowed: Vec::new(),
         within: Vec::new(),

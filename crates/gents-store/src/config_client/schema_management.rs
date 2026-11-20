@@ -4,20 +4,15 @@ use super::{graphql_api_base, ConfigAccess, ConfigClientError};
 
 type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
-fn actor_context(actor: Option<&identity::Did>) -> defra_core::RequestContext {
-    defra_core::RequestContext::default().with_identity(actor.map(ToString::to_string))
-}
-
 impl ConfigAccess {
     pub async fn collection_versions(&self) -> Result<Vec<Value>> {
         match self {
             Self::Local(local) => {
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        let versions = match actor {
-                            Some(actor) => {
-                                let context = actor_context(Some(&actor));
+                        let versions = match context.identity() {
+                            Some(_) => {
                                 let selector = schema::CollectionSelector {
                                     get_inactive: true,
                                     ..Default::default()
@@ -47,10 +42,9 @@ impl ConfigAccess {
             Self::Local(local) => {
                 let collection = collection.to_owned();
                 let patch = serde_json::to_string(patch)?;
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        let context = actor_context(actor.as_ref());
                         node.patch_collection_as(&context, &patch, None).await?;
                         Ok::<_, ConfigClientError>(json!({
                             "committed": true, "collection": collection, "VersionID": null,
@@ -80,10 +74,9 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => {
                 let version_id = version_id.to_owned();
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        let context = actor_context(actor.as_ref());
                         node.set_active_collection_version_as(&context, &version_id)
                             .await
                             .map_err(Into::into)
@@ -94,11 +87,12 @@ impl ConfigAccess {
                 let url = format!("{}/collections/default", graphql_api_base(endpoint.url())?);
                 let client = super::graphql::http_client().await?;
                 endpoint
-                    .authorize(client.post(&url))?
-                    .timeout(std::time::Duration::from_secs(120))
-                    .body(version_id.to_owned())
-                    .send()
-                    .await?
+                    .send_resolving(|endpoint| {
+                        Ok(endpoint
+                            .authorize(client.post(&url))?
+                            .body(version_id.to_owned()))
+                    })
+                    .await??
                     .error_for_status()?;
                 Ok(())
             }
@@ -110,11 +104,10 @@ impl ConfigAccess {
         config.validate_for_http()?;
         match self {
             Self::Local(local) => {
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 let config = serde_json::to_value(config)?;
                 local
                     .run_owned(move |node| async move {
-                        let context = actor_context(actor.as_ref());
                         let id = node.set_migration_as(&context, &config).await?;
                         Ok::<_, ConfigClientError>(json!({"lensId": id}))
                     })
@@ -135,10 +128,9 @@ impl ConfigAccess {
             Self::Local(local) => {
                 let query = query.to_owned();
                 let sdl = sdl.to_owned();
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        let context = actor_context(actor.as_ref());
                         node.add_view_as(&context, &query, &sdl, None)
                             .await
                             .map(drop)
@@ -162,10 +154,9 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => {
                 let collection = collection.to_owned();
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        let context = actor_context(actor.as_ref());
                         node.materialize_collection_as(&context, &collection)
                             .await
                             .map_err(Into::into)
@@ -189,10 +180,9 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => {
                 let collection = collection.to_owned();
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        let context = actor_context(actor.as_ref());
                         node.truncate_collection_as(&context, &collection, None)
                             .await
                             .map_err(Into::into)
@@ -229,11 +219,14 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => {
                 let collections = collections.to_vec();
-                let actor = local.identity().map(ToString::to_string);
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        let caller = actor.or_else(|| node.node_identity_did().map(str::to_owned));
-                        let context = defra_core::RequestContext::default().with_identity(caller);
+                        let caller = context
+                            .identity()
+                            .map(str::to_owned)
+                            .or_else(|| node.node_identity_did().map(str::to_owned));
+                        let context = context.with_identity(caller);
                         node.database()
                             .delete_collections_as(&context, collections, false)
                             .await
@@ -264,20 +257,19 @@ impl ConfigAccess {
         };
         let url = format!("{}/{}", graphql_api_base(endpoint.url())?, route);
         let client = super::graphql::http_client().await?;
-        let mut request = endpoint
-            .authorize(client.request(method, &url))?
-            .timeout(std::time::Duration::from_secs(120));
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-        let response =
-            request
-                .send()
-                .await
-                .map_err(|source| ConfigClientError::SchemaOperation {
-                    url: url.clone(),
-                    source,
-                })?;
+        let response = endpoint
+            .send_resolving(|endpoint| {
+                let request = endpoint.authorize(client.request(method.clone(), &url))?;
+                Ok(match &body {
+                    Some(body) => request.json(body),
+                    None => request,
+                })
+            })
+            .await?
+            .map_err(|source| ConfigClientError::SchemaOperation {
+                url: url.clone(),
+                source,
+            })?;
         let status = response.status();
         let bytes = response.bytes().await?;
         if !status.is_success() {

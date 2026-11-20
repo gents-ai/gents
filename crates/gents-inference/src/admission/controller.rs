@@ -5,13 +5,14 @@ use defra_node::Node as EmbeddedNode;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio_util::sync::CancellationToken;
 
-use super::client::{AdmissionError, CallKind};
+use super::client::AdmissionError;
 use super::config::BackendAdmissionConfig;
 use super::permit::AdmissionPermit;
 use super::persistence::{
     persist_call_started, persist_existing_call_running, persist_existing_call_terminal,
     persist_terminal_call,
 };
+use gents_loop::provider_call::admission::CallKind;
 use gents_store::drop_cleanup::DropCleanup;
 
 pub(super) struct CapacityPool {

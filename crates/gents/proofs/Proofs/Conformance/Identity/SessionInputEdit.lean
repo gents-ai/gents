@@ -1,5 +1,6 @@
 import Proofs.Session.Identity.SessionInputEdit
 import Proofs.Conformance.Family
+import Proofs.Conformance.UserDelegation
 
 namespace Conformance.SessionInputEdit
 
@@ -64,3 +65,11 @@ def nativeDiscovery : Family DiscoveryInput DiscoveryOutput where
       selected := !(selectedForEffect (discover fixture [i.actor] "edit-doc") "agent").isEmpty }
 
 end Conformance.SessionInputEdit
+
+namespace Identity.SessionInputEdit
+
+deriving instance Lean.ToJson for Outcome
+
+attribute [conformance_function] answer
+
+end Identity.SessionInputEdit

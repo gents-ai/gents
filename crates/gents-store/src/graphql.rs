@@ -146,6 +146,16 @@ pub async fn graphql_response_with_transaction_retry(
     crate::config_client::ConfigAccess::read_local_response(node, graphql, operation).await
 }
 
+/// [`graphql_with_transaction_retry`] for a read a decision is taken on
+/// ([`crate::config_client::ConfigAccess::read_for_decision`]).
+pub async fn graphql_for_decision(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> Result<QueryResponse, ConfigClientError> {
+    graphql_with_transaction_retry(node, graphql, operation).await
+}
+
 pub async fn graphql_with_transaction_retry(
     node: &EmbeddedNode,
     graphql: &str,

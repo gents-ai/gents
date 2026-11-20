@@ -16,6 +16,13 @@ use gents_pack::plugin::store::InstalledPlugin;
 use gents_pack::plugin::PluginOutcome;
 use gents_store::config_client::ConfigAccess;
 
+/// The agent a plugin run acts for: its node and identities.
+pub struct PluginRunAgent<'a> {
+    pub node: Arc<EmbeddedNode>,
+    pub node_did: &'a str,
+    pub agent_did: Option<&'a str>,
+}
+
 #[async_trait]
 pub trait PluginHost: Send + Sync {
     fn home(&self) -> Option<&Path>;
@@ -28,24 +35,26 @@ pub trait PluginHost: Send + Sync {
 
     fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin>;
 
-    /// One call of `record` with `input` and no caller-bound services.
+    /// One call of `record` with `input` and no caller-bound services, as
+    /// part of the tool call `context` describes.
     async fn call_outcome(
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<PluginOutcome>;
 
     /// `coordinate` run once as the calling agent's Tools select it (or
     /// unselected when they do not): the output, a note for an unserved
-    /// request field, and the binding note.
+    /// request field, and the binding note. `context` is the tool call the
+    /// run is part of.
     async fn run_plugin_once(
         self: Arc<Self>,
         coordinate: &str,
         selected: &[PluginToolRef],
-        node: Arc<EmbeddedNode>,
-        node_did: &str,
-        agent_did: Option<&str>,
+        agent: PluginRunAgent<'_>,
         input: serde_json::Value,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<(serde_json::Value, Option<String>, Option<String>)>;
 
     /// The application-write tool over `collections` for `access`.
@@ -56,11 +65,13 @@ pub trait PluginHost: Send + Sync {
         actor: Option<identity::Did>,
     ) -> Result<Box<dyn ToolDyn>>;
 
-    /// The tool a plugin tool reference resolves to, bound to the calling agent.
+    /// The tool a plugin tool reference resolves to, bound to the calling
+    /// agent. `own_folder` is the root the agent's file-writing tools write.
     fn plugin_tool(
         self: Arc<Self>,
         plugin: &PluginToolRef,
         read_root: Option<PathBuf>,
+        own_folder: Option<PathBuf>,
         node: Arc<EmbeddedNode>,
         node_did: &str,
         agent_did: Option<&str>,
@@ -98,6 +109,7 @@ impl PluginHost for NoPluginHost {
         &self,
         _record: &InstalledPlugin,
         _input: serde_json::Value,
+        _context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<PluginOutcome> {
         Err(no_runtime())
     }
@@ -106,10 +118,9 @@ impl PluginHost for NoPluginHost {
         self: Arc<Self>,
         _coordinate: &str,
         _selected: &[PluginToolRef],
-        _node: Arc<EmbeddedNode>,
-        _node_did: &str,
-        _agent_did: Option<&str>,
+        _agent: PluginRunAgent<'_>,
         _input: serde_json::Value,
+        _context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
         Err(no_runtime())
     }
@@ -127,6 +138,7 @@ impl PluginHost for NoPluginHost {
         self: Arc<Self>,
         _plugin: &PluginToolRef,
         _read_root: Option<PathBuf>,
+        _own_folder: Option<PathBuf>,
         _node: Arc<EmbeddedNode>,
         _node_did: &str,
         _agent_did: Option<&str>,

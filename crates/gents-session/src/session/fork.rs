@@ -289,12 +289,6 @@ async fn link_fork_children(
         );
         let agent = identity::Did::new(agent_did)?;
         let update = format!("update_{collection}");
-        // The creator grants and marks in one native transaction
-        // (`Identity.SessionChild.recoverSessionChild`); outside a transaction
-        // native relationship changes also require `get-collection`, which an
-        // Agent creator does not hold.
-        // Grants and the marker update guarded on parent_linked = false are all
-        // in the transaction, so a confirmed conflict is rebuilt.
         access.transact_signed_conflict_rebuild("session.mark_fork_parent_linked", |txn| {
             let (agent, update, doc, creator) = (&agent, &update, &doc, &creator);
             Box::pin(async move {
@@ -1007,24 +1001,26 @@ async fn fork_in_txn(
 
     let created = ensure_session_in_txn(
         txn,
-        child,
-        params.caller_node_did,
-        agent,
-        params.caller_requester_did,
-        None,
-        Some(gents_protocol::session::SessionProvenance {
-            fork: Some(gents_protocol::session::SessionFork {
-                source_session_id: params.source_session_id.to_owned(),
-                at_user_turn,
-                before_message_key: match params.boundary {
-                    ForkBoundary::BeforeMessageKey(key) => Some(key.to_owned()),
-                    ForkBoundary::UserTurn(_) => None,
-                },
-                edit_client_did: edit_client_did.map(str::to_owned),
+        crate::session::NewAgentSession {
+            session_id: child,
+            node_did: params.caller_node_did,
+            agent_did: agent,
+            requester_did: params.caller_requester_did,
+            title: None,
+            provenance: Some(gents_protocol::session::SessionProvenance {
+                fork: Some(gents_protocol::session::SessionFork {
+                    source_session_id: params.source_session_id.to_owned(),
+                    at_user_turn,
+                    before_message_key: match params.boundary {
+                        ForkBoundary::BeforeMessageKey(key) => Some(key.to_owned()),
+                        ForkBoundary::UserTurn(_) => None,
+                    },
+                    edit_client_did: edit_client_did.map(str::to_owned),
+                }),
+                ..Default::default()
             }),
-            ..Default::default()
-        }),
-        &chrono::Utc::now().to_rfc3339(),
+            created_at: &chrono::Utc::now().to_rfc3339(),
+        },
     )
     .await?;
     if !created {
@@ -1394,13 +1390,15 @@ mod tests {
                 Box::pin(async move {
                     ensure_session_in_txn(
                         txn,
-                        "unbound-child",
-                        node_did,
-                        &binding.agent_did,
-                        Some(user.did()),
-                        None,
-                        None,
-                        "2026-09-22T00:00:00Z",
+                        crate::session::NewAgentSession {
+                            session_id: "unbound-child",
+                            node_did,
+                            agent_did: &binding.agent_did,
+                            requester_did: Some(user.did()),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-09-22T00:00:00Z",
+                        },
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())

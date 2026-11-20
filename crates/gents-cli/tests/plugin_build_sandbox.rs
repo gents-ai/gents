@@ -25,9 +25,14 @@ async fn a_scaffolded_plugin_builds_and_passes_its_cases_inside_the_sandbox() {
     )
     .unwrap();
 
-    let build = gents_tools::native::run_plugin_build(&root, &dir, true)
-        .await
-        .unwrap_or_else(|error| panic!("{error:#}"));
+    let build = gents_tools::native::run_plugin_build(
+        &gents_loop::tool::ToolCallEnvelope::default(),
+        &root,
+        &dir,
+        true,
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{error:#}"));
     assert_eq!(build.sandbox, "macos_seatbelt");
     assert_eq!(build.output["cases"][0]["passed"], 1, "{}", build.output);
     assert_eq!(

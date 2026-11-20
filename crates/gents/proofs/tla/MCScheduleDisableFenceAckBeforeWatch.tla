@@ -1,0 +1,4 @@
+---- MODULE MCScheduleDisableFenceAckBeforeWatch ----
+EXTENDS ScheduleDisableFence
+
+====

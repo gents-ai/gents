@@ -96,7 +96,6 @@ pub async fn run_openai_oneshot_with_tools_admitted(
             OneshotInputs {
                 tool_config,
                 provider_family,
-                replay_issuer,
                 prompt,
                 prompt_builder,
                 output_obligations: &output_obligations,
@@ -104,6 +103,7 @@ pub async fn run_openai_oneshot_with_tools_admitted(
                 background_tool_registry,
                 lsp_pool: lsp_pool.clone(),
             },
+            replay_issuer,
             client,
         )
         .await
@@ -113,7 +113,6 @@ pub async fn run_openai_oneshot_with_tools_admitted(
 struct OneshotInputs<'a> {
     tool_config: &'a AgentToolSurfaceConfig,
     provider_family: Option<String>,
-    replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     prompt: &'a str,
     prompt_builder: LayeredPromptBuilder,
     output_obligations: &'a [(String, gents_documents::WriteToolOutputObligation)],
@@ -126,27 +125,17 @@ async fn run_oneshot_with_completion_client<C>(
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
     inputs: OneshotInputs<'_>,
+    replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     client: C,
 ) -> Result<OneshotRunResult>
 where
     C: ProviderClient,
 {
-    let OneshotInputs {
-        tool_config,
-        provider_family,
-        replay_issuer,
-        prompt,
-        prompt_builder,
-        output_obligations,
-        tools,
-        background_tool_registry,
-        lsp_pool,
-    } = inputs;
     let model = client.completion_model(&agent.model_name);
     let mut config = loop_config(
         agent,
-        prompt_builder.preamble().to_owned(),
-        tools.len(),
+        inputs.prompt_builder.preamble().to_owned(),
+        inputs.tools.len(),
         gents_inference::rendered_request::CaptureScopeKind::OneShot,
     );
     config.replay.issuer = replay_issuer;
@@ -154,21 +143,7 @@ where
         &mut config,
         crate::claude_request_context::for_one_shot(agent).as_ref(),
     )?;
-    run_oneshot_owned(
-        node,
-        agent,
-        tool_config,
-        provider_family,
-        &prompt_builder,
-        model,
-        prompt,
-        tools,
-        config,
-        output_obligations,
-        background_tool_registry,
-        lsp_pool,
-    )
-    .await
+    run_oneshot_owned(node, agent, inputs, model, config).await
 }
 
 async fn terminalize_oneshot_setup_failure(
@@ -198,32 +173,36 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_oneshot_owned<M>(
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
-    tool_config: &AgentToolSurfaceConfig,
-    provider_family: Option<String>,
-    prompt_builder: &LayeredPromptBuilder,
+    inputs: OneshotInputs<'_>,
     model: M,
-    prompt: &str,
-    tools: Arc<Vec<Box<dyn ToolDyn>>>,
     mut config: crate::runtime::agent::loop_stream::LoopConfig,
-    output_obligations: &[(String, gents_documents::WriteToolOutputObligation)],
-    background_tool_registry: BackgroundToolRegistry,
-    lsp_pool: gents_tools::native::lsp::LspPool,
 ) -> Result<OneshotRunResult>
 where
     M: ProviderModel,
 {
+    let OneshotInputs {
+        tool_config,
+        provider_family,
+        prompt,
+        prompt_builder,
+        output_obligations,
+        tools,
+        background_tool_registry,
+        lsp_pool,
+    } = inputs;
     let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
         node.clone(),
         &agent.agent_did,
         agent.node_identity().clone(),
         prompt,
-        agent.deadline_duration.as_secs(),
-        ExecutionOrigin::Interactive,
-        agent.backend_id.as_deref().unwrap_or_default(),
+        gents_session::request::lifecycle::ExecutionBinding {
+            deadline_duration_secs: agent.deadline_duration.as_secs(),
+            execution_origin: ExecutionOrigin::Interactive,
+            backend_id: agent.backend_id.as_deref().unwrap_or_default().into(),
+        },
         TriggerLineage::default(),
         Some(agent.agent_identity.clone()),
     )
@@ -353,22 +332,13 @@ where
         Some(request.agent_did.clone()),
         Some(request.request_id.clone()),
     );
-    config.tool_context = gents_loop::tool::ToolCallEnvelope::new(Some(
-        gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext::entered(
-            None,
-            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
-                identity: Some(identity.clone()),
-                deadline_at: deadline,
-                cancellation_token: request_token.clone(),
-                workspace_cwd: None,
-                live_output: None,
-                session_id: Some(request.session_id.clone()),
-                correlation: None,
-                source_fields: Default::default(),
-                background: false,
-            },
-        ),
-    ));
+    config.tool_context = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        identity: Some(identity),
+        session_id: Some(request.session_id.clone()),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(deadline, request_token)
+    }
+    .call();
+    config.provider_call.capture = capture_scope.clone();
     let inference = async {
         let mut stream = Box::pin(crate::runtime::agent::loop_stream::run_loop_stream(
             model,
@@ -384,7 +354,8 @@ where
             &mut lifecycle,
             &response_doc_id,
             provider_profile,
-        );
+        )
+        .with_capture(capture_scope);
         let mut lease_poll = tokio::time::interval(std::time::Duration::from_secs(1));
         lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -420,28 +391,7 @@ where
             "provider stream ended without an explicit terminal response"
         ))
     };
-    let scoped_inference =
-        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            Some(identity),
-            deadline,
-            request_token,
-            None,
-            None,
-            Some(request.session_id.clone()),
-            None,
-            Default::default(),
-            false,
-            async {
-                match capture_scope {
-                    Some(scope) => {
-                        gents_inference::rendered_request::scope::scope_request(scope, inference)
-                            .await
-                    }
-                    None => inference.await,
-                }
-            },
-        );
-    let response = scoped_inference.await;
+    let response = Box::pin(inference).await;
 
     let session_id = hook.session_id().await;
     match response {

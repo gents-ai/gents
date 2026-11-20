@@ -11,14 +11,6 @@ use serde_json::Value;
 use super::fs::read_runtime_state_json;
 use super::graphql::{escape_graphql_string, first_graphql_row, graphql_query};
 
-/// Hang detector for every wait without a deadline of its own: the longest a
-/// wait may observe no progress (no change to the documents it watches, no
-/// output from the process it waits on) before it fails with the state it
-/// last saw. It is one suite-wide ceiling, far above any host's scheduling
-/// delay, and never a per-test latency budget: a contract asserts the order
-/// of events, and a loaded host may take arbitrarily long between them.
-pub const STALL_CEILING: Duration = Duration::from_secs(600);
-
 /// File changes directly inside the directories that can hold a home's
 /// runtime state. Serve replaces that state once it is serving, which is
 /// after its startup gate opened client access; until then the gate answers
@@ -440,6 +432,7 @@ pub async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str
     }
 }
 
+#[cfg(feature = "live-e2e")]
 pub async fn wait_for_completed_tool_calls(
     graphql: &str,
     session_id: &str,
@@ -536,6 +529,7 @@ pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<S
     }
 }
 
+#[cfg(feature = "live-e2e")]
 pub async fn wait_for_completed_inference_agents(
     graphql: &str,
     backend_id: &str,

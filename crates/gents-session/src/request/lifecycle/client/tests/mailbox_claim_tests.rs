@@ -161,7 +161,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     let tools = bind_request_tools(tools, context);
     let args = serde_json::json!({"title":"delegated notice"}).to_string();
     let receipt = tools[0]
-        .call_with_receipt(args.clone(), &gents_loop::tool::ToolCallEnvelope::ambient())
+        .call_with_receipt(args.clone(), &gents_loop::tool::ToolCallEnvelope::default())
         .await
         .result?;
     let receipt: serde_json::Value = serde_json::from_str(&receipt)?;
@@ -201,7 +201,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         .await?;
     let reused: serde_json::Value = serde_json::from_str(
         &tools[0]
-            .call_with_receipt(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .call_with_receipt(args, &gents_loop::tool::ToolCallEnvelope::default())
             .await
             .result?,
     )?;

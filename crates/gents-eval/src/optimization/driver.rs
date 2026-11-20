@@ -35,8 +35,8 @@ use crate::report::load_run_rows;
 use crate::runner::freeze;
 use crate::runner::freeze::pack::load_pack;
 use crate::runner::{
-    freeze_refused, resume, run, Capture, CellRequest, CellSource, RunOptions, RunOutcome,
-    RunRequest, TrialExecutor,
+    freeze_refused, resume, run, Capture, CellRequest, CellSource, RunLocation, RunOptions,
+    RunOutcome, RunRequest, TrialExecutor,
 };
 use crate::{load_run, load_trials, DefinitionRef, RunOrigin, SubjectRef, TrialRecord};
 use gents_documents::{EvalDefinition, EvalSplit};
@@ -274,9 +274,11 @@ pub(crate) async fn execute_run(
         tracing::info!(run_id = %plan.run_id, "optimization run resumed");
         return resume(
             access,
-            &origin.owner,
-            &plan.run_id,
-            &request.runs_dir,
+            RunLocation {
+                owner: &origin.owner,
+                run_id: &plan.run_id,
+                runs_dir: &request.runs_dir,
+            },
             executor,
             registry,
             cancel,

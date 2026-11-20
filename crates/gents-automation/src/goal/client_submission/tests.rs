@@ -129,10 +129,38 @@ async fn submit_while_runtime_answers(
         "a saved control the runtime has not answered stays pending rather than failing"
     );
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
-    let (receipt, processed) = tokio::join!(
-        submission,
-        process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-    );
+    let (receipt, processed) = tokio::join!(submission, async {
+        if requester.did() == fixture.user.did() {
+            let ConfigAccess::Graphql(endpoint) = access else {
+                anyhow::bail!("the User submits through its client-held endpoint");
+            };
+            let authorization = endpoint
+                .client_authorization()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("the client has no request credential"))?;
+            crate::goal::client_application::apply(
+                &fixture.node,
+                &identity,
+                authorization,
+                &gents_protocol::goal_control::ApplyGoalControl {
+                    node_did: command.node_did.clone(),
+                    command_doc_id: doc_id.clone(),
+                    agent_did: command.agent_did.clone(),
+                },
+            )
+            .await?;
+            Ok::<_, anyhow::Error>(None)
+        } else {
+            process_command(
+                &fixture.node,
+                &identity,
+                &doc_id,
+                fixture.agent.as_ref(),
+                None,
+            )
+            .await
+        }
+    });
     assert_eq!(processed.unwrap(), None);
     let receipt = receipt.unwrap();
     receipt.validate_for(command).unwrap();
@@ -376,9 +404,15 @@ async fn cross_actor_stale_goal_rejection_is_durable_and_recoverable() {
                     goal_before["data"]["AgentRequest"]
                 );
                 assert_eq!(before["data"]["Goal"], goal_before["data"]["Goal"]);
-                process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-                    .await
-                    .unwrap();
+                process_command(
+                    &fixture.node,
+                    &identity,
+                    &doc_id,
+                    fixture.agent.as_ref(),
+                    None,
+                )
+                .await
+                .unwrap();
                 assert_eq!(access.execute(query).await.unwrap(), before);
                 let recovered = recover_session_goal_control(&access, user.as_ref(), &prepared)
                     .await

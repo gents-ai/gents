@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 
 /// Throwaway user, runtime and desktop homes under a test's own directory for
 /// every host and CLI process it spawns. Without them the runtime CLI resolves
@@ -21,10 +21,6 @@ impl ProcessHomes {
 
     /// The desktop home whose `cli` child holds the CLI client identity that
     /// `init` creates and later CLI commands sign with.
-    #[allow(
-        dead_code,
-        reason = "shared by test binaries that do not all sign as the CLI"
-    )]
     pub fn cli_identity(&self) -> DesktopPaths {
         DesktopPaths::from_root(self.root.join("desktop").join("cli"))
     }
@@ -34,7 +30,7 @@ impl ProcessHomes {
         [
             ("GENTS_HOME", self.root.join("runtime")),
             (
-                gents_desktop_core::client::DESKTOP_HOME_ENV,
+                gents_store::client_journal::paths::DESKTOP_HOME_ENV,
                 self.root.join("desktop"),
             ),
             ("XDG_DATA_HOME", user.join(".local").join("share")),

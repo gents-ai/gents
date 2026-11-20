@@ -255,13 +255,14 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
         let create = gents_session::request::lifecycle::build_session_message_request(
             &cause,
             &target,
-            "do the work",
-            None,
-            &uuid::Uuid::new_v4().to_string(),
-            None,
-            1,
-            None,
-            None,
+            gents_session::request::lifecycle::SessionMessageRequest {
+                content: "do the work",
+                title: None,
+                request_id: &uuid::Uuid::new_v4().to_string(),
+                retry_key: None,
+                hop: 1,
+                input: gents_protocol::request_input::RequestInput::default(),
+            },
             &signer(&message),
         )
         .await

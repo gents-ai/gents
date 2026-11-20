@@ -86,7 +86,7 @@ impl Fixture {
                 .with_http(
                     defra_node::HttpConfig::with_listener(listener)
                         .unwrap()
-                        .with_extra_routes(route.router()),
+                        .with_authenticated_routes(route.router()),
                 )
                 .build()
                 .await
@@ -277,7 +277,10 @@ impl Fixture {
         url.set_path(OWNER_STAGED_PATH);
         let request = reqwest::Client::new().post(url).json(command);
         let request = match bearer {
-            Some(key) => endpoint(&self.graphql, key).authorize(request).unwrap(),
+            Some(key) => endpoint(&self.graphql, key)
+                .authorize_runtime(request)
+                .await
+                .unwrap(),
             None => request,
         };
         let response = request.send().await.unwrap();
@@ -373,6 +376,11 @@ async fn native_change(
             )
             .await
         }
+        OwnerStagedChange::ConfigurationReader {
+            configuration,
+            doc_id,
+            agent_did,
+        } => actor(configuration.collection(), doc_id, "reader", agent_did).await,
         OwnerStagedChange::PairingReader {
             observation,
             doc_id,
@@ -1060,6 +1068,22 @@ async fn owner_staged_targets_follow_their_operation_kind() {
         &node_doc,
     )
     .await;
+    let mut triggers = Vec::new();
+    for index in 0..2 {
+        triggers.push(
+            create_linked(
+                &runtime_access,
+                "Trigger",
+                serde_json::json!({
+                    "node_did": runtime.did(),
+                    "trigger_id": format!("reader-{index}"),
+                    "task_id": "task",
+                }),
+                &node_doc,
+            )
+            .await,
+        );
+    }
     // A Callback selects the workspace Agents its handler names
     // (`workspace_selection::selected_agents`): `bound` names the sibling,
     // `unbound` names another Agent.
@@ -1094,7 +1118,11 @@ async fn owner_staged_targets_follow_their_operation_kind() {
     }
     let outsider = did(f.outsider.did());
     let sibling_did = did(sibling.did());
-    for (transport, cursor) in ["http", "embedded"].into_iter().zip(&documents) {
+    for ((transport, cursor), trigger) in ["http", "embedded"]
+        .into_iter()
+        .zip(&documents)
+        .zip(&triggers)
+    {
         for case in generated(gents_lean_vocab::families::owner_staged_targets::cases).await {
             let input = &case.input;
             let (change, subject, collection, doc) = match input.path.as_str() {
@@ -1151,6 +1179,26 @@ async fn owner_staged_targets_follow_their_operation_kind() {
                     &f.target,
                     "Agent",
                     &sibling_doc,
+                ),
+                "configuration_reader" => (
+                    OwnerStagedChange::ConfigurationReader {
+                        configuration: gents_protocol::owner_staged::SelectedConfiguration::Trigger,
+                        doc_id: trigger.clone(),
+                        agent_did: sibling.did().to_owned(),
+                    },
+                    &sibling_did,
+                    "Trigger",
+                    trigger,
+                ),
+                "configuration_outsider_reader" => (
+                    OwnerStagedChange::ConfigurationReader {
+                        configuration: gents_protocol::owner_staged::SelectedConfiguration::Trigger,
+                        doc_id: trigger.clone(),
+                        agent_did: f.outsider.did().to_owned(),
+                    },
+                    &outsider,
+                    "Trigger",
+                    trigger,
                 ),
                 other => panic!("unknown modeled path {other}"),
             };

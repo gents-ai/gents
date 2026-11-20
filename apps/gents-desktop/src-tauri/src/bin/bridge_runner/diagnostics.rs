@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gents_desktop_core::client::ClientCore;
+use gents_desktop_bridge::client_runtime::ClientRuntime;
 use gents_observe::observe::run_timeline_fetch::load_run_timeline_rows;
 use gents_store::config_client::ConfigAccess;
 use serde::Serialize;
@@ -137,7 +137,7 @@ pub(crate) async fn build_desktop_session_snapshot(
     let node_did = resolved_node_did.as_deref();
     let requester_scope = fixture.requester_scope(node_did, session_id, request_id);
     let access = fixture.desktop_core().operator_access(node_did?).ok()?;
-    let page = match gents_desktop_core::client::load_session_transcript_page_on(
+    let page = match gents_observe::client_projection::query::load_session_transcript_page_on(
         &access,
         session_id,
         node_did,
@@ -157,24 +157,25 @@ pub(crate) async fn build_desktop_session_snapshot(
             return None;
         }
     };
-    let context_store = match gents_desktop_core::client::load_session_context_store_on(
-        &access,
-        session_id,
-        node_did,
-        requester_scope.as_deref(),
-    )
-    .await
-    {
-        Ok(store) => Some(store),
-        Err(error) => {
-            tracing::warn!(
-                session_id,
-                error = %error,
-                "live bridge session context query failed; using bounded inexact totals"
-            );
-            None
-        }
-    };
+    let context_store =
+        match gents_observe::client_projection::query::load_session_context_store_on(
+            &access,
+            session_id,
+            node_did,
+            requester_scope.as_deref(),
+        )
+        .await
+        {
+            Ok(store) => Some(store),
+            Err(error) => {
+                tracing::warn!(
+                    session_id,
+                    error = %error,
+                    "live bridge session context query failed; using bounded inexact totals"
+                );
+                None
+            }
+        };
     let mut snapshot = build_session_snapshot_for_node_with_transcript(
         fixture.desktop_core().as_ref(),
         &access,
@@ -280,7 +281,7 @@ enum DiagnosticSource {
 
 async fn build_request_diagnostics(
     source: DiagnosticSource,
-    core: &ClientCore,
+    core: &ClientRuntime,
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
@@ -289,7 +290,9 @@ async fn build_request_diagnostics(
 ) -> RequestDiagnostics {
     let refresh_error = match source {
         DiagnosticSource::Remote => {
-            match gents_desktop_core::client::load_node_snapshot_on(access, node_did).await {
+            match gents_observe::client_projection::query::load_node_snapshot_on(access, node_did)
+                .await
+            {
                 Ok(snapshot) => {
                     core.stores().ensure(node_did).replace_snapshot(snapshot);
                     None
@@ -314,19 +317,19 @@ async fn build_request_diagnostics(
         .map(|session| session.node_did.clone());
     // Counts use a separate explicit diagnostic read, uncapped by the
     // interactive row budget.
-    let transcript_page = gents_desktop_core::client::load_session_transcript_page_on(
+    let transcript_page = gents_observe::client_projection::query::load_session_transcript_page_on(
         access,
         session_id,
         resolved_node_did.as_deref(),
         requester_scope.as_deref(),
         None,
-        Some(gents_desktop_core::client::MAX_SESSION_TRANSCRIPT_PAGE_SIZE),
+        Some(gents_observe::client_projection::query::MAX_SESSION_TRANSCRIPT_PAGE_SIZE),
     )
     .await
     .ok();
     let transcript_store = transcript_page.as_ref().map(|page| &page.store);
     let (diagnostics_store, transcript_diagnostics_error) =
-        match gents_desktop_core::client::load_session_diagnostics_store_on(
+        match gents_observe::client_projection::query::load_session_diagnostics_store_on(
             access,
             session_id,
             resolved_node_did.as_deref(),

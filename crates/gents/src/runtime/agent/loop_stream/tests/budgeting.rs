@@ -113,10 +113,10 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         gents_store::config_client::ConfigAccess::local_managed_agent(node.clone(), agent.did().parse().unwrap(), agent.as_ref()).unwrap()
             .write("test.reduction.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "session-3283", node_did: "{root_did}", agent_did: "{agent_did}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#)).await.unwrap();
         let request_doc_id = "request-doc-3283";
-        let model = ScriptedModel::new(vec![
+        let model = scripted([vec![
             RawStreamingChoice::Message("done".to_string()),
             RawStreamingChoice::FinalResponse(()),
-        ]);
+        ]]);
         let mut loop_config = config(0);
         loop_config.max_tokens = Some(max_tokens);
         loop_config.context_window = 6_500;

@@ -5,61 +5,11 @@ use sha2::{Digest, Sha512};
 
 use gents_store::identity::{NodeIdentity, ServiceAccount};
 
-#[allow(dead_code)]
-pub(crate) struct StubNodeIdentity {
-    pub did: String,
-}
-
-impl StubNodeIdentity {
-    #[allow(dead_code)]
-    pub(crate) fn new(did: impl Into<String>) -> Self {
-        Self { did: did.into() }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn arc(did: impl Into<String>) -> Arc<dyn NodeIdentity> {
-        Arc::new(Self::new(did))
-    }
-}
-
-#[async_trait]
-impl NodeIdentity for StubNodeIdentity {
-    fn did(&self) -> &str {
-        &self.did
-    }
-
-    async fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, gents_store::identity::IdentityError> {
-        panic!(
-            "StubNodeIdentity::sign called for {} — routing tests must not sign",
-            self.did
-        )
-    }
-
-    async fn verify(
-        &self,
-        _did: &str,
-        _payload: &[u8],
-        _sig: &[u8],
-    ) -> Result<bool, gents_store::identity::IdentityError> {
-        panic!(
-            "StubNodeIdentity::verify called for {} — routing tests must not verify",
-            self.did
-        )
-    }
-
-    fn service_account(&self) -> Option<&ServiceAccount> {
-        None
-    }
-}
-
-#[allow(dead_code)]
 pub(crate) struct SigningStubNodeIdentity {
     did: String,
 }
 
-#[allow(dead_code)]
 impl SigningStubNodeIdentity {
-    #[allow(dead_code)]
     pub(crate) fn arc(did: impl Into<String>) -> Arc<dyn NodeIdentity> {
         Arc::new(Self { did: did.into() })
     }

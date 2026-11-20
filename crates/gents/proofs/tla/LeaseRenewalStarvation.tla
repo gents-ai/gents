@@ -41,7 +41,10 @@
 \* tests that read the model run `lake`. `lease_holders_await_the_lean_snapshot`
 \* refuses a synchronous model read after a lease starts without that await,
 \* and `lean_generator_runs_stay_off_async_runtime_threads` keeps per-call
-\* generator runs off async bodies.
+\* generator runs off async bodies. A fourth test took the order through a
+\* file-local fixture the fence did not know by name (`plugin_job_dispatch`'s
+\* `step0`, which claims through `job_chain`), so the fence now also counts
+\* every function of a file that reaches a lease start.
 \*
 \* The lease's promise to its owner is conditional: an owner that holds a
 \* live lease keeps it while its runtime can schedule the renewal

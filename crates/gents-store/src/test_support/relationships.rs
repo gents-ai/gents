@@ -1,7 +1,7 @@
 //! Fixture relationship changes made the way production owners make them: by
 //! the acting identity inside a native transaction. Outside one, native
-//! relationship changes also require node `get-collection`, which an Agent
-//! (and a fixture User granted only its scenario's permissions) does not hold.
+//! relationship changes also require node `get-collection`, which a fixture
+//! User granted only its scenario's permissions does not hold.
 
 use crate::config_client::{ConfigAccess, ConfigClientError};
 

@@ -627,7 +627,7 @@ describe("the Packs page", () => {
           has_more: false,
         }),
       },
-      deployments: [{ ...node, nodeDid: "did:key:remote", source: "peer" }],
+      deployments: [{ ...node, nodeDid: "did:key:remote", local: false }],
     });
     renderIn(app, <PacksScreen />);
     expect(screen.getByText(/installed on that machine/)).toBeInTheDocument();

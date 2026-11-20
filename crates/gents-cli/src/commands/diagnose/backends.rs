@@ -161,6 +161,7 @@ async fn backend_check(
         &backend.endpoint,
         key.as_deref(),
         None,
+        backend.client_version.as_deref(),
     )
     .await
     .context("backend model discovery failed")?;

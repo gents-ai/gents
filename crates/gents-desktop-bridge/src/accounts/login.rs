@@ -13,7 +13,8 @@ use super::{
     provider_label, require_reachable_configuration, save_issued_credential, sign_in_label,
     PendingOAuthCredentials,
 };
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 pub(crate) fn provider(method: InferenceAuthMethod) -> Result<&'static str, BridgeError> {
     match method {

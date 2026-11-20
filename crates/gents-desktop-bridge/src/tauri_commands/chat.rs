@@ -1,4 +1,4 @@
-use crate::error::BridgeError;
+use gents_store::client_error::BridgeError;
 use tauri::State;
 
 use crate::commands::{rename_session, send_chat_message};

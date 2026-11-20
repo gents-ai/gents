@@ -1,18 +1,15 @@
-use std::io::Write;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use gents_store::test_support::bounded_process::{BoundedProcess, Exited};
 use serde_json::Value;
 
 use super::fs::read_captured_log;
-use super::ports;
-
-mod desktop_binary;
+use gents::support::ports;
 
 const MAX_STOLEN_PORT_ATTEMPTS: u32 = 3;
 
@@ -41,14 +38,6 @@ impl Drop for ServeProcess {
 }
 
 impl ServeProcess {
-    pub fn new(child: Child) -> Self {
-        Self {
-            child,
-            stdout_log: None,
-            stderr_log: None,
-        }
-    }
-
     pub fn with_logs(
         child: Child,
         stdout_log: tempfile::NamedTempFile,
@@ -88,68 +77,6 @@ impl ServeProcess {
 
 pub fn cli_bin() -> &'static str {
     env!("CARGO_BIN_EXE_gents")
-}
-
-pub fn desktop_bin() -> Result<PathBuf> {
-    let build = desktop_binary::DesktopBuild::for_cli(
-        Path::new(cli_bin()),
-        env!("GENTS_BUILD_TARGET"),
-        std::env::consts::EXE_SUFFIX,
-    )
-    .context("resolving desktop build from the invoking CLI artifact")?;
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| anyhow!("unable to resolve workspace root from CARGO_MANIFEST_DIR"))?;
-    let output = build
-        .cargo_command(workspace_root)
-        .stderr(Stdio::inherit())
-        .output()
-        .context("building gents-desktop binary for e2e")?;
-    let messages = desktop_binary::parse_artifact_messages(&output.stdout)
-        .context("decoding Cargo artifact messages")?;
-    for rendered in &messages.rendered {
-        std::io::stderr().write_all(rendered.as_bytes())?;
-    }
-    anyhow::ensure!(
-        output.status.success(),
-        "gents-desktop build failed: {}",
-        output.status
-    );
-    build
-        .reported_binary(messages.executable.as_deref())
-        .with_context(|| {
-            format!(
-                "checking Cargo's desktop artifact against {}",
-                build.binary.display()
-            )
-        })
-}
-
-pub fn run_desktop_init_json(node_home: &Path, desktop_home: &Path, label: &str) -> Result<Value> {
-    let output = Command::new(desktop_bin()?)
-        .env("RUST_LOG", "error")
-        .env("GENTS_HOME", node_home)
-        .env("GENTS_DESKTOP_HOME", desktop_home)
-        .arg("init")
-        .arg("--node-home")
-        .arg(node_home)
-        .arg("--desktop-home")
-        .arg(desktop_home)
-        .arg("--label")
-        .arg(label)
-        .arg("--json")
-        .output()
-        .context("running gents-desktop init")?;
-    if !output.status.success() {
-        bail!(
-            "gents-desktop init failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    serde_json::from_slice(&output.stdout).context("parsing JSON from gents-desktop init")
 }
 
 pub fn run_init_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
@@ -251,7 +178,7 @@ fn spawn_server_with_ready_json_inner(
                 .child
                 .try_wait()
                 .context("checking serve child status")?;
-            let timed_out = progressed_at.elapsed() >= super::waits::STALL_CEILING;
+            let timed_out = progressed_at.elapsed() >= gents_store::test_support::STALL_CEILING;
             if exited.is_some() || timed_out {
                 let (stdout, stderr) = serve.captured_output()?;
                 let addr = format!("127.0.0.1:{port}");
@@ -275,7 +202,7 @@ fn spawn_server_with_ready_json_inner(
                 }
                 bail!(
                     "gents server wrote nothing for {:?} before its readiness JSON\nstdout:\n{}\nstderr:\n{}",
-                    super::waits::STALL_CEILING,
+                    gents_store::test_support::STALL_CEILING,
                     stdout,
                     stderr
                 );
@@ -352,11 +279,7 @@ pub(crate) fn served_home_dir(
     home_dir.join(".gents")
 }
 
-/// Foreground test servers must retain ordinary CLI stderr even when the test
-/// runner was launched from a native service environment; explicit fixture
-/// overrides are applied afterward so native logging remains testable.
 pub(crate) fn configure_foreground_server_env(command: &mut Command, envs: &[(&str, &str)]) {
-    command.env_remove("GENTS_SYSTEM_LOG");
     for (name, value) in envs {
         command.env(name, value);
     }
@@ -397,18 +320,6 @@ pub fn wait_for_port(port: u16, serve: &mut ServeProcess) -> Result<()> {
         }
         thread::sleep(Duration::from_millis(200));
     }
-}
-
-pub fn spawn_cli(home_dir: &Path, args: &[&str]) -> Result<Child> {
-    Command::new(cli_bin())
-        .env("HOME", home_dir)
-        .env("RUST_LOG", "error")
-        .current_dir(home_dir)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("spawning gents {}", args.join(" ")))
 }
 
 /// A backstop, not an expectation: it turns a command that would hang until

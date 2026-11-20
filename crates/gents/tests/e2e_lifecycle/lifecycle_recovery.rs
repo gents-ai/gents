@@ -760,6 +760,8 @@ fn fixture_provider_message_key(
     )
 }
 
+const CANONICAL_OUTPUT_CREATED_AT: &str = "2026-03-23T00:00:05Z";
+
 fn canonical_created_doc_id(
     response: &gents::defra_node::QueryResponse,
     collection: &str,
@@ -777,17 +779,16 @@ fn canonical_created_doc_id(
         })
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn seed_completed_canonical_output(
     db: &crate::support::TestDb,
     agent_identity: &Arc<dyn gents_store::identity::NodeIdentity>,
     request_doc_id: &str,
     session_id: &str,
-    node_did: &str,
     generation: &str,
     content: &str,
-    created_at: &str,
 ) -> (String, String) {
+    let node_did = db.node_identity.did();
+    let created_at = CANONICAL_OUTPUT_CREATED_AT;
     let source = fixture_provider_turn_source();
     let segment = gents_protocol::output::OutputSegment {
         node_did: node_did.to_string(),
@@ -879,17 +880,16 @@ async fn seed_completed_canonical_output(
     (segment_doc_id, message_doc_id)
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn seed_open_canonical_flush(
     db: &crate::support::TestDb,
     agent_identity: &Arc<dyn gents_store::identity::NodeIdentity>,
     request_doc_id: &str,
     session_id: &str,
-    node_did: &str,
     generation: &str,
     content: &str,
-    created_at: &str,
 ) -> String {
+    let node_did = db.node_identity.did();
+    let created_at = CANONICAL_OUTPUT_CREATED_AT;
     let segment = gents_protocol::output::OutputSegment {
         node_did: node_did.to_string(),
         requester_did: Some(db.node_identity.did().to_owned()),
@@ -1009,10 +1009,8 @@ async fn recover_all_preserves_completed_canonical_output_after_lease_expiry() {
         &agent_identity,
         &request_doc_id,
         "session-complete",
-        db.node_identity.did(),
         "expired-completed-generation",
         "complete",
-        "2026-03-23T00:00:05Z",
     )
     .await;
     let report = RequestLifecycle::recover_all_with_identities(
@@ -1127,10 +1125,8 @@ async fn recover_all_leaves_live_execution_lease_untouched() {
         &agent_identity,
         &request_doc_id,
         "live-session",
-        db.node_identity.did(),
         "live-generation",
         "still running",
-        "2026-03-23T00:00:05Z",
     )
     .await;
 
@@ -1235,10 +1231,8 @@ async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
         &agent_identity,
         &request_doc_id,
         "interrupted-session",
-        db.node_identity.did(),
         "expired-interrupt-generation",
         "partial turn",
-        "2026-03-23T00:00:05Z",
     )
     .await;
     let interrupt_requested_at = chrono::Utc::now().to_rfc3339();

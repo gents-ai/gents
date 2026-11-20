@@ -1,7 +1,6 @@
 use crate::support::*;
 
 use std::fs;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
@@ -120,11 +119,9 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let port = allocate_port()?;
+    let (serve, port, _) =
+        spawn_server_with_ready_json_recovering(&home_dir, allocate_port()?, &[], &[])?;
     let graphql = graphql_url(port);
-    let mut serve = spawn_server_with_env(&home_dir, port, &[], &[])?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let healthy = run_cli_json(&home_dir, &["runtime", "diagnose", "--graphql", &graphql])?;
     assert_eq!(

@@ -299,24 +299,22 @@ async fn try_step_on(
     };
     let staged = Mutex::new(Vec::new());
     let stepped = {
-        let (input, pin, output, receipt, cause, staged, lifecycle) = (
-            &input,
-            &pin,
-            &output,
-            &receipt,
-            &cause,
-            &staged,
-            &*lifecycle,
-        );
+        let step = StepCommit {
+            lifecycle: &*lifecycle,
+            input: &input,
+            pin: &pin,
+            revision,
+            output: &output,
+            receipt: &receipt,
+            cause: &cause,
+            staged: &staged,
+        };
+        let step = &step;
         access
             .transact_write("plugin_job.run_step", |txn| {
                 Box::pin(async move {
-                    staged.lock().expect("staged requests lock").clear();
-                    step_transaction(
-                        txn, runtime, lifecycle, input, pin, revision, output, receipt, cause,
-                        staged,
-                    )
-                    .await
+                    step.staged.lock().expect("staged requests lock").clear();
+                    step_transaction(txn, runtime, step).await
                 })
             })
             .await
@@ -374,21 +372,38 @@ async fn try_step_on(
 #[cfg(test)]
 pub(super) static STEP_TRANSACTION_RUNS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// The step a guest returned, as its transaction commits it: the row's
+/// lifecycle, the input and pin it ran on at progress `revision`, its output
+/// and receipt, the cause its staged requests carry, and the requests it
+/// staged, kept for commit recovery.
+struct StepCommit<'a> {
+    lifecycle: &'a ToolCallLifecycle,
+    input: &'a JobStepInput,
+    pin: &'a JobPin,
+    revision: u64,
+    output: &'a JobStepOutput,
+    receipt: &'a PluginExecutionReceipt,
+    cause: &'a SessionMessageCause,
+    staged: &'a Mutex<Vec<gents_protocol::request_admission::AgentRequestCreate>>,
+}
+
 /// The step transaction: it re-reads every fact it admits against, so a
 /// conflict re-runs it whole and writes nothing in memory.
-#[allow(clippy::too_many_arguments)]
 async fn step_transaction(
     txn: &ConfigApplyTxn<'_>,
     runtime: &JobRuntime,
-    lifecycle: &ToolCallLifecycle,
-    input: &JobStepInput,
-    pin: &JobPin,
-    revision: u64,
-    output: &JobStepOutput,
-    receipt: &PluginExecutionReceipt,
-    cause: &SessionMessageCause,
-    staged: &Mutex<Vec<gents_protocol::request_admission::AgentRequestCreate>>,
+    step: &StepCommit<'_>,
 ) -> Result<Stepped> {
+    let StepCommit {
+        lifecycle,
+        input,
+        pin,
+        revision,
+        output,
+        receipt,
+        cause,
+        staged,
+    } = *step;
     let row_doc_id = input.job.row_doc_id.as_str();
     #[cfg(test)]
     STEP_TRANSACTION_RUNS

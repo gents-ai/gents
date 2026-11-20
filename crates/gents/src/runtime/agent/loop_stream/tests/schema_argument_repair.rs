@@ -34,7 +34,7 @@ async fn schema_argument_repairs_drive_the_owned_loop() {
         )));
     }
     turn.push(RawStreamingChoice::FinalResponse(()));
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         turn,
         vec![
             RawStreamingChoice::Message("done".into()),
@@ -48,7 +48,7 @@ async fn schema_argument_repairs_drive_the_owned_loop() {
             TaggedMessage::unassociated(Message::user("exercise schema repairs")),
             Vec::new(),
             Arc::new(tools),
-            owned_config(4),
+            owned_config_for(4, &lifecycle),
         ),
         &hook,
         &writer,
@@ -62,7 +62,7 @@ async fn schema_argument_repairs_drive_the_owned_loop() {
     assert_eq!(rows.len(), cases.len());
     assert!(rows.iter().all(|row| row["lifecycle_state"] == "completed"));
     let access = lifecycle.access().unwrap();
-    let requests = model.seen_requests().await;
+    let requests = model.requests();
     let threaded = requests
         .last()
         .unwrap()

@@ -35,7 +35,8 @@ impl ConfigCommandTool {
             .pointer("/runtime_effective/effective/root")
             .and_then(Value::as_str)
             .context("configuration discovery requires an effective tool root")?;
-        let context = crate::native::ToolContext::new(root.into(), false)?;
+        let context = crate::native::ToolContext::new(root.into(), false)
+            .map(|context| context.for_call(&self.envelope))?;
         let sources = requested
             .into_iter()
             .map(|source| {

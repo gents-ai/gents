@@ -56,20 +56,20 @@ async fn production_materializer_persists_event_source_document_lineage() {
     let task = resolved_task_for_test("task-event", &agent_did, "event body");
 
     let request_id = materializer
-        .materialize(
-            &task,
-            Some("event-trigger"),
-            TriggerKind::Event,
-            Some(&trigger_doc_id),
-            Some("source-doc-exact"),
-            None,
-            None,
-            "event body",
-            None,
-            "event-test-fire",
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("event-trigger"),
+            trigger_kind: TriggerKind::Event,
+            trigger_doc_id: Some(&trigger_doc_id),
+            source_doc_id: Some("source-doc-exact"),
+            correlation: None,
+            trigger_context: None,
+            rendered_prompt: "event body",
+            rendered_goal_objective: None,
+            durable_fire_key: "event-test-fire",
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect("Event materialize should succeed");
 
@@ -212,20 +212,20 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let task = resolved_task_for_test("task-lead", &agent_did, "continue the lead");
     let request_id = materializer
-        .materialize(
-            &task,
-            Some("lead-outcomes"),
-            TriggerKind::Event,
-            Some(&trigger_doc_id),
-            Some("outcome-doc"),
-            None,
-            None,
-            "continue the lead",
-            None,
-            &fire.fire_key,
-            Some(&prepared),
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("lead-outcomes"),
+            trigger_kind: TriggerKind::Event,
+            trigger_doc_id: Some(&trigger_doc_id),
+            source_doc_id: Some("outcome-doc"),
+            correlation: None,
+            trigger_context: None,
+            rendered_prompt: "continue the lead",
+            rendered_goal_objective: None,
+            durable_fire_key: &fire.fire_key,
+            delivery: Some(&prepared),
+            prepared_ids: None,
+        })
         .await
         .expect("a fire into the paired client's session is delivered");
     assert_eq!(request_id, fire.request_id);
@@ -303,20 +303,20 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let task = resolved_task_for_test("task-schedule", &agent_did, "schedule body");
     let request_id = materializer
-        .materialize(
-            &task,
-            Some("schedule-trigger"),
-            TriggerKind::Schedule,
-            Some(&trigger_doc_id),
-            None,
-            None,
-            None,
-            "schedule body",
-            None,
-            "schedule-test-fire",
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("schedule-trigger"),
+            trigger_kind: TriggerKind::Schedule,
+            trigger_doc_id: Some(&trigger_doc_id),
+            source_doc_id: None,
+            correlation: None,
+            trigger_context: None,
+            rendered_prompt: "schedule body",
+            rendered_goal_objective: None,
+            durable_fire_key: "schedule-test-fire",
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .unwrap();
     let response = agent
@@ -360,20 +360,20 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
     let materializer = ProductionMaterializer::new(node, rx);
 
     let missing = materializer
-        .materialize(
-            &task,
-            Some("event-trigger"),
-            TriggerKind::Event,
-            Some("event-trigger-config-doc"),
-            None,
-            None,
-            None,
-            "body",
-            None,
-            "invalid-event-test-fire",
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("event-trigger"),
+            trigger_kind: TriggerKind::Event,
+            trigger_doc_id: Some("event-trigger-config-doc"),
+            source_doc_id: None,
+            correlation: None,
+            trigger_context: None,
+            rendered_prompt: "body",
+            rendered_goal_objective: None,
+            durable_fire_key: "invalid-event-test-fire",
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect_err("Event materialization without a source document must fail closed");
     assert!(
@@ -382,20 +382,20 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
     );
 
     let misplaced = materializer
-        .materialize(
-            &task,
-            Some("schedule-trigger"),
-            TriggerKind::Schedule,
-            Some("schedule-trigger-config-doc"),
-            Some("event-doc-on-schedule"),
-            None,
-            None,
-            "body",
-            None,
-            "invalid-schedule-test-fire",
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("schedule-trigger"),
+            trigger_kind: TriggerKind::Schedule,
+            trigger_doc_id: Some("schedule-trigger-config-doc"),
+            source_doc_id: Some("event-doc-on-schedule"),
+            correlation: None,
+            trigger_context: None,
+            rendered_prompt: "body",
+            rendered_goal_objective: None,
+            durable_fire_key: "invalid-schedule-test-fire",
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect_err("non-Event materialization must reject source document lineage");
     assert!(
@@ -418,20 +418,20 @@ async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
     let task = resolved_task_for_test("task-manual", "general", "manual body");
 
     let err = materializer
-        .materialize(
-            &task,
-            Some("manual-must-not-have-id"),
-            TriggerKind::Manual,
-            None,
-            None,
-            None,
-            None,
-            "manual body",
-            None,
-            "invalid-manual-test-fire",
-            None,
-            None,
-        )
+        .materialize(FireMaterialization {
+            task: &task,
+            trigger_id: Some("manual-must-not-have-id"),
+            trigger_kind: TriggerKind::Manual,
+            trigger_doc_id: None,
+            source_doc_id: None,
+            correlation: None,
+            trigger_context: None,
+            rendered_prompt: "manual body",
+            rendered_goal_objective: None,
+            durable_fire_key: "invalid-manual-test-fire",
+            delivery: None,
+            prepared_ids: None,
+        })
         .await
         .expect_err("Manual materialize with trigger_id must fail before persistence");
 

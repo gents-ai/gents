@@ -155,7 +155,7 @@ async fn ensure_home_identity(
     }
 
     let data_dir = gents_service::home_state::default_data_dir(home_dir);
-    let store_lock = crate::commands::init::lock_init_store(home_dir, &data_dir, false)?;
+    let store_lock = crate::commands::init::lock_init_store(home_dir, &data_dir, false).await?;
     if let Some(report) = read_init_config(home_dir)?.and_then(report_from_stored_identity) {
         return Ok(report);
     }

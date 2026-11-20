@@ -363,6 +363,7 @@ pub async fn load_compaction_entries(
     Ok(entries)
 }
 
+#[derive(Clone, Copy)]
 pub struct NewExactSessionCompaction<'a> {
     pub agent_did: &'a str,
     pub session_id: &'a str,
@@ -388,42 +389,33 @@ pub async fn save_exact_compaction_entry(
 ) -> Result<CompactionEntry> {
     save_compaction_entry_with_access(
         access,
-        input.agent_did,
-        input.session_id,
-        input.node_did,
-        input.requester_did,
-        input.request_id,
-        input.request_doc_id,
+        input,
         reduction.checkpoint,
-        input.files_read,
-        input.files_modified,
         reduction.messages_compacted()?,
-        input.compacted_through_sequence,
-        input.original_tokens,
-        input.compacted_tokens,
-        input.expected_generation,
     )
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn save_compaction_entry_with_access(
     access: &gents_store::config_client::ConfigAccess,
-    agent_did: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    request_id: &str,
-    request_doc_id: &str,
+    input: NewExactSessionCompaction<'_>,
     summary: &str,
-    files_read: &[String],
-    files_modified: &[String],
     messages_compacted: u32,
-    compacted_through_sequence: u32,
-    original_tokens: usize,
-    compacted_tokens: usize,
-    expected_generation: &str,
 ) -> Result<CompactionEntry> {
+    let NewExactSessionCompaction {
+        agent_did,
+        session_id,
+        node_did,
+        requester_did,
+        request_id,
+        request_doc_id,
+        files_read,
+        files_modified,
+        compacted_through_sequence,
+        original_tokens,
+        compacted_tokens,
+        expected_generation,
+    } = input;
     let compacted_through_sequence = Some(compacted_through_sequence);
     let summary = summary.trim().to_string();
     let summary = &summary;
@@ -480,22 +472,9 @@ pub(super) async fn save_compaction_entry_with_access(
                     validate_compaction_chain(node_did, session_id, requester_did, &rows)?;
                     let actual_generation = compaction_generation(&rows)?;
                     if actual_generation != expected_generation {
-                        if let Some(entry) = reconcile_exact_redelivery(
-                            &rows,
-                            expected_generation,
-                            session_id,
-                            node_did,
-                            requester_did,
-                            request_id,
-                            request_doc_id,
-                            summary,
-                            files_read,
-                            files_modified,
-                            messages_compacted,
-                            compacted_through_sequence,
-                            original_tokens,
-                            compacted_tokens,
-                        )? {
+                        if let Some(entry) =
+                            reconcile_exact_redelivery(&rows, input, summary, messages_compacted)?
+                        {
                             return Ok(entry);
                         }
                     }
@@ -684,23 +663,26 @@ fn validate_file_path_projection_chain(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn reconcile_exact_redelivery(
     rows: &[CompactionGenerationRow],
-    expected_generation: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    request_id: &str,
-    request_doc_id: &str,
+    input: NewExactSessionCompaction<'_>,
     summary: &str,
-    files_read: &[String],
-    files_modified: &[String],
     messages_compacted: u32,
-    compacted_through_sequence: Option<u32>,
-    original_tokens: usize,
-    compacted_tokens: usize,
 ) -> Result<Option<CompactionEntry>> {
+    let NewExactSessionCompaction {
+        expected_generation,
+        session_id,
+        node_did,
+        requester_did,
+        request_id,
+        request_doc_id,
+        files_read,
+        files_modified,
+        original_tokens,
+        compacted_tokens,
+        ..
+    } = input;
+    let compacted_through_sequence = Some(input.compacted_through_sequence);
     let Some(predecessor_len) = (0..rows.len()).find(|length| {
         compaction_generation(&rows[..*length]).ok().as_deref() == Some(expected_generation)
     }) else {

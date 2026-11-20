@@ -1,0 +1,4 @@
+---- MODULE MCCommitResponseWaitDroppedAnswer ----
+EXTENDS CommitResponseWait
+
+====

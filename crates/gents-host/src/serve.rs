@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use axum::{routing::get, Router};
 use gents::defra_node::Node as EmbeddedNode;
 use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState};
+use gents_p2p::p2p_reconcile::intervals::P2pIntervals;
 use gents_store::{identity::KeyIdentity, identity::NodeIdentity};
 use gents_tools::mcp::pool::McpPool;
 use serde_json::{json, Value};
@@ -22,7 +23,10 @@ use uuid::Uuid;
 
 use crate::args::*;
 use crate::defaults::*;
-use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
+use crate::http::router::{
+    EnrollmentHandles, RouterIdentity, RuntimeActivation, RuntimeActivationObservation,
+    ServeLifecycleHandle, ToolSurface,
+};
 use crate::http::runtime_contract_router;
 use crate::tool_ceiling::{format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg};
 use gents_protocol::row::{
@@ -492,13 +496,14 @@ async fn wait_for_embedded_http_bind(
     }
 }
 
-async fn stall_after_client_access_for_tests() -> Result<()> {
-    let Some(path) = std::env::var_os("GENTS_TEST_STALL_AFTER_CLIENT_ACCESS") else {
+#[cfg(feature = "test-fixtures")]
+async fn stall_after_client_access(path: Option<&Path>) -> Result<()> {
+    let Some(path) = path else {
         return Ok(());
     };
-    tokio::fs::File::open(&path)
+    tokio::fs::File::open(path)
         .await
-        .with_context(|| format!("opening the configured startup stall {path:?}"))?;
+        .with_context(|| format!("opening the configured startup stall {}", path.display()))?;
     Ok(())
 }
 
@@ -522,6 +527,10 @@ async fn serve_foreground(
     // A home whose identity can never own the node is refused from its
     // configuration alone, before any store is reserved or opened.
     gents_store::local::home::ensure_home_identity_can_serve(&home_dir)?;
+    let init_config = read_init_config(&home_dir)?;
+    if let Some(config) = init_config.as_ref() {
+        gents_store::local::document_acp::ensure_home_opens(config)?;
+    }
     let data_dir = args
         .data_dir
         .clone()
@@ -533,6 +542,7 @@ async fn serve_foreground(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
+    gents_store::local::backend_protection::refuse_earlier_lineage(&data_dir)?;
     let watched_home = home_dir.clone();
     let (_held_home, home_identity) =
         tokio::task::spawn_blocking(move || home_watch::hold_home(&watched_home)).await??;
@@ -593,7 +603,6 @@ async fn serve_foreground(
     if let Some(url) = &advertised_graphql_url {
         gents_p2p::p2p_reconcile::endpoint::validate_advertised_graphql_url(url)?;
     }
-    let init_config = read_init_config(&home_dir)?;
     if let (Some(explicit), Some(config)) = (args.node_name.as_deref(), init_config.as_ref()) {
         if explicit != config.node_name {
             anyhow::bail!(
@@ -621,8 +630,16 @@ async fn serve_foreground(
     let _post_open_keychain_prompt_guard =
         gents_service::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
     let protected_backend = protected_backend
-        .preflight(&backend_store_key, Some(identity.did()))
-        .await?;
+        .preflight(
+            &backend_store_key,
+            &identity,
+            init_config
+                .as_ref()
+                .map(|config| config.document_acp)
+                .unwrap_or_default(),
+        )
+        .await?
+        .with_block_cache_bytes(block_cache_bytes(args.block_cache_mb)?);
     let effective_tool_ceiling = args
         .tool_ceiling
         .or_else(|| init_config.as_ref().map(|config| config.tool_ceiling))
@@ -701,33 +718,46 @@ async fn serve_foreground(
     )
     .with_client_signing_capability(identity.client_signing_capability()?)?;
     let runtime_routers = runtime_contract_router(
-        graphql_url.clone(),
-        runtime_graphql.clone(),
-        node_name.clone(),
-        identity.did().to_string(),
-        format_tool_ceiling(effective_tool_ceiling).to_string(),
-        effective_tool_root
-            .as_deref()
-            .map(|root| {
-                gents_session::workspace::root_resolution::resolve_configured_tool_root(root)
-                    .map(|resolved| resolved.to_string_lossy().into_owned())
-                    .map_err(|error| {
-                        format!("tool root {} does not resolve: {error:#}", root.display())
-                    })
-            })
-            .transpose(),
-        args.cli_tools.clone(),
-        Some(home_dir.to_string_lossy().into_owned()),
-        Some(data_dir.clone()),
-        mcp_options,
+        RouterIdentity {
+            graphql: graphql_url.clone(),
+            p2p_graphql: runtime_graphql.clone(),
+            node_name: node_name.clone(),
+            node_did: identity.did().to_string(),
+            node_identity: Some(identity.clone()),
+            document_acp: init_config
+                .as_ref()
+                .map(|config| config.document_acp)
+                .unwrap_or_default(),
+        },
+        ToolSurface {
+            tool_ceiling: format_tool_ceiling(effective_tool_ceiling).to_string(),
+            tool_root: effective_tool_root
+                .as_deref()
+                .map(|root| {
+                    gents_session::workspace::root_resolution::resolve_configured_tool_root(root)
+                        .map(|resolved| resolved.to_string_lossy().into_owned())
+                        .map_err(|error| {
+                            format!("tool root {} does not resolve: {error:#}", root.display())
+                        })
+                })
+                .transpose(),
+            cli_tools: args.cli_tools.clone(),
+            home: Some(home_dir.to_string_lossy().into_owned()),
+            store_dir: Some(data_dir.clone()),
+            mcp: mcp_options,
+        },
+        EnrollmentHandles {
+            offer_issuer: enrollment_offer_issuer.clone(),
+            decisions: enrollment_decisions.clone(),
+            p2p_admission: p2p_admission_state.clone(),
+        },
+        RuntimeActivation {
+            runtime: activation_runtime.clone(),
+            observation: activation_rx,
+            replicated_schema: replicated_schema.clone(),
+            serve_lifecycle: serve_lifecycle.clone(),
+        },
         Some(backend_health.clone()),
-        p2p_admission_state.clone(),
-        enrollment_offer_issuer.clone(),
-        enrollment_decisions.clone(),
-        activation_runtime.clone(),
-        activation_rx,
-        replicated_schema.clone(),
-        serve_lifecycle.clone(),
     );
     let scrape_state = runtime_routers.scrape_state;
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
@@ -749,9 +779,18 @@ async fn serve_foreground(
         .with_startup_gate(client_access_ready.clone(), bind_probe_path.clone());
     let streams =
         crate::http::shutdown_streams::ShutdownStreams::new(runtime.shutdown_tx.subscribe());
+    let edge = gents_store::local::document_acp::HttpEdge::new(
+        init_config
+            .as_ref()
+            .map(|config| config.document_acp)
+            .unwrap_or_default(),
+        identity.did(),
+    );
     let http_config = defra_node::HttpConfig::with_addr(http_addr)
-        .with_extra_routes(extra_routes)
-        .with_router_transform(Arc::new(move |router| authority.wrap(streams.wrap(router))));
+        .with_authenticated_routes(extra_routes)
+        .with_router_transform(Arc::new(move |router| {
+            authority.wrap(streams.wrap(edge.wrap(router)))
+        }));
     anyhow::ensure!(
         server_identity.node_identity_did.as_deref() == Some(identity.did()),
         "runtime identity does not match the protected store identity"
@@ -816,7 +855,8 @@ async fn serve_foreground(
             .await
             .context("claiming the readiness this home's previous process left behind")?;
         client_access_ready.store(true, std::sync::atomic::Ordering::Release);
-        stall_after_client_access_for_tests().await?;
+        #[cfg(feature = "test-fixtures")]
+        stall_after_client_access(args.stall_after_client_access.as_deref()).await?;
         gents_store::local::store_key::upgrade::finish(&data_dir)?;
         let schema = gents_p2p::p2p_reconcile::read_client_replicated_schema(node.clone())
             .await
@@ -848,6 +888,9 @@ async fn serve_foreground(
                 tool_ceiling,
                 plugin_home: Some(home_dir.clone()),
                 backend_health: Some(backend_health.clone()),
+                p2p_intervals: p2p_intervals(&args),
+                p2p_network_id: args.p2p_network_id.clone(),
+                system_log: args.system_log,
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,
@@ -902,13 +945,15 @@ async fn serve_foreground(
             let p2p_status =
                 load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission)
                     .await?;
-            if let Some(p2p) = gents_store::identity::node_p2p(&node) {
+            if let (Some(p2p), Some(network)) =
+                (gents_p2p::node_access::operations(&node), enrollment_network)
+            {
                 *enrollment_offer_issuer.write().await =
                     Some(gents_p2p::p2p_reconcile::EnrollmentOfferIssuer::new(
                         node.clone(),
                         identity.clone(),
                         p2p,
-                        enrollment_network.network_id,
+                        network.network_id,
                         identity.did().to_string(),
                         "client".to_string(),
                     ));
@@ -1591,7 +1636,7 @@ async fn load_local_server_p2p_status(
             "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
-            let p2p = gents_store::identity::node_p2p(node).ok_or_else(|| {
+            let p2p = gents_p2p::node_access::operations(node).ok_or_else(|| {
                 anyhow::anyhow!(
                     "P2P transport was requested but is not available on the embedded node"
                 )
@@ -1647,6 +1692,26 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
 }
 
+fn p2p_intervals(args: &ServeArgs) -> P2pIntervals {
+    let millis = |value: Option<u64>| value.map(Duration::from_millis);
+    P2pIntervals::with_overrides(
+        millis(args.p2p_registry_heartbeat_ms),
+        millis(args.p2p_pairing_sweep_ms),
+        millis(args.p2p_endpoint_heartbeat_ms),
+        millis(args.p2p_registry_stale_ms),
+    )
+}
+
+fn block_cache_bytes(mib: Option<u64>) -> Result<usize> {
+    let Some(mib) = mib else {
+        return Ok(gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES);
+    };
+    usize::try_from(mib)
+        .ok()
+        .and_then(|mib| mib.checked_mul(1024 * 1024))
+        .with_context(|| format!("--block-cache-mb {mib} exceeds the addressable size"))
+}
+
 #[cfg(all(test, unix))]
 mod server_key_tests {
     use super::*;
@@ -1661,6 +1726,48 @@ mod server_key_tests {
             Some(Command::Server(args)) => args,
             _ => panic!("expected `server`"),
         }
+    }
+
+    #[test]
+    fn p2p_flags_default_derive_and_refuse_zero_or_blank() {
+        assert_eq!(p2p_intervals(&parse_server(&[])), P2pIntervals::default());
+        let overridden = p2p_intervals(&parse_server(&[
+            "--p2p-registry-heartbeat-ms",
+            "1000",
+            "--p2p-pairing-sweep-ms",
+            "500",
+        ]));
+        assert_eq!(overridden.pairing_sweep, Duration::from_millis(500));
+        assert_eq!(overridden.endpoint_heartbeat, Duration::from_millis(1000));
+        assert_eq!(overridden.registry_stale_after, Duration::from_millis(3000));
+        assert_eq!(
+            parse_server(&["--p2p-network-id", " lab "]).p2p_network_id,
+            Some("lab".to_string())
+        );
+        for refused in [
+            ["--p2p-pairing-sweep-ms", "0"],
+            ["--p2p-registry-stale-ms", "0"],
+            ["--p2p-network-id", " "],
+        ] {
+            let mut argv = vec!["gents", "server"];
+            argv.extend(refused);
+            assert!(Cli::try_parse_from(argv).is_err(), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn block_cache_flag_defaults_and_refuses_zero() {
+        let unset = parse_server(&[]);
+        assert_eq!(
+            block_cache_bytes(unset.block_cache_mb).unwrap(),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES
+        );
+        let sized = parse_server(&["--block-cache-mb", "128"]);
+        assert_eq!(
+            block_cache_bytes(sized.block_cache_mb).unwrap(),
+            128 * 1024 * 1024
+        );
+        assert!(Cli::try_parse_from(["gents", "server", "--block-cache-mb", "0"]).is_err());
     }
 
     #[cfg(unix)]

@@ -57,7 +57,7 @@ async fn snapshot_of(
             .expect("store observer is running");
     }
     let access = served.runtime.user_access();
-    let page = gents_desktop_core::client::load_session_transcript_page_on(
+    let page = gents_observe::client_projection::query::load_session_transcript_page_on(
         &access,
         session_id,
         Some(node),

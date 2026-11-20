@@ -15,13 +15,15 @@ impl DefraSessionHook {
         let requester_did = self.active_requester_did().await;
         let mut lifecycle = self
             .adopt_accepted_tool_dispatch(
-                internal_call_id,
-                tool_call_id.as_deref(),
-                &request_id,
-                &session_id,
-                WAIT_PROCESS_TOOL_NAME,
-                args,
-                parent_deadline_at,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id,
+                    provider_call_id: tool_call_id.as_deref(),
+                    request_id: &request_id,
+                    session_id: &session_id,
+                    tool_name: WAIT_PROCESS_TOOL_NAME,
+                    args,
+                    deadline_at: parent_deadline_at,
+                },
                 gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
@@ -134,13 +136,15 @@ impl DefraSessionHook {
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
             .adopt_accepted_tool_dispatch(
-                internal_call_id,
-                tool_call_id.as_deref(),
-                &request_id,
-                &session_id,
-                LIST_PROCESSES_TOOL_NAME,
-                args,
-                deadline_at,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id,
+                    provider_call_id: tool_call_id.as_deref(),
+                    request_id: &request_id,
+                    session_id: &session_id,
+                    tool_name: LIST_PROCESSES_TOOL_NAME,
+                    args,
+                    deadline_at,
+                },
                 gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
@@ -191,13 +195,15 @@ impl DefraSessionHook {
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
             .adopt_accepted_tool_dispatch(
-                internal_call_id,
-                tool_call_id.as_deref(),
-                &request_id,
-                &session_id,
-                READ_PROCESS_TOOL_NAME,
-                args,
-                deadline_at,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id,
+                    provider_call_id: tool_call_id.as_deref(),
+                    request_id: &request_id,
+                    session_id: &session_id,
+                    tool_name: READ_PROCESS_TOOL_NAME,
+                    args,
+                    deadline_at,
+                },
                 gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;
