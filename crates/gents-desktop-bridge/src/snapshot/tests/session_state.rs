@@ -456,23 +456,27 @@ fn requester_scope_does_not_cross_canonical_output_facts() {
     };
     push_canonical_text_message_for_node(
         &mut rows,
-        "owner",
-        "session-1",
-        None,
-        1,
-        MessageRole::User,
-        "owner prompt",
+        CanonicalText {
+            doc_id: "owner",
+            session_id: "session-1",
+            request_doc_id: None,
+            sequence: 1,
+            role: MessageRole::User,
+            text: "owner prompt",
+        },
         "did:test:amy",
         None,
     );
     push_canonical_text_message_for_node(
         &mut rows,
-        "other",
-        "session-1",
-        None,
-        2,
-        MessageRole::User,
-        "other prompt",
+        CanonicalText {
+            doc_id: "other",
+            session_id: "session-1",
+            request_doc_id: None,
+            sequence: 2,
+            role: MessageRole::User,
+            text: "other prompt",
+        },
         "did:test:amy",
         Some("did:test:other"),
     );

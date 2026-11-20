@@ -510,9 +510,7 @@ pub fn write_declaration_refused(protected: bool, managed: bool, mailbox: bool) 
 }
 
 fn reject_managed_collection_name(collection: &str) -> Result<()> {
-    let managed = gents_store::schema::migration::DEFAULT_REGISTRY
-        .managed_names()
-        .any(|name| name == collection)
+    let managed = gents_store::schema::catalog::RUNTIME_CATALOG.manages(collection)
         || gents_protocol::schemas::is_replicated_protocol_collection(collection);
     if write_declaration_refused(
         PROTECTED_DATASTORE_COLLECTIONS.contains(&collection),
@@ -634,7 +632,7 @@ mod tests {
 
     #[test]
     fn a_write_tool_declares_no_collection_gents_manages_but_the_mailbox() {
-        let managed = gents_store::schema::migration::DEFAULT_REGISTRY
+        let managed = gents_store::schema::catalog::RUNTIME_CATALOG
             .managed_names()
             .chain(
                 gents_protocol::schemas::REPLICATED_PROTOCOL_COLLECTION_NAMES

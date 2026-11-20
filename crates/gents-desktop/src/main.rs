@@ -72,10 +72,7 @@ fn run_command(command: Command) -> anyhow::Result<()> {
                 .enable_all()
                 .build()
                 .map_err(|error| anyhow::anyhow!(error))?;
-            let desktop_paths = match args.desktop_home {
-                Some(root) => DesktopPaths::from_root(root),
-                None => DesktopPaths::discover()?,
-            };
+            let desktop_paths = DesktopPaths::resolve(args.desktop_home)?;
             if args.dangerously_overwrite {
                 dangerously_overwrite_desktop_home(desktop_paths.root())?;
             } else if args.reset {
@@ -237,4 +234,63 @@ fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
     .fold(filter, |filter, directive| {
         filter.add_directive(directive.parse().expect("valid tracing directive"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_launcher_command_line_is_well_formed() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn init_reads_every_flag() {
+        let cli = Cli::try_parse_from([
+            "gents-desktop",
+            "init",
+            "--node-home",
+            "node",
+            "--desktop-home",
+            "desktop",
+            "--reset",
+            "--label",
+            "Studio",
+            "--json",
+        ])
+        .expect("init flags parse");
+        let Some(Command::Init(args)) = cli.command else {
+            panic!("init is a subcommand");
+        };
+        assert_eq!(args.node_home, Some(PathBuf::from("node")));
+        assert_eq!(args.desktop_home, Some(PathBuf::from("desktop")));
+        assert!(args.reset && args.json && !args.dangerously_overwrite);
+        assert_eq!(args.label.as_deref(), Some("Studio"));
+    }
+
+    #[test]
+    fn no_subcommand_launches_the_desktop() {
+        let cli = Cli::try_parse_from(["gents-desktop"]).expect("bare launch parses");
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn a_debug_build_is_one_under_a_debug_profile_directory() {
+        assert!(is_debug_build(Path::new(
+            "target/debug/gents-desktop-tauri"
+        )));
+        assert!(!is_debug_build(Path::new(
+            "target/release/gents-desktop-tauri"
+        )));
+        assert!(!is_debug_build(Path::new(
+            "target/debugger/gents-desktop-tauri"
+        )));
+    }
+
+    #[test]
+    fn every_transport_noise_directive_parses() {
+        with_default_transport_noise_filters(EnvFilter::new("warn"));
+    }
 }

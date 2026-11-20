@@ -572,6 +572,19 @@ See `../README.md` for how this fits the broader formal-verification model.
   restart, regressing the clock and authentication), `Overlap` (two
   recoveries read and keep at once) and `OwnRead` (ordered reads, but a
   request mints from its own read's answer after a newer one was kept).
+- `CallerAncestry` — a `gents runtime service stop` caller walking its parent
+  chain to decide whether the service's job is its ancestor while processes
+  exit, orphans are adopted and freed process IDs are reused. The caller asks
+  the service manager for the job's pid, reads its own parent, then one
+  parent per step; Lean `ServiceLifecycle.CallerObservation.callerRunsOnTarget`
+  and `admission` decide. `NoSelfStop` (no admitted stop ends the job the
+  caller runs under), `QuietOutsiderIsAdmitted` (an outside caller whose
+  readable chain holds still is admitted) and `Terminates` hold. RED:
+  `UnreadableAsRoot` ends the walk at an unreadable link as if at the root;
+  `Subreaper` lets the job adopt orphans of its tree, which the Lean premise
+  excludes, and a parent read through a reused pid misses the job;
+  `ShortBound` gives up before the root of a real chain; `Unbounded` walks
+  forever through reused pids.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking

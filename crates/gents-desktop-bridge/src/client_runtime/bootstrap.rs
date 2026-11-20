@@ -10,7 +10,7 @@ use tokio::sync::watch;
 
 impl ClientRuntime {
     pub async fn start() -> Result<Self> {
-        Self::start_with_paths(DesktopPaths::discover()?).await
+        Self::start_with_paths(DesktopPaths::platform_default()?).await
     }
     pub async fn start_with_paths(paths: DesktopPaths) -> Result<Self> {
         Self::start_with_paths_and_options(paths, ClientRuntimeOptions::default()).await
@@ -88,6 +88,7 @@ impl ClientRuntime {
             inference_observations: Default::default(),
             request_patch_signatures: Default::default(),
             context_details: Default::default(),
+            starters: Default::default(),
             shutdown_completion: Default::default(),
             last_mutation_error: Default::default(),
         })

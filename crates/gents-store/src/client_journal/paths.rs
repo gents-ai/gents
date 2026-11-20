@@ -1,9 +1,6 @@
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-
-pub const DESKTOP_HOME_ENV: &str = "GENTS_DESKTOP_HOME";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopPaths {
@@ -17,19 +14,26 @@ pub struct DesktopPaths {
 }
 
 impl DesktopPaths {
-    pub fn discover() -> Result<Self> {
-        Self::discover_with_env(std::env::var_os(DESKTOP_HOME_ENV))
+    /// The desktop client state a process was given with `--desktop-home`,
+    /// else the platform's application data folder.
+    pub fn resolve(explicit: Option<PathBuf>) -> Result<Self> {
+        match explicit {
+            Some(root) => Ok(Self::from_root(root)),
+            None => Self::platform_default(),
+        }
     }
 
-    fn discover_with_env(env_root: Option<OsString>) -> Result<Self> {
-        let root = match env_root.filter(|value| !value.is_empty()) {
-            Some(root) => PathBuf::from(root),
-            None => dirs::data_local_dir()
-                .ok_or_else(|| anyhow!("unable to resolve a local application data directory"))?
-                .join("gents")
-                .join("desktop"),
-        };
-        crate::local::home::refuse_real_gents_home(&root, DESKTOP_HOME_ENV);
+    /// The platform's application data folder's `gents/desktop`. A test build
+    /// refuses it outside the temporary directory, so a test passes its
+    /// desktop home explicitly.
+    pub fn platform_default() -> Result<Self> {
+        let root = dirs::data_local_dir()
+            .ok_or_else(|| {
+                anyhow!("unable to resolve a local application data directory; pass --desktop-home")
+            })?
+            .join("gents")
+            .join("desktop");
+        crate::local::home::refuse_real_gents_home(&root, "--desktop-home");
         Ok(Self::from_root(root))
     }
 

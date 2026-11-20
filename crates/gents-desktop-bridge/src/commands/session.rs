@@ -1,5 +1,6 @@
 use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_snapshot_for_node_with_transcript,
+    SessionReadInputs,
 };
 use crate::types::{DesktopSessionSnapshot, SessionRowsView, SessionRowsWindow};
 use gents_store::client_error::BridgeError;
@@ -203,13 +204,15 @@ pub async fn session_snapshot(
         node_did.as_deref(),
         &session_id,
         request_id.as_deref(),
-        Some(&transcript_page.store),
-        Some(&transcript_page.canonical_dependencies),
-        context_store.as_ref(),
-        prompt_ownership.as_ref(),
-        false,
-        true,
-        fresh_requests.as_deref(),
+        SessionReadInputs {
+            transcript_store: Some(&transcript_page.store),
+            canonical_dependencies: Some(&transcript_page.canonical_dependencies),
+            context_store: context_store.as_ref(),
+            prompt_ownership: prompt_ownership.as_ref(),
+            context_totals_exact: false,
+            include_live_tail: true,
+            request_projection: fresh_requests.as_deref(),
+        },
     )
     .await
     .map_err(BridgeError::classify_transport_error)?;

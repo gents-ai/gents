@@ -1,9 +1,17 @@
 use super::*;
 
 /// `(id, first-party id, window, default max_tokens, upper max_tokens, default effort)`.
+type ModelRow = (
+    &'static str,
+    &'static str,
+    Option<u64>,
+    u64,
+    u64,
+    Option<&'static str>,
+);
+
 #[rustfmt::skip]
-#[allow(clippy::type_complexity)]
-const MODELS: [(&str, &str, Option<u64>, u64, u64, Option<&str>); 22] = [
+const MODELS: [ModelRow; 22] = [
     ("claude-3-5-haiku", "claude-3-5-haiku-20241022", None, 8192, 8192, None),
     ("claude-haiku-4-5", "claude-haiku-4-5-20251001", Some(200000), 32000, 64000, None),
     ("claude-haiku-5-5", "claude-haiku-5-5", Some(1000000), 128000, 128000, Some("medium")),
@@ -29,9 +37,10 @@ const MODELS: [(&str, &str, Option<u64>, u64, u64, Option<&str>); 22] = [
 ];
 
 /// `(tier, [input, output, cache_write_5m, cache_write_1h, cache_read, web_search], long prompt)`.
+type PricingRow = (&'static str, [f64; 6], Option<(u64, [f64; 5])>);
+
 #[rustfmt::skip]
-#[allow(clippy::type_complexity)]
-const PRICING: [(&str, [f64; 6], Option<(u64, [f64; 5])>); 11] = [
+const PRICING: [PricingRow; 11] = [
     ("tier_2_10", [2.0, 10.0, 2.5, 4.0, 0.2, 0.01], None),
     ("tier_2_10_cache_read_0_10", [2.0, 10.0, 2.5, 4.0, 0.1, 0.01], None),
     ("tier_3_15", [3.0, 15.0, 3.75, 6.0, 0.3, 0.01], None),

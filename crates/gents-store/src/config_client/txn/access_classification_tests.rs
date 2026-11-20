@@ -12,7 +12,7 @@ use crate::identity::{
     AgentAdmissionObservationError, AgentProvisionError, EnrollmentApprovalError,
     EnrollmentGrantError, GrantSetError, RemoteAgentProvisionError,
 };
-use crate::schema::migration::RuntimeMigrationError;
+use crate::schema::catalog::RuntimeSchemaError;
 use crate::schema::LegacyBackendPreflightError;
 use crate::views::ViewError;
 
@@ -68,8 +68,8 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
         "remote_agent_provision_error_authorization" => {
             classify_erased(erasure, RemoteAgentProvisionError::Authorization(access))
         }
-        "runtime_migration_error_config" => {
-            classify_erased(erasure, RuntimeMigrationError::Config(access))
+        "runtime_schema_error_config" => {
+            classify_erased(erasure, RuntimeSchemaError::Config(access))
         }
         "authored_document_create_error_publication" => classify_erased(
             erasure,

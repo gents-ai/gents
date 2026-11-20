@@ -142,7 +142,8 @@ impl ReplayFixture {
     ) -> Option<CapturedRequest> {
         use gents_inference::rendered_request::{
             build_rendered_completion_request, AssemblyBuildPath, AssemblyTrace,
-            DefraRenderedRequestSink, RenderedRequestComponents, RenderedRequestContext,
+            DefraRenderedRequestSink, ProviderRoute, RenderedAttempt, RenderedRequestComponents,
+            RenderedRequestContext,
         };
 
         let capture_scope = format!("{}.1", self.scope_kind);
@@ -189,15 +190,19 @@ impl ReplayFixture {
                 model_name: "test-model".into(),
                 provider_family: Some(family.into()),
             },
-            &capture_scope,
             source,
-            Some(endpoint),
-            Some(route_path_sha256),
-            turn_index as usize,
-            0,
-            trace,
+            ProviderRoute {
+                endpoint: Some(endpoint),
+                route_path_sha256: Some(route_path_sha256),
+            },
+            RenderedAttempt {
+                capture_scope: capture_scope.clone(),
+                turn_index: turn_index as usize,
+                attempt: 0,
+                assembly_trace: trace,
+                admission_join: None,
+            },
             RenderedRequestComponents::from_provider_body(body.clone(), source),
-            None,
         )
         .expect("canonical capture fixture");
         let sink =

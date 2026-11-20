@@ -218,7 +218,7 @@ async fn observe_native_restart(
     }
 
     let records = tempfile::tempdir().unwrap();
-    let registry = crate::call::hook::BackgroundExecutionRegistry::default()
+    let registry = crate::call::hook::background_executions::BackgroundExecutionRegistry::default()
         .with_process_records(records.path().to_path_buf());
     let process = if await_mode == "background" {
         crate::call::hook::tests::process_records::process_for_generated_outcome(

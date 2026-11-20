@@ -22,7 +22,6 @@ test-fixtures = ["gents-loop/test-fixtures", "test-home-guard", "axum/ws", "gent
 gents-store.workspace = true
 gents-documents.workspace = true
 acp.workspace = true
-schema.workspace = true
 db.workspace = true
 document.workspace = true
 rapidhash = { workspace = true }
@@ -61,7 +60,6 @@ reqwest = { workspace = true, features = ["stream"] }
 reqwest-provider = { package = "reqwest", version = "0.13", default-features = false }
 tokio-util = "0.7"
 tempfile = "3"
-kovan-map = "0.2.2"
 flate2 = "1"
 
 [dev-dependencies]

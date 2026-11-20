@@ -26,7 +26,9 @@ pub async fn desktop_owned_session(
     AgentRequest,
     gents_session::request::streaming::DefraStreamWriter,
 ) {
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
+    };
     let desktop = gents_store::identity::KeyIdentity::load_or_create(
         db._tempdir.path().join("desktop.key"),
         None,
@@ -42,10 +44,7 @@ pub async fn desktop_owned_session(
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "desktop-parent",
-        db.node_did(),
-        desktop.did(),
-        db.agent_did(),
-        session_id,
+        RequestScope::new(db.node_did(), desktop.did(), db.agent_did(), session_id),
         "run work",
         "interactive",
         "2030-01-01T00:00:00Z",

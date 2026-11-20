@@ -41,17 +41,26 @@ fn accepts_live_cursor(base: Option<&str>, current: Option<&str>, terminal: bool
     !terminal && base.is_some() && base == current
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct LiveDeltaBase<'a> {
+    pub cursor: &'a str,
+    pub content_byte_len: usize,
+    pub content_hash: &'a str,
+    pub reasoning_byte_len: usize,
+    pub reasoning_hash: &'a str,
+}
+
+pub struct LiveDeltaStores<'a> {
+    pub request: &'a ClientStore,
+    pub store: &'a ClientStore,
+    pub revision: gents_observe::client_projection::observe::StoreProjectionRevision,
+}
+
 pub async fn build_session_live_delta(
     core: &ClientRuntime,
     session_id: &str,
     node_did: Option<&str>,
     request_id: &str,
-    base_live_cursor: &str,
-    base_content_byte_len: usize,
-    base_content_hash: &str,
-    base_reasoning_byte_len: usize,
-    base_reasoning_hash: &str,
+    base: LiveDeltaBase<'_>,
 ) -> anyhow::Result<SessionLiveDeltaView> {
     let started = std::time::Instant::now();
     let (observed, revision) = core
@@ -72,17 +81,15 @@ pub async fn build_session_live_delta(
         .await?;
     }
     let mut delta = build_session_live_delta_from_store(
-        &observed,
-        &live_store,
-        revision,
+        LiveDeltaStores {
+            request: &observed,
+            store: &live_store,
+            revision,
+        },
         session_id,
         node_did,
         request_id,
-        base_live_cursor,
-        base_content_byte_len,
-        base_content_hash,
-        base_reasoning_byte_len,
-        base_reasoning_hash,
+        base,
     );
     if delta.outcome != "snapshotRequired" {
         if let Some(node) = node_did {
@@ -142,20 +149,18 @@ pub async fn build_session_live_delta(
 
 /// The cursor is bound to `request_store`'s request row, so a lagging replica
 /// yields the same cursor on both paths.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_session_live_delta_from_store(
-    request_store: &ClientStore,
-    store: &ClientStore,
-    revision: gents_observe::client_projection::observe::StoreProjectionRevision,
+    stores: LiveDeltaStores<'_>,
     session_id: &str,
     node_did: Option<&str>,
     request_id: &str,
-    base_live_cursor: &str,
-    base_content_byte_len: usize,
-    base_content_hash: &str,
-    base_reasoning_byte_len: usize,
-    base_reasoning_hash: &str,
+    base: LiveDeltaBase<'_>,
 ) -> SessionLiveDeltaView {
+    let LiveDeltaStores {
+        request: request_store,
+        store,
+        revision,
+    } = stores;
     let revision = SessionProjectionRevisionView {
         store_version: revision.store_version,
         provenance_version: revision.provenance_version,
@@ -182,18 +187,18 @@ pub(crate) fn build_session_live_delta_from_store(
     else {
         return result;
     };
-    if !accepts_live_cursor(Some(base_live_cursor), Some(&live.cursor), false) {
+    if !accepts_live_cursor(Some(base.cursor), Some(&live.cursor), false) {
         return result;
     }
     let content = live_text_patch(
         Some(&live.content),
-        base_content_byte_len,
-        base_content_hash,
+        base.content_byte_len,
+        base.content_hash,
     );
     let reasoning = live_text_patch(
         Some(&live.reasoning),
-        base_reasoning_byte_len,
-        base_reasoning_hash,
+        base.reasoning_byte_len,
+        base.reasoning_hash,
     );
     result.outcome = if content.mode == "unchanged" && reasoning.mode == "unchanged" {
         "unchanged"

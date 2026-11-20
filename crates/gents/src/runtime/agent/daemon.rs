@@ -144,7 +144,8 @@ where
     rendered_request_capture_factory:
         Option<gents_inference::rendered_request::RenderedRequestCaptureFactory>,
     background_tool_registry: gents_toolcalls::call::hook::BackgroundToolRegistry,
-    background_execution_registry: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    background_execution_registry:
+        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     inference_observations: gents_inference::inference_observation::InferenceObservationRegistry,
     remote_tools: Option<gents_documents::RemoteTools>,
     job_tools: rapidhash::RapidHashMap<String, gents_toolcalls::background::job::JobBinding>,
@@ -217,7 +218,7 @@ where
         Option<gents_inference::rendered_request::RenderedRequestCaptureFactory>,
     pub(super) background_tool_registry: gents_toolcalls::call::hook::BackgroundToolRegistry,
     pub(super) background_execution_registry:
-        gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
     pub(super) runtime_status: crate::runtime::status::RuntimeStatusHandle,
     pub(super) slot_generation: u64,

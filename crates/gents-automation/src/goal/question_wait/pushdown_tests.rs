@@ -1,6 +1,8 @@
 use gents_protocol::{
     goal_control::{GoalRevision, ObservedGoal, SessionGoalObservation},
-    request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose},
+    request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
+    },
     request_input::GoalAssignmentInput,
     request_lifecycle::RequestLifecycleState,
     row::{AgentRequestRow, MailboxItemRow},
@@ -17,10 +19,7 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "request",
-        did,
-        did,
-        "agent",
-        "chat",
+        RequestScope::new(did, did, "agent", "chat"),
         "Start the goal",
         "interactive",
         "2026-10-21T00:00:00Z",

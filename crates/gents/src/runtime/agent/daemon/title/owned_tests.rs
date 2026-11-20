@@ -11,7 +11,7 @@ use gents_protocol::output::{
     OutputOutcome, OutputSource, OutputWriter, PayloadRef, SourceClose, StreamPayload,
 };
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use rig::streaming::RawStreamingChoice;
@@ -38,9 +38,8 @@ use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use gents_session::request::watcher::DefraWatcher;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{NodeIdentity, RuntimeNode};
-use gents_toolcalls::call::hook::{
-    BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::{BackgroundToolRegistry, FailurePolicy};
 use gents_tools::surface::AgentToolSurfaceConfig;
 
 /// Answers every review with `reply`, or by allowing the invocation its
@@ -407,13 +406,15 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
                 &approval_call,
                 &tool_context,
                 "bash_unrestricted",
-                program,
-                &arguments,
-                key.path.to_str(),
-                Duration::from_secs(5),
+                gents_tools::native::CommandRequest {
+                    command_name: program,
+                    args: &arguments,
+                    cwd: key.path.to_str(),
+                    timeout: Duration::from_secs(5),
+                    raw_json: true,
+                    max_output_chars: 2048,
+                },
                 &policy,
-                true,
-                2048,
             )
             .await
             .unwrap();
@@ -673,13 +674,15 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
                 &approval_call,
                 &tool_context,
                 "bash_unrestricted",
-                &program,
-                &arguments,
-                None,
-                Duration::from_secs(5),
+                gents_tools::native::CommandRequest {
+                    command_name: &program,
+                    args: &arguments,
+                    cwd: None,
+                    timeout: Duration::from_secs(5),
+                    raw_json: true,
+                    max_output_chars: 2048,
+                },
                 &policy,
-                true,
-                2048,
             )
             .await
             .map(|_| ())
@@ -1290,10 +1293,12 @@ impl TitleFixture {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             request_id,
-            identity.did(),
-            &agent_config.agent_did,
-            &agent_config.agent_did,
-            session_id,
+            RequestScope::new(
+                identity.did(),
+                &agent_config.agent_did,
+                &agent_config.agent_did,
+                session_id,
+            ),
             "explain the request",
             "interactive",
             created_at,

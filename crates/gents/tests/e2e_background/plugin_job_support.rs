@@ -465,7 +465,7 @@ pub(crate) async fn wait_job(
     until: impl Fn(&JobView) -> bool,
 ) -> JobView {
     let access = h.actors.fixture.access.clone();
-    use crate::support::snapshots::SnapshotReader;
+    use gents_store::test_support::snapshot_reader::SnapshotReader;
     let mut changes = access.subscribe_changes("AgentToolCall").await;
     loop {
         let last = load_job_view(&access, None, address(h, tool_call_id)).await;
