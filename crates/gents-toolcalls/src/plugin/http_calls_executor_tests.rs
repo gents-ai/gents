@@ -144,7 +144,7 @@ impl gents_pack::plugin::model_binding::ModelResolver for Endpoint {
                 api_key: None,
                 model: "m".into(),
                 max_concurrent: 1,
-                backend_key: "test".into(),
+                limiter: Arc::new(tokio::sync::Semaphore::new(1)),
                 connect_timeout: Duration::from_secs(1),
                 request_timeout: Duration::from_secs(1),
                 max_output_tokens: None,

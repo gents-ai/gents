@@ -8,6 +8,7 @@ use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
 use defra_node::Node as EmbeddedNode;
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 

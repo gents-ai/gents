@@ -8,6 +8,7 @@ pub mod graphql;
 pub mod identity;
 pub mod local;
 pub mod node_extension;
+pub mod provenance;
 pub mod schema;
 pub mod service;
 pub mod subscription_source;

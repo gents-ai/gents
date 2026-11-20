@@ -28,11 +28,12 @@ pub use action_plan::{
 };
 pub use documents::handoff_route_fields;
 pub use documents::{
-    isolated_workspace_upsert_mutation, repository_placement_upsert_mutation,
-    workspace_binding_upsert_mutation, workspace_cleanup_docs_mutation,
-    workspace_placement_upsert_mutation, workspace_receipt_create_mutation, IsolatedWorkspaceDoc,
-    MemoryWorkspaceDocuments, ProvisioningObservation, WorkspaceBindingDoc, WorkspaceDocuments,
-    WorkspacePlacementDoc, WorkspaceProvenance, WorkspaceReceiptDoc,
+    isolated_workspace_upsert_mutation, read_isolated_workspace_doc, read_workspace_placement_doc,
+    repository_placement_upsert_mutation, workspace_binding_upsert_mutation,
+    workspace_cleanup_docs_mutation, workspace_placement_upsert_mutation,
+    workspace_receipt_create_mutation, IsolatedWorkspaceDoc, MemoryWorkspaceDocuments,
+    ProvisioningObservation, WorkspaceBindingDoc, WorkspaceDocuments, WorkspacePlacementDoc,
+    WorkspaceProvenance, WorkspaceReceiptDoc,
 };
 pub use executor::cleanup::{execute_cleanup_workspace_plan, CleanupWorkspaceOutcome};
 pub use executor::create::execute_create_workspace_plan;
@@ -64,9 +65,8 @@ pub use runtime::{
 };
 
 pub use overlay::{
-    frozen_instruction_manifest_from_overlay, install_process_operator_tool_root,
-    request_workspace_cwd, require_under_ceiling, resolve_request_workspace_overlay_with_identity,
-    workspace_authority_file_mode,
+    frozen_instruction_manifest_from_overlay, request_workspace_cwd, require_under_ceiling,
+    resolve_request_workspace_overlay_with_identity, workspace_authority_file_mode,
 };
 pub(crate) use overlay::{
     validate_request_workspace_input_with_identity, validate_unbound_request_workspace_input,

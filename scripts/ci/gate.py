@@ -82,7 +82,7 @@ class Group:
 GROUPS = [
     Group("foundation", "portable", [
         "gents-protocol", "gents-schemas", "gents-loop", "gents-lean-contract",
-        "gents-lean-vocab", "gents-migration", "gents-lens-fixture-add-label",
+        "gents-lean-vocab",
         "gents-callback-fixture-create-workspace", "gents-claude", "gents-claude-login",
         "gents-chatgpt-login", "gents-login-ui", "gents-fs-runner", "gents-shell",
         "gents-core-packs", "gents-workspace-hack",
@@ -152,19 +152,19 @@ VERA_TESTS = {
     "gents-cli": (("--test", "integration"), "cli_runtime::cli_home_document_access::"),
 }
 
-# Packages with no test of their own. The list only shrinks: a listed package
-# that runs a test fails the gate, as does an unlisted one that runs none.
+# Packages with no test of their own, each with why. The list only shrinks: a
+# listed package that runs a test fails the gate, as does an unlisted one that
+# runs none.
 NO_TESTS = {
-    "fixture-domain-plugin",
-    "gents-callback-fixture-create-workspace",
-    "gents-core-packs",
-    "gents-desktop",
-    "gents-lens-fixture-add-label",
-    "gents-workspace-hack",
+    "fixture-domain-plugin": "a fixture; gents-fixture-host's tests exercise it",
+    "gents-callback-fixture-create-workspace": "a fixture; gents-automation's callback tests run it",
+    "gents-core-packs": "only embeds the archives its build script finds; gents-cli's init tests install them",
+    "gents-workspace-hack": "holds no code; it unifies dependency features",
 }
 
 # With GATE_PORTABLE_SHARDS above zero the portable groups' crates build once
-# into one nextest archive (`build:portable`) and `shard:portable` runs it as
+# (`build:portable`). With one slice its build jobs run the tests themselves;
+# with more, the build is a nextest archive and `shard:portable` runs it as
 # that many slices on their own runners, compiling nothing. Test binaries must
 # then find source files and binaries through the runtime CARGO_MANIFEST_DIR,
 # NEXTEST_WORKSPACE_ROOT and CARGO_BIN_EXE_<name>: the build checkout is gone.
@@ -188,7 +188,7 @@ GLOBAL_PATHS = (
     ".github/scripts/setup-", ".github/scripts/rustc-direct.sh",
     ".github/scripts/ensure-rust-build-space.py", ".github/scripts/desktop-runtime-journey.sh",
     ".github/scripts/show-sccache-stats.sh", ".github/scripts/check-isolated-runtime-runner.py",
-    ".github/scripts/collect-migration-lens-diagnostics.py", ".github/scripts/host-runtime-service.sh",
+    ".github/scripts/host-runtime-service.sh",
     "scripts/macos-clang-lld.sh", "scripts/linux-lld.sh", "scripts/measure-gents-binary.sh",
     "scripts/check-native-e2e-capabilities.sh", "third_party/", "examples/",
 )
@@ -285,7 +285,7 @@ def check_groups(members):
     if duplicates or missing or unknown:
         fail(f"GROUPS in scripts/ci/gate.py must hold each workspace member once: "
              f"missing {missing}, unknown {unknown}, duplicated {duplicates}")
-    stale = sorted(NO_TESTS - set(members))
+    stale = sorted(NO_TESTS.keys() - set(members))
     if stale:
         fail(f"NO_TESTS names packages outside the workspace: {stale}")
 
@@ -677,7 +677,7 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
                      "timeout": 150 if single else 90, "go": go}
             vera = vera_tests(archived)
             # The slice that runs in the build job splits into the role's
-            # `partitions` hash partitions; each job builds the archive from
+            # `partitions` hash partitions; each job builds the tests from
             # its runner's compiler cache and kept target tree and runs its
             # partition there, on any free portable runner. The Vera feature
             # tests run once, in the first job.
@@ -909,8 +909,6 @@ def run_lint(selection):
         sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile])
     if "gents-loop" in affected:
         sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile])
-    if "gents-lens-fixture-add-label" in affected:
-        sh(["cargo", "build", "-p", "gents-lens-fixture-add-label", "--target", "wasm32-unknown-unknown", *profile])
     if "gents-desktop-tauri" in affected:
         sh(["./scripts/check-native-e2e-capabilities.sh"])
     if selection.get("ios_check") and sys.platform == "darwin":
@@ -1204,10 +1202,10 @@ def partition_arguments(entry):
     return ["--partition", f"hash:{entry['partition']}/{entry['partitions']}"] if entry.get("partition") else []
 
 
-def listed_tests(archive, workspace):
-    """Package -> (tests, ignored) in an archive, and the paths of its test binaries."""
-    raw = subprocess.run(["cargo", "nextest", "list", "--archive-file", str(archive), "--workspace-remap",
-                          str(workspace), "--message-format", "json", "--run-ignored", "all"],
+def listed_tests(selection, workspace):
+    """Package -> (tests, ignored) that `cargo nextest list <selection>` finds, and
+    the paths of its test binaries. `selection` names an archive or a build."""
+    raw = subprocess.run(["cargo", "nextest", "list", *selection, "--message-format", "json", "--run-ignored", "all"],
                          cwd=workspace, check=True, stdout=subprocess.PIPE).stdout
     tests, binaries = {}, []
     for suite in json.loads(raw)["rust-suites"].values():
@@ -1263,12 +1261,14 @@ def doctests(packages):
 
 
 def run_build(selection, name, partition=None):
-    """Build every selected crate's tests once, in one Cargo invocation, into a nextest archive.
+    """Build every selected crate's tests once, in one Cargo invocation.
 
-    In CI the build runs from a worktree under RUNNER_TEMP that the runner removes
-    after the job, so a test binary can only reach source files through the
-    runtime paths a shard remaps to its own checkout. `build:<name>:<partition>`
-    runs only that partition of the tests; `build:<name>` (`make gate`) runs them all.
+    A slice that runs here builds and runs them in this checkout. For shards
+    they go into a nextest archive, built in CI from a worktree under
+    RUNNER_TEMP that the runner removes after the job, so a test binary can
+    only reach source files through the runtime paths a shard remaps to its own
+    checkout. `build:<name>:<partition>` runs only that partition of the tests;
+    `build:<name>` (`make gate`) runs them all.
     """
     entries = [entry for entry in selection["archives"] if entry["archive"] == name]
     if partition is None:
@@ -1342,7 +1342,7 @@ class LeanContract:
 
 
 # Packages whose tests run another package's binary from beside the test
-# binary when GENTS_TEST_BINARIES_PREBUILT is set: the archive must build that
+# binary when GENTS_TEST_BINARIES_PREBUILT is set: the build must include that
 # package too, or a plan that tests only the first (a draft, a partition) finds
 # no helper (#3950).
 TEST_HELPER_PACKAGES = {"gents-tools": ("gents-fs-runner",)}
@@ -1354,10 +1354,51 @@ def archive_packages(packages):
     return list(dict.fromkeys([*packages, *helpers]))
 
 
+def build_arguments(packages):
+    """The Cargo selection of a portable build: its packages and their helpers, features and profile."""
+    features = [PACKAGE_FEATURES[package] for package in packages
+                if package in PACKAGE_FEATURES and package != "gents-desktop-bridge"]
+    arguments = [flag for package in archive_packages(packages) for flag in ("-p", package)]
+    if features:
+        arguments += ["--features", ",".join(features)]
+    return [*arguments, "--cargo-profile", os.environ.get("PROFILE") or ARCHIVE_PROFILE]
+
+
 def build_and_run(entry, name, lean):
+    """A slice that runs in its build job builds and runs in this checkout: an
+    archive is written only for shards to run on other runners. Archiving the
+    in-job slice wrote about 20 GB per job and extracted it twice, and one job
+    failed extracting it with ENOSPC (2026-11-20)."""
     packages = entry["packages"].split()
     if not system_preflight():
         return
+    if entry.get("run"):
+        build_here(entry, name, lean, packages)
+    else:
+        build_archive(entry, name, lean, packages)
+
+
+def build_here(entry, name, lean, packages):
+    selection = build_arguments(packages)
+    # `cargo nextest list` builds every test binary of the selection, as `archive` did.
+    built = nextest(["list", *selection, "--timings", "--list-type", "binaries-only"],
+                    label=f"build {name}: {len(packages)} crates")
+    show_timings(Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "cargo-timings" / "cargo-timing.html")
+    if not built:
+        return
+    problems = check_listing(name, packages, selection, ROOT)
+    if problems is None:
+        return
+    built = lean is None or lean.wait()
+    if not problems and built:
+        # Tests that would otherwise `cargo build` a helper binary use the one built beside them.
+        os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
+        nextest(["run", *selection, *test_run_arguments(entry)], label=f"run {name}")
+    if built:
+        run_vera_tests(entry.get("vera", "").split())
+
+
+def build_archive(entry, name, lean, packages):
     source = ROOT
     if os.environ.get("GITHUB_ACTIONS") and os.environ.get("RUNNER_TEMP"):
         source = Path(os.environ["RUNNER_TEMP"]) / ARCHIVE_SOURCE
@@ -1369,24 +1410,29 @@ def build_and_run(entry, name, lean):
     output = archive_dir()
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f"{name}.tar.zst"
-    features = [PACKAGE_FEATURES[package] for package in packages
-                if package in PACKAGE_FEATURES and package != "gents-desktop-bridge"]
-    arguments = ["archive", *[flag for package in archive_packages(packages) for flag in ("-p", package)]]
-    if features:
-        arguments += ["--features", ",".join(features)]
-    arguments += ["--cargo-profile", os.environ.get("PROFILE") or ARCHIVE_PROFILE]
-    arguments += ["--archive-file", str(archive), "--timings"]
+    arguments = ["archive", *build_arguments(packages), "--archive-file", str(archive), "--timings"]
     built = nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates")
     show_timings(Path(os.environ.get("CARGO_TARGET_DIR") or source / "target") / "cargo-timings" / "cargo-timing.html")
     if not built:
         return
+    if check_listing(name, packages, ["--archive-file", str(archive), "--workspace-remap", str(source)], source,
+                     output=output) is None:
+        return
+    built = lean is None or lean.wait()
+    if built:
+        run_vera_tests(entry.get("vera", "").split())
+
+
+def check_listing(name, packages, selection, source, output=None):
+    """The per-package test counts against NO_TESTS, the doctest check and, for an
+    archive (`output`), relocatability. None when the listing failed, else the problems."""
     started = time.time()
     try:
-        tests, binaries = listed_tests(archive, source)
+        tests, binaries = listed_tests(selection, source)
     except subprocess.CalledProcessError as error:
-        results.append((f"check {name} archive", f"listing failed: exit {error.returncode}", "",
+        results.append((f"check {name} build", f"listing failed: exit {error.returncode}", "",
                         time.time() - started))
-        return
+        return None
     problems = []
     for package in packages:
         total, _ = tests.get(package, (0, 0))
@@ -1397,30 +1443,26 @@ def build_and_run(entry, name, lean):
     if fences := doctests(packages):
         problems.append(f"doc comments hold code blocks rustdoc would test, which nextest does not run "
                         f"(tag them text or ignore, or add a doctest step): {', '.join(fences[:10])}")
-    if stuck := unrelocatable(binaries, source):
-        problems.append(f"test binaries embed the build checkout's path {source}: {', '.join(stuck)}")
-    (output / f"{name}.tests.json").write_text(json.dumps(tests, indent=2, sort_keys=True))
+    if output is not None:
+        # Shards run the binaries from another checkout; the build job's own run uses this one.
+        if stuck := unrelocatable(binaries, source):
+            problems.append(f"test binaries embed the build checkout's path {source}: {', '.join(stuck)}")
+        (output / f"{name}.tests.json").write_text(json.dumps(tests, indent=2, sort_keys=True))
     total = sum(count for count, _ in tests.values())
     ignored = sum(count for _, count in tests.values())
     for problem in problems:
         print(f"::error::{problem}", flush=True)
-    results.append((f"check {name} archive", "ok" if not problems else "; ".join(problems),
+    results.append((f"check {name} build", "ok" if not problems else "; ".join(problems),
                     f"{total} tests listed, {ignored} ignored", time.time() - started))
-    built = lean is None or lean.wait()
-    if not problems and entry.get("run") and built:
-        run_archive(entry, archive, name)
-    if built:
-        run_vera_tests(entry.get("vera", "").split())
+    return problems
 
 
-def run_archive(entry, archive, name):
-    """The whole archive, on this runner, from this job's own checkout."""
-    os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
-    arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci",
-                 *partition_arguments(entry)]
+def test_run_arguments(entry):
+    """The in-job run's nextest options: the CI profile, its partition and the job's test threads."""
+    arguments = ["--profile", "ci", *partition_arguments(entry)]
     if os.environ.get("RUST_TEST_THREADS"):
         arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
-    nextest(arguments, label=f"run {name}")
+    return arguments
 
 
 def run_shard(selection, name, index=None):

@@ -6,7 +6,7 @@ use gents_session::request::interrupt::interrupt_request_by_doc_id_with_access;
 use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
-use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
@@ -15,8 +15,8 @@ use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
     live_target, rows_when, wait_for_request_terminal, LiveAgentSpec, LiveUser,
 };
-use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const WAIT: Duration = Duration::from_secs(240);
 

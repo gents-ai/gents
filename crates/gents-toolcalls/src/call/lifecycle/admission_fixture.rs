@@ -478,10 +478,12 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        identity.did(),
-        identity.did(),
-        identity.did(),
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            identity.did(),
+            identity.did(),
+            session_id,
+        ),
         "spawn",
         "interactive",
         now,
@@ -1368,7 +1370,7 @@ pub async fn set_state(
 mod lifecycle_tests {
     use super::*;
     use crate::call::lifecycle::FailureClass;
-    use gents_session::session::tool_call_state::CancelCause;
+    use gents_protocol::tool_call::CancelCause;
 
     /// Reads the admitted row through the owning Agent's access; ACP hides it from the node.
     async fn row(

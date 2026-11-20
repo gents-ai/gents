@@ -28,6 +28,27 @@ pub struct StoredInitConfig<ToolPackage = String, ToolCeiling = String> {
     pub store_encryption: Option<crate::local::store_key::StoreEncryption>,
     #[serde(default, skip_serializing_if = "DocumentAcp::is_local")]
     pub document_acp: DocumentAcp,
+    /// The folder holding the CLI client identity that administers this home,
+    /// when `init` was given `--desktop-home`; unset is the platform's default
+    /// desktop home's `cli` folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_identity: Option<String>,
+}
+
+/// The client identity folder `home`'s settings record, if any. Only the one
+/// field is read, so a settings file of another shape or none at all records
+/// nothing; whether such a home can be opened is the repair owner's to report.
+pub fn recorded_client_identity(home_dir: &Path) -> Option<PathBuf> {
+    #[derive(Deserialize)]
+    struct Recorded {
+        #[serde(default)]
+        client_identity: Option<String>,
+    }
+    let contents = fs::read(init_config_path(home_dir)).ok()?;
+    serde_json::from_slice::<Recorded>(&contents)
+        .ok()?
+        .client_identity
+        .map(PathBuf::from)
 }
 
 pub fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {

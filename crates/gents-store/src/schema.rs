@@ -1,5 +1,5 @@
+pub mod catalog;
 pub mod journal;
-pub mod migration;
 
 #[cfg(test)]
 mod pushdown_tests;
@@ -79,11 +79,13 @@ pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
         return Ok(access
             .run_local_owned(|node| async move {
-                crate::schema::migration::ensure_migrations_borrowed(node.as_ref()).await
+                catalog::ensure_runtime(node.as_ref())
+                    .await
+                    .map_err(catalog::RuntimeSchemaError::Schema)
             })
             .await?);
     }
-    Ok(crate::schema::migration::ensure_migrations_borrowed(node).await?)
+    Ok(catalog::ensure_runtime(node).await?)
 }
 
 #[cfg(test)]

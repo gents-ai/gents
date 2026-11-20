@@ -6,9 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
-use super::manifest::{
-    StageToolSequenceExpectation, TriggerRequestCountSource, WorkspaceReceiptPathExpectation,
-};
+use super::manifest::{PackExpect, TriggerRequestCountSource, WorkspaceReceiptPathExpectation};
 use super::results::graphql_rows;
 use super::tool_calls::verify_stage_tool_sequences;
 use crate::graphql_access::post_graphql;
@@ -203,20 +201,21 @@ pub(super) fn validate_workspace_receipt_path_rows(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each expectation comes from a separate scenario section"
-)]
 pub(super) async fn await_stages(
     graphql: &GraphqlEndpoint,
-    trigger_ids: &[String],
-    trigger_request_counts: &BTreeMap<String, usize>,
-    trigger_request_count_sources: &BTreeMap<String, TriggerRequestCountSource>,
-    stage_tool_sequences: &[StageToolSequenceExpectation],
-    workspace_receipt_paths: Option<&WorkspaceReceiptPathExpectation>,
+    expect: &PackExpect,
     correlation: &str,
     deadline: Duration,
 ) -> Result<Vec<StageResult>> {
+    let PackExpect {
+        trigger_ids,
+        trigger_request_counts,
+        trigger_request_count_sources,
+        stage_tool_sequences,
+        workspace_receipt_paths,
+        ..
+    } = expect;
+    let workspace_receipt_paths = workspace_receipt_paths.as_ref();
     let started = Instant::now();
     loop {
         if let Some(expected) = workspace_receipt_paths {

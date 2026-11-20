@@ -2,7 +2,7 @@ use super::SessionGoals;
 use crate::goal::operator_resume_test_support::Fixture;
 use gents_lean_vocab::families::goal_request_assignment_contracts_message_input as message_input;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
@@ -103,10 +103,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             let mut opening = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 format!("opening-{index}"),
-                f.identity.did(),
-                f.agent.did(),
-                f.agent.did(),
-                &session_id,
+                RequestScope::new(f.identity.did(), f.agent.did(), f.agent.did(), &session_id),
                 "Original goal",
                 "interactive",
                 "2026-10-21T00:00:00Z",

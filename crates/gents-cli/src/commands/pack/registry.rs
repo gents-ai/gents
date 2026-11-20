@@ -241,7 +241,12 @@ pub(crate) mod tests {
         AxumPath((_ns, name)): AxumPath<(String, String)>,
     ) -> Response {
         if name == state.name {
-            Json(json!({ "latest": state.latest })).into_response()
+            Json(json!({
+                "latest": state.latest,
+                "description": "A pack the fake registry serves",
+                "owner": "fixture",
+            }))
+            .into_response()
         } else {
             StatusCode::NOT_FOUND.into_response()
         }

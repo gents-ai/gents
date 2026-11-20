@@ -18,7 +18,6 @@ use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
 use gents_protocol::runtime_connection::RuntimeConnection;
 use gents_store::client_journal::paths::DesktopPaths;
 use tokio::sync::Mutex;
-use tracing_subscriber::prelude::*;
 
 use gents_desktop_bridge::types::{DesktopBootstrapSummary, InitConfigStatus, SavedRuntimeView};
 
@@ -48,6 +47,7 @@ pub(crate) struct LiveBridgeFixture {
     update_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     running_node: Mutex<Option<RunningNode>>,
     shutdown_started: AtomicBool,
+    retain_data: bool,
     /// The node the runner's one frontend selected, as a window's selection.
     selected_node: std::sync::Mutex<Option<String>>,
 }
@@ -192,7 +192,7 @@ impl LiveBridgeFixture {
 
         self.remote_core.shutdown().await?;
         self.desktop_core.shutdown().await?;
-        if std::env::var_os("GENTS_TAURI_LIVE_RETAIN_DATA").is_some() {
+        if self.retain_data {
             if let Some(tempdir) = self.tempdir.lock().await.take() {
                 let retained = tempdir.keep();
                 tracing::info!(path = %retained.display(), "retained live bridge fixture data");
@@ -204,9 +204,8 @@ impl LiveBridgeFixture {
     pub(crate) async fn start(
         backend_override: Option<LiveBackendOverride>,
         agent_target_backend_override: Option<LiveTargetBackendOverride>,
+        retain_data: bool,
     ) -> Result<Arc<Self>> {
-        init_live_runner_tracing();
-
         let backend = LiveBackendConfig::resolve(backend_override.as_ref())?;
         let agent_target_backend =
             LiveBackendConfig::resolve_target(agent_target_backend_override.as_ref(), &backend)?;
@@ -355,13 +354,12 @@ impl LiveBridgeFixture {
             update_task: Mutex::new(Some(update_task)),
             running_node: Mutex::new(Some(running_node)),
             shutdown_started: AtomicBool::new(false),
+            retain_data,
             selected_node: std::sync::Mutex::new(None),
         }))
     }
 
-    pub(crate) async fn start_desktop_only() -> Result<Arc<Self>> {
-        init_live_runner_tracing();
-
+    pub(crate) async fn start_desktop_only(retain_data: bool) -> Result<Arc<Self>> {
         let tempdir = tempfile::tempdir()?;
         let remote_paths = DesktopPaths::from_root(tempdir.path().join("remote-empty"));
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
@@ -434,6 +432,7 @@ impl LiveBridgeFixture {
             update_task: Mutex::new(Some(update_task)),
             running_node: Mutex::new(None),
             shutdown_started: AtomicBool::new(false),
+            retain_data,
             selected_node: std::sync::Mutex::new(None),
         }))
     }
@@ -506,26 +505,6 @@ fn live_core_options() -> ClientRuntimeOptions {
     }
 }
 
-fn init_live_runner_tracing() {
-    static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    INIT.get_or_init(|| {
-        let filter = std::env::var("GENTS_DESKTOP_TEST_LOG")
-            .map(tracing_subscriber::EnvFilter::new)
-            .unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("warn,gents_desktop_tauri=info")
-            });
-        let _ = tracing_subscriber::registry()
-            .with(filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(false)
-                    .compact()
-                    .without_time(),
-            )
-            .try_init();
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -548,7 +527,9 @@ mod tests {
     use gents_desktop_bridge::commands::{
         delete_skill_config, save_skill_config, send_chat_message,
     };
-    use gents_desktop_bridge::snapshot::build_session_snapshot_for_node_with_transcript;
+    use gents_desktop_bridge::snapshot::{
+        build_session_snapshot_for_node_with_transcript, SessionReadInputs,
+    };
     use gents_desktop_bridge::types::{ChatSendRequest, SkillDeleteRequest, SkillSaveRequest};
 
     const MODEL_NAME: &str = "desktop-live-skill-mock";
@@ -559,7 +540,8 @@ mod tests {
         run_on_live_runtime(async {
             let mock = MockChatEndpoint::start(MODEL_NAME, "ok").await?;
             let fixture =
-                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None).await?;
+                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None, false)
+                    .await?;
             let result = skill_create_delete_case(fixture.as_ref()).await;
             fixture.shutdown().await?;
             result
@@ -572,7 +554,8 @@ mod tests {
         run_on_live_runtime(async {
             let mock = MockChatEndpoint::start_with_held_prompt(MODEL_NAME, "skill loaded").await?;
             let fixture =
-                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None).await?;
+                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None, false)
+                    .await?;
             let result = slash_skill_chat_case(fixture.as_ref(), &mock).await;
             fixture.shutdown().await?;
             result
@@ -751,13 +734,15 @@ mod tests {
             Some(&node_did),
             &submitted.session_id,
             Some(&submitted.request_id),
-            Some(&transcript_page.store),
-            Some(&transcript_page.canonical_dependencies),
-            Some(&context_store),
-            None,
-            true,
-            true,
-            None,
+            SessionReadInputs {
+                transcript_store: Some(&transcript_page.store),
+                canonical_dependencies: Some(&transcript_page.canonical_dependencies),
+                context_store: Some(&context_store),
+                prompt_ownership: None,
+                context_totals_exact: true,
+                include_live_tail: true,
+                request_projection: None,
+            },
         )
         .await?
         .context("desktop session snapshot missing after skill chat submit")?;
@@ -1243,7 +1228,7 @@ mod tests {
                         .to_owned(),
                 ),
                 api_key: Some("desktop-live-test-key".to_string()),
-                api_key_env_var: None,
+                ..Default::default()
             }
         }
 

@@ -7,17 +7,14 @@ use gents_session::request::lifecycle::{
     DEFAULT_REQUEST_MAX_RETRIES,
 };
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::{
+    fixture_agent, fixture_agent_access, fixture_agent_did, fixture_root, FIXTURE_AGENT_NONCE,
+};
 use std::sync::Arc;
 
 fn test_node_did() -> String {
     use gents_store::identity::NodeIdentity as _;
-    crate::triggers::callback::test_root_identity()
-        .did()
-        .to_owned()
-}
-
-fn test_agent_did() -> String {
-    crate::triggers::callback::test_agent_did()
+    fixture_root().did().to_owned()
 }
 
 const TEST_BACKEND_ID: &str = "backend-order";
@@ -48,7 +45,7 @@ async fn load_agent_goal(
     node: &Arc<EmbeddedNode>,
     session: &str,
 ) -> anyhow::Result<Option<crate::goal::GoalDocument>> {
-    agent_access(node)
+    fixture_agent_access(node, FIXTURE_AGENT_NONCE)
         .transact_readonly("test.claim_agent_goal", |txn| {
             Box::pin(async move {
                 crate::goal::load_canonical_goal_in_txn(txn, &test_node_did(), session).await
@@ -64,7 +61,7 @@ async fn ensure_agent_session(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> anyhow::Result<()> {
-    agent_access(node)
+    fixture_agent_access(node, FIXTURE_AGENT_NONCE)
         .transact_write("test.claim_agent_session", |txn| {
             Box::pin(async move {
                 gents_session::session::ensure_session_in_txn(
@@ -72,7 +69,7 @@ async fn ensure_agent_session(
                     gents_session::session::NewAgentSession {
                         session_id: session,
                         node_did,
-                        agent_did: &test_agent_did(),
+                        agent_did: &fixture_agent_did(FIXTURE_AGENT_NONCE),
                         requester_did,
                         title: None,
                         provenance: None,
@@ -84,15 +81,6 @@ async fn ensure_agent_session(
             })
         })
         .await
-}
-
-fn agent_access(node: &Arc<EmbeddedNode>) -> gents_store::config_client::ConfigAccess {
-    gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(test_agent_did()).unwrap(),
-        crate::triggers::callback::test_agent_identity().as_ref(),
-    )
-    .unwrap()
 }
 
 fn test_lifecycle(
@@ -109,7 +97,7 @@ fn test_lifecycle(
         execution_origin,
         backend_id,
     );
-    let agent = crate::triggers::callback::test_agent_identity();
+    let agent = fixture_agent(FIXTURE_AGENT_NONCE);
     lifecycle
         .bind_managed_agent(agent.as_ref())
         .expect("bind the fixture managed Agent signer");
@@ -153,7 +141,7 @@ async fn insert_pending_request_for_owner(
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
     let escaped_execution_origin = escape_graphql_string(execution_origin);
-    let escaped_agent_did = escape_graphql_string(&test_agent_did());
+    let escaped_agent_did = escape_graphql_string(&fixture_agent_did(FIXTURE_AGENT_NONCE));
     let mutation = format!(
         r#"mutation {{
                 create_AgentRequest(input: {{
@@ -180,7 +168,7 @@ async fn insert_pending_request_for_owner(
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
         fields = gents_protocol::row::AGENT_REQUEST_FIELDS,
     );
-    let agent = identity::Did::new(test_agent_did()).unwrap();
+    let agent = identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE)).unwrap();
     root_access(node)
         .transact_write("test.insert_pending_request", |txn| {
             let mutation = &mutation;
@@ -207,7 +195,7 @@ async fn durable_request_row(
     doc_id: &str,
 ) -> gents_protocol::row::AgentRequestRow {
     let doc_id = escape_graphql_string(doc_id);
-    let response = agent_access(node)
+    let response = fixture_agent_access(node, FIXTURE_AGENT_NONCE)
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
                 gents_protocol::row::AGENT_REQUEST_FIELDS,
@@ -268,7 +256,7 @@ async fn durable_claim_and_begin_use_real_owners_without_arming_local_renewal() 
         claimed.execution_lease_expires_at.as_deref(),
         Some("2023-11-14T22:13:30+00:00")
     );
-    let agent = agent_access(&node);
+    let agent = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
     RequestLifecycle::begin_owned_execution_at_with_access(
         &agent,
         &doc_id,
@@ -345,7 +333,7 @@ async fn claim_queue_uses_arrival_order_and_scopes_sessions_to_owner() {
         .await;
     }
     for (request, expected) in [(&first, true), (&second, false)] {
-        let allowed = agent_access(&node)
+        let allowed = fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
             .transact_write("test.claim_queue_arrival_order", |txn| {
                 Box::pin(async move {
                     gents_session::request::lifecycle::query::claim_queue_allows(txn, request).await
@@ -432,7 +420,7 @@ async fn serial_claim_considers_active_owner_requests_across_pages() {
             })
             .collect::<Vec<_>>();
         // The firing Agent stages each receipt beside the request it creates.
-        agent_access(&node).transact_write(
+        fixture_agent_access(&node, FIXTURE_AGENT_NONCE).transact_write(
                 "test.seed_serial_claim_receipts",
                 |txn| {
                     let receipts = receipts.clone();
@@ -456,7 +444,7 @@ async fn serial_claim_considers_active_owner_requests_across_pages() {
             "b" => &next,
             other => panic!("the serial cohort has no fire for modeled document {other}"),
         };
-        let allowed = agent_access(&node)
+        let allowed = fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
             .transact_write("test.serial_claim_trigger_cohort", |txn| {
                 Box::pin(async move {
                     gents_session::request::lifecycle::query::claim_queue_allows(txn, request).await
@@ -482,7 +470,7 @@ async fn queued_task_goal_changes_only_when_its_request_claims() {
                 .await
                 .unwrap();
             let original = crate::goal::seed_goal_from_access(
-                &agent_access(&node),
+                &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
                 &test_node_did(),
                 session,
                 Some("finish original work"),
@@ -521,7 +509,7 @@ async fn queued_task_goal_changes_only_when_its_request_claims() {
                 "goal_id": original.goal_id, "goal_objective": "perform next assignment",
                 "goal_token_budget": task_budget, "goal_assignment_applied": false,
             });
-            agent_access(&node).transact_write("test.task_assignment", |txn| {
+            fixture_agent_access(&node, FIXTURE_AGENT_NONCE).transact_write("test.task_assignment", |txn| {
             let receipt = receipt.clone();
             Box::pin(async move {
                 txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
@@ -571,7 +559,7 @@ async fn queued_task_goal_changes_only_when_its_request_claims() {
                 escape_graphql_string(&first_doc_id),
                 test_node_did(),
             );
-            agent_access(&node)
+            fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
                 .transact_write("test.finish_prior_assignment", |txn| {
                     let finish = &finish;
                     Box::pin(async move {
@@ -583,7 +571,7 @@ async fn queued_task_goal_changes_only_when_its_request_claims() {
                 .unwrap();
             if stopped {
                 crate::goal::seed_goal_from_access(
-                    &agent_access(&node),
+                    &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
                     &test_node_did(),
                     session,
                     None,
@@ -619,13 +607,16 @@ async fn queued_task_goal_changes_only_when_its_request_claims() {
                 if stopped { 100 } else { 0 }
             );
             assert_eq!(
-                crate::goal::refresh_goal_usage_from_access(&agent_access(&node), &assigned)
-                    .await
-                    .unwrap(),
+                crate::goal::refresh_goal_usage_from_access(
+                    &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
+                    &assigned
+                )
+                .await
+                .unwrap(),
                 if stopped { 0 } else { 100 }
             );
             assert!(!crate::goal::update_goal_fields_if_status_from_access(
-                &agent_access(&node),
+                &fixture_agent_access(&node, FIXTURE_AGENT_NONCE),
                 &original,
                 gents_protocol::goal_status::GoalStatus::Active,
                 "objective: \"stale controller\""
@@ -669,7 +660,7 @@ async fn concurrent_serial_claims_follow_durable_arrival_order() {
             "queued_serial": true,
             "goal_assignment_applied": false,
         });
-        agent_access(&node).transact_write(
+        fixture_agent_access(&node, FIXTURE_AGENT_NONCE).transact_write(
                 "test.serial_claim_receipt", |txn| {
                     let input = input.clone();
                     Box::pin(async move {
@@ -825,24 +816,21 @@ async fn signed_background_claim_fixture(
     session: &str,
 ) -> (AgentRequest, String) {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
     let access = root_access(node);
-    let agent = agent_access(node);
-    let identity = crate::triggers::callback::test_agent_identity();
+    let agent = fixture_agent_access(node, FIXTURE_AGENT_NONCE);
+    let identity = fixture_agent(FIXTURE_AGENT_NONCE);
     let identity = identity.as_ref();
-    let (node_did, agent_did) = (test_node_did(), test_agent_did());
+    let (node_did, agent_did) = (test_node_did(), fixture_agent_did(FIXTURE_AGENT_NONCE));
     ensure_agent_session(node, session, &node_did, Some(&agent_did))
         .await
         .unwrap();
     let mut parent = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "snapshot-parent",
-        &node_did,
-        &agent_did,
-        &agent_did,
-        session,
+        RequestScope::new(&node_did, &agent_did, &agent_did, session),
         "Prior work",
         "interactive",
         "2026-10-21T00:00:00Z",
@@ -856,10 +844,7 @@ async fn signed_background_claim_fixture(
     let mut wake = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "snapshot-wake",
-        &node_did,
-        &agent_did,
-        &agent_did,
-        session,
+        RequestScope::new(&node_did, &agent_did, &agent_did, session),
         "Review background results",
         "scheduled",
         "2026-10-21T00:00:01Z",
@@ -910,7 +895,7 @@ async fn create_fixture_request(
                     "AgentRequest",
                     &doc,
                     "working_agent",
-                    &identity::Did::new(test_agent_did())?,
+                    &identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE))?,
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(doc)
@@ -923,8 +908,8 @@ async fn create_fixture_request(
 #[tokio::test]
 async fn background_claim_snapshots_transcript_before_successor_input() {
     let node = test_node().await;
-    let (node_did, agent_did) = (test_node_did(), test_agent_did());
-    let agent = agent_access(&node);
+    let (node_did, agent_did) = (test_node_did(), fixture_agent_did(FIXTURE_AGENT_NONCE));
+    let agent = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
     let session_id = "background-claim-snapshot";
     let (request, source_doc) = signed_background_claim_fixture(&node, session_id).await;
     gents_session::session::import_history_observation_as(
@@ -1032,8 +1017,8 @@ async fn background_claim_snapshots_transcript_before_successor_input() {
 #[tokio::test]
 async fn background_claim_keeps_fork_imports_out_of_notification_input() {
     let node = test_node().await;
-    let (node_did, agent_did) = (test_node_did(), test_agent_did());
-    let agent = agent_access(&node);
+    let (node_did, agent_did) = (test_node_did(), fixture_agent_did(FIXTURE_AGENT_NONCE));
+    let agent = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
     let session_id = "background-import-snapshot";
     let origin_key = "background-completion-notification:owned:tool";
     let (request, source_doc) = signed_background_claim_fixture(&node, session_id).await;
@@ -1180,7 +1165,7 @@ async fn claim_pins_configured_budget_and_reclaim_preserves_unlimited_or_zero() 
             r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending"{budget_patch} }}) {{ _docID }} }}"#,
             escape_graphql_string(&resumed_request.doc_id)
         );
-        agent_access(&node)
+        fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
             .transact_write("test.requeue_budget", |txn| {
                 let mutation = &mutation;
                 Box::pin(async move {

@@ -18,7 +18,7 @@ struct CompactionFixture {
 impl CompactionFixture {
     async fn new(name: &str, request_id: &str, session_id: &str) -> Self {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         use gents_store::identity::NodeIdentity;
         let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
@@ -28,10 +28,7 @@ impl CompactionFixture {
         let create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             request_id,
-            db.node_identity.did(),
-            user.did(),
-            agent.did(),
-            session_id,
+            RequestScope::new(db.node_identity.did(), user.did(), agent.did(), session_id),
             "compaction",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

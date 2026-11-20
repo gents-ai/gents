@@ -8,7 +8,6 @@ use std::path::Path;
 pub const PROMPT: &str = "Retry this failed editor turn.";
 pub const CAPTURED: &str = "original retry captured context\n";
 
-#[allow(clippy::too_many_arguments)]
 pub async fn verify(
     client: &mut Attachment,
     id: &mut u32,

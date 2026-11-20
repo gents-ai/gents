@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::ServeLifecycle;
-use crate::enrollment::canonical_domain_payload;
+use crate::enrollment::{
+    canonical_domain_payload, signed_command_staleness, SignedCommandStaleness,
+};
 
 pub const RUNTIME_CONTROL_VERSION: u8 = 1;
 /// Native server startup takes the reservation before reopening its store.
@@ -222,15 +224,11 @@ fn valid_build(build: &str) -> bool {
 
 fn validate_time(value: &str, now: DateTime<Utc>) -> Result<()> {
     let issued = DateTime::parse_from_rfc3339(value)?.with_timezone(&Utc);
-    ensure(
-        issued <= now + Duration::seconds(5),
-        RuntimeControlError::FutureTimestamp,
-    )?;
-    ensure(
-        now - issued <= Duration::seconds(60),
-        RuntimeControlError::ExpiredTimestamp,
-    )?;
-    Ok(())
+    match signed_command_staleness(issued, now) {
+        Some(SignedCommandStaleness::FromFuture) => Err(RuntimeControlError::FutureTimestamp),
+        Some(SignedCommandStaleness::Expired) => Err(RuntimeControlError::ExpiredTimestamp),
+        None => Ok(()),
+    }
 }
 
 fn payload<T>(domain: &str, value: &T) -> Result<Vec<u8>>
@@ -244,6 +242,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     fn command(operation: RuntimeOperation, now: DateTime<Utc>) -> RuntimeControlCommand {
         RuntimeControlCommand {

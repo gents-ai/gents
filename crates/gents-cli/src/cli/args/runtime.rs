@@ -192,6 +192,11 @@ pub(crate) struct QueryArgs {
     pub(crate) field_page: Option<String>,
     #[arg(
         long,
+        help = "find: add _signer {created, latest, writers, unsigned}, the DIDs whose verified signatures wrote each document's versions"
+    )]
+    pub(crate) signer: bool,
+    #[arg(
+        long,
         help = "Maximum rows (find defaults to 50; search to 10; maximum 1000); String fields are capped at 2000 bytes"
     )]
     pub(crate) limit: Option<u32>,

@@ -48,7 +48,17 @@ pub(crate) async fn outdated_packs_on(
     let mut report = Vec::new();
     for pack in installed {
         let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&pack.coordinate);
-        let (latest, outdated, mut error) = match client.package(namespace, name).await {
+        let page = client.package(namespace, name).await;
+        // The registry's page was read for the latest version; what it says
+        // of the pack goes with it, so a list of packs asks once for each.
+        let said = |field: &str| {
+            page.as_ref()
+                .ok()
+                .and_then(|package| package[field].as_str())
+                .map(str::to_owned)
+        };
+        let (description, owner) = (said("description"), said("owner"));
+        let (latest, outdated, mut error) = match page {
             Err(error) => (None, None, Some(format!("{error:#}"))),
             Ok(package) => match package["latest"].as_str() {
                 None => (
@@ -76,6 +86,8 @@ pub(crate) async fn outdated_packs_on(
             "source": pack.source,
             "latest": latest,
             "outdated": outdated,
+            "description": description,
+            "owner": owner,
         });
         let newer = match (&latest, outdated, &error) {
             (Some(latest), Some(true), None) => Some(latest.clone()),
@@ -801,6 +813,11 @@ mod tests {
         assert_eq!(
             packs[0]["source"]["kind"], "local",
             "a pack installed from a path reports that it came from a file: {packs:?}"
+        );
+        assert_eq!(
+            (&packs[0]["description"], &packs[0]["owner"]),
+            (&json!("A pack the fake registry serves"), &json!("fixture")),
+            "the registry's words on the pack come with the list: {packs:?}"
         );
         assert!(
             !home.path().join("data").exists(),

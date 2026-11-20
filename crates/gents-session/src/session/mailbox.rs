@@ -23,9 +23,6 @@ mod domain;
 #[cfg(test)]
 mod native_policy_conformance;
 mod notification;
-mod runtime_notice;
-pub use runtime_notice::publish as publish_runtime_notice;
-pub use runtime_notice::{RuntimeNotice, RuntimeNoticeError, RuntimeNoticeScopeError};
 mod reply;
 mod waiting;
 pub(crate) use reply::claim_reply_in_txn;

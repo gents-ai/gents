@@ -69,7 +69,8 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         let tool_doc_id = tool.doc_id().unwrap().to_owned();
         let tool_call_id = tool.tool_call_id().to_owned();
 
-        let registry = crate::call::hook::BackgroundExecutionRegistry::default();
+        let registry =
+            crate::call::hook::background_executions::BackgroundExecutionRegistry::default();
         let token = tokio_util::sync::CancellationToken::new();
         let reservation = registry
             .reserve(tool_call_id.clone(), tool_doc_id.clone(), token.clone())
@@ -181,10 +182,12 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 &node_did,
                 &session_id,
                 tool.requester_did(),
-                std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
-                    background_executions: registry.clone(),
-                    job_driver: job_driver.clone(),
-                }),
+                std::sync::Arc::new(
+                    crate::call::hook::background_executions::RuntimeExecutionWitness {
+                        background_executions: registry.clone(),
+                        job_driver: job_driver.clone(),
+                    },
+                ),
             )
             .await;
             owned_blocked = Some(first_resume.is_err());
@@ -239,10 +242,12 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 &node_did,
                 &session_id,
                 tool.requester_did(),
-                std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
-                    background_executions: registry.clone(),
-                    job_driver: job_driver.clone(),
-                }),
+                std::sync::Arc::new(
+                    crate::call::hook::background_executions::RuntimeExecutionWitness {
+                        background_executions: registry.clone(),
+                        job_driver: job_driver.clone(),
+                    },
+                ),
             )
             .await
             .expect("resume succeeds after the existing recovery owner verifies process exit");
@@ -355,7 +360,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     )
     .await;
 
-    let registry = crate::call::hook::BackgroundExecutionRegistry::default();
+    let registry = crate::call::hook::background_executions::BackgroundExecutionRegistry::default();
     let token = tokio_util::sync::CancellationToken::new();
     let reservation = registry
         .reserve(tool_call_id.clone(), tool_doc_id.clone(), token.clone())
@@ -402,7 +407,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     .await
     .unwrap();
     assert_eq!(stop.status.as_str(), "stop_requested");
-    tool.cancel_during_run(gents_session::session::tool_call_state::CancelCause::UserCancelled)
+    tool.cancel_during_run(gents_protocol::tool_call::CancelCause::UserCancelled)
         .await
         .unwrap();
     let terminal_row = tool
@@ -440,10 +445,12 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         &node_did,
         &session_id,
         tool.requester_did(),
-        std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
-            background_executions: registry.clone(),
-            job_driver: job_driver.clone(),
-        }),
+        std::sync::Arc::new(
+            crate::call::hook::background_executions::RuntimeExecutionWitness {
+                background_executions: registry.clone(),
+                job_driver: job_driver.clone(),
+            },
+        ),
     )
     .await;
     let resume_blocked = blocked.is_err();
@@ -476,10 +483,12 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         &node_did,
         &other_session,
         None,
-        std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
-            background_executions: registry.clone(),
-            job_driver: job_driver.clone(),
-        }),
+        std::sync::Arc::new(
+            crate::call::hook::background_executions::RuntimeExecutionWitness {
+                background_executions: registry.clone(),
+                job_driver: job_driver.clone(),
+            },
+        ),
     )
     .await
     .expect("an unrelated session is not blocked by this process record");
@@ -510,10 +519,12 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         &node_did,
         &session_id,
         tool.requester_did(),
-        std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
-            background_executions: registry,
-            job_driver,
-        }),
+        std::sync::Arc::new(
+            crate::call::hook::background_executions::RuntimeExecutionWitness {
+                background_executions: registry,
+                job_driver,
+            },
+        ),
     )
     .await
     .expect("resume succeeds after the registered process owner records exit");

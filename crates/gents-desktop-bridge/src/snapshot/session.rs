@@ -86,14 +86,14 @@ mod timeline_page;
 use command_denial::command_denial_from_row;
 pub use context_projection::attach_last_request_context;
 use context_projection::{build_session_context_from_stores, usize_to_i64};
-pub use live_delta::build_session_live_delta;
+pub use live_delta::{build_session_live_delta, LiveDeltaBase};
 #[cfg(test)]
-pub(crate) use live_delta::build_session_live_delta_from_store;
+pub(crate) use live_delta::{build_session_live_delta_from_store, LiveDeltaStores};
 use pending_turn::{project_pending_turn, project_retry_eligibility};
-use projection::build_session_snapshot_from_store_for_node_with_transcript;
 #[cfg(test)]
 pub(crate) use projection::render_transcript_rows;
 pub(crate) use projection::render_transcript_rows_with_provenance;
+use projection::{build_session_snapshot_from_store_for_node_with_transcript, SessionProjection};
 #[cfg(test)]
 use request_context::decode_latest_request_context;
 use request_context::load_latest_session_request_context;
@@ -302,19 +302,21 @@ pub fn build_session_snapshot_from_store_for_node(
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
     build_session_snapshot_from_store_for_node_with_transcript(
-        store,
-        store,
-        store,
-        None,
-        None,
-        false,
-        true,
-        true,
-        true,
+        SessionProjection {
+            store,
+            transcript_store: store,
+            context_store: store,
+            canonical_dependencies: None,
+            prompt_ownership: None,
+            request_projection: None,
+            transcript_is_bounded: false,
+            context_totals_exact: true,
+            pending_owner_known: true,
+            include_live_tail: true,
+        },
         node_did,
         session_id,
         preferred_request_id,
-        None,
     )
 }
 
@@ -337,36 +339,48 @@ pub async fn build_session_snapshot_for_node(
         node_did,
         session_id,
         preferred_request_id,
-        None,
-        None,
-        None,
-        None,
-        true,
-        true,
-        None,
+        SessionReadInputs {
+            transcript_store: None,
+            canonical_dependencies: None,
+            context_store: None,
+            prompt_ownership: None,
+            context_totals_exact: true,
+            include_live_tail: true,
+            request_projection: None,
+        },
     )
     .await
     .expect("test session snapshot read")
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "projection inputs come from separate stores and request options"
-)]
+pub struct SessionReadInputs<'a> {
+    pub transcript_store: Option<&'a ClientStore>,
+    pub canonical_dependencies: Option<&'a CanonicalTranscriptDependencies>,
+    pub context_store: Option<&'a ClientStore>,
+    pub prompt_ownership:
+        Option<&'a gents_observe::client_projection::query::RequestPromptOwnership>,
+    pub context_totals_exact: bool,
+    pub include_live_tail: bool,
+    pub request_projection: Option<&'a [AgentRequestRow]>,
+}
+
 pub async fn build_session_snapshot_for_node_with_transcript(
     core: &ClientRuntime,
     access: &ConfigAccess,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
-    transcript_store: Option<&ClientStore>,
-    canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
-    context_store: Option<&ClientStore>,
-    prompt_ownership: Option<&gents_observe::client_projection::query::RequestPromptOwnership>,
-    context_totals_exact: bool,
-    include_live_tail: bool,
-    request_projection: Option<&[AgentRequestRow]>,
+    inputs: SessionReadInputs<'_>,
 ) -> anyhow::Result<Option<DesktopSessionSnapshot>> {
+    let SessionReadInputs {
+        transcript_store,
+        canonical_dependencies,
+        context_store,
+        prompt_ownership,
+        context_totals_exact,
+        include_live_tail,
+        request_projection,
+    } = inputs;
     let (store, projection_revision) = core
         .stores()
         .snapshot_with_revision(node_did.unwrap_or_default());
@@ -446,19 +460,21 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         _ => None,
     };
     let mut snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-        store.as_ref(),
-        transcript_store.unwrap_or(store.as_ref()),
-        context_store.or(transcript_store).unwrap_or(store.as_ref()),
-        canonical_dependencies,
-        prompt_ownership,
-        transcript_store.is_some(),
-        context_totals_exact,
-        context_totals_exact,
-        include_live_tail,
+        SessionProjection {
+            store: store.as_ref(),
+            transcript_store: transcript_store.unwrap_or(store.as_ref()),
+            context_store: context_store.or(transcript_store).unwrap_or(store.as_ref()),
+            canonical_dependencies,
+            prompt_ownership,
+            request_projection,
+            transcript_is_bounded: transcript_store.is_some(),
+            context_totals_exact,
+            pending_owner_known: context_totals_exact,
+            include_live_tail,
+        },
         node_did,
         session_id,
         preferred_request_id,
-        request_projection,
     );
     if let Some(snapshot) = snapshot.as_mut() {
         goal_provenance::attach(
@@ -1305,19 +1321,21 @@ mod paging_coverage_tests {
             }
             let page = ClientStore::default();
             let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
-                &store,
-                &page,
-                &store,
-                None,
-                Some(&ownership),
-                true,
-                case.complete,
-                false,
-                true,
+                SessionProjection {
+                    store: &store,
+                    transcript_store: &page,
+                    context_store: &store,
+                    canonical_dependencies: None,
+                    prompt_ownership: Some(&ownership),
+                    request_projection: None,
+                    transcript_is_bounded: true,
+                    context_totals_exact: case.complete,
+                    pending_owner_known: false,
+                    include_live_tail: true,
+                },
                 Some("node"),
                 "session",
                 Some("request"),
-                None,
             )
             .unwrap();
             assert_eq!(

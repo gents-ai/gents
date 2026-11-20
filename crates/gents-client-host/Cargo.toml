@@ -27,7 +27,6 @@ gents = { path = "../gents" }
 gents-store = { workspace = true }
 gents-documents = { workspace = true }
 gents-inference = { workspace = true }
-gents-pack = { workspace = true }
 gents-session = { workspace = true }
 gents-tools = { workspace = true }
 gents-automation = { workspace = true }

@@ -214,6 +214,8 @@ fn tool_config(
         process_ceiling: Default::default(),
         selected_plugins: Vec::new(),
         ceiling_plugins: None,
+        registry_url: None,
+        plugin_builder: None,
     }
 }
 

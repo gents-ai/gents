@@ -1,8 +1,8 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::support::snapshots::SnapshotReader;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
 use gents_store::config_client::ConfigAccess;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::{

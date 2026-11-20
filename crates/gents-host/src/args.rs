@@ -88,6 +88,11 @@ pub struct ServeArgs {
         help = "Send diagnostics to the system log (os_log or journald) instead of stderr, which then carries only the exit error. The native service definition sets it"
     )]
     pub system_log: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL Agents' pack commands resolve and search from. Defaults to the public registry"
+    )]
+    pub registry: Option<String>,
     #[arg(skip)]
     pub keychain_startup_approval: bool,
     /// Startup waits after client access opens until this path opens for
@@ -156,6 +161,13 @@ pub struct ServeArgs {
     pub mcp_write_collections: Vec<String>,
     #[arg(
         long,
+        default_value_t = 16,
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Pack UX observation streams (/packs/ux/watch) served at once; a further stream is refused until one ends"
+    )]
+    pub pack_watch_limit: u32,
+    #[arg(
+        long,
         value_name = "ADDR:PORT",
         env = "GENTS_METRICS_ADDR",
         help = "Also serve Prometheus /metrics on this dedicated listener, without runtime operator authorization. Off by default. Loopback addresses serve unauthenticated; a specific non-loopback interface requires --metrics-auth-token-env; wildcard (unspecified) addresses are refused. The runtime API's /metrics still requires the operator"
@@ -174,6 +186,12 @@ pub struct ServeArgs {
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
     )]
     pub tool_root: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Standalone gents-fs-runner executable for the native filesystem tools. Defaults to this executable's built-in runner"
+    )]
+    pub fs_runner: Option<PathBuf>,
     #[arg(
         long,
         value_enum,

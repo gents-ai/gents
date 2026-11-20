@@ -9,9 +9,10 @@ use serde_json::Value;
 
 use super::RuntimeHttpState;
 use crate::http::healthz::render_healthz_payload;
+use crate::http::prometheus::p2p::P2pMetricsSnapshot;
+use crate::http::prometheus::store::{load_metrics_query_data, with_local_native_executors};
 use crate::http::prometheus::{
-    load_metrics_query_data, render_prometheus_metrics, sample_process_memory,
-    with_local_native_executors, P2pMetricsSnapshot, ProcessMetricsSnapshot,
+    render_prometheus_metrics, sample_process_memory, ProcessMetricsSnapshot,
 };
 use gents_service::state::P2pAdmissionState;
 

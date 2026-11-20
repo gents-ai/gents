@@ -8,7 +8,7 @@ use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 
 #[derive(Clone, Copy)]
 pub enum ReadSource<'a, 'txn> {
