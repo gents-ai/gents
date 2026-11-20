@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- InferenceBackend `client_version` sets the wire client version that ChatGPT Codex and
+  Grok OAuth backends advertise, replacing the `GENTS_CHATGPT_CODEX_CLIENT_VERSION` and
+  `GENTS_XAI_GROK_CLIENT_VERSION` environment overrides; unset, each client's built-in
+  version is used. InferenceBackend `request_timeout_secs` (default 120s) bounds one plugin
+  model call through that backend, and InferenceExecution `title_timeout_secs` (default
+  10s) bounds one title-generation attempt, replacing fixed timeouts. The OAuth token
+  endpoint overrides `GENTS_CLAUDE_OAUTH_TOKEN_URL`, `GENTS_XAI_OAUTH_TOKEN_URL`,
+  `CODEX_REFRESH_TOKEN_URL_OVERRIDE`, `GENTS_XAI_OAUTH_DEVICE_URL` are removed; refresh
+  takes its endpoint as an argument (#1764).
 - An application pairing no longer reinstalls its collections on authority
   read before its author lost the P2P mutation grant: each install re-reads
   the author's authority after the operations before it, and a change to the

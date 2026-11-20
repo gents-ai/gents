@@ -29,6 +29,7 @@ pub fn execution_settings(document: Option<&Value>) -> Result<Value> {
         "stream_batch_ms": execution.stream_batch_ms.unwrap_or(DEFAULT_STREAM_BATCH_MS as i64),
         "stream_liveness_timeout_secs": execution.stream_liveness_timeout_secs.unwrap_or(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
         "provider_idle_timeout_secs": execution.provider_idle_timeout_secs.unwrap_or(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS as i64),
+        "title_timeout_secs": execution.title_timeout_secs.unwrap_or(DEFAULT_TITLE_TIMEOUT_SECS as i64),
         "deadline_duration_secs": execution.deadline_duration_secs.unwrap_or(DEFAULT_DEADLINE_DURATION_SECS as i64),
         "retry_policy_id": execution.retry_policy_id,
     }))

@@ -18,6 +18,7 @@ use gents_inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use gents_inference::backends::registry::backend_fields;
 use gents_inference::resolved::{
     ResolvedAgent, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_TITLE_TIMEOUT_SECS,
 };
 use gents_store::identity::{NodeIdentity, RuntimeNode};
 use gents_store::schema::migration;
@@ -621,6 +622,11 @@ pub(crate) fn agent_config_from_documents(
         "provider_idle_timeout_secs",
         DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     )?;
+    let title_secs = positive_duration_secs_or_default(
+        execution.title_timeout_secs,
+        "title_timeout_secs",
+        DEFAULT_TITLE_TIMEOUT_SECS,
+    )?;
     let max_total_tokens = execution
         .max_total_tokens
         .map(|limit| {
@@ -673,6 +679,7 @@ pub(crate) fn agent_config_from_documents(
         backend_endpoint: backend.backend_endpoint,
         backend_auth: backend.backend_auth,
         claude_platform: backend.claude_platform,
+        client_version: backend.client_version,
         model_name: inference.profile.model_name.clone(),
         service_tier: inference.profile.service_tier,
         resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),
@@ -691,6 +698,7 @@ pub(crate) fn agent_config_from_documents(
         stream_batch_ms,
         stream_liveness_timeout: Duration::from_secs(liveness_secs),
         provider_idle_timeout: Duration::from_secs(provider_idle_secs),
+        title_timeout: Duration::from_secs(title_secs),
         deadline_duration: Duration::from_secs(deadline_duration_secs),
         completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields {
             retry_max_transport: retry.max_transport_retries,

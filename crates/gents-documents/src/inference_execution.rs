@@ -40,6 +40,10 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub provider_idle_timeout_secs: Option<i64>,
+    /// Title-generation attempt timeout; default 10s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub title_timeout_secs: Option<i64>,
     /// Overall claimed-request duration, including tools; default 86,400s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -119,6 +123,7 @@ impl InferenceExecution {
                 "provider_idle_timeout_secs",
                 self.provider_idle_timeout_secs,
             ),
+            ("title_timeout_secs", self.title_timeout_secs),
             ("deadline_duration_secs", self.deadline_duration_secs),
         ] {
             if value.is_some_and(|value| value <= 0) {
