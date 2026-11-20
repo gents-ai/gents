@@ -504,7 +504,9 @@ export type DesktopApiAdapter = {
   /** installs a pack, or with `preview` reports what installing it would write */
   installPack: (request: PackInstallRequest) => Promise<PackInstallReport>;
   updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
-  removePack: (pack: string) => Promise<void>;
+  /** `edited` says what becomes of the pack's documents edited since it was
+      installed: refused by default, or deleted with the rest (`overwrite`). */
+  removePack: (pack: string, edited?: PackEditedChoice) => Promise<void>;
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
   wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
   listPackWireSources: () => Promise<PackWireSources>;
