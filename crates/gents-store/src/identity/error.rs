@@ -122,10 +122,18 @@ pub enum IdentityError {
         #[source]
         source: crypto::Error,
     },
+    #[error("commit signature type {signature_type:?} is not one DefraDB signs with")]
+    UnknownCommitSignatureType {
+        signature_type: String,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("commit signer {identity:?} ({signature_type}) is not a readable public key")]
     UnreadableCommitSigner {
         identity: String,
         signature_type: String,
+        #[source]
+        source: crypto::Error,
     },
     #[error("no signing identity is loaded for {did}")]
     SigningIdentityNotLoaded { did: String },

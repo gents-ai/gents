@@ -255,23 +255,15 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         1,
         "signed genesis must retain its actual creator on the receiver"
     );
-    // gents#3888: the receiver names the writer from the synced block signature.
-    let history = receiver_author
-        .execute(&format!(
-            r#"{{ _commits(docID: "{}") {{ cid height fieldName signature {{ identity type }} }} }}"#,
-            escape_graphql_string(&doc)
-        ))
-        .await?;
-    let genesis =
-        gents_store::graphql::composite_commits_at(history["data"].get("_commits"), "_commits")?;
-    let signature = genesis
-        .last()
-        .and_then(|commit| commit.signature.as_ref())
-        .context("the synced genesis carries no signature")?;
     assert_eq!(
-        gents_store::identity::commit_signer_did(&signature.identity, &signature.signature_type)?,
-        candidate.did(),
-        "the receiver must read the writer's DID from the synced signature"
+        gents_store::provenance::document_signers(&receiver_author, &doc).await?,
+        gents_store::provenance::DocumentSigners {
+            created: Some(candidate.did().to_owned()),
+            latest: Some(candidate.did().to_owned()),
+            writers: std::collections::BTreeSet::from([candidate.did().to_owned()]),
+            unsigned: false,
+        },
+        "the receiver must name the writer from the synced signature"
     );
     let offer_b = issuer.mint().await?;
     let request_b = crate::p2p_reconcile::enrollment_candidate::sign_enrollment_request(

@@ -1063,4 +1063,14 @@ async fn find_signer_names_who_wrote_a_document_not_who_it_claims() {
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("signer must be true or false"));
+
+    let paged: QueryParams = serde_json::from_value(json!({"argv":["find"],"collection":"Order","options":{"fields":["login"],"signer":true,"field_page":{"doc_id":own_id,"field":"login","offset_bytes":0}}}))
+    .unwrap();
+    let error = Tool::call(&tool, paged, &gents_loop::tool::ToolCallEnvelope::default())
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("field_page cannot combine with signer"),
+        "a field page never silently drops the requested _signer: {error:#}"
+    );
 }

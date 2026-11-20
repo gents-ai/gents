@@ -316,27 +316,30 @@ pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
 /// The DID that signed a commit, from `_commits { signature { identity type } }`:
 /// the inverse of [`commit_signer_identity_for_did`]. DefraDB verifies the
 /// signature when the block arrives, so this names the node that wrote it.
+/// The DID is derived as DefraDB derives it at merge
+/// (`verified_signature_signer_did`), so a compressed secp256k1 or P-256
+/// header key names the same DID as its uncompressed form.
 pub fn commit_signer_did(identity: &str, signature_type: &str) -> Result<String> {
-    let unreadable = || IdentityError::UnreadableCommitSigner {
-        identity: identity.to_owned(),
-        signature_type: signature_type.to_owned(),
+    let parsed =
+        serde_json::from_value(serde_json::Value::from(signature_type)).map_err(|source| {
+            IdentityError::UnknownCommitSignatureType {
+                signature_type: signature_type.to_owned(),
+                source,
+            }
+        })?;
+    let key_type = match parsed {
+        defra_core::SignatureType::EdDSA => crypto::KeyType::Ed25519,
+        defra_core::SignatureType::ES256K => crypto::KeyType::Secp256k1,
+        defra_core::SignatureType::ES256 => crypto::KeyType::Secp256r1,
+        defra_core::SignatureType::BLSAugV1 => crypto::KeyType::Bls12381,
     };
-    let key_type = match signature_type {
-        "EdDSA" => crypto::KeyType::Ed25519,
-        "ES256K" => crypto::KeyType::Secp256k1,
-        "ES256" => crypto::KeyType::Secp256r1,
-        "BLS_AUG_V1" => crypto::KeyType::Bls12381,
-        _ => return Err(unreadable()),
-    };
-    if !identity.len().is_multiple_of(2) || !identity.is_ascii() {
-        return Err(unreadable());
-    }
-    let bytes = (0..identity.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&identity[i..i + 2], 16))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|_| unreadable())?;
-    crypto::create_did_key(key_type, &bytes).map_err(|_| unreadable())
+    crypto::public_key_from_string(key_type, identity)
+        .and_then(|key| key.did())
+        .map_err(|source| IdentityError::UnreadableCommitSigner {
+            identity: identity.to_owned(),
+            signature_type: signature_type.to_owned(),
+            source,
+        })
 }
 
 /// DefraDB tolerates up to 60s of clock skew and its bearers carry no nonce,

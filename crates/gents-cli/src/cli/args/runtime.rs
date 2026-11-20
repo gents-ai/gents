@@ -192,7 +192,7 @@ pub(crate) struct QueryArgs {
     pub(crate) field_page: Option<String>,
     #[arg(
         long,
-        help = "find: add _signer {created, latest}, the DIDs whose verified signatures wrote each document"
+        help = "find: add _signer {created, latest, writers, unsigned}, the DIDs whose verified signatures wrote each document's versions"
     )]
     pub(crate) signer: bool,
     #[arg(

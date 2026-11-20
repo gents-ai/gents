@@ -103,7 +103,7 @@ pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
         None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows; search ranks keywords with BM25. Configuration uses config; schema definitions use schema."),
         Some("fields") => Ok("{argv:[\"fields\"],collection:\"Shipment\"}. Returns available field names and types; no options."),
-        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_lt,_geq,_leq,_in,_nin,_like; compose with _and,_or,_not. Use search for BM25 keywords. Recover a truncated string with options.field_page:{doc_id,field,offset_bytes:0}. Later pages require expected_hash from value_hash; offsets are UTF-8 byte boundaries. Changed values require restarting at zero. Empty values and offset at end return a complete empty page. Field must remain in fields; existing filters and authorization apply. Set options.signer:true to add _signer:{created,latest,writers,unsigned} from the document's verified block signatures: the DIDs behind its first and latest versions, every DID that signed any change (check all of writers, not only created and latest), and whether any change is unsigned. Relationship selections and vector search are not exposed here."),
+        Some("find") => Ok("{argv:[\"find\"],collection:\"Shipment\",options:{fields:[\"reference\",\"status\"],filter:{status:{_eq:\"queued\"}},order:[{priority:\"ASC\"}],offset:0,limit:20}}. Fields are required. Default limit 50, maximum 1000; offset ≤100000. Orders use ASC/DESC; _docID is appended as a tie-breaker. Pagination observes the current datastore, not a retained snapshot. Filters use native DefraDB operators: _eq,_neq,_gt,_lt,_geq,_leq,_in,_nin,_like; compose with _and,_or,_not. Use search for BM25 keywords. Recover a truncated string with options.field_page:{doc_id,field,offset_bytes:0}. Later pages require expected_hash from value_hash; offsets are UTF-8 byte boundaries. Changed values require restarting at zero. Empty values and offset at end return a complete empty page. Field must remain in fields; existing filters and authorization apply. Set options.signer:true to add _signer:{created,latest,writers,unsigned}, the document's provenance from its verified version signatures: the DIDs behind its first and newest versions (null when unsigned or ambiguous), every DID that signed any version (an edit in between shows here even when created and latest agree), and unsigned:true when some version cannot be attributed (unsigned, or missing from the readable history). Not combinable with field_page. Relationship selections and vector search are not exposed here."),
         Some("search") => Ok("{argv:[\"search\"],collection:\"Reports\",options:{fields:[\"duty\"],search_fields:[\"duty\"],text:\"crew duty\",limit:5}}. Returns native BM25 _score, highest first; zero-score rows may follow matches. search_fields are String fields; fields selects returned values. Default limit 10, maximum 1000. Optional filter uses native operators; optional order uses find’s typed field-order tie-breakers. _docID breaks remaining ties. Configure fulltext indexes through schema help indexes fulltext; no embeddings needed."),
         Some("explain") => Ok("{argv:[\"explain\"],collection:\"Shipment\",options:{fields:[\"reference\"],filter:{status:{_eq:\"queued\"}},limit:20,mode:\"simple\"}}. Uses the same fields/filter/order/offset/limit and scope as find. Default simple inspects the native plan without executing the query. Set mode:execute only when the user requests measured execution; this runs the bounded read and returns native execution metrics. Execution metrics describe native work, not a matching-row total; use count for that. No mutations. Index observations are native plan facts; recommendations for other workloads are inferences."),
         Some("count") => Ok("{argv:[\"count\"],collection:\"Shipment\",options:{filter:{status:{_eq:\"queued\"}}}}. Returns total_count from DefraDB COUNT over every matching row; no fields/limit/offset/order."),
@@ -279,11 +279,22 @@ pub(super) async fn execute_typed_command(
         .map(|value| serde_json::from_value(value.clone()))
         .transpose()
         .context("invalid field_page")?;
+    let signer = match args.options.get("signer") {
+        None | Some(Value::Bool(false)) => false,
+        Some(Value::Bool(true)) => true,
+        Some(_) => return Err(anyhow!("signer must be true or false").into()),
+    };
     let selected_fields = params.fields.clone();
     if let Some(page) = &field_page {
         page.validate(&selected_fields)?;
         if args.options.contains_key("offset") || args.options.contains_key("order") {
             return Err(anyhow!("field_page cannot combine with row offset/order").into());
+        }
+        if signer {
+            return Err(anyhow!(
+                "field_page cannot combine with signer; read _signer with find without field_page"
+            )
+            .into());
         }
         let exact = json!({"_docID":{"_eq":page.doc_id}});
         params.filter = Some(match params.filter.take().filter(|v| !v.is_null()) {
@@ -408,18 +419,16 @@ pub(super) async fn execute_typed_command(
     } else {
         Vec::new()
     };
-    let signer = match args.options.get("signer") {
-        None | Some(Value::Bool(false)) => false,
-        Some(Value::Bool(true)) => true,
-        Some(_) => return Err(anyhow!("signer must be true or false").into()),
-    };
     if command == "find" && signer {
         for row in rows.as_array_mut().unwrap() {
             let doc_id = row["_docID"]
                 .as_str()
                 .context("a find row came back without _docID")?
                 .to_owned();
-            row["_signer"] = document_signers(access, &doc_id).await?;
+            let signers = gents_store::provenance::document_signers(access, &doc_id)
+                .await
+                .map_err(anyhow::Error::from)?;
+            row["_signer"] = serde_json::to_value(signers).map_err(anyhow::Error::from)?;
         }
     }
     if command == "find" && !selected_fields.iter().any(|field| field == "_docID") {
@@ -446,48 +455,6 @@ pub(super) async fn execute_typed_command(
         result["ranking"] = json!("bm25");
     }
     Ok(result)
-}
-
-/// Who wrote a document, from its verified version signatures: the DIDs behind
-/// its first and latest versions (null where unsigned), every DID that signed
-/// any version (an edit in between shows up here, so an app checks all of
-/// them), and whether any version carries no signature at all.
-// ponytail: one _commits read per row (rows ≤ 1000); batch by docID if it shows up in a profile.
-async fn document_signers(access: &dyn ConfigRead, doc_id: &str) -> Result<Value> {
-    let history = access
-        .execute_read(&format!(
-            r#"{{ _commits(docID: "{}") {{ cid height fieldName signature {{ identity type }} }} }}"#,
-            gents_store::graphql::escape_graphql_string(doc_id)
-        ))
-        .await?;
-    let rows = history["data"]["_commits"]
-        .as_array()
-        .context("DefraDB returned no _commits for a document")?;
-    // Each version's composite (`_C`) block is signed and links its field blocks
-    // by CID, so its signature covers them; Defra leaves update field blocks
-    // unsigned. Newest first.
-    let commits = gents_store::graphql::decode_composite_commits(rows)?;
-    let did = |commit: &gents_store::graphql::CompositeCommit| -> Result<Option<String>> {
-        commit
-            .signature
-            .as_ref()
-            .filter(|sig| !sig.identity.is_empty())
-            .map(|sig| gents_store::identity::commit_signer_did(&sig.identity, &sig.signature_type))
-            .transpose()
-            .map_err(Into::into)
-    };
-    let signers = commits.iter().map(did).collect::<Result<Vec<_>>>()?;
-    let writers = signers
-        .iter()
-        .flatten()
-        .collect::<std::collections::BTreeSet<_>>();
-    let unsigned = signers.iter().any(Option::is_none);
-    Ok(json!({
-        "created": signers.last().cloned().flatten(),
-        "latest": signers.first().cloned().flatten(),
-        "writers": writers,
-        "unsigned": unsigned,
-    }))
 }
 
 fn collect_plan_observations(plan: &Value, out: &mut Vec<String>) {
