@@ -128,7 +128,7 @@ pub use inference_backend::{
     InferenceBackendObservation, InvalidBackendAuthSelection,
 };
 pub use inference_execution::{
-    InferenceExecution, InferenceRetryPolicy, MAX_DEADLINE_DURATION_SECS,
+    configured_loop_limit, InferenceExecution, InferenceRetryPolicy, MAX_DEADLINE_DURATION_SECS,
 };
 pub use inference_sampling::InferenceSampling;
 
