@@ -631,8 +631,10 @@ async fn apply(
                 home,
                 &source,
                 &[engineer.to_owned()],
-                wiring.consent_dynamic,
-                wiring.tool_calls,
+                gents_pack::pack::plugin_wire::WireConsent {
+                    dynamic: wiring.consent_dynamic,
+                    tool_calls: wiring.tool_calls,
+                },
                 gents_host::http::pack_wire_client::SIGNERS,
             )
             .await

@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use gents_pack::operations::pack::{admit_digest, parse_inference_slots};
 use gents_pack::pack::install_flow::{
     check_wire_target, has_plugin_references, install_documents_pack_resolved_inner, merge,
-    DocumentsInstallRequest, LocalPackAccess,
+    DocumentsInstallNode, DocumentsInstallRequest, LocalPackAccess,
 };
 use gents_pack::pack::installation_roots;
 use gents_pack::pack::plugin_wire::wire_pack_plugins;
@@ -152,13 +152,15 @@ async fn install_documents_pack_inner(
         }
     }
     install_documents_pack_resolved_inner(
-        access,
-        owner,
+        &DocumentsInstallNode {
+            access,
+            owner,
+            local,
+        },
         pack,
         &request,
         explicit,
         dependencies,
-        local,
         &gents_tools::surface::PackRoots,
         refuse_unapproved_root,
     )
@@ -469,8 +471,10 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 &home,
                 pack.archive(),
                 args.grant_authority,
-                slot_owner.as_deref(),
-                &requested,
+                gents_pack::pack::plugin_lifecycle::PluginSlotBindings {
+                    owner: slot_owner.as_deref(),
+                    bindings: &requested,
+                },
                 gents_pack::pack::InstalledVia::Operator,
                 pack.provenance(),
                 move |identity, changes| {
