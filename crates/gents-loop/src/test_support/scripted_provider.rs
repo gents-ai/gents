@@ -46,6 +46,20 @@ pub enum Step {
     Pending,
 }
 
+impl Step {
+    /// A final response reporting `usage` the way a provider's
+    /// `{"usage": ...}` payload reads.
+    pub fn usage_end(usage: rig::completion::Usage) -> Self {
+        Self::End(StreamEnd {
+            usage: Some(usage),
+            token_usage: crate::rig_compat::observed_token_usage(
+                &serde_json::json!({ "usage": usage }),
+            ),
+            request_id: None,
+        })
+    }
+}
+
 /// How one provider call answers.
 pub enum Reply {
     /// The call opens a stream that plays these steps.

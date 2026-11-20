@@ -63,16 +63,16 @@ fn reply(index: usize, call: &family::Call) -> Reply {
             Reply::Stream(steps)
         }
         None => {
-            steps.push(Step::End(crate::rig_compat::model::StreamEnd {
-                usage: call.usage.as_ref().map(|usage| rig::completion::Usage {
+            steps.push(match &call.usage {
+                Some(usage) => Step::usage_end(rig::completion::Usage {
                     input_tokens: usage.input,
                     output_tokens: usage.output,
                     total_tokens: usage.total,
                     cached_input_tokens: 0,
                     cache_creation_input_tokens: 0,
                 }),
-                ..Default::default()
-            }));
+                None => Step::End(crate::rig_compat::model::StreamEnd::default()),
+            });
             Reply::Stream(steps)
         }
     }

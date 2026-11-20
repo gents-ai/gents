@@ -60,15 +60,12 @@ fn review_provider(reply: Option<String>) -> ScriptedProvider {
         });
         Reply::Stream(vec![
             Step::Chunk(RawStreamingChoice::Message(reply)),
-            Step::End(gents_loop::rig_compat::model::StreamEnd {
-                usage: Some(rig::completion::Usage {
-                    input_tokens: 3,
-                    output_tokens: 5,
-                    total_tokens: 8,
-                    cached_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                }),
-                ..Default::default()
+            Step::usage_end(rig::completion::Usage {
+                input_tokens: 3,
+                output_tokens: 5,
+                total_tokens: 8,
+                cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             }),
         ])
     })
