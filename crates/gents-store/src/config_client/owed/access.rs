@@ -52,6 +52,9 @@ pub enum OwedAccessTicket {
         node_did: String,
         transaction: String,
     },
+    /// A transaction on a home on the node's own store: its access changes
+    /// applied with it (`observedGrant false`).
+    NothingOwed,
 }
 
 impl OwedAccessTicket {
@@ -68,6 +71,7 @@ impl OwedAccessTicket {
                 let context = defra_core::RequestContext::default().with_identity(actor.clone());
                 await_on(node, &context, handle, deadline).await
             }
+            Self::NothingOwed => Ok(GrantWait::Settled),
             Self::Http {
                 endpoint,
                 node_did,
@@ -103,7 +107,7 @@ pub enum OwnGrantError {
     NotKept,
     #[error("This change is saved and its access is still being set up on this home. Try again in a moment.")]
     StillWaiting,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Unanswered(#[from] ConfigClientError),
 }
 

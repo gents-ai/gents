@@ -96,6 +96,7 @@ impl<'a> ConfigApplyTxn<'a> {
                         .map_err(|_| ConfigClientError::OwedAwaitTransaction)?,
                     actor: endpoint.principal_did().map(str::to_owned),
                 }),
+                None if !endpoint.reports_external_provider() => Ok(OwedAccessTicket::NothingOwed),
                 None => Ok(OwedAccessTicket::Http {
                     endpoint: (*endpoint).clone(),
                     node_did: endpoint

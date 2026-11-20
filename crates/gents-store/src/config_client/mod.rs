@@ -412,6 +412,12 @@ impl GraphqlEndpoint {
 
     /// Whether `authorization` mints a Vera delegation, which lapses within
     /// minutes, rather than forwarding a bearer or minting an identity token.
+    /// Whether the runtime behind this endpoint decides document access
+    /// through an external provider, as its status reported.
+    pub fn reports_external_provider(&self) -> bool {
+        self.delegation_audience.get().is_some()
+    }
+
     pub fn mints_delegations(&self) -> bool {
         self.delegated_authorization.is_none()
             && self.client_signing_capability.is_some()
