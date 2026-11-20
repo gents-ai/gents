@@ -116,6 +116,10 @@ pub enum DocumentAcpError {
 }
 
 impl DocumentAcpError {
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+
     pub(crate) fn refusal(&self) -> Option<IncompatibleStoreKind> {
         match self {
             Self::DeploymentDiffers { .. } => Some(IncompatibleStoreKind::OtherVersionSchema),

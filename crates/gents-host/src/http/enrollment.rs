@@ -120,11 +120,9 @@ pub fn unavailable_reason(provider: gents_store::local::document_acp::DocumentAc
 /// The HTTP status of a refused enrollment request: one a home cannot serve
 /// at all is not a malformed request.
 pub fn refusal_status(error: &anyhow::Error) -> axum::http::StatusCode {
-    match gents_protocol::error_chain::find_source::<
-        gents_store::local::document_acp::DocumentAcpError,
-    >(error.as_ref())
-    {
-        Some(gents_store::local::document_acp::DocumentAcpError::TransportGrantsAwaitProvider) => {
+    use gents_store::local::document_acp::DocumentAcpError;
+    match DocumentAcpError::in_chain(error.as_ref()) {
+        Some(DocumentAcpError::TransportGrantsAwaitProvider) => {
             axum::http::StatusCode::NOT_IMPLEMENTED
         }
         _ => axum::http::StatusCode::BAD_REQUEST,

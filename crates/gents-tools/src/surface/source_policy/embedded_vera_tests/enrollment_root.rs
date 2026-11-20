@@ -55,8 +55,7 @@ async fn serving_creates_an_enrollment_root_only_on_a_local_home() -> anyhow::Re
         )
         .await
         .expect_err("no enrollment request is pending");
-        let refusal =
-            gents_protocol::error_chain::find_source::<DocumentAcpError>(decided.as_ref());
+        let refusal = DocumentAcpError::in_chain(decided.as_ref());
         match provider {
             DocumentAcp::Vera => {
                 assert!(root.is_none() && again.is_none(), "{root:?} {again:?}");
