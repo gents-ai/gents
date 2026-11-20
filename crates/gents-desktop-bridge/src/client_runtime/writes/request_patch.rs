@@ -266,7 +266,7 @@ impl ClientRuntime {
         &self,
         node_did: &str,
         request_id: &str,
-    ) -> Result<gents_observe::observe::run_timeline::RunTimeline> {
+    ) -> Result<gents_observe::observe::run_timeline::events::RunTimeline> {
         normalize_required("node_did", node_did)?;
         let request_id = normalize_required("request_id", request_id)?;
         let access = self.session_queue_access(node_did)?;

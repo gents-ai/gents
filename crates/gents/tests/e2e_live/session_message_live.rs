@@ -3354,7 +3354,7 @@ struct ToolCallRow {
 async fn timeline_tools(
     node: &LiveUser,
     request_id: &str,
-) -> Vec<gents_observe::observe::run_timeline::TimelineToolCallRow> {
+) -> Vec<gents_observe::observe::run_timeline::rows::TimelineToolCallRow> {
     load_timeline(node, request_id).await.tool_calls
 }
 
@@ -3362,7 +3362,7 @@ async fn timeline_tools(
 async fn load_timeline(
     node: &LiveUser,
     request_id: &str,
-) -> gents_observe::observe::run_timeline::RunTimelineRows {
+) -> gents_observe::observe::run_timeline::rows::RunTimelineRows {
     // A published header can name a closing segment whose parent link the
     // writer has not committed yet; that dependency is incomplete, not denied.
     let deadline = tokio::time::Instant::now() + STALL_CEILING;
@@ -3392,7 +3392,7 @@ async fn load_timeline(
     }
 }
 
-fn tool_row(row: gents_observe::observe::run_timeline::TimelineToolCallRow) -> ToolCallRow {
+fn tool_row(row: gents_observe::observe::run_timeline::rows::TimelineToolCallRow) -> ToolCallRow {
     ToolCallRow {
         doc_id: row
             .doc_id

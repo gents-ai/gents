@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents_observe::observe::run_timeline::{RunTimelineRows, TimelineToolCallRow};
+use gents_observe::observe::run_timeline::rows::{RunTimelineRows, TimelineToolCallRow};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 #[cfg(test)]
