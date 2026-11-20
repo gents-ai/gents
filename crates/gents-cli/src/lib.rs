@@ -108,7 +108,7 @@ Examples:
   gents init --backend-preset claude-cli-subscription   # then: gents accounts login claude
   gents init --write
   gents init --yolo
-  gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
+  gents init --inference-url http://HOST:PORT/v1 --model-name MODEL --write
   gents init --defra-query-collection AgentRequest
   gents init --identity-only
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL

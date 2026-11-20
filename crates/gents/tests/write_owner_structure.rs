@@ -2519,8 +2519,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-cli/src/commands/start.rs", 1, "GENTS_HOME: records whether the home was chosen explicitly; becomes the home owner's discovery result"),
     ("crates/gents-cli/src/commands/start/setup.rs", 1, "GENTS_HOME: home discovery when --home is absent; becomes the home owner's discovery result"),
     ("crates/gents-cli/src/desired_state/load.rs", 1, "desired-state ${VAR} interpolation: the manifest names operator-supplied variables; legitimately external"),
-    ("crates/gents-cli/src/interactive_backend.rs", 1, "INFERENCE_ENDPOINT changes which backend init selects; becomes an --endpoint flag"),
-    ("crates/gents-cli/src/resolve_helpers.rs", 1, "INFERENCE_ENDPOINT fallback during init; becomes an --endpoint flag"),
     ("crates/gents-desktop-bridge/src/host_browser.rs", 4, "BROWSER, PATH, APPDIR and APPIMAGE: platform browser discovery and the AppImage probe; legitimately external"),
     ("crates/gents-desktop-bridge/src/package_tools.rs", 6, "PATH, APPDIR, APPIMAGE and the launcher's variables: restores the host environment for host programs launched from an AppImage; legitimately external"),
     ("crates/gents-desktop-bridge/src/tauri_commands/e2e.rs", 13, "GENTS_NATIVE_E2E and GENTS_E2E_* drive the native end-to-end command (native-e2e feature); test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
