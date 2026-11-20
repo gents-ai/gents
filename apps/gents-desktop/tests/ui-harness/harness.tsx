@@ -1,12 +1,11 @@
 import React, { Profiler } from "react";
 import ReactDOM from "react-dom/client";
 
+import "./launchParams";
 import App from "../../src/App";
 import { setTimingForTests } from "../../src/hooks/timing";
 import { createDesktopUiHarness } from "./desktopHarness";
 import { createLiveDesktopUiHarness } from "./liveBridgeHarness";
-import { preferences, resetPreferences } from "../../src/ui/preferences";
-import { FLAGS, type FlagId } from "../../src/ui/lib/flags";
 
 declare global {
   interface Window {
@@ -18,13 +17,6 @@ declare global {
 
 const params = new URLSearchParams(window.location.search);
 const backend = params.get("backend") === "live" ? "live" : "deterministic";
-/* ?fresh forgets what this browser remembers of earlier visits, so what
-   opens once opens again */
-if (params.has("fresh")) resetPreferences();
-/* ?flags=a,b turns those experimental features on for this page */
-for (const id of (params.get("flags") ?? "").split(",")) {
-  if (FLAGS.some((flag) => flag.id === id)) preferences.setFlag(id as FlagId, "on");
-}
 const harness =
   backend === "live"
     ? createLiveDesktopUiHarness({ bridgeUrl: params.get("bridgeUrl") })

@@ -58,8 +58,6 @@ export function DefaultPacksReview({
     .filter((pack) => pack.state === "missing")
     .map((pack) => ({ pack: pack.pack }));
   const List = onDismiss ? CardList : PageList;
-  /* on a page there is no card to draw once nothing is left to offer */
-  if (!onDismiss && open.length === 0 && !error) return null;
 
   return (
     <div
@@ -81,14 +79,11 @@ export function DefaultPacksReview({
                 <li key={pack.pack} className="py-1">
                   <Collapsible className="group/about">
                     <div className="flex items-center gap-3">
-                      <CollapsibleTrigger
-                        aria-label={`About ${pack.pack}`}
-                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-1.5 text-left"
-                      >
+                      <CollapsibleTrigger className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-1.5 text-left">
                         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-data-open/about:rotate-90 motion-reduce:transition-none" />
                         <span className="shrink-0 text-sm font-medium">
                           {shortName(pack.pack)}
-                        </span>
+                        </span>{" "}
                         <span className="min-w-0 truncate text-sm text-muted-foreground first-letter:uppercase">
                           {pack.purpose}
                         </span>
@@ -216,8 +211,9 @@ const PageList = ({ children }: { children: ReactNode }) => (
 /** The starter packs offered once over the shell on the desktop's own node
     while one is missing from it, until they are installed or put off with
     Not now. Putting them off is remembered on this device for that node; the
-    Packs page keeps offering them. A pack that is installed and off, or that
-    this build doesn't carry, doesn't open it by itself. */
+    Packs page keeps them, hidden to one line until Show. A pack that is
+    installed and off, or that this build doesn't carry, doesn't open it by
+    itself. */
 export function StarterPacksCard() {
   const review = useDefaultPacks();
   const dismissed = useStarterPacksDismissed(review.nodeDid);
@@ -254,22 +250,25 @@ export function StarterPacksCard() {
 /** The same review as a section of the Packs page, shown while any starter
     pack is not installed and on, or the list could not be read. Hiding it puts the
     packs off as Not now on the card does, leaving one line; Show opens them
-    here again without bringing the card back. */
+    here again without bringing the card back. Like Not now, Hide waits while
+    an install runs. A list that could not be read has nothing to hide, so its
+    error shows even when the packs are put off. */
 export function StarterPacksSection() {
   const review = useDefaultPacks();
-  const { nodeDid } = review;
+  const { nodeDid, busy } = review;
   const dismissed = useStarterPacksDismissed(nodeDid);
   const [shown, setShown] = useState(false);
-  const hidden = dismissed && !shown;
   const waiting = review.packs.filter((pack) => pack.state !== "installed");
   if (waiting.length === 0 && !review.error) return null;
+  const hidden = dismissed && !shown && waiting.length > 0;
   const toggle =
-    nodeDid === null ? null : (
+    nodeDid === null || waiting.length === 0 ? null : (
       <Button
         size="sm"
         variant="ghost"
         className="text-xs text-muted-foreground hover:text-foreground"
         aria-expanded={!hidden}
+        disabled={busy}
         onClick={() => {
           if (hidden) setShown(true);
           else {
