@@ -142,6 +142,75 @@ it("refreshes only the changed pack and removes its retired pages", async () => 
   expect(chips()).toEqual(["second:chip"]);
 });
 
+it("reloads a pack plugin on a plain scan only when its listing digest changes (a CLI reinstall)", async () => {
+  const v1 = { ...packed("first", true), digest: "sha256:a" };
+  listings = [v1];
+  sources.set(v1.id, chipPlugin("first"));
+  await scanRuntimeUxPlugins();
+  expect(chips()).toEqual(["first:chip"]);
+
+  call.mockClear();
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([]);
+
+  listings = [{ ...v1, digest: "sha256:b" }];
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: v1.id }]]);
+  expect(chips()).toEqual(["first:chip"]);
+});
+
+it("never rereads a pack plugin listed without a digest, and follows one once listed", async () => {
+  const p = packed("first", true);
+  listings = [p];
+  sources.set(p.id, chipPlugin("first"));
+  await scanRuntimeUxPlugins();
+  call.mockClear();
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([]);
+
+  listings = [{ ...p, digest: "sha256:a" }];
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: p.id }]]);
+  call.mockClear();
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([]);
+  listings = [{ ...p, digest: "sha256:b" }];
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: p.id }]]);
+});
+
+it("runs only its own plugin in a window opened for one", async () => {
+  const board = packed("board", true);
+  const other = {
+    ...packed("other", true),
+    id: "other/game/other",
+    pack: "other/game",
+  };
+  listings = [board, clock("clock"), other];
+  sources.set(board.id, chipPlugin("board"));
+  sources.set(other.id, chipPlugin("other"));
+  sources.set("clock", chipPlugin("clock"));
+  configureUxDoors({
+    list: async () => ({ plugins: [...listings] }),
+    source: async (id: string) => {
+      call("desktop_ux_plugin_source", { id });
+      return { source: sources.get(id) as string, css: null, digest: "sha256:0" };
+    },
+    only: "board",
+  });
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: board.id }]]);
+  expect(chips()).toEqual(["board:chip"]);
+  expect(Object.keys(uxPluginRecords())).toEqual(["board"]);
+
+  /* another pack's change, heard from the main window, loads nothing here */
+  call.mockClear();
+  await refreshRuntimePackUxPlugins("other/game");
+  await reloadRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: board.id }]]);
+  expect(chips()).toEqual(["board:chip"]);
+});
+
 it("reports an explicit pack refresh failure without retiring the current pages", async () => {
   const entry = packed("widget", true);
   listings = [entry];
