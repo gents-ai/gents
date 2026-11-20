@@ -30,6 +30,7 @@ fn body_wiring(
         inference_slots: Vec::new(),
         dependency_variables: Vec::new(),
         bind_agents: Vec::new(),
+        installer_environment: Default::default(),
         overwrite: false,
         keep: false,
         preview: false,

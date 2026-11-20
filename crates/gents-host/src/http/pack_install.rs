@@ -76,6 +76,9 @@ struct InstallRequest {
     /// agents. The serving runtime's environment never binds one.
     #[serde(default)]
     bind_agents: Vec<String>,
+    /// The installer's environment value of each variable the packs read: the
+    /// only environment the runtime plans this install from.
+    installer_environment: std::collections::BTreeMap<String, String>,
     overwrite: bool,
     keep: bool,
     preview: bool,
@@ -177,8 +180,6 @@ pub async fn encode_install_request(
     owner: &str,
     explicit: bool,
 ) -> Result<serde_json::Value> {
-    // The runtime plans only from what it is sent, so send the values this
-    // installer's environment gives (gents#3857).
     let supplied = gents_pack::pack::install_flow::supplied_variables(
         &args.dependency_variables,
         &args.bind_agents,
@@ -186,13 +187,9 @@ pub async fn encode_install_request(
     let packs = std::iter::once(pack)
         .chain(dependencies.iter())
         .collect::<Vec<_>>();
-    let from_environment =
-        gents_pack::pack::install_flow::environment_variables(&packs, &supplied, &|name| {
-            gents_pack::operations::pack::install_value(
-                gents_protocol::operations::pack::PackActor::User,
-                &supplied,
-                name,
-            )
+    let installer_environment =
+        gents_pack::pack::install_flow::installer_environment(&packs, &supplied, &|name| {
+            args.environment.value(name)
         })?;
     let root = pack.shared_archive();
     let root_source = pack.provenance();
@@ -206,16 +203,7 @@ pub async fn encode_install_request(
         .collect::<Vec<_>>();
     let node_did = owner.to_owned();
     let inference_slots = args.inference_slots.clone();
-    let dependency_variables = args
-        .dependency_variables
-        .iter()
-        .cloned()
-        .chain(from_environment)
-        .collect::<Vec<_>>();
-    gents_pack::operations::pack::parse_variables(&dependency_variables).context(
-        "a hosted install sends the runtime its --var values and each variable the packs' \
-         configurations read from this shell's environment; nothing was installed",
-    )?;
+    let dependency_variables = args.dependency_variables.clone();
     let bind_agents = args.bind_agents.clone();
     let wire = args.wire.clone();
     let (overwrite, keep, preview, force_rebind, grant_authority) = (
@@ -235,6 +223,7 @@ pub async fn encode_install_request(
             inference_slots,
             dependency_variables,
             bind_agents,
+            installer_environment,
             overwrite,
             keep,
             preview,
@@ -449,6 +438,9 @@ async fn install_owned(
     } = received;
     let explicit = request.explicit;
     let args = DocumentsInstallRequest {
+        environment: gents_pack::operations::pack::InstallEnvironment::HostedRuntime(
+            request.installer_environment,
+        ),
         home: home.clone(),
         remote: false,
         inference_slots: request.inference_slots,

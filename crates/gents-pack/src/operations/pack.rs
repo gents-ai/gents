@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use gents_protocol::operations::pack::{
     DigestAdmission, DigestExpectation, EditedAdmission, EditedDocuments, PackActor,
-    PackChangeInput, PackOperation, PackOperationError, PackVariables, ReaderAction, RootReader,
-    VariableSource,
+    PackChangeInput, PackOperation, PackOperationError, PackVariables, PlanEnvironment, Planner,
+    ReaderAction, RootReader, VariableSource,
 };
 use gents_store::config_client::ConfigAccess;
 
@@ -125,16 +125,10 @@ fn variable_name(name: &str, raw: &str) -> Result<(), PackOperationError> {
     if !well_formed {
         return Err(PackOperationError::VariableName(raw.to_owned()));
     }
-    if is_inference_variable(name) {
+    if name.ends_with("_MODEL") || name.ends_with("_ENDPOINT") {
         return Err(PackOperationError::VariableInference(name.to_owned()));
     }
     Ok(())
-}
-
-/// Whether `name` names an inference model or endpoint, which an install
-/// takes from its inference slots and never as a supplied variable.
-pub fn is_inference_variable(name: &str) -> bool {
-    name.ends_with("_MODEL") || name.ends_with("_ENDPOINT")
 }
 
 /// The install variables `values` supply, each `NAME=VALUE` or
@@ -199,29 +193,73 @@ pub fn parse_inference_slots(
     Ok(bindings)
 }
 
-/// The value the root pack and each dependency read for `name` when no value
-/// was supplied for that pack alone.
-pub fn install_value(actor: PackActor, variables: &PackVariables, name: &str) -> Option<String> {
-    let shared = variables.shared.get(name);
-    // An agent binding is never read from the environment.
-    let in_environment =
-        !crate::pack::is_agent_binding_variable(name) && std::env::var_os(name).is_some();
-    match variable_source(actor, false, shared.is_some(), in_environment) {
-        VariableSource::Shared => shared.cloned(),
-        VariableSource::Environment => std::env::var(name).ok(),
-        VariableSource::Scoped | VariableSource::Unset => None,
+/// Lean `Pack.Operations.planEnvironment`.
+pub fn plan_environment(planner: Planner) -> PlanEnvironment {
+    match planner {
+        Planner::Installer => PlanEnvironment::Own,
+        Planner::HostedRuntime => PlanEnvironment::Sent,
     }
 }
 
-/// The value a runtime planning a hosted install reads for `name`: what the
-/// installer sent, which holds every value its own environment gave
-/// ([`crate::pack::install_flow::environment_variables`]). Only an inference
-/// name, which is never sent, still reads this process's environment.
-pub fn hosted_install_value(variables: &PackVariables, name: &str) -> Option<String> {
-    if is_inference_variable(name) {
-        install_value(PackActor::User, variables, name)
-    } else {
-        variables.shared.get(name).cloned()
+/// The environment an install plans from: its installer's own process, or,
+/// for a runtime planning a hosted install, the installer's values its
+/// request carried.
+#[derive(Clone, Default)]
+pub enum InstallEnvironment {
+    #[default]
+    Installer,
+    HostedRuntime(BTreeMap<String, String>),
+}
+
+/// Names the sent variables without their values, which may be credentials.
+impl std::fmt::Debug for InstallEnvironment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Installer => formatter.write_str("Installer"),
+            Self::HostedRuntime(sent) => formatter
+                .debug_tuple("HostedRuntime")
+                .field(&sent.keys().collect::<Vec<_>>())
+                .finish(),
+        }
+    }
+}
+
+impl InstallEnvironment {
+    fn planner(&self) -> Planner {
+        match self {
+            Self::Installer => Planner::Installer,
+            Self::HostedRuntime(_) => Planner::HostedRuntime,
+        }
+    }
+
+    /// The environment's value of `name`, as [`plan_environment`] decides
+    /// which environment that is.
+    pub fn value(&self, name: &str) -> Option<String> {
+        match (plan_environment(self.planner()), self) {
+            (PlanEnvironment::Own, _) => std::env::var(name).ok(),
+            (PlanEnvironment::Sent, Self::HostedRuntime(sent)) => sent.get(name).cloned(),
+            (PlanEnvironment::Sent, Self::Installer) => None,
+        }
+    }
+}
+
+/// The value the root pack and each dependency read for `name` when no value
+/// was supplied for that pack alone: Lean `Pack.Operations.planValue`.
+pub fn install_value(
+    actor: PackActor,
+    variables: &PackVariables,
+    environment: &InstallEnvironment,
+    name: &str,
+) -> Option<String> {
+    let shared = variables.shared.get(name);
+    // An agent binding is never read from the environment.
+    let from_environment = (!crate::pack::is_agent_binding_variable(name))
+        .then(|| environment.value(name))
+        .flatten();
+    match variable_source(actor, false, shared.is_some(), from_environment.is_some()) {
+        VariableSource::Shared => shared.cloned(),
+        VariableSource::Environment => from_environment,
+        VariableSource::Scoped | VariableSource::Unset => None,
     }
 }
 
@@ -300,6 +338,11 @@ mod conformance {
                 input.in_environment,
             )
         });
+    }
+
+    #[test]
+    fn plan_environment_matches_the_lean_model() {
+        families::pack_operations_plan_environment::replay(|input| plan_environment(input.planner));
     }
 
     #[test]
