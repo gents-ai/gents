@@ -5,14 +5,14 @@ use anyhow::{anyhow, Context as _, Result};
 use rapidhash::RapidHashMap;
 use serde_json::Value;
 
-use super::native_runner::self_runner_binary;
 use super::shared::{
     prepare_managed_command, CommandConstraints, CommandExecutionMode, CommandNetworkMode,
 };
 use crate::runtime_context::tool_execution_bounds;
 use gents_session::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
-/// Path to a binary that takes [`PLUGIN_BUILD_COMMAND`]; unset means this one.
+/// Path to a binary that takes [`PLUGIN_BUILD_COMMAND`]; unset means the
+/// runtime's host executable.
 const BUILDER_ENV: &str = "GENTS_PLUGIN_BUILDER";
 /// The hidden entry point of the `gents` and desktop binaries.
 pub const PLUGIN_BUILD_COMMAND: &str = "__plugin-build";
@@ -37,8 +37,9 @@ pub async fn run_plugin_build(
     root: &Path,
     pack_dir: &Path,
     run_cases: bool,
+    host: Option<&Path>,
 ) -> Result<PluginBuildOutcome> {
-    let program = builder_program()?;
+    let program = builder_program(host)?;
     let mut args = vec![
         PLUGIN_BUILD_COMMAND.to_owned(),
         pack_dir
@@ -110,15 +111,14 @@ pub async fn run_plugin_build(
     }
 }
 
-fn builder_program() -> Result<String> {
+fn builder_program(host: Option<&Path>) -> Result<String> {
     if let Some(path) = std::env::var(BUILDER_ENV)
         .ok()
         .filter(|path| !path.trim().is_empty())
     {
         return Ok(path);
     }
-    self_runner_binary()
-        .map(|path: PathBuf| path.to_string_lossy().into_owned())
+    host.map(|path| path.to_string_lossy().into_owned())
         .context(
             "this runtime has no plugin builder; have the operator run `gents config pack build`",
         )

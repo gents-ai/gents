@@ -43,7 +43,7 @@ pub(crate) async fn dispatch(
 ) -> Result<()> {
     let ctx = EvalContext::resolve(command.scope(), runtime).await?;
     let executor = EmbeddedExecutor::new(
-        gents::DocumentRuntimeOptions::default(),
+        crate::embedded_runtime_options(),
         ctx.runs_dir(),
         ctx.runtime.clone(),
     )

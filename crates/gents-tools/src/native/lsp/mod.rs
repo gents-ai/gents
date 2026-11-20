@@ -149,6 +149,14 @@ impl LspTool {
         })
     }
 
+    pub(crate) fn with_native_executables(
+        mut self,
+        executables: crate::native::NativeExecutables,
+    ) -> Self {
+        self.context = self.context.with_native_executables(executables);
+        self
+    }
+
     fn effective_workspace(&self, call: &gents_loop::tool::ToolCallEnvelope) -> PathBuf {
         overlay_workspace_or(call, &self.config.workspace)
     }

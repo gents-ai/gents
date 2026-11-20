@@ -31,7 +31,7 @@ mod goal;
 pub mod lsp;
 mod native_runner;
 mod plugin_build;
-pub use native_runner::enable_self_runner;
+pub use native_runner::NativeExecutables;
 pub use plugin_build::{run_plugin_build, PluginBuildOutcome, PLUGIN_BUILD_COMMAND};
 pub mod session_history;
 mod title_audit_usage;
@@ -275,17 +275,19 @@ impl ToolSet {
     }
 
     pub fn build_native_tools(&self) -> Result<Vec<Box<dyn ToolDyn>>> {
-        self.build_native_tools_with_writethrough(None)
+        self.build_native_tools_with_writethrough(None, &NativeExecutables::default())
     }
 
     pub fn build_native_tools_with_writethrough(
         &self,
         writethrough: Option<lsp::LspWritethrough>,
+        executables: &NativeExecutables,
     ) -> Result<Vec<Box<dyn ToolDyn>>> {
         let read_context = match &self.read_root {
             Some(root) => ToolContext::new(root.clone(), read_root_requires_create(&self.tools))?,
             None => ToolContext::from_default_read_root()?,
-        };
+        }
+        .with_native_executables(executables.clone());
 
         let mut built: Vec<Box<dyn ToolDyn>> = Vec::new();
         for tool in &self.tools {

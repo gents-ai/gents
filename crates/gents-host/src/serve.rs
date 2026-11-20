@@ -351,6 +351,8 @@ pub trait ServeClient: Send + Sync {
 
     fn version(&self) -> crate::http::version::VersionResponse;
 
+    fn host_executable(&self) -> Option<PathBuf>;
+
     async fn bound_root_agents(
         &self,
         root: &Path,
@@ -885,6 +887,10 @@ async fn serve_foreground(
                 advertised_graphql_url,
                 tool_ceiling,
                 plugin_home: Some(home_dir.clone()),
+                native_executables: gents_tools::native::NativeExecutables {
+                    host: client.host_executable(),
+                    fs_runner: args.fs_runner.clone(),
+                },
                 backend_health: Some(backend_health.clone()),
                 p2p_intervals: p2p_intervals(&args),
                 p2p_network_id: args.p2p_network_id.clone(),

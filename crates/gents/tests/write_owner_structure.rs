@@ -2808,7 +2808,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-session/src/workspace/adapter.rs", 1, "inherits the process environment for a managed git child, minus the git variables it overrides; legitimately external"),
     ("crates/gents-store/src/client_journal/paths.rs", 1, "GENTS_DESKTOP_HOME: the desktop home owner's discovery before configuration exists; legitimately external"),
     ("crates/gents-store/src/local/home.rs", 1, "GENTS_HOME: the home owner's discovery when --home is absent, before configuration exists; legitimately external"),
-    ("crates/gents-tools/src/native/native_runner.rs", 1, "GENTS_FS_RUNNER: discovery of the filesystem runner executable; becomes a serve flag"),
     ("crates/gents-tools/src/ux_preview.rs", 1, "GENTS_UX_PREVIEW_ASSETS: preview renderer assets outside an installed layout; becomes a flag"),
     ("crates/gents-tools/src/ux_preview/browser.rs", 1, "PATH: platform discovery of a system browser; legitimately external"),
     ("crates/gents/examples/serve_default_agent.rs", 1, "example program configured by its environment; not shipped"),
@@ -3070,7 +3069,6 @@ const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-toolcalls/src/plugin/model_calls.rs", 1, "model-call concurrency limiters by key shared by every node; move onto the node's extensions"),
     ("crates/gents-tools/src/builtin/self_config/configuration_discovery/text.rs", 5, "secret redaction patterns: compiled regular expressions, immutable once built; stay"),
     ("crates/gents-tools/src/native/command_observability.rs", 2, "process-wide command policy counters for metrics; stay"),
-    ("crates/gents-tools/src/native/native_runner.rs", 1, "whether this executable serves as its own filesystem runner, set once at the entry point; becomes a serve flag"),
     ("crates/gents/src/client_runtime/mod.rs", 1, "the shared reqwest client, a connection pool built once; stays"),
 ];
 

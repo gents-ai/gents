@@ -394,6 +394,7 @@ impl AgentToolSurfaceConfig {
                     EndpointScope::All => None,
                     scope => Some(scope.keys().into_iter().collect()),
                 },
+                plugin_builder: None,
             },
             agent_policy,
             ceiling_policy,

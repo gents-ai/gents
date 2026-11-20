@@ -171,6 +171,7 @@ pub struct SelfConfigToolConfig {
     /// admits every plugin. `config plugin run` calls no plugin outside it,
     /// selected or not: an installed plugin runs with its installed grants.
     pub ceiling_plugins: Option<std::collections::BTreeSet<String>>,
+    pub plugin_builder: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
@@ -374,7 +375,7 @@ impl ToolSurface {
         });
         let mut tools = self
             .host_tools
-            .build_native_tools_with_writethrough(writethrough)?;
+            .build_native_tools_with_writethrough(writethrough, &runtime.native_executables)?;
         if self.self_config.enabled {
             tools.push(Box::new(
                 gents_inference::usage_observation::ProviderLimitsTool {
@@ -517,10 +518,10 @@ impl ToolSurface {
             );
         }
         if let Some(lsp) = &self.lsp {
-            tools.push(Box::new(crate::native::lsp::LspTool::new(
-                lsp.clone(),
-                runtime.lsp_pool.clone(),
-            )?));
+            tools.push(Box::new(
+                crate::native::lsp::LspTool::new(lsp.clone(), runtime.lsp_pool.clone())?
+                    .with_native_executables(runtime.native_executables.clone()),
+            ));
         }
         if self.include_goal_tools {
             tools.extend(build_goal_tools(self.include_goal_creation));
@@ -555,6 +556,7 @@ impl ToolSurface {
                 runtime.identity.clone(),
                 &SelfConfigToolConfig {
                     selected_plugins: self.plugin_tools.clone(),
+                    plugin_builder: runtime.native_executables.host.clone(),
                     ..self.self_config.clone()
                 },
                 runtime.plugins.clone(),

@@ -390,6 +390,7 @@ pub struct ConfigCommandTool {
     pub(super) selected_plugins: Vec<gents_documents::PluginToolRef>,
     /// The plugin tool names the process ceiling admits; `None` is all.
     pub(super) ceiling_plugins: Option<BTreeSet<String>>,
+    pub(super) plugin_builder: Option<std::path::PathBuf>,
     /// The call this copy serves; [`Tool::call`] sets it on its own copy.
     pub(super) envelope: gents_loop::tool::ToolCallEnvelope,
 }

@@ -503,9 +503,15 @@ impl ConfigCommandTool {
             self.ensure_compile_grant("build", &sources)?;
             self.execution.enter_mutation();
             Some(
-                crate::native::run_plugin_build(&self.envelope, &context.root(), &dir, false)
-                    .await?
-                    .sandbox,
+                crate::native::run_plugin_build(
+                    &self.envelope,
+                    &context.root(),
+                    &dir,
+                    false,
+                    self.plugin_builder.as_deref(),
+                )
+                .await?
+                .sandbox,
             )
         };
         let report = tokio::task::spawn_blocking(move || pack_built(&dir, None))
@@ -544,8 +550,14 @@ impl ConfigCommandTool {
         }
         self.ensure_compile_grant("test", &sources)?;
         self.execution.enter_mutation();
-        let build =
-            crate::native::run_plugin_build(&self.envelope, &context.root(), &dir, true).await?;
+        let build = crate::native::run_plugin_build(
+            &self.envelope,
+            &context.root(),
+            &dir,
+            true,
+            self.plugin_builder.as_deref(),
+        )
+        .await?;
         let mut plugins = build.output["cases"].clone();
         let mut passed = 0;
         let mut failed = 0;

@@ -833,6 +833,10 @@ impl crate::serve::ServeClient for TestServeClient {
         crate::http::version::version_response()
     }
 
+    fn host_executable(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     async fn bound_root_agents(
         &self,
         root: &std::path::Path,

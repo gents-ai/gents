@@ -326,7 +326,8 @@ async fn run_agent_owned(
     )
     .with_plugins(agent.plugins().clone())
     .with_tasks(Arc::new(gents_automation::triggers::task_run::TaskRuns))
-    .with_usage_cache(agent.usage_cache().clone());
+    .with_usage_cache(agent.usage_cache().clone())
+    .with_native_executables(agent.native_executables().clone());
     registry::probe_and_promote_enabled_backends(&agent.node).await;
 
     let (control_subscription, resolved_snapshot) =
