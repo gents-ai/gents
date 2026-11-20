@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::plugin::executor::PluginExecutor;
-use crate::plugin::rounds::{drive, HostCalls, Round, MAX_ROUNDS};
+use crate::plugin::rounds::{drive, HostCalls, Round};
 use futures::future::BoxFuture;
 use gents_documents::InferenceProfile;
 use gents_pack::plugin::model_binding::{
@@ -384,7 +384,10 @@ async fn a_plugin_that_never_stops_asking_is_cut_at_the_round_cap() {
         "{}",
         call.outcome.diagnostics
     );
-    assert_eq!(fake.requests(), MAX_ROUNDS as usize);
+    assert_eq!(
+        fake.requests(),
+        gents_pack::plugin::DEFAULT_MAX_ROUNDS as usize
+    );
 }
 
 #[tokio::test]

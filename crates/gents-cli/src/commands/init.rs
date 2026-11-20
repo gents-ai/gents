@@ -379,8 +379,11 @@ pub(crate) async fn init_home_with_core_packs(
             .await?;
     }
     stage("store_key_initialized");
-    let mut node_builder =
-        gents_store::local::store_key::persistent_builder(&data_dir, &store_key)?;
+    let mut node_builder = gents_store::local::store_key::persistent_builder(
+        &data_dir,
+        &store_key,
+        gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+    )?;
     let ceiling = gents_host::tool_ceiling::host_tool_ceiling(
         stored.tool_ceiling,
         stored.tool_root.as_deref().map(Path::new),
@@ -1343,6 +1346,8 @@ async fn initialize_runtime_home(
         auth: backend_auth,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
+        client_version: None,
+        request_timeout_secs: None,
         max_concurrent: choice
             .and_then(|choice| choice.max_concurrent)
             .or(args.max_concurrent),
@@ -1633,6 +1638,8 @@ fn tools_for_package(
                     ..Default::default()
                 }),
                 cli: Vec::new(),
+                max_instruction_chars: None,
+                max_background_tool_calls: None,
             })
         }
     };
@@ -2753,11 +2760,15 @@ mod tests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await?
                 .into_std()?;
-            let node = gents_store::local::store_key::persistent_builder(&data, &key)?
-                .with_node_identity_did(did)
-                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
-                .build()
-                .await?;
+            let node = gents_store::local::store_key::persistent_builder(
+                &data,
+                &key,
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )?
+            .with_node_identity_did(did)
+            .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?;
             let collection = node
                 .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
                 .context("legacy backend baseline missing")?;

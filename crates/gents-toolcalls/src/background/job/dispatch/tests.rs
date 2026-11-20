@@ -47,6 +47,7 @@ fn context() -> StepContext {
         target_hops: vec![(("node".to_owned(), "a".to_owned()), 0)],
         target_ids: vec![("a".to_owned(), ("node".to_owned(), "a".to_owned()))],
         live_background: 0,
+        background_limit: Default::default(),
         started_by_job: false,
         cwd_allowed: Vec::new(),
         within: Vec::new(),

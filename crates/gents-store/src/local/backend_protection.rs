@@ -224,10 +224,14 @@ impl<'a> FreshBackendStore<'a> {
         if nac_owner.as_str() == did {
             return Err(BackendProtectionError::NodeOwnedNodeAcp);
         }
-        let builder = super::store_key::persistent_builder(&self.data, key)
-            .map_err(|error| BackendProtectionError::Schema(error.into()))?
-            .with_node_identity_did(did.clone())
-            .with_node_acp_owner(nac_owner.as_str());
+        let builder = super::store_key::persistent_builder(
+            &self.data,
+            key,
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
+        .map_err(|error| BackendProtectionError::Schema(error.into()))?
+        .with_node_identity_did(did.clone())
+        .with_node_acp_owner(nac_owner.as_str());
         let builder = document_acp::configure_fresh(builder, &self.data, key, document_acp, node)?;
         let node = start(builder).await?;
         let result: Result<_> = async {
@@ -316,10 +320,14 @@ impl<'a> ProtectedBackendStore<'a> {
                 super::store_compat::check_copy(&self.data, key).await,
             )?;
         }
-        let builder = super::store_key::persistent_builder(&self.data, key)
-            .map_err(|error| BackendProtectionError::Schema(error.into()))?
-            .with_node_identity_did(did.clone())
-            .with_node_acp_enabled();
+        let builder = super::store_key::persistent_builder(
+            &self.data,
+            key,
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
+        .map_err(|error| BackendProtectionError::Schema(error.into()))?
+        .with_node_identity_did(did.clone())
+        .with_node_acp_enabled();
         let builder = document_acp::configure(builder, &self.data, key, document_acp, node)?;
         let node = build_configured(builder, &self.data, document_acp).await?;
         let checked = validate_binding(&node).await;
@@ -341,6 +349,7 @@ impl<'a> ProtectedBackendStore<'a> {
             store: self,
             node_did: did,
             document_acp,
+            block_cache_bytes: crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
         })
     }
 }
@@ -349,9 +358,18 @@ pub struct PreflightProtectedBackendStore<'a> {
     store: ProtectedBackendStore<'a>,
     node_did: String,
     document_acp: DocumentAcp,
+    block_cache_bytes: usize,
 }
 
 impl PreflightProtectedBackendStore<'_> {
+    /// Size the served node's block cache; the preflight check itself
+    /// always opens with the default.
+    #[must_use]
+    pub fn with_block_cache_bytes(mut self, block_cache_bytes: usize) -> Self {
+        self.block_cache_bytes = block_cache_bytes;
+        self
+    }
+
     /// Construct the served node from the same locked data directory whose
     /// provenance was checked. Callers cannot substitute another native node.
     /// The caller reads `plugins` from its plugin store while it holds that
@@ -392,11 +410,12 @@ impl PreflightProtectedBackendStore<'_> {
         let projection =
             super::document_projector_with_installed_plugins(runtime.clone(), policy, plugins)
                 .map_err(|error| BackendProtectionError::Schema(error.into()))?;
-        let builder = super::store_key::persistent_builder(&self.store.data, key)
-            .map_err(|error| BackendProtectionError::Schema(error.into()))?
-            .with_document_projector(projection)
-            .with_node_identity_did(self.node_did)
-            .with_node_acp_enabled();
+        let builder =
+            super::store_key::persistent_builder(&self.store.data, key, self.block_cache_bytes)
+                .map_err(|error| BackendProtectionError::Schema(error.into()))?
+                .with_document_projector(projection)
+                .with_node_identity_did(self.node_did)
+                .with_node_acp_enabled();
         let builder =
             document_acp::configure(builder, &self.store.data, key, self.document_acp, &runtime)?;
         let builder = configure(builder);

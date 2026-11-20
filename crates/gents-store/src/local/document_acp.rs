@@ -11,10 +11,15 @@ use crate::local::store_key::StoreKey;
 
 #[cfg(feature = "vera")]
 mod embedded_vera;
+mod enrollment;
 mod http_edge;
 #[cfg(test)]
 mod tests;
 
+pub use enrollment::{
+    enrollment, enrollment_root, ensure_enrollment, EnrollmentAnswer, EnrollmentRequest,
+    EnrollmentRoot,
+};
 pub use http_edge::HttpEdge;
 
 const VERA_DIR_NAME: &str = "vera";
@@ -75,7 +80,10 @@ pub enum DocumentAcpError {
     DelegationRequired,
     /// The provider grants no transport relationships yet (defradb.rs#2980),
     /// so the runtime publishes no peer records as its Node.
-    #[error("this home cannot be shared with other devices yet")]
+    #[error(
+        "peer networking is not available on this home yet, so it cannot be shared with other \
+         devices"
+    )]
     TransportGrantsAwaitProvider,
     #[error(
         "this home was created by another version of Gents or with another device key; open it \
@@ -108,6 +116,10 @@ pub enum DocumentAcpError {
 }
 
 impl DocumentAcpError {
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+
     pub(crate) fn refusal(&self) -> Option<IncompatibleStoreKind> {
         match self {
             Self::DeploymentDiffers { .. } => Some(IncompatibleStoreKind::OtherVersionSchema),

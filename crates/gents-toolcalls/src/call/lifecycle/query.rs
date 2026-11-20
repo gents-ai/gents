@@ -451,6 +451,7 @@ impl ToolCallLifecycle {
             cancel_cause,
             selected_tool_identity,
             await_mode,
+            background_limit: Default::default(),
         }))
     }
 }

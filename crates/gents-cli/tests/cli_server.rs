@@ -3263,11 +3263,11 @@ async fn restarted_server_never_reports_the_killed_process_ready() -> Result<()>
             let mut serve = spawn_server_with_env(
                 &home_dir,
                 port,
-                &[],
-                &[(
-                    "GENTS_TEST_STALL_AFTER_CLIENT_ACCESS",
+                &[
+                    "--stall-after-client-access",
                     stall.to_str().context("stall path is not UTF-8")?,
-                )],
+                ],
+                &[],
             )?;
             wait_for_port(port, &mut serve)?;
             Ok((port, serve))

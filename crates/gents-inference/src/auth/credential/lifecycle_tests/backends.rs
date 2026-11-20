@@ -72,6 +72,8 @@ async fn each_accounts_backend_keeps_its_own_models() {
             auth: gents_documents::BackendAuth::NodeOAuth { account_ref: None },
             connect_timeout_secs: None,
             discovery_timeout_secs: None,
+            client_version: None,
+            request_timeout_secs: None,
             max_concurrent: None,
             max_queue_depth: None,
             enabled: true,

@@ -51,7 +51,7 @@ async fn usage_wiring_codex_client_records_under_its_account_key() {
     let url =
         crate::clients::provider_http::tests::one_shot_server("200 OK", CODEX_USAGE_HEADERS, "")
             .await;
-    let client = build_responses_client(cache.clone(), node.clone(), did, None, &url, None)
+    let client = build_responses_client(cache.clone(), node.clone(), did, None, &url, None, None)
         .await
         .expect("client");
     let model = client.completion_model("gpt-5-codex");
@@ -85,7 +85,7 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     let url =
         crate::clients::provider_http::tests::server_for(2, "200 OK", CODEX_USAGE_HEADERS, "")
             .await;
-    let client = build_responses_client(cache.clone(), node.clone(), did, None, &url, None)
+    let client = build_responses_client(cache.clone(), node.clone(), did, None, &url, None, None)
         .await
         .expect("client");
     let model = client.completion_model("gpt-5-codex");

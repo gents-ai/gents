@@ -9,6 +9,7 @@ pub fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> String {
         backend_endpoint: agent_config.backend_endpoint.clone(),
         backend_auth: agent_config.backend_auth.clone(),
         claude_platform: agent_config.claude_platform.clone(),
+        client_version: agent_config.client_version.clone(),
     })
 }
 

@@ -14,10 +14,12 @@ type InferenceBackendMetadata @policy(id: "$household", resource: "configuration
     oauth_allow_overage: Boolean
     connect_timeout_secs: Int
     discovery_timeout_secs: Int
+    request_timeout_secs: Int
     max_concurrent: Int
     max_queue_depth: Int
     enabled: Boolean @index
     tags: [String!]
     updated_at: DateTime @index(direction: DESC)
     claude_platform: JSON
+    client_version: String
 }

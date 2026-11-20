@@ -8,6 +8,7 @@ type InferenceBackend @policy(id: "$household", resource: "secret_configuration"
     auth: JSON
     connect_timeout_secs: Int
     discovery_timeout_secs: Int
+    request_timeout_secs: Int
     max_concurrent: Int
     max_queue_depth: Int
     enabled: Boolean @index
@@ -18,4 +19,5 @@ type InferenceBackend @policy(id: "$household", resource: "secret_configuration"
     updated_at: DateTime @index(direction: DESC)
     catalog_freshness: JSON
     claude_platform: JSON
+    client_version: String
 }
