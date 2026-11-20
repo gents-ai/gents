@@ -52,12 +52,14 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             node.clone(),
             &mut parent,
             &node_did,
-            0,
-            gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
-            "task-native-tool",
-            serde_json::json!({"tool_name": "bash", "args": {}}),
-            AwaitMode::Background,
-            true,
+            crate::call::lifecycle::admission_fixture::AcceptedFixtureCall {
+                turn: 0,
+                tool_name: gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
+                tool_call_id: "task-native-tool",
+                arguments: serde_json::json!({"tool_name": "bash", "args": {}}),
+                await_mode: AwaitMode::Background,
+                start_running: true,
+            },
         )
         .await
         .unwrap();

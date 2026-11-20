@@ -592,14 +592,16 @@ impl super::ToolCallLifecycle {
                 crate::background::completion::append_background_tool_completion(
                     node,
                     &lifecycle.access()?,
-                    lifecycle.session_id(),
-                    &request_id,
-                    &doc_id,
-                    lifecycle.tool_name(),
-                    status,
-                    "",
-                    Some(reason),
-                    gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    &crate::background::completion::BackgroundToolCompletion {
+                        parent_session_id: lifecycle.session_id(),
+                        parent_request_id: &request_id,
+                        tool_call_doc_id: &doc_id,
+                        tool_name: lifecycle.tool_name(),
+                        status,
+                        result: "",
+                        reason: Some(reason),
+                        wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    },
                 )
                 .await
             }
@@ -687,14 +689,16 @@ impl super::ToolCallLifecycle {
                     node,
                     access,
                     request_doc_id,
-                    session_id,
-                    request_id,
-                    &row.doc_id,
-                    &row.tool_name,
-                    status,
-                    &output,
-                    reason,
-                    wake,
+                    &crate::background::completion::BackgroundToolCompletion {
+                        parent_session_id: session_id,
+                        parent_request_id: request_id,
+                        tool_call_doc_id: &row.doc_id,
+                        tool_name: &row.tool_name,
+                        status,
+                        result: &output,
+                        reason,
+                        wake,
+                    },
                 )
                 .await;
             match appended {
@@ -995,14 +999,16 @@ async fn append_recovered_background_tool_completion(
         node,
         access,
         parent_request_doc_id,
-        &row.session_id,
-        parent_request_id,
-        &row.doc_id,
-        &row.tool_name,
-        status,
-        "",
-        Some(reason),
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        &crate::background::completion::BackgroundToolCompletion {
+            parent_session_id: &row.session_id,
+            parent_request_id,
+            tool_call_doc_id: &row.doc_id,
+            tool_name: &row.tool_name,
+            status,
+            result: "",
+            reason: Some(reason),
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        },
     )
     .await
     {
