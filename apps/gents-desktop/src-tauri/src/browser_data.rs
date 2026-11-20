@@ -2,8 +2,8 @@ use std::path::Path;
 
 /// The same isolated WebKit store is used by native E2E windows and their reset
 /// helper. A malformed or missing test identifier must never select user data.
+#[cfg(all(feature = "native-e2e", debug_assertions))]
 pub(crate) fn isolated_store_identifier() -> anyhow::Result<Option<[u8; 16]>> {
-    #[cfg(all(feature = "native-e2e", debug_assertions))]
     if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() == Some("1") {
         let value = std::env::var("GENTS_E2E_WEBVIEW_STORE_ID")?;
         anyhow::ensure!(
@@ -17,6 +17,11 @@ pub(crate) fn isolated_store_identifier() -> anyhow::Result<Option<[u8; 16]>> {
         anyhow::ensure!(identifier != [0; 16], "WebView store ID must not be zero");
         return Ok(Some(identifier));
     }
+    Ok(None)
+}
+
+#[cfg(not(all(feature = "native-e2e", debug_assertions)))]
+pub(crate) fn isolated_store_identifier() -> anyhow::Result<Option<[u8; 16]>> {
     Ok(None)
 }
 

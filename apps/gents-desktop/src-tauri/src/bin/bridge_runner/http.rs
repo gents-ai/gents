@@ -24,6 +24,7 @@ impl BridgeRunnerServer {
     pub(crate) async fn start(
         fixture: Arc<LiveBridgeFixture>,
         runtime: tokio::runtime::Handle,
+        live: bool,
     ) -> Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
@@ -35,7 +36,7 @@ impl BridgeRunnerServer {
                     _ = &mut stopped => break,
                     accepted = listener.accept() => {
                         let Ok((stream, _)) = accepted else { break };
-                        connections.spawn(serve_connection(stream, Arc::clone(&fixture), runtime.clone()));
+                        connections.spawn(serve_connection(stream, Arc::clone(&fixture), runtime.clone(), live));
                     }
                     Some(_) = connections.join_next(), if !connections.is_empty() => {}
                 }
@@ -60,9 +61,10 @@ async fn serve_connection(
     mut stream: TcpStream,
     fixture: Arc<LiveBridgeFixture>,
     runtime: tokio::runtime::Handle,
+    live: bool,
 ) {
     let response = match read_http_request(&mut stream).await {
-        Ok(request) => handle_request(&fixture, request, &runtime).await,
+        Ok(request) => handle_request(&fixture, request, &runtime, live).await,
         Err(error) => Err(error),
     }
     .unwrap_or_else(|error| {

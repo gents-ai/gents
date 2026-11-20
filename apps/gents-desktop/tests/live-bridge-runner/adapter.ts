@@ -303,7 +303,7 @@ export function createFixtureHelpers(runner: {
   return {
     /** Write an agent document on the remote node; the write triggers P2P
      *  replication so the same document becomes visible on the desktop node
-     *  (write-on-A, read-on-B). Requires GENTS_TAURI_LIVE=1. */
+     *  (write-on-A, read-on-B). Requires the runner's --live flag (GENTS_TAURI_LIVE=1). */
     saveAgentConfigOnRemote: async (request: AgentSaveRequest) =>
       runner.postJson<{ ok: boolean }>(
         "/desktop/test-fixture/remote-save-agent",

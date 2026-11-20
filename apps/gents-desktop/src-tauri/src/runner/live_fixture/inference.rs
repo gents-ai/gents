@@ -27,24 +27,16 @@ impl Default for LiveInferenceSettings {
 }
 
 impl LiveInferenceSettings {
-    pub(super) fn from_env() -> Result<Self> {
-        match std::env::var("GENTS_DESKTOP_LIVE_INFERENCE") {
-            Ok(raw) => Self::parse(Some(&raw)),
-            Err(std::env::VarError::NotPresent) => Self::parse(None),
-            Err(error) => Err(error).context("reading GENTS_DESKTOP_LIVE_INFERENCE"),
-        }
-    }
-
-    fn parse(raw: Option<&str>) -> Result<Self> {
+    pub(super) fn parse(raw: Option<&str>) -> Result<Self> {
         let settings: Self = match raw {
             Some(raw) => {
                 let value: Value =
-                    serde_json::from_str(raw).context("parsing GENTS_DESKTOP_LIVE_INFERENCE")?;
+                    serde_json::from_str(raw).context("parsing --inference-settings")?;
                 anyhow::ensure!(
                     value.is_object(),
-                    "GENTS_DESKTOP_LIVE_INFERENCE must be a JSON object"
+                    "--inference-settings must be a JSON object"
                 );
-                serde_json::from_value(value).context("decoding GENTS_DESKTOP_LIVE_INFERENCE")?
+                serde_json::from_value(value).context("decoding --inference-settings")?
             }
             None => Self::default(),
         };
@@ -54,20 +46,20 @@ impl LiveInferenceSettings {
             ..Default::default()
         }
         .validate()
-        .context("GENTS_DESKTOP_LIVE_INFERENCE sampling")?;
+        .context("--inference-settings sampling")?;
         InferenceProfile {
             reasoning_effort: settings.reasoning_effort,
             max_output_tokens: Some(settings.max_output_tokens),
             ..Default::default()
         }
         .validate()
-        .context("GENTS_DESKTOP_LIVE_INFERENCE profile")?;
+        .context("--inference-settings profile")?;
         InferenceExecution {
             max_turns: Some(settings.max_turns),
             ..Default::default()
         }
         .validate()
-        .context("GENTS_DESKTOP_LIVE_INFERENCE execution")?;
+        .context("--inference-settings execution")?;
         Ok(settings)
     }
 
