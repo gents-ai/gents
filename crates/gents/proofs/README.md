@@ -1713,19 +1713,24 @@ actors. Real host containment and compiler QA remain separate acceptance gates.
 
 ### Invalid tool progress (#1298)
 
-`CompletionRetry.InvalidToolProgress` models a cumulative allowance of eight
+`CompletionRetry.InvalidToolProgress` models a cumulative allowance of
 invalid-arguments, policy-denied, or unknown-tool outcomes per owned request
-execution. Success and ordinary failures do not reset it; skips and background
-completion do not charge it. The eighth outcome is durably observed before the
+execution: `InferenceExecution.max_invalid_tool_calls`, eight when unset.
+`configuredLimit` resolves both loop-guard fields: unset takes the default, a
+positive value is used, and zero or a negative value is refused by the
+document's validation, since a zero allowance is exhausted before the first
+call and a zero failure limit admits no bounded state. Success and ordinary failures do not reset it; skips and background
+completion do not charge it. The outcome that spends the allowance is durably observed before the
 existing stream failure path delegates terminalization to the execution lease
-owner. No ninth tool dispatch is permitted, including within a multi-call turn.
+owner. No further tool dispatch is permitted, including within a multi-call turn.
 
 The model proves bounded counts over arbitrary finite traces, monotonic usage,
 a strictly decreasing remaining allowance on accepted invalid outcomes, and
 absorbing exhaustion. This bounds invalid churn, not infinite valid work or
 storage/provider availability. Outcome classification and persistence ordering
-remain runtime consumer obligations. Eleven traces of the
-`invalid_tool_progress_contracts_composed` family drive the real owned loop and persistence hook,
+remain runtime consumer obligations. The traces of the
+`invalid_tool_progress_contracts_composed` family, at the default and at
+configured allowances including one, drive the real owned loop and persistence hook,
 checked against their composition with `RepeatedToolFailure`; the model is not
 a second lifecycle or permission owner.
 
@@ -1733,7 +1738,7 @@ a second lifecycle or permission owner.
 
 `CompletionRetry.RepeatedToolFailure` folds the owned loop's dispatch record
 over `InvalidToolProgress.Outcome` and composes with that allowance. After
-three consecutive dispatches of one call (tool name and argument text) whose
+`InferenceExecution.repeated_tool_failure_limit` (three when unset) consecutive dispatches of one call (tool name and argument text) whose
 ordinary failure has the same error identity, the next identical call is not
 run: a policy-denied notice stands in as its result through the persistence
 hook, so transcript and provider input agree. Repeating it again ends the
@@ -1759,7 +1764,10 @@ charged outcomes never count, that hook-handled calls not stopped reset, that su
 spends one allowance unit, and that an unbounded identical failure stops on
 the fifth call. Interleaved repeats are left to the turn cap and other
 budgets. The `repeated_tool_failure_contracts_owned_loop` and
-`invalid_tool_progress_contracts_composed` families drive the real owned loop and persistence hook.
+`invalid_tool_progress_contracts_composed` families, at default and configured
+limits, drive the real owned loop and persistence hook;
+`invalid_tool_progress_contracts_configured` drives the document's resolution
+and validation of both fields.
 
 ### Logical invocation output obligations
 

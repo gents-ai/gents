@@ -1,21 +1,18 @@
 use gents_loop::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct PostStatusArgs {
-    #[allow(dead_code)]
     report_type: String,
-    #[allow(dead_code)]
     scope: String,
-    #[allow(dead_code)]
     body: String,
-    #[allow(dead_code)]
     findings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct PostStatusOutput {
     posted: bool,
+    report: PostStatusArgs,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,10 +46,13 @@ impl Tool for PostStatusTool {
 
     async fn call(
         &self,
-        _args: Self::Args,
+        args: Self::Args,
         _context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        Ok(PostStatusOutput { posted: true })
+        Ok(PostStatusOutput {
+            posted: true,
+            report: args,
+        })
     }
 }
 

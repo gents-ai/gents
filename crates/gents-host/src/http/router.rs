@@ -183,12 +183,6 @@ pub fn runtime_contract_router(
 
     let operator_routes = Router::new()
         .route("/packs/ux/watch", post(crate::http::pack_watch::watch))
-        .route(
-            "/packs/wire",
-            post(crate::http::pack_wire::wire_handler).layer(axum::extract::DefaultBodyLimit::max(
-                crate::http::pack_wire::MAX_BODY,
-            )),
-        )
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
         .route("/activation", get(activation_handler))
@@ -216,6 +210,10 @@ pub fn runtime_contract_router(
             get(crate::http::pack_install::session::install_session),
         )
         .route("/version", get(version_handler))
+        .route(
+            gents_pack::pack::plugin_wire::PLUGIN_RECORD_PATH,
+            get(crate::http::pack_record::plugin_record),
+        )
         .route(
             gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
             post(crate::http::agent_identity::provision),

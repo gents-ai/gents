@@ -30,14 +30,8 @@ pub enum RecoveryResult {
     Lost,
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    not(any(test, feature = "test-fixtures")),
-    expect(
-        dead_code,
-        reason = "Model-driven conformance supplies explicit selections to the production recovery owner."
-    )
-)]
 pub enum RecoverySelectionChoice {
     NoMessage,
     MessageKey(String),
@@ -156,6 +150,7 @@ async fn ensure_auxiliary_has_no_tools(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn selection_from_choice(
     headers: &[TranscriptMessageRow],
     choice: &RecoverySelectionChoice,
@@ -191,6 +186,7 @@ fn selection_from_choice(
 pub struct RecoveryFacts {
     pub fresh_generation: String,
     pub observed_now: DateTime<Utc>,
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub selection_choice: Option<RecoverySelectionChoice>,
     pub expected_outcome: Option<RequestLifecycleState>,
 }
@@ -209,6 +205,7 @@ pub(super) async fn recover_expired_generation(
         RecoveryFacts {
             fresh_generation: uuid::Uuid::new_v4().to_string(),
             observed_now: Utc::now(),
+            #[cfg(any(test, feature = "test-fixtures"))]
             selection_choice: None,
             expected_outcome: None,
         },
@@ -244,6 +241,7 @@ async fn recover_expired_generation_with_access_and_facts(
     let RecoveryFacts {
         fresh_generation,
         observed_now,
+        #[cfg(any(test, feature = "test-fixtures"))]
         selection_choice,
         expected_outcome,
     } = facts;
@@ -279,6 +277,7 @@ async fn recover_expired_generation_with_access_and_facts(
             move |txn| {
                 let request_doc_id = request_doc_id.clone();
                 let fresh_generation = fresh_generation.clone();
+                #[cfg(any(test, feature = "test-fixtures"))]
                 let selection_choice = selection_choice.clone();
                 Box::pin(async move {
                     let rendered = {
@@ -376,6 +375,7 @@ async fn recover_expired_generation_with_access_and_facts(
                         reader.observe_headers(&headers);
                         let _ = validate_selection(&mut reader, &headers, &row, terminal_output)
                             .await?;
+                        #[cfg(any(test, feature = "test-fixtures"))]
                         if let Some(choice) = &selection_choice {
                             let expected = selection_from_choice(&headers, choice)?;
                             if row.terminal_output.as_ref() != Some(&expected) {
@@ -692,6 +692,7 @@ async fn recover_expired_generation_with_access_and_facts(
                         TerminalOutput::NoMessage
                     };
                     let selection = if is_auxiliary {
+                        #[cfg(any(test, feature = "test-fixtures"))]
                         anyhow::ensure!(
                             selection_choice.as_ref().is_none_or(|choice| matches!(
                                 choice,
@@ -705,10 +706,12 @@ async fn recover_expired_generation_with_access_and_facts(
                         );
                         TerminalOutput::NoMessage
                     } else {
-                        match &selection_choice {
+                        #[cfg(any(test, feature = "test-fixtures"))]
+                        let selection = match &selection_choice {
                             None => selection,
                             Some(choice) => selection_from_choice(&headers, choice)?,
-                        }
+                        };
+                        selection
                     };
                     let reply_preview =
                         validate_selection(&mut reader, &headers, &row, &selection).await?;

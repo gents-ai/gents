@@ -202,10 +202,19 @@ pub async fn load_enrollment_grant_receipts(
     access: &ConfigAccess,
     member: &str,
 ) -> Result<Vec<EnrollmentGrantReceipt>, EnrollmentGrantError> {
+    let rendered = receipt_query(member);
+    let response = access
+        .read_for_decision(&rendered)
+        .await
+        .map_err(EnrollmentGrantError::Read)?;
+    decode_receipts(&response)
+}
+
+fn receipt_query(member: &str) -> gents_protocol::document_query::Rendered {
     use gents_protocol::document_query::{
         fields::network_enrollment_grant as fields, Filter, Query, Selection,
     };
-    let rendered = Query::select(
+    Query::select(
         Selection::doc_id()
             .field(fields::REQUEST_ID)
             .field(fields::MEMBER_DID)
@@ -215,12 +224,7 @@ pub async fn load_enrollment_grant_receipts(
             .field(fields::RESTORATION_OWED_AT),
     )
     .filter(Filter::eq(fields::MEMBER_DID, member))
-    .render();
-    let response = access
-        .read_for_decision(&rendered)
-        .await
-        .map_err(EnrollmentGrantError::Read)?;
-    decode_receipts(&response)
+    .render()
 }
 
 /// What an explicit enrollment grant recorded and issued.
@@ -430,26 +434,30 @@ where
             held.push(EnrollmentGrantTuple::Permission(provenance.permission));
         }
     }
-    let recorded = plan_grant(member.as_str(), &held, &receipts);
-    let names: Vec<&str> = recorded.iter().map(|tuple| tuple.name()).collect();
-    let input = json!({
-        "request_id": request_id,
-        "member_did": member.as_str(),
-        "tuples": if names.is_empty() { Value::Null } else { json!(names) },
-        "granted_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        "node_doc_id": node_doc_id,
-        "parent_linked": true,
-    });
-    let taken_over: Vec<&str> = receipts
-        .iter()
-        .filter(|receipt| receipt.owed)
-        .map(|receipt| receipt.doc_id.as_str())
-        .collect();
-    let doc_id = runtime
+    let accounted = plan_grant(member.as_str(), &held, &receipts);
+    held.retain(|tuple| !accounted.contains(tuple));
+    let query = receipt_query(member.as_str());
+    let (doc_id, recorded, mut receipts) = runtime
         .transact_signed_conflict_rebuild("enrollment_grant.record", |txn| {
-            let (input, taken_over) = (&input, &taken_over);
+            let (query, held) = (&query, &held);
             Box::pin(async move {
-                take_over_in_txn(txn, taken_over).await?;
+                let receipts = decode_receipts(&txn.run(query).await?)?;
+                let recorded = plan_grant(member.as_str(), held, &receipts);
+                let names: Vec<&str> = recorded.iter().map(|tuple| tuple.name()).collect();
+                let input = json!({
+                    "request_id": request_id,
+                    "member_did": member.as_str(),
+                    "tuples": if names.is_empty() { Value::Null } else { json!(names) },
+                    "granted_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    "node_doc_id": node_doc_id,
+                    "parent_linked": true,
+                });
+                let taken_over: Vec<&str> = receipts
+                    .iter()
+                    .filter(|receipt| receipt.owed)
+                    .map(|receipt| receipt.doc_id.as_str())
+                    .collect();
+                take_over_in_txn(txn, &taken_over).await?;
                 let result = txn
                     .execute_client_signed_create(
                         "mutation($input: NetworkEnrollmentGrantMutationInputArg!) { create_NetworkEnrollmentGrant(input: $input) { _docID } }",
@@ -462,7 +470,7 @@ where
                         .map_err(EnrollmentGrantError::RecordUnconfirmed)?;
                 txn.add_resource_relationship(RECEIPT_COLLECTION, &doc, "parent", "nodes", node_doc_id)
                     .await?;
-                Ok::<_, EnrollmentGrantError>(doc)
+                Ok::<_, EnrollmentGrantError>((doc, recorded, receipts))
             })
         })
         .await?;
@@ -475,7 +483,6 @@ where
         owed: false,
         restore: false,
     };
-    let mut receipts = receipts;
     receipts.push(receipt.clone());
     issue_or_abandon(tuples, &receipt, &receipts).await?;
     Ok(EnrollmentGrantOutcome {

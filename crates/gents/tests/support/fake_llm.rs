@@ -15,7 +15,6 @@ pub enum ChatAction {
     Sse(String),
     HttpError(StatusCode, String),
     WaitThenHttpError(Arc<tokio::sync::Semaphore>, StatusCode, String),
-    DelayThenSse(Duration, String),
     WaitThenSse(Arc<tokio::sync::Semaphore>, String),
     GatedSse(
         Vec<(Duration, String)>,
@@ -235,7 +234,7 @@ async fn handle_chat(
         },
         ChatAction::GatedSse(first, gate, rest, emitted) => {
             let stopped = state.stopped.clone();
-            let chunks = futures_util::stream::unfold(
+            let chunks = futures::stream::unfold(
                 (first.into_iter(), Some(rest), gate, stopped, emitted),
                 |(mut first, mut rest, gate, stopped, emitted)| async move {
                     let chunk = if let Some((delay, first)) = first.next() {
@@ -281,10 +280,6 @@ async fn handle_chat(
                 axum::body::Body::from_stream(chunks),
             )
                 .into_response()
-        }
-        ChatAction::DelayThenSse(delay, body) => {
-            let _ = tokio::time::timeout(delay, state.stop.notified()).await;
-            sse_response(body)
         }
         ChatAction::WaitThenSse(gate, body) => loop {
             if state.stopped.load(Ordering::Relaxed) {
