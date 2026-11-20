@@ -254,17 +254,20 @@ class Shards(unittest.TestCase):
         self.assertFalse(sharded_build["run"])
         self.assertNotIn("partition", sharded_build)
 
-    def test_the_build_jobs_slice_splits_into_one_partition_per_host_group(self):
-        groups = ROLES["portable"]["host_groups"]
+    def test_the_build_jobs_slice_splits_into_the_roles_partitions_on_any_runner(self):
+        count = ROLES["portable"]["partitions"]
         archives = sharded(1, everything=True)["archives"]
         self.assertEqual([(entry["partition"], entry["partitions"]) for entry in archives],
-                         [(index, len(groups)) for index in range(1, len(groups) + 1)])
-        self.assertEqual([entry["runs_on"] for entry in archives],
-                         [[*ROLES["portable"]["labels"], group] for group in groups])
+                         [(index, count) for index in range(1, count + 1)])
+        self.assertEqual([entry["runs_on"] for entry in archives], [ROLES["portable"]["labels"]] * count)
         for entry in archives:
             self.assertEqual(entry["packages"].split(), self.PORTABLE)
             self.assertEqual(gate.partition_arguments(entry),
-                             ["--partition", f"hash:{entry['partition']}/{len(groups)}"])
+                             ["--partition", f"hash:{entry['partition']}/{count}"])
+
+    def test_forks_and_fallbacks_build_one_partition(self):
+        self.assertEqual(gate.partitions("portable", fork=True, fallback=False), 1)
+        self.assertEqual(gate.partitions("portable", fork=False, fallback=True), 1)
 
     def test_a_partitioned_build_runs_and_lists_only_its_partition(self):
         selection = sharded(1, everything=True)
@@ -279,9 +282,9 @@ class Shards(unittest.TestCase):
             gate.run(selection, "build:portable:2")
         build, run = captured
         self.assertNotIn("--partition", build)
-        self.assertEqual(run[run.index("--partition") + 1], f"hash:2/{len(ROLES['portable']['host_groups'])}")
+        self.assertEqual(run[run.index("--partition") + 1], f"hash:2/{ROLES['portable']['partitions']}")
         with self.assertRaises(SystemExit):
-            gate.run_build(selection, "portable", len(ROLES["portable"]["host_groups"]) + 1)
+            gate.run_build(selection, "portable", ROLES["portable"]["partitions"] + 1)
 
     def test_the_build_waits_for_the_lean_contract_before_its_tests(self):
         events = []
@@ -563,7 +566,7 @@ class RepositoryVariables(unittest.TestCase):
         self.assertFalse(portable & {entry["job"] for entry in outputs["matrix"]["include"]})
         archives = outputs["archives"]["include"]
         self.assertEqual([archive.get("partition") for archive in archives],
-                         list(range(1, len(ROLES["portable"]["host_groups"]) + 1)))
+                         list(range(1, ROLES["portable"]["partitions"] + 1)))
         for archive in archives:
             self.assertTrue(archive["run"])
         self.assertEqual(outputs["shards"]["include"], [])
@@ -775,11 +778,10 @@ class HostGroups(unittest.TestCase):
         self.assertEqual([entry["runs_on"][-1] for entry in selection["shards"]],
                          [self.GROUPS[index % len(self.GROUPS)] for index in range(4)])
 
-    def test_each_partition_keeps_to_its_host_group(self):
+    def test_partitions_take_any_portable_runner(self):
         archives = sharded(1, everything=True)["archives"]
-        self.assertEqual([archive["runs_on"] for archive in archives],
-                         [[*ROLES["portable"]["labels"], group] for group in self.GROUPS])
-        # Without host groups (a fork, the hosted fallback) one build takes the role's labels.
+        self.assertTrue(all(archive["runs_on"] == ROLES["portable"]["labels"] for archive in archives))
+        # On the hosted fallback one build takes the fallback's labels.
         with mock.patch.dict(os.environ, {"GATE_FALLBACK": "hosted"}):
             [archive] = sharded(1, everything=True)["archives"]
             self.assertNotIn("partition", archive)

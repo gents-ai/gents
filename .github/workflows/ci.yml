@@ -604,6 +604,7 @@ jobs:
       # it took 2.5 to 10 minutes before the compile started (PR #3926's runs).
       - uses: ./.github/actions/rust-runner
         with:
+          role: portable
           lean: ${{ (matrix.run || matrix.vera) && 'true' || 'false' }}
           lean-contract: deferred
           afterburner: ${{ matrix.run && matrix.go && 'true' || 'false' }}
