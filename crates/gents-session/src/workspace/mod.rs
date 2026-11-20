@@ -28,11 +28,12 @@ pub use action_plan::{
 };
 pub use documents::handoff_route_fields;
 pub use documents::{
-    isolated_workspace_upsert_mutation, repository_placement_upsert_mutation,
-    workspace_binding_upsert_mutation, workspace_cleanup_docs_mutation,
-    workspace_placement_upsert_mutation, workspace_receipt_create_mutation, IsolatedWorkspaceDoc,
-    MemoryWorkspaceDocuments, ProvisioningObservation, WorkspaceBindingDoc, WorkspaceDocuments,
-    WorkspacePlacementDoc, WorkspaceProvenance, WorkspaceReceiptDoc,
+    isolated_workspace_upsert_mutation, read_isolated_workspace_doc, read_workspace_placement_doc,
+    repository_placement_upsert_mutation, workspace_binding_upsert_mutation,
+    workspace_cleanup_docs_mutation, workspace_placement_upsert_mutation,
+    workspace_receipt_create_mutation, IsolatedWorkspaceDoc, MemoryWorkspaceDocuments,
+    ProvisioningObservation, WorkspaceBindingDoc, WorkspaceDocuments, WorkspacePlacementDoc,
+    WorkspaceProvenance, WorkspaceReceiptDoc,
 };
 pub use executor::cleanup::{execute_cleanup_workspace_plan, CleanupWorkspaceOutcome};
 pub use executor::create::execute_create_workspace_plan;

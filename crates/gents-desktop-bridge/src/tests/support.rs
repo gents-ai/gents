@@ -476,17 +476,14 @@ pub async fn submit_signed(
     shape: impl FnOnce(&mut gents_protocol::request_admission::AgentRequestCreate),
 ) -> anyhow::Result<String> {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
 
     let requester = signer.did().to_owned();
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        runtime.node_did(),
-        &requester,
-        &agent.agent_did,
-        session_id,
+        RequestScope::new(runtime.node_did(), &requester, &agent.agent_did, session_id),
         String::new(),
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

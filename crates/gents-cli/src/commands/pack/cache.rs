@@ -8,8 +8,12 @@ use crate::cli::PackPruneArgs;
 
 pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
-    let pack =
-        gents_pack::pack::resolved_pack::resolve_pack_source(&args.package, None, &home).await?;
+    let pack = gents_pack::pack::resolved_pack::resolve_pack_source(
+        &args.package,
+        args.registry.as_deref(),
+        &home,
+    )
+    .await?;
     anyhow::ensure!(
         pack.manifest().metadata.kind == PackKind::Assets
             || pack
@@ -67,6 +71,7 @@ mod tests {
         let report = crate::request_helpers::capture_report(prune(PackPruneArgs {
             package: "acme/tools".to_owned(),
             home: Some(home.path().to_owned()),
+            registry: None,
         }))
         .await
         .unwrap();
@@ -110,6 +115,7 @@ mod tests {
         let error = prune(PackPruneArgs {
             package: "fixture/slot_fixture".to_owned(),
             home: Some(home.path().to_path_buf()),
+            registry: None,
         })
         .await
         .unwrap_err();

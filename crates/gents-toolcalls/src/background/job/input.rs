@@ -1673,10 +1673,12 @@ pub(crate) mod tests {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "request-1",
-            node_did(),
-            agent_did(),
-            agent_did(),
-            "session-1",
+            gents_protocol::request_admission::RequestScope::new(
+                node_did(),
+                agent_did(),
+                agent_did(),
+                "session-1",
+            ),
             "spawn",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

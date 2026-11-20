@@ -1,5 +1,5 @@
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::RequestInput;
 use gents_store::config_client::ConfigAccess;
@@ -150,10 +150,12 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("capture-{index}"),
-            identity.did(),
-            &binding.agent_did,
-            &binding.agent_did,
-            "capture-session",
+            RequestScope::new(
+                identity.did(),
+                &binding.agent_did,
+                &binding.agent_did,
+                "capture-session",
+            ),
             "Captured source",
             "interactive",
             "2026-10-20T00:00:00Z",

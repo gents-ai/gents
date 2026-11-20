@@ -5,7 +5,9 @@ use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::observe::run_timeline::{RunTimeline, RunTimelineEvent, TimelineRenderedRequestEvent};
+use crate::observe::run_timeline::events::{
+    RunTimeline, RunTimelineEvent, TimelineRenderedRequestEvent,
+};
 
 mod atif;
 mod build;

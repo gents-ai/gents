@@ -185,7 +185,7 @@ pub async fn spawn_server_with_ready_json(
                 .push_str(&String::from_utf8_lossy(&buffer[..read]));
         }
     });
-    let served = crate::support::process::served_home_dir(home, args, envs);
+    let served = crate::support::process::served_home_dir(home, args);
     let home = home.to_owned();
     let envs = envs
         .iter()
@@ -253,8 +253,6 @@ pub async fn run_desktop_init_json(home: &Path, desktop_home: &Path, label: &str
         Duration::from_secs(120),
         Command::new(&binary)
             .env("RUST_LOG", "error")
-            .env("GENTS_HOME", home)
-            .env("GENTS_DESKTOP_HOME", desktop_home)
             .args(["init", "--node-home"])
             .arg(home)
             .arg("--desktop-home")

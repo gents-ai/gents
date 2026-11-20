@@ -80,9 +80,9 @@ pub(in crate::runtime::agent) async fn run_agent(
     external_shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     agent.backend_admission.validate(&agent.node).await?;
-    gents_store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
+    gents_store::schema::catalog::ensure_runtime_owned(agent.node.clone())
         .await
-        .context("ensure runtime schema migrations")?;
+        .context("ensure runtime schemas")?;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start(
         agent.node.clone(),
         agent.node_did().to_string(),
@@ -124,9 +124,9 @@ pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
     retry_delay: std::time::Duration,
     slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
-    gents_store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
+    gents_store::schema::catalog::ensure_runtime_owned(agent.node.clone())
         .await
-        .context("ensure runtime schema migrations")?;
+        .context("ensure runtime schemas")?;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         agent.node.clone(),
         agent.node_did().to_string(),
@@ -326,7 +326,9 @@ async fn run_agent_owned(
     )
     .with_plugins(agent.plugins().clone())
     .with_tasks(Arc::new(gents_automation::triggers::task_run::TaskRuns))
-    .with_usage_cache(agent.usage_cache().clone());
+    .with_registry_url(agent.registry_url().map(str::to_owned))
+    .with_usage_cache(agent.usage_cache().clone())
+    .with_native_executables(agent.native_executables().clone());
     registry::probe_and_promote_enabled_backends(&agent.node).await;
 
     let (control_subscription, resolved_snapshot) =
@@ -428,11 +430,6 @@ async fn run_agent_owned(
         };
     }
     let (active_snapshot_tx, active_snapshot_rx) = watch::channel(initial_active_snapshot.clone());
-    *agent
-        .active_snapshot
-        .write()
-        .map_err(|_| anyhow::anyhow!("runtime snapshot binding unavailable"))? =
-        Some(active_snapshot_rx.clone());
     runtime.job_driver.runtime().bind_snapshot(
         gents_automation::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
             active_snapshot_rx.clone(),

@@ -5,7 +5,7 @@ use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 use std::{sync::Arc, time::Duration};
 
-pub use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+use gents_store::test_support::PIN_FIXED_DID;
 
 pub async fn native_queue_image(
     node: &std::sync::Arc<defra_node::Node>,

@@ -313,8 +313,8 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "GENTS_RELEASE_URL to a gents Linux release tarball"
             )
 
-        # An explicit glibc loader becomes /proc/self/exe, so the runtime cannot
-        # discover the embedded filesystem runner by executable basename.
+        # An explicit glibc loader becomes /proc/self/exe, so the server names
+        # this shim with --fs-runner instead of its own executable.
         install_fs_runner = (
             f"printf '%s\\n' '#!/bin/sh' "
             f"'exec {self._REMOTE_BINARY} __native-fs-runner \"$@\"' "

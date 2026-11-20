@@ -478,10 +478,12 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        identity.did(),
-        identity.did(),
-        identity.did(),
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.did(),
+            identity.did(),
+            identity.did(),
+            session_id,
+        ),
         "spawn",
         "interactive",
         now,

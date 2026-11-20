@@ -55,13 +55,15 @@ async fn one_time_workspace_approval_runs_the_reported_six_browser_cases() {
                 &call,
                 &tools,
                 "bash",
-                "/bin/sh",
-                &args,
-                None,
-                Duration::from_secs(120),
+                crate::native::CommandRequest {
+                    command_name: "/bin/sh",
+                    args: &args,
+                    cwd: None,
+                    timeout: Duration::from_secs(120),
+                    raw_json: true,
+                    max_output_chars: 128 * 1024,
+                },
                 &policy,
-                true,
-                128 * 1024,
             )
         };
         let mut first = Box::pin(run());

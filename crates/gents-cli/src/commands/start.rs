@@ -19,9 +19,7 @@ use tokio::runtime::Handle;
 use crate::cli::args::ShellArgs;
 use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
-use gents_service::home_state::{
-    default_home_ignoring_env, read_finished_init_config, resolve_home_dir,
-};
+use gents_service::home_state::{default_home, read_finished_init_config, resolve_home_dir};
 
 use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
@@ -42,6 +40,7 @@ const PUBLISH_WAIT: Duration = Duration::from_secs(5);
 pub(crate) struct StartArgs {
     pub(crate) home: Option<PathBuf>,
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
+    pub(crate) registry: Option<String>,
     pub(crate) agent: Option<String>,
     pub(crate) print: Option<String>,
     pub(crate) steer: bool,
@@ -68,6 +67,7 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
     let (home, config, graphql, home_flag) = ready_node(
         args.home.take(),
         args.store_key_custody,
+        args.registry.as_deref(),
         terminal,
         RepairOperation::Run,
     )
@@ -180,6 +180,7 @@ pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
     let (home, config, graphql, _) = ready_node(
         args.home,
         args.store_key_custody,
+        args.registry.as_deref(),
         true,
         RepairOperation::Run,
     )
@@ -196,7 +197,8 @@ pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
 /// starts its node there; a start that does not finish moves it back.
 pub(crate) async fn repoint(home: Option<PathBuf>) -> Result<()> {
     let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
-    let (home, _, graphql, _) = ready_node(home, None, terminal, RepairOperation::Repoint).await?;
+    let (home, _, graphql, _) =
+        ready_node(home, None, None, terminal, RepairOperation::Repoint).await?;
     eprintln!(
         "The background service now serves {} at {}",
         crate::shell_word(&home),
@@ -213,11 +215,12 @@ pub(crate) async fn repoint(home: Option<PathBuf>) -> Result<()> {
 async fn ready_node(
     home: Option<PathBuf>,
     custody: Option<StoreKeyCustodyArg>,
+    registry: Option<&str>,
     terminal: bool,
     operation: RepairOperation,
 ) -> Result<(PathBuf, StoredInitConfig, GraphqlEndpoint, Option<PathBuf>)> {
     let mut progress = TerminalProgress::new();
-    let ready = ready_node_with(home, custody, terminal, operation, &mut progress).await;
+    let ready = ready_node_with(home, custody, registry, terminal, operation, &mut progress).await;
     if ready.is_err() {
         progress.finish();
     }
@@ -227,6 +230,7 @@ async fn ready_node(
 async fn ready_node_with(
     home: Option<PathBuf>,
     custody: Option<StoreKeyCustodyArg>,
+    registry: Option<&str>,
     terminal: bool,
     operation: RepairOperation,
     progress: &mut TerminalProgress,
@@ -262,7 +266,7 @@ async fn ready_node_with(
                 }
                 RepairOutcome::NeedsSetup if answer == RepairAnswer::ContinueSetup => {
                     progress.finish();
-                    setup::continue_setup(&choice.home).await?;
+                    setup::continue_setup(&choice.home, registry).await?;
                     answer = RepairAnswer::None;
                 }
                 RepairOutcome::NeedsSetup => {
@@ -270,7 +274,7 @@ async fn ready_node_with(
                     ensure!(terminal, "{}", not_set_up(&choice.home));
                     progress.finish();
                     choice = HomeChoice {
-                        home: setup::setup(setup_home.take(), custody).await?,
+                        home: setup::setup(setup_home.take(), custody, registry).await?,
                         explicit: false,
                     };
                     answer = RepairAnswer::None;
@@ -317,7 +321,7 @@ async fn ready_node_with(
                     ensure!(!set_up, "setup left this home uninitialized");
                     ensure!(terminal, "{}", not_set_up(&choice.home));
                     progress.finish();
-                    setup::setup(Some(choice.home.clone()), custody).await?;
+                    setup::setup(Some(choice.home.clone()), custody, registry).await?;
                     set_up = true;
                 }
                 RepairOutcome::Decide(decision) => {
@@ -482,18 +486,14 @@ fn answered(
     }
 }
 
-/// `--home` or `GENTS_HOME` naming the folder `gents` opens without them is
-/// not a choice of another folder.
+/// `--home` naming the folder `gents` opens without it is not a choice of
+/// another folder.
 fn home_choice(home_given: Option<&Path>) -> Result<HomeChoice> {
     let home = crate::absolutize(resolve_home_dir(home_given))?;
-    let given = home_given.is_some()
-        || std::env::var_os(gents_store::local::home::GENTS_HOME_ENV)
-            .is_some_and(|value| !value.is_empty());
     let canonical =
         |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let explicit = given
-        && !default_home_ignoring_env()
-            .is_ok_and(|default| canonical(&default) == canonical(&home));
+    let explicit = home_given.is_some()
+        && !default_home().is_ok_and(|default| canonical(&default) == canonical(&home));
     Ok(HomeChoice { home, explicit })
 }
 
@@ -871,6 +871,7 @@ mod tests {
         let args = |continuing: bool, prompt: bool| StartArgs {
             home: None,
             store_key_custody: None,
+            registry: None,
             agent: None,
             print: None,
             steer: false,

@@ -337,10 +337,12 @@ pub fn build_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         purpose,
         identity.request_id,
-        identity.node_did,
-        identity.requester_did.unwrap_or(acting_agent),
-        identity.agent_did,
-        identity.session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            identity.node_did,
+            identity.requester_did.unwrap_or(acting_agent),
+            identity.agent_did,
+            identity.session_id,
+        ),
         identity.content,
         identity.execution_origin.as_str(),
         identity.created_at,
@@ -1305,7 +1307,7 @@ async fn project_refused_request_onto_session_in_txn(
 #[cfg(test)]
 mod session_message_tests {
     use super::*;
-    use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+    use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
     #[tokio::test]
     async fn session_message_request_carries_the_cwd() {

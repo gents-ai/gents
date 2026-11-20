@@ -6,7 +6,7 @@ use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError};
 
 use crate::background::job::control::control_by_doc_id;
 use crate::background::status::ProcessControlScope;
-use crate::call::hook::BackgroundExecutionRegistry;
+use crate::call::hook::background_executions::BackgroundExecutionRegistry;
 use crate::call::lifecycle::{ToolCallLifecycle, ToolRowKind};
 use gents_protocol::tool_call::AwaitMode;
 use gents_session::session::tool_call_state::CancelCause;

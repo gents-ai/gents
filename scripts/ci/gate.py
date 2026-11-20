@@ -82,7 +82,7 @@ class Group:
 GROUPS = [
     Group("foundation", "portable", [
         "gents-protocol", "gents-schemas", "gents-loop", "gents-lean-contract",
-        "gents-lean-vocab", "gents-migration", "gents-lens-fixture-add-label",
+        "gents-lean-vocab",
         "gents-callback-fixture-create-workspace", "gents-claude", "gents-claude-login",
         "gents-chatgpt-login", "gents-login-ui", "gents-fs-runner", "gents-shell",
         "gents-core-packs", "gents-workspace-hack",
@@ -158,7 +158,6 @@ NO_TESTS = {
     "gents-callback-fixture-create-workspace",
     "gents-core-packs",
     "gents-desktop",
-    "gents-lens-fixture-add-label",
     "gents-workspace-hack",
 }
 
@@ -187,7 +186,7 @@ GLOBAL_PATHS = (
     ".github/scripts/setup-", ".github/scripts/rustc-direct.sh",
     ".github/scripts/ensure-rust-build-space.py", ".github/scripts/desktop-runtime-journey.sh",
     ".github/scripts/show-sccache-stats.sh", ".github/scripts/check-isolated-runtime-runner.py",
-    ".github/scripts/collect-migration-lens-diagnostics.py", ".github/scripts/host-runtime-service.sh",
+    ".github/scripts/host-runtime-service.sh",
     "scripts/macos-clang-lld.sh", "scripts/linux-lld.sh", "scripts/measure-gents-binary.sh",
     "scripts/check-native-e2e-capabilities.sh", "third_party/", "examples/",
 )
@@ -908,8 +907,6 @@ def run_lint(selection):
         sh(["cargo", "check", "-p", "gents-cli", "--tests", "--features", "vera", *profile])
     if "gents-loop" in affected:
         sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile])
-    if "gents-lens-fixture-add-label" in affected:
-        sh(["cargo", "build", "-p", "gents-lens-fixture-add-label", "--target", "wasm32-unknown-unknown", *profile])
     if "gents-desktop-tauri" in affected:
         sh(["./scripts/check-native-e2e-capabilities.sh"])
     if selection.get("ios_check") and sys.platform == "darwin":
