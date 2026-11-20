@@ -23,6 +23,7 @@ async fn claimed_owner_with_short_lease(
             deadline_duration_secs: 60,
             execution_origin: ExecutionOrigin::Interactive,
             backend_id: "lease-test".into(),
+            operator_tool_root: None,
         },
         TriggerLineage::default(),
         Some(gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap()),

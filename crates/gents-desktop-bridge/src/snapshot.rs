@@ -183,7 +183,7 @@ fn read_init_ceiling(node_home: &std::path::Path) -> Option<InitCeilingView> {
 }
 
 #[path = "snapshot/runtime_tasks.rs"]
-mod runtime_tasks;
+pub(crate) mod runtime_tasks;
 #[path = "snapshot/task_lineage.rs"]
 mod task_lineage;
 use runtime_tasks::request_matches_node;

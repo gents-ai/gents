@@ -226,6 +226,7 @@ mod tests {
             serve_lifecycle: Default::default(),
             document_acp: Default::default(),
             node_identity: None,
+            pack_watch_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
         }
     }
 

@@ -17,9 +17,6 @@ use super::super::types::{
 };
 use super::runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_histories};
 
-static STARTERS: std::sync::LazyLock<super::runtime_tasks::StarterCache> =
-    std::sync::LazyLock::new(Default::default);
-
 pub(crate) fn node_reads(
     core: &ClientRuntime,
     node_did: &str,
@@ -317,7 +314,7 @@ pub async fn build_runtime_snapshot(core: &ClientRuntime) -> DesktopRuntimeSnaps
         if let Ok(access) = node_reads(core, &deployment.node_did) {
             super::runtime_tasks::resolve_summary_starters(
                 &access,
-                &STARTERS,
+                core.starters(),
                 deployment.sessions.iter_mut(),
             )
             .await;

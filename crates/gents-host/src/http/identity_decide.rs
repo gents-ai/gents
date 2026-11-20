@@ -341,6 +341,7 @@ mod tests {
             Default::default(),
             Default::default(),
             None,
+            16,
         )
         .contract
         .merge(

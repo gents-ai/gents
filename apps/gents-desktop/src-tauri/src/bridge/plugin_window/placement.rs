@@ -12,8 +12,11 @@ pub(super) struct Placement {
 
 const PLACES_FILE: &str = "plugin-windows.json";
 const VISIBLE: f64 = 80.0;
-static PLACES: tokio::sync::Mutex<Option<RapidHashMap<String, Placement>>> =
-    tokio::sync::Mutex::const_new(None);
+
+/// Plugin window placements, read from disk on first use and written back
+/// when a window closes.
+#[derive(Default)]
+pub(super) struct Places(tokio::sync::Mutex<Option<RapidHashMap<String, Placement>>>);
 
 impl Placement {
     pub(super) fn of<R>(window: &tauri::WebviewWindow<R>) -> Option<Self>
@@ -87,7 +90,8 @@ pub(super) async fn placement_of<R>(app: &AppHandle<R>, plugin_id: &str) -> Opti
 where
     R: Runtime,
 {
-    let mut places = PLACES.lock().await;
+    let places = app.try_state::<Places>()?;
+    let mut places = places.0.lock().await;
     loaded(app, &mut places).await;
     places.as_ref()?.get(plugin_id).copied()
 }
@@ -98,7 +102,10 @@ where
 {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let mut places = PLACES.lock().await;
+        let Some(places) = app.try_state::<Places>() else {
+            return;
+        };
+        let mut places = places.0.lock().await;
         let path = loaded(&app, &mut places).await;
         let Some(map) = places.as_mut() else { return };
         map.insert(plugin_id, place);

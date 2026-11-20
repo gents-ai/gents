@@ -156,6 +156,13 @@ pub struct ServeArgs {
     pub mcp_write_collections: Vec<String>,
     #[arg(
         long,
+        default_value_t = 16,
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Pack UX observation streams (/packs/ux/watch) served at once; a further stream is refused until one ends"
+    )]
+    pub pack_watch_limit: u32,
+    #[arg(
+        long,
         value_name = "ADDR:PORT",
         env = "GENTS_METRICS_ADDR",
         help = "Also serve Prometheus /metrics on this dedicated listener, without runtime operator authorization. Off by default. Loopback addresses serve unauthenticated; a specific non-loopback interface requires --metrics-auth-token-env; wildcard (unspecified) addresses are refused. The runtime API's /metrics still requires the operator"

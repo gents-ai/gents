@@ -23,6 +23,7 @@ async fn managed_agent_signs_transcript_and_plugin_effect_blocks() {
             deadline_duration_secs: 60,
             execution_origin: ExecutionOrigin::Interactive,
             backend_id: "lease-test".into(),
+            operator_tool_root: None,
         },
         TriggerLineage::default(),
         Some(agent.clone()),

@@ -60,6 +60,7 @@ pub struct RuntimeHttpState {
     /// The home's node key, which signs its status before the runtime that
     /// holds it too has started.
     pub node_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
+    pub pack_watch_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl RuntimeHttpState {
@@ -151,6 +152,7 @@ pub fn runtime_contract_router(
     serve_lifecycle: ServeLifecycleHandle,
     document_acp: gents_store::local::document_acp::DocumentAcp,
     node_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
+    pack_watch_limit: u32,
 ) -> RuntimeRouters {
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
@@ -179,6 +181,7 @@ pub fn runtime_contract_router(
         serve_lifecycle,
         document_acp,
         node_identity,
+        pack_watch_slots: Arc::new(tokio::sync::Semaphore::new(pack_watch_limit as usize)),
     };
 
     let operator_routes = Router::new()

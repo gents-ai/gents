@@ -202,6 +202,7 @@ where
             deadline_duration_secs: agent.deadline_duration.as_secs(),
             execution_origin: ExecutionOrigin::Interactive,
             backend_id: agent.backend_id.as_deref().unwrap_or_default().into(),
+            operator_tool_root: None,
         },
         TriggerLineage::default(),
         Some(agent.agent_identity.clone()),

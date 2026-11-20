@@ -88,6 +88,7 @@ impl ClientRuntime {
             inference_observations: Default::default(),
             request_patch_signatures: Default::default(),
             context_details: Default::default(),
+            starters: Default::default(),
             shutdown_completion: Default::default(),
             last_mutation_error: Default::default(),
         })
