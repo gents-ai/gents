@@ -147,10 +147,10 @@ async fn backend_check(
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(
-            backend.connect_timeout_secs.unwrap_or(10) as u64,
+            backend.effective_connect_timeout_secs() as u64,
         ))
         .timeout(Duration::from_secs(
-            backend.discovery_timeout_secs.unwrap_or(10) as u64,
+            backend.effective_discovery_timeout_secs() as u64,
         ))
         .build()
         .context("building backend discovery client")?;

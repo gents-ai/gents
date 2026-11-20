@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
 
-use gents_documents::backend_credential::{BackendCredential, BackendCredentialError};
+use gents_documents::backend_credential::{
+    backend_credential_in_txn, BackendCredential, BackendCredentialError,
+};
 
 /// The caller must first authorize the initiating actor's metadata selection.
 /// This runtime-only lookup never substitutes another credential or destination.
@@ -16,23 +18,8 @@ pub(crate) async fn resolve_backend_credential(
 ) -> Result<BackendCredential, BackendCredentialError> {
     let access = super::rows::runtime_credential_access(node, node_did)
         .map_err(BackendCredentialError::Read)?;
-    let id = gents_store::graphql::escape_graphql_string(credential_id);
-    let query = format!(
-        r#"{{ BackendCredential(filter: {{credential_id: {{_eq: "{id}"}}}}, limit: 2) {{ credential_id node_did provider_kind endpoint version secret }} }}"#
-    );
-    let response = access
-        .execute(&query)
-        .await
-        .map_err(|error| BackendCredentialError::Read(error.into()))?;
-    let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "BackendCredential");
-    if rows.len() != 1 {
-        return Err(BackendCredentialError::MissingOrAmbiguous);
-    }
-    let credential: BackendCredential =
-        serde_json::from_value(rows[0].clone()).map_err(|_| BackendCredentialError::Invalid)?;
-    if credential.credential_id != credential_id
-        || !credential.matches_binding(node_did, provider, endpoint, version)
-    {
+    let credential = backend_credential_in_txn(&access, credential_id).await?;
+    if !credential.matches_binding(node_did, provider, endpoint, version) {
         return Err(BackendCredentialError::BindingMismatch);
     }
     Ok(credential)

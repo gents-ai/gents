@@ -127,16 +127,19 @@ impl BackendCredential {
     }
 }
 
-pub async fn backend_credential_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+pub async fn backend_credential_in_txn<R>(
+    reader: &R,
     credential_id: &str,
-) -> Result<BackendCredential, BackendCredentialError> {
+) -> Result<BackendCredential, BackendCredentialError>
+where
+    R: gents_store::config_client::ConfigRead + ?Sized,
+{
     let id = gents_store::graphql::escape_graphql_string(credential_id);
     let query = format!(
         r#"{{ BackendCredential(filter: {{credential_id: {{_eq: "{id}"}}}}, limit: 2) {{ credential_id node_did provider_kind endpoint version secret }} }}"#
     );
-    let response = txn
-        .execute(&query)
+    let response = reader
+        .execute_read(&query)
         .await
         .map_err(|error| BackendCredentialError::Read(error.into()))?;
     let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "BackendCredential");

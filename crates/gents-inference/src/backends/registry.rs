@@ -797,9 +797,9 @@ pub async fn discover_runtime_backend_models(
         .context("runtime credential resolver unavailable")?;
     backend.validate()?;
     let discovery_timeout =
-        std::time::Duration::from_secs(backend.discovery_timeout_secs.unwrap_or(10) as u64);
+        std::time::Duration::from_secs(backend.effective_discovery_timeout_secs() as u64);
     let connect_timeout =
-        std::time::Duration::from_secs(backend.connect_timeout_secs.unwrap_or(10) as u64)
+        std::time::Duration::from_secs(backend.effective_connect_timeout_secs() as u64)
             .min(discovery_timeout);
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())

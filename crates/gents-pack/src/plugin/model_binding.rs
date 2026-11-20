@@ -6,6 +6,9 @@ use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use gents_documents::inference_defaults::{
+    DEFAULT_CONNECT_TIMEOUT_SECS, DEFAULT_REQUEST_TIMEOUT_SECS,
+};
 use gents_documents::{InferenceBackend, InferenceProfile};
 use gents_loop::openai_wire::OpenAiWireApi;
 use gents_store::collection::Collection;
@@ -17,12 +20,6 @@ pub struct ModelBinding {
     pub node_did: String,
     pub profile_id: String,
 }
-
-const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;
-/// Unset `request_timeout_secs` default. Bounds one host-side model exchange
-/// independently of the guest's remaining wall-clock budget, so a stalled
-/// endpoint cannot occupy its permit for the entire guest lifetime.
-const DEFAULT_REQUEST_TIMEOUT_SECS: i64 = 120;
 
 pub struct ModelEndpoint {
     pub url: String,

@@ -2,7 +2,25 @@ pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 120;
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
 pub const DEFAULT_MAX_CONCURRENT: i64 = 1;
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
+pub const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;
+pub const DEFAULT_DISCOVERY_TIMEOUT_SECS: i64 = 10;
+/// Unset `request_timeout_secs` default. Bounds one host-side model exchange
+/// independently of the guest's remaining wall-clock budget, so a stalled
+/// endpoint cannot occupy its permit for the entire guest lifetime.
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: i64 = 120;
 pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
+
+impl crate::InferenceBackend {
+    pub fn effective_connect_timeout_secs(&self) -> i64 {
+        self.connect_timeout_secs
+            .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS)
+    }
+
+    pub fn effective_discovery_timeout_secs(&self) -> i64 {
+        self.discovery_timeout_secs
+            .unwrap_or(DEFAULT_DISCOVERY_TIMEOUT_SECS)
+    }
+}
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,

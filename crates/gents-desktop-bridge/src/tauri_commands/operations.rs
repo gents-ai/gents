@@ -350,6 +350,8 @@ pub async fn list_backends_with_health_for_core(
                     .collect()
             })
             .unwrap_or_default();
+        let max_concurrent = backend.effective_max_concurrent();
+        let max_queue_depth = backend.effective_max_queue_depth();
         views.push(BackendHealthView {
             backend_id: backend.backend_id,
             name: backend.name,
@@ -359,8 +361,8 @@ pub async fn list_backends_with_health_for_core(
             probe_status,
             display_state,
             last_probe: observation.and_then(|row| row.last_probe),
-            max_concurrent: backend.max_concurrent.unwrap_or(1),
-            max_queue_depth: backend.max_queue_depth.unwrap_or(100),
+            max_concurrent,
+            max_queue_depth,
             models,
             recent_calls,
         });
