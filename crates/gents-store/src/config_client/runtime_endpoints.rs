@@ -62,6 +62,14 @@ impl RuntimeEndpoints {
 }
 
 impl GraphqlEndpoint {
+    /// The runtime this endpoint was opened for, when it was opened for one.
+    pub fn runtime_node_did(&self) -> Option<&str> {
+        match &*self.client_authentication {
+            EndpointAuthentication::Runtime { node, .. } => Some(node),
+            _ => None,
+        }
+    }
+
     /// Discover the runtime's client authentication again, holding the
     /// held audience's status lock as every status read does (TLA+
     /// `HeldAudienceReads`).
