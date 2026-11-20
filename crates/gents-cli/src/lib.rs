@@ -880,6 +880,7 @@ mod tests {
     use gents_service::home_state::write_init_config;
     use gents_service::state::StoredInitConfig;
     use gents_store::identity::NodeIdentity as _;
+    #[cfg(not(feature = "vera"))]
     use std::collections::BTreeMap;
 
     #[tokio::test]
@@ -1076,6 +1077,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "vera"))]
     fn home_contents(dir: &Path, contents: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -1089,8 +1091,9 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "vera"))]
     #[tokio::test]
-    async fn an_offline_access_refuses_an_unfinished_vera_home_without_writing_to_it() {
+    async fn a_build_without_the_vera_node_refuses_an_offline_vera_home_without_writing_to_it() {
         gents_service::home_state::client_identity_for_new_node()
             .await
             .unwrap();
@@ -1106,7 +1109,7 @@ mod tests {
         home_contents(temp.path(), &mut before);
 
         let error = match resolve_config_access(Some(&home), None).await {
-            Ok(_) => panic!("an embedded Vera home cannot be opened yet"),
+            Ok(_) => panic!("this build cannot open an embedded Vera home"),
             Err(error) => error,
         };
 
@@ -1115,14 +1118,8 @@ mod tests {
             .unwrap_or_else(|| panic!("not a document access refusal: {error:#}"));
         assert!(
             matches!(
-                (refusal, cfg!(feature = "vera")),
-                (
-                    gents_store::local::document_acp::DocumentAcpError::NotYetUsable,
-                    true
-                ) | (
-                    gents_store::local::document_acp::DocumentAcpError::Unavailable,
-                    false
-                )
+                refusal,
+                gents_store::local::document_acp::DocumentAcpError::Unavailable
             ),
             "{error:#}"
         );
