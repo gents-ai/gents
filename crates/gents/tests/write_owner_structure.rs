@@ -2529,7 +2529,7 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-eval/src/runner/embedded/executor/install.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
     ("crates/gents-eval/src/runner/freeze/pack.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables; legitimately external"),
     ("crates/gents-fs-runner/src/traversal/common.rs", 5, "GENTS_FS_RUNNER_BLOCK_* pause a traversal for race tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
-    ("crates/gents-host/src/serve.rs", 3, "the secret named by the metrics token flag (legitimately external), HOME for the default working root (platform discovery), and GENTS_TEST_STALL_AFTER_CLIENT_ACCESS: test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
+    ("crates/gents-host/src/serve.rs", 2, "the secret named by the metrics token flag (legitimately external) and HOME for the default working root (platform discovery)"),
     ("crates/gents-inference/src/auth/credential/token_endpoint.rs", 1, "OAuth token URL overrides point refresh at a local token server in tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("crates/gents-inference/src/auth/xai_login.rs", 2, "xAI OAuth device and token URL overrides for a local server in tests; test seam in a shipped crate: move behind a test fixture or the harness's own arguments"),
     ("crates/gents-inference/src/clients/chatgpt_codex.rs", 1, "GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides the wire client version the provider requires; becomes an InferenceBackend field"),

@@ -493,13 +493,14 @@ async fn wait_for_embedded_http_bind(
     }
 }
 
-async fn stall_after_client_access_for_tests() -> Result<()> {
-    let Some(path) = std::env::var_os("GENTS_TEST_STALL_AFTER_CLIENT_ACCESS") else {
+#[cfg(feature = "test-fixtures")]
+async fn stall_after_client_access(path: Option<&Path>) -> Result<()> {
+    let Some(path) = path else {
         return Ok(());
     };
-    tokio::fs::File::open(&path)
+    tokio::fs::File::open(path)
         .await
-        .with_context(|| format!("opening the configured startup stall {path:?}"))?;
+        .with_context(|| format!("opening the configured startup stall {}", path.display()))?;
     Ok(())
 }
 
@@ -843,7 +844,8 @@ async fn serve_foreground(
             .await
             .context("claiming the readiness this home's previous process left behind")?;
         client_access_ready.store(true, std::sync::atomic::Ordering::Release);
-        stall_after_client_access_for_tests().await?;
+        #[cfg(feature = "test-fixtures")]
+        stall_after_client_access(args.stall_after_client_access.as_deref()).await?;
         gents_store::local::store_key::upgrade::finish(&data_dir)?;
         let schema = gents_p2p::p2p_reconcile::read_client_replicated_schema(node.clone())
             .await
