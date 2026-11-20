@@ -10,7 +10,7 @@ use gents_protocol::output::rows::{
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, PresentedPayload, SourceClose,
 };
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_session::session::tool_presentation::render_presentation;
 use gents_store::graphql::escape_graphql_string;
 

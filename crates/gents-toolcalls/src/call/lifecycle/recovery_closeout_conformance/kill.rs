@@ -44,7 +44,7 @@ async fn kill_fixture(observation: KillObservation) -> (PublishedAdmission, Opti
 #[tokio::test]
 async fn generated_kill_cases_drive_the_session_message_kill() {
     use crate::background::caused::KillOutcome;
-    use gents_session::session::tool_call_state::ToolCallState;
+    use gents_protocol::tool_call::ToolCallState;
     for case in gents_lean_vocab::families::session_message_kill_drive::cases::<
         KillAction,
         KillObservation,

@@ -2172,9 +2172,7 @@ pub(super) fn project_transcript_rows(
                     Some(pin.handle.clone()),
                     row.lifecycle_state
                         .as_deref()
-                        .and_then(
-                            gents_session::session::tool_call_state::ToolCallState::from_persisted,
-                        )
+                        .and_then(gents_protocol::tool_call::ToolCallState::from_persisted)
                         .map(|lifecycle| {
                             gents_toolcalls::plugin::job_calls::job_state(
                                 lifecycle,

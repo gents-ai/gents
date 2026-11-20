@@ -21,7 +21,7 @@ use gents_observe::observe::trace_export::{
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
 use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::graphql::escape_graphql_string;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
