@@ -40,6 +40,10 @@ live-e2e = []
 # Debug native desktop acceptance must never address the user's daily service.
 native-e2e = ["gents-service/native-e2e"]
 heap-profiling = ["dep:tikv-jemallocator"]
+# Lets a home decide document access through a Vera node the runtime hosts
+# (`gents init --document-acp vera`). Off by default: it adds the
+# Vera node and its consensus library to the build.
+vera = ["gents-host/vera"]
 typescript = ["dep:ts-rs"]
 
 [dependencies]
@@ -107,7 +111,7 @@ sha2.workspace = true
 serde_yaml.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true

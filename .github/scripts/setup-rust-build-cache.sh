@@ -220,3 +220,14 @@ if ! "${sccache_bin:-sccache}" --show-stats >/dev/null 2>&1; then
   cache_unavailable "The sccache server does not answer on $(hostname -s). A person must ${repair}."
 fi
 echo "Using the sccache server ${SCCACHE_SERVER_UDS:-on port ${SCCACHE_SERVER_PORT:-4226}} (${sccache_bin:-sccache})."
+# A server reads its base directories once, at start. A checkout or target tree
+# missing from them keys this job's compiles by its own paths, so the host's
+# other runners never hit them (both Studio servers, 2026-11-18).
+base_dirs="$("${sccache_bin:-sccache}" --show-stats 2>/dev/null | sed -n 's/^Base directories  *//p')"
+if [[ -n "${base_dirs}" ]]; then
+  for dir in "${GITHUB_WORKSPACE:-}" "${cargo_target_dir}"; do
+    if [[ -n "${dir}" && ", ${base_dirs}," != *", ${dir%/}/,"* ]]; then
+      echo "::warning title=sccache base directories::The sccache server on $(hostname -s) does not normalize ${dir}, so this job's compiles miss what the host's other runners cached. A person must ${repair}; the service lists every registered runner's checkout and target trees when it starts (.github/runner/start-gents-sccache.sh)."
+    fi
+  done
+fi

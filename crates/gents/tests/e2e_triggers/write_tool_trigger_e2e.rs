@@ -11,9 +11,7 @@ use gents_tools::builtin::defra_write::BoundedWriteTool;
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
-use crate::support::snapshots::{
-    fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot,
-};
+use crate::support::snapshots::{is_routed_ready_after, wait_for_runtime_snapshot_as};
 use crate::support::{test_db, ManagedAgentFixture};
 
 const DRIFT_SIG: &str = "drift:host-doc:9f2c";
@@ -97,36 +95,6 @@ async fn configure_action_trigger(
         ),
     ])
     .await;
-}
-
-async fn wait_for_runtime_snapshot<F>(
-    access: &ConfigAccess,
-    node_did: &str,
-    runtime: &tokio::task::JoinHandle<anyhow::Result<()>>,
-    predicate: F,
-) -> RuntimeSnapshot
-where
-    F: Fn(&RuntimeSnapshot) -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut changes = access.subscribe_changes("NodeRuntime").await;
-    loop {
-        let last_snapshot = fetch_runtime_snapshot_as(access, node_did).await;
-        if let Some(snapshot) = last_snapshot.as_ref() {
-            if predicate(snapshot) {
-                return snapshot.clone();
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {node_did}; runtime_finished={}; \
-             last_snapshot={last_snapshot:?}",
-            runtime.is_finished()
-        );
-        tokio::time::timeout_at(deadline, changes.recv())
-            .await
-            .expect("trigger readiness deadline");
-    }
 }
 
 async fn query_agent_requests_for_trigger(
@@ -268,7 +236,7 @@ async fn boot_agent_with_action_trigger(
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(&fixture.access, &node_did, &handle, |snapshot| {
+    let startup = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -289,7 +257,7 @@ async fn boot_agent_with_action_trigger(
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(&fixture.access, &node_did, &handle, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot_as(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
@@ -303,11 +271,10 @@ async fn boot_agent_with_action_trigger(
         r#"{{EventSourceCursor(filter: {{owner_did: {{_eq: "{}"}}, source_collection: {{_eq: "ActionRequest"}}}}) {{consumer}}}}"#,
         escape_graphql_string(&node_did)
     );
-    crate::support::live_inference::wait_for_rows(
+    crate::support::live_inference::rows_when(
         &fixture.access,
         "EventSourceCursor",
         &cursor_query,
-        Duration::from_secs(30),
         |data| {
             data["EventSourceCursor"].as_array().is_some_and(|rows| {
                 rows.iter()
@@ -363,7 +330,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
     let task_id = "task-b6-multifield";
     let trigger_id = "trigger-b6-multifield";
     let (handle, shutdown_tx) =
-        boot_agent_with_action_trigger(&db, &fixture, "b6-multifield", task_id, trigger_id).await;
+        boot_agent_with_action_trigger(&db, fixture, "b6-multifield", task_id, trigger_id).await;
 
     gents_store::config_client::create_authored_document(
         &fixture.access,
@@ -378,8 +345,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
     assert_eq!(
         crate::support::live_inference::wait_for_request_terminal(
             &fixture.access,
-            &request.request_id,
-            Duration::from_secs(120)
+            &request.request_id
         )
         .await,
         "completed"
@@ -401,7 +367,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
     let task_id = "task-b6-tooldriven";
     let trigger_id = "trigger-b6-tooldriven";
     let (handle, shutdown_tx) =
-        boot_agent_with_action_trigger(&db, &fixture, "b6-tooldriven", task_id, trigger_id).await;
+        boot_agent_with_action_trigger(&db, fixture, "b6-tooldriven", task_id, trigger_id).await;
 
     let tool = BoundedWriteTool::new(
         gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -426,7 +392,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
             "status": "open",
         }))
         .expect("decode write-tool args"),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .expect("request_action write tool call");
@@ -467,8 +433,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
     assert_eq!(
         crate::support::live_inference::wait_for_request_terminal(
             &fixture.access,
-            &request.request_id,
-            Duration::from_secs(120)
+            &request.request_id
         )
         .await,
         "completed"

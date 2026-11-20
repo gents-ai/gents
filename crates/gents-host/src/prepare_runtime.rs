@@ -107,6 +107,14 @@ async fn prepare_inner(
     );
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let home = tokio::task::spawn_blocking(move || std::fs::canonicalize(home)).await??;
+    let recorded = tokio::task::spawn_blocking({
+        let home = home.clone();
+        move || read_init_config(&home)
+    })
+    .await??;
+    if let Some(config) = recorded {
+        gents_store::local::document_acp::ensure_home_opens(&config)?;
+    }
     let build = gents_store::service::executable_build_id().await?;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
@@ -232,21 +240,19 @@ async fn prepare_inner(
         }
         recorded_endpoint = Some(endpoint);
     }
-    tokio::task::spawn_blocking({
-        let home = home.clone();
-        move || gents_store::local::home::lock_home_store(&home).map(drop)
-    })
-    .await?
-    .map_err(|error| {
-        if error.lock_held().is_some() {
-            anyhow::Error::from(refusal(
-                RuntimePreparationRefusal::StoreBusy,
-                "Another runtime still owns this store. Its retirement has not been confirmed.",
-            ))
-        } else {
-            error.into()
-        }
-    })?;
+    gents_store::local::home::acquire_home_store(&home, STARTUP_WAIT)
+        .await
+        .map(drop)
+        .map_err(|error| {
+            if error.lock_held().is_some() {
+                anyhow::Error::from(refusal(
+                    RuntimePreparationRefusal::StoreBusy,
+                    "Another runtime still owns this store. Its retirement has not been confirmed.",
+                ))
+            } else {
+                error.into()
+            }
+        })?;
     let pending_config = if let Some(root) = requested_root {
         if !credentials_checked {
             drop(load_runtime_identity(&home, &config).await?);

@@ -616,7 +616,7 @@ mod no_model {
         let live = LiveBox::new()?;
         let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
         let copy = live.root.join("copy-of-gents");
-        fs::copy(cli_bin(), &copy)?;
+        gents_store::test_support::copy_executable(Path::new(cli_bin()), &copy)?;
         let mut command = live.gents_from(&copy);
         command.arg("--home").arg(&home.home);
         let mut installing = Terminal::spawn(&command, &live.log("copy"))?;

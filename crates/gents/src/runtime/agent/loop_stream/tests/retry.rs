@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn owned_hook_observes_retry_and_clears_after_execution() {
     use gents_inference::inference_observation::{InferenceKey, InferenceObservationRegistry};
-    use gents_inference::rendered_request::scope::{scope_request, test_scope};
+    use gents_inference::rendered_request::scope::test_scope;
     let (_db, hook, _writer, lifecycle) = owned_test_hook().await;
     let request = lifecycle.request();
     let registry = InferenceObservationRegistry::default();
@@ -22,14 +22,14 @@ async fn owned_hook_observes_retry_and_clears_after_execution() {
     let scope = test_scope(context, Arc::new(|_| Box::pin(async { Ok(()) })));
     let mut settings = owned_config(0);
     settings.retry_policy.transport_backoff = vec![Duration::from_secs(1)];
-    let model = ScriptedModel::new_calls(vec![
-        ScriptedCall::FailStream(transient_provider_error("reset")),
-        ScriptedCall::Turn(vec![
+    let model = scripted(vec![
+        Reply::Fail(transient_provider_error("reset")),
+        Reply::turn(vec![
             RawStreamingChoice::Message("recovered".into()),
             RawStreamingChoice::FinalResponse(()),
         ]),
     ]);
-    scope_request(scope, async {
+    { settings.provider_call.capture = Some(scope); async {
         let stream = run_loop_stream(
             model,
             Some(hook),
@@ -75,7 +75,7 @@ async fn owned_hook_observes_retry_and_clears_after_execution() {
                 _ => {}
             }
         }
-    })
+    } }
     .await;
     drop(guard);
     assert!(registry.snapshot(&key).is_none());

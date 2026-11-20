@@ -21,7 +21,7 @@ function fixture() {
       node(),
       node({
         nodeDid: remote,
-        source: "enrollment",
+        local: false,
         label: "studio-1",
         node: { ...deployment.node, nodeDid: remote, displayName: "Amy" },
       }),
@@ -128,7 +128,7 @@ it("shows an enrolled node's unread settings as unknown, not as an empty form", 
       <AgentScreen nodeDid={remote} section="agent" />
     </TooltipProvider>,
   );
-  expect(screen.getByRole("status")).toHaveTextContent(
+  expect(screen.getByText(/^Read-only here/)).toHaveTextContent(
     /^Read-only here: change .+'s settings on that machine\.$/,
   );
   /* nothing drawn from settings the app hasn't read */

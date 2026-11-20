@@ -117,36 +117,9 @@ impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
     }
 }
 
-#[derive(Clone)]
-struct ProviderCallCountingModel(Arc<AtomicUsize>);
-
-#[allow(refining_impl_trait)]
-impl CompletionModel for ProviderCallCountingModel {
-    type Response = ();
-    type StreamingResponse = ();
-    type Client = ();
-
-    fn make(_: &(), _: impl Into<String>) -> Self {
-        Self(Arc::new(AtomicUsize::new(0)))
-    }
-
-    async fn completion(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Err(CompletionError::ProviderError("streaming only".into()))
-    }
-
-    async fn stream(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(StreamingCompletionResponse::stream(Box::pin(stream::iter(
-            vec![Ok(RawStreamingChoice::FinalResponse(()))],
-        ))))
-    }
+/// A provider that ends every call it receives, so a test can count them.
+fn provider_call_counting_model() -> ScriptedProvider {
+    ScriptedProvider::responding(|_| Reply::end())
 }
 
 fn pre_inference_agent(agent_config: Arc<ResolvedAgent>) -> Arc<ResolvedAgent> {
@@ -198,13 +171,13 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         &[],
     );
     let entered = Arc::new(tokio::sync::Notify::new());
-    let provider_calls = Arc::new(AtomicUsize::new(0));
+    let provider_calls = provider_call_counting_model();
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
+        model: Arc::new(provider_calls.clone()),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(PreInferenceBlockingTool {
             entered: entered.clone(),
@@ -293,7 +266,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         "interruption uses the ordinary owner terminal reason: {row}"
     );
     assert_eq!(
-        provider_calls.load(Ordering::SeqCst),
+        provider_calls.calls(),
         0,
         "no provider call may run in the pre-inference window"
     );
@@ -316,13 +289,13 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         false,
         &[],
     );
-    let provider_calls = Arc::new(AtomicUsize::new(0));
+    let provider_calls = provider_call_counting_model();
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
+        model: Arc::new(provider_calls.clone()),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(Vec::<Box<dyn gents_loop::tool::ToolDyn>>::new()),
         prompt_builder: prompt,
@@ -492,7 +465,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         "interruption uses the ordinary owner terminal reason: {terminal}"
     );
     assert_eq!(
-        provider_calls.load(Ordering::SeqCst),
+        provider_calls.calls(),
         0,
         "no provider call may run before execution begins"
     );
@@ -514,13 +487,13 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
         false,
         &[],
     );
-    let provider_calls = Arc::new(AtomicUsize::new(0));
+    let provider_calls = provider_call_counting_model();
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
+        model: Arc::new(provider_calls.clone()),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(Vec::<Box<dyn gents_loop::tool::ToolDyn>>::new()),
         prompt_builder: prompt,
@@ -600,7 +573,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     assert_eq!(row["failure_reason"], "interrupted", "{row}");
     assert_eq!(row["stopped_before_running"], false, "{row}");
     assert!(!row["terminalized_at"].is_null(), "{row}");
-    assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(provider_calls.calls(), 0);
     capture.assert_source("mid_flight");
     node.shutdown().await.expect("node shutdown");
 }
@@ -653,7 +626,7 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     let hashing = tokio::spawn(async move {
         super::super::request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            gents_session::workspace::adapter::working_tree_hash(&dest),
+            gents_session::workspace::adapter::working_tree_hash(&dest, None),
         )
         .await
         .map(|hashed| hashed.map_err(|error| format!("{error:#}")))

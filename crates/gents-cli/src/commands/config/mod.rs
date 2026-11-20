@@ -44,11 +44,11 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             AgentCommand::RevokeSelfConfig(args) => {
                 behavior::agent_self_config_permission(args, false).await
             }
-            AgentCommand::GrantCatalog(args) => {
-                behavior::agent_catalog_permission(args, true).await
+            AgentCommand::GrantNodeAdmin(args) => {
+                behavior::agent_node_administration(args, true).await
             }
-            AgentCommand::RevokeCatalog(args) => {
-                behavior::agent_catalog_permission(args, false).await
+            AgentCommand::RevokeNodeAdmin(args) => {
+                behavior::agent_node_administration(args, false).await
             }
             AgentCommand::List(args) => crud::config_list(crud::AGENT_SPEC, args).await,
             AgentCommand::Show(args) => behavior::agent_show(args).await,

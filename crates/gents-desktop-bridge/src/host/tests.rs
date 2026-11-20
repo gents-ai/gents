@@ -63,7 +63,7 @@ async fn two_attachments_share_a_core_and_detaching_does_not_close_it() {
     }
     drop(clients.remove(0));
     tasks.remove(0).await.unwrap().unwrap();
-    assert!(!core.local_peer_id().is_empty());
+    assert!(!core.node_identity().did().is_empty());
     let client = &mut clients[0];
     client
         .send(Bytes::from_static(
@@ -321,7 +321,10 @@ async fn provider_usage_read_rejects_an_unconfigured_runtime() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    assert_eq!(
+        error.code,
+        gents_store::client_error::BridgeErrorCode::InvalidArgument
+    );
     core.shutdown().await.unwrap();
 }
 
@@ -357,65 +360,70 @@ async fn inference_setup_state_rejects_an_unconfigured_runtime() {
         )
         .await
         .unwrap_err();
-    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    assert_eq!(
+        error.code,
+        gents_store::client_error::BridgeErrorCode::InvalidArgument
+    );
     core.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn inference_settings_read_survives_a_concurrent_projection_replacement() {
-    use identity::Identity as _;
-
-    let (core, directory) = crate::tests::support::boot_core().await;
-    let home = directory.path().join("runtime");
-    std::fs::create_dir_all(&home).unwrap();
-    let key_path = home.join("node.key");
-    let identity = gents_store::identity::load_or_create_file_identity(&key_path).unwrap();
-    let did = identity.did().unwrap().to_string();
-    let store = core.stores().ensure(&did);
-    let database = gents_store::test_support::wire_database::WireDatabase::spawn(
-        json!({"Node": [{"_docID": "node", "node_did": did, "display_name": "Current settings"}]}),
-        std::sync::Arc::new(move |collection| {
-            if collection == "Node" {
-                store.replace_snapshot(gents_desktop_core::client::ClientStore::default());
-            }
-            Box::pin(async { Ok(()) })
-        }),
-    )
-    .await;
-    let graphql = database.graphql.clone();
-    std::fs::write(
-        home.join("init.json"),
-        json!({"node_name":"Local", "node_did":did, "key_path":key_path}).to_string(),
-    )
-    .unwrap();
-    std::fs::write(
-        home.join("runtime.json"),
-        json!({"node_name":"Local", "node_did":did, "graphql":graphql, "p2p_transport":"iroh"})
-            .to_string(),
-    )
-    .unwrap();
-    core.persist_local_standard_peer(
-        "Local",
-        "iroh://unavailable-runtime",
-        &did,
-        &graphql,
-        &home.to_string_lossy(),
-    )
+    let (core, _directory) = crate::tests::support::boot_core().await;
+    let server = wiremock::MockServer::start().await;
+    let runtime = crate::client_test_support::runtime_key("settings-runtime").await;
+    let did = runtime.did.as_str();
+    crate::client_test_support::runtime_metadata(&server, &runtime).await;
+    let store = core.stores().ensure(did);
+    let fresh = gents_observe::client_projection::store::ClientStore::from_rows(
+        gents_observe::client_projection::store::ClientStoreRows {
+            nodes: vec![serde_json::from_value(
+                json!({"node_did":did,"display_name":"Current settings"}),
+            )
+            .unwrap()],
+            ..Default::default()
+        },
+    );
+    let settings = gents_observe::client_inference::InferenceSetupState::project(&fresh, did);
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(
+            gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
+        ))
+        .respond_with(move |_: &wiremock::Request| {
+            store.replace_snapshot(gents_observe::client_projection::store::ClientStore::default());
+            wiremock::ResponseTemplate::new(200).set_body_json(
+                gents_observe::client_inference::InferenceSettingsResponse {
+                    contract_version:
+                        gents_observe::client_inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
+                    state: settings.clone(),
+                },
+            )
+        })
+        .mount(&server)
+        .await;
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: did.into(),
+        label: "Settings runtime".into(),
+        graphql: format!("{}/api/v0/graphql", server.uri()),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    })
     .await
     .unwrap();
-    let result = ClientHost::new(core.clone())
+    let settings = ClientHost::new(core.clone())
         .execute(
             protocol::ClientCommand::InferenceSetupState {
-                node_did: did.clone(),
+                node_did: did.into(),
             },
             &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
-        .await;
-    core.shutdown().await.unwrap();
-    let settings = result.unwrap();
+        .await
+        .unwrap();
     assert_eq!(settings["nodeDid"], did);
     assert_eq!(settings["node"]["displayName"], "Current settings");
+    core.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -425,14 +433,12 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let server = wiremock::MockServer::start().await;
     let graphql = format!("{}/api/v0/graphql", server.uri());
     let directory = tempfile::tempdir().unwrap();
-    let paths = gents_desktop_core::client::DesktopPaths::from_root(directory.path());
-    let options = gents_desktop_core::client::ClientCoreOptions {
-        operator_identity_interaction:
-            gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
-        ..gents_desktop_core::client::ClientCoreOptions::local_only()
+    let paths = gents_store::client_journal::paths::DesktopPaths::from_root(directory.path());
+    let options = crate::client_runtime::ClientRuntimeOptions {
+        ..crate::client_test_support::file_journal_options()
     };
     let core = Arc::new(
-        gents_desktop_core::client::ClientCore::start_with_paths_and_options(paths, options)
+        crate::client_runtime::ClientRuntime::start_with_paths_and_options(paths, options)
             .await
             .unwrap(),
     );
@@ -455,13 +461,19 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         .to_string(),
     )
     .unwrap();
-    core.persist_local_standard_peer(
-        "Local",
-        "iroh://unavailable-runtime",
-        &did,
-        &graphql,
-        &home.to_string_lossy(),
+    crate::client_test_support::runtime_metadata(
+        &server,
+        &crate::client_test_support::RuntimeKey::of_file(&key_path),
     )
+    .await;
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: did.to_string(),
+        label: ("Local").to_string(),
+        graphql: graphql.to_string(),
+        local_node_home: Some(home.to_string_lossy().into_owned()),
+        access_request: None,
+        access_state: None,
+    })
     .await
     .unwrap();
     assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
@@ -514,18 +526,18 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         assert!(claims.contains(&client), "{claims}");
         assert!(!claims.contains(&did), "{claims}");
     }
-    let settings = gents_desktop_core::inference::InferenceSetupState::project(
-        &gents_desktop_core::client::ClientStore::default(),
+    let settings = gents_observe::client_inference::InferenceSetupState::project(
+        &gents_observe::client_projection::store::ClientStore::default(),
         &did,
     );
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path(
-            gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
+            gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
         ))
         .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-            gents_desktop_core::inference::InferenceSettingsResponse {
+            gents_observe::client_inference::InferenceSettingsResponse {
                 contract_version:
-                    gents_desktop_core::inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
+                    gents_observe::client_inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
                 state: settings,
             },
         ))
@@ -548,7 +560,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let settings_read = requests
         .iter()
         .find(|request| {
-            request.url.path() == gents_desktop_core::inference::INFERENCE_SETTINGS_PATH
+            request.url.path() == gents_observe::client_inference::INFERENCE_SETTINGS_PATH
         })
         .unwrap();
     assert!(settings_read
@@ -734,16 +746,17 @@ async fn retirement_is_acknowledged_only_after_the_installation_closes_its_store
     );
 
     let paths = core.paths().clone();
-    let closed = core.shutdown().await;
-    let reopened = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())
-        .expect("a closed installation has released its store");
-    drop(reopened);
-    host.acknowledge_retirement(&closed).await;
+    drop(core);
+    let closing = tokio::spawn(host.close_and_acknowledge_retirement());
     let mut acknowledged = false;
     while let Some(frame) = client.next().await {
         let response: Value = serde_json::from_slice(&frame.unwrap()).unwrap();
         if response["kind"] == "response" && response["id"] == 1 {
             assert!(response["error"].is_null(), "{response}");
+            drop(
+                gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())
+                    .expect("the store is free when the retirement is acknowledged"),
+            );
             acknowledged = true;
         }
     }
@@ -751,6 +764,7 @@ async fn retirement_is_acknowledged_only_after_the_installation_closes_its_store
         acknowledged,
         "retirement closed without its acknowledgement"
     );
+    closing.await.unwrap().unwrap();
 }
 #[test]
 fn generated_storage_failures_keep_their_code_in_host_errors() {
@@ -762,8 +776,8 @@ fn generated_storage_failures_keep_their_code_in_host_errors() {
         .context("preparing a request");
         let error = super::backend_error(error);
         let full = match error.code {
-            crate::BridgeErrorCode::StorageFull => true,
-            crate::BridgeErrorCode::Backend => false,
+            gents_store::client_error::BridgeErrorCode::StorageFull => true,
+            gents_store::client_error::BridgeErrorCode::Backend => false,
             other => panic!("{i:?} became {other:?}"),
         };
         if full {
@@ -776,11 +790,12 @@ fn generated_storage_failures_keep_their_code_in_host_errors() {
 #[test]
 fn file_review_availability_keeps_its_typed_code_through_host_context() {
     for code in [
-        crate::BridgeErrorCode::ProjectionPending,
-        crate::BridgeErrorCode::EndpointUnreachable,
-        crate::BridgeErrorCode::Unsupported,
+        gents_store::client_error::BridgeErrorCode::ProjectionPending,
+        gents_store::client_error::BridgeErrorCode::EndpointUnreachable,
+        gents_store::client_error::BridgeErrorCode::Unsupported,
     ] {
-        let expected = crate::BridgeError::new(code, "File review is unavailable.");
+        let expected =
+            gents_store::client_error::BridgeError::new(code, "File review is unavailable.");
         let error = anyhow::Error::new(expected.clone()).context("loading recorded versions");
         let encoded = serde_json::to_value(super::backend_error(error)).unwrap();
         assert_eq!(encoded["code"], code.as_str());

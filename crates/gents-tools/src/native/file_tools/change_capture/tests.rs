@@ -48,9 +48,9 @@ fn images_preserve_permission_observations_and_refuse_symlink_content() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("source");
     std::fs::write(&path, "private bytes").unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o751)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o420)).unwrap();
     let value = serde_json::to_value(read_image(&path)).unwrap();
-    assert_eq!(value["permissions"]["unix_mode"], 0o751);
+    assert_eq!(value["permissions"]["unix_mode"], 0o420);
     assert_eq!(value["links"], 1);
     let link = root.path().join("link");
     symlink(&path, &link).unwrap();
@@ -67,24 +67,23 @@ async fn incomplete_images_retain_the_original_without_claiming_a_finished_mutat
     let root_path = std::fs::canonicalize(root.path()).unwrap();
     let path = root_path.join("file");
     std::fs::write(&path, "original bytes").unwrap();
-    gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-        None,
-        None,
-        tokio_util::sync::CancellationToken::new(),
-        None,
-        Some(writer),
-        None,
-        None,
-        Default::default(),
-        false,
-        async {
-            let lock = file_mutation_lock_for(&path);
-            let _guard = lock.lock().await;
-            let capture = FileChangeCapture::start(&root_path, &path).await.unwrap();
-            std::fs::write(&path, "partial bytes").unwrap();
-            drop(capture);
-        },
-    )
+    let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        live_output: Some(writer),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        )
+    }
+    .call();
+    async {
+        let lock = file_mutation_lock_for(&path);
+        let _guard = lock.lock().await;
+        let capture = FileChangeCapture::start(&scope_call, &root_path, &path)
+            .await
+            .unwrap();
+        std::fs::write(&path, "partial bytes").unwrap();
+        drop(capture);
+    }
     .await;
     let pending = registry.deferred_writes("physical-tool").await.unwrap();
     let changes = serde_json::to_value(pending.downcast_ref::<FileChanges>().unwrap()).unwrap();
@@ -109,52 +108,36 @@ async fn previews_and_rejected_edits_do_not_publish_file_images() {
     let path = root_path.join("file");
     std::fs::write(&path, b"original\r\nbytes\r\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root_path.clone(), false).unwrap());
-    gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-        None,
-        None,
-        tokio_util::sync::CancellationToken::new(),
-        None,
-        Some(writer),
-        None,
-        None,
-        Default::default(),
-        false,
-        async {
-            let args = |dry_run, expected_content_hash| EditFileArgs {
-                path: "file".into(),
-                old_text: "original".into(),
-                new_text: "updated".into(),
-                replace_all: false,
-                raw_json: true,
-                dry_run,
-                match_mode: None,
-                operation: None,
-                expected_content_hash,
-            };
-            tool.call(
-                args(true, None),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            )
+    let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        live_output: Some(writer),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        )
+    }
+    .call();
+    async {
+        let args = |dry_run, expected_content_hash| EditFileArgs {
+            path: "file".into(),
+            old_text: "original".into(),
+            new_text: "updated".into(),
+            replace_all: false,
+            raw_json: true,
+            dry_run,
+            match_mode: None,
+            operation: None,
+            expected_content_hash,
+        };
+        tool.call(args(true, None), &scope_call).await.unwrap();
+        assert!(registry.deferred_writes("preview-tool").await.is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), b"original\r\nbytes\r\n");
+        assert!(tool
+            .call(args(false, Some("stale".into())), &scope_call)
             .await
-            .unwrap();
-            assert!(registry.deferred_writes("preview-tool").await.is_none());
-            assert_eq!(std::fs::read(&path).unwrap(), b"original\r\nbytes\r\n");
-            assert!(tool
-                .call(
-                    args(false, Some("stale".into())),
-                    &gents_loop::tool::ToolCallEnvelope::ambient()
-                )
-                .await
-                .is_err());
-            assert!(registry.deferred_writes("preview-tool").await.is_none());
-            tool.call(
-                args(false, None),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
-            )
-            .await
-            .unwrap();
-        },
-    )
+            .is_err());
+        assert!(registry.deferred_writes("preview-tool").await.is_none());
+        tool.call(args(false, None), &scope_call).await.unwrap();
+    }
     .await;
     let writes = registry.deferred_writes("preview-tool").await.unwrap();
     let changes = serde_json::to_value(writes.downcast_ref::<FileChanges>().unwrap()).unwrap();

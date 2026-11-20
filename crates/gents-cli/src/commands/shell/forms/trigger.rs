@@ -437,8 +437,8 @@ fn choices(sources: &Sources) -> [Vec<(String, String)>; 3] {
 
 #[cfg(test)]
 mod tests {
-    use gents_desktop_core::inference::AgentView;
     use gents_documents::{ConcurrencyMode, Trigger, TriggerSource};
+    use gents_observe::client_inference::AgentView;
     use gents_shell::source::{Doc, FormError, FormRef};
     use serde_json::json;
 

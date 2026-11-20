@@ -131,13 +131,15 @@ impl DefraSessionHook {
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
             .adopt_accepted_tool_dispatch(
-                internal_call_id,
-                tool_call_id.as_deref(),
-                &request_id,
-                &session_id,
-                tool.name(),
-                args,
-                deadline_at,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id,
+                    provider_call_id: tool_call_id.as_deref(),
+                    request_id: &request_id,
+                    session_id: &session_id,
+                    tool_name: tool.name(),
+                    args,
+                    deadline_at,
+                },
                 gents_protocol::tool_call::AwaitMode::Foreground,
             )
             .await?;

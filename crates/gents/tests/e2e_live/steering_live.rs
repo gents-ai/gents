@@ -193,7 +193,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     );
     release.notify_one();
     assert_eq!(
-        wait_for_request_terminal(&access, ACTIVE, Duration::from_secs(600)).await,
+        wait_for_request_terminal(&access, ACTIVE).await,
         "completed"
     );
     for id in receipt.request_doc_ids {

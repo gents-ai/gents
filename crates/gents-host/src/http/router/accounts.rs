@@ -83,11 +83,12 @@ pub(super) async fn enrollment_decision_handler(
                 "decision_doc_id": outcome.decision_doc_id,
                 "revision_doc_id": outcome.revision_doc_id,
                 "delivery_pending": outcome.delivery_pending,
+                "administration_removal_pending": outcome.administration_removal_pending,
             })),
         )
             .into_response(),
         Err(error) => (
-            StatusCode::BAD_REQUEST,
+            crate::http::enrollment::refusal_status(&error),
             axum::Json(json!({
                 "error": error.to_string(),
                 "code": gents_p2p::p2p_reconcile::EnrollmentDecisionRefusal::in_chain(error.as_ref())
@@ -112,7 +113,7 @@ pub(super) async fn enrollment_pending_handler(
     match service.query(&command).await {
         Ok(result) => (StatusCode::OK, axum::Json(result)).into_response(),
         Err(error) => (
-            StatusCode::BAD_REQUEST,
+            crate::http::enrollment::refusal_status(&error),
             axum::Json(json!({"error": error.to_string()})),
         )
             .into_response(),

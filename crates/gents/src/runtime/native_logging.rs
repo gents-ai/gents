@@ -26,16 +26,12 @@ where
     }
 }
 
-pub fn service_logging_enabled() -> bool {
-    std::env::var_os("GENTS_SYSTEM_LOG").is_some_and(|value| value == "1")
-}
-
-/// Mirror an operator-local diagnostic to stderr when running as a service:
-/// service mode drops the console tracing layer, so the exit-error sink (the
-/// only stderr the service manager captures) would otherwise carry just the
-/// presentation-safe bail.
-pub fn mirror_service_diagnostic(diagnostic: &str) {
-    if service_logging_enabled() {
+/// Mirror an operator-local diagnostic to stderr when the host logs to the
+/// system log (`gents server --system-log`): that mode drops the console
+/// tracing layer, so the exit-error sink (the only stderr the service manager
+/// captures) would otherwise carry just the presentation-safe bail.
+pub fn mirror_service_diagnostic(system_log: bool, diagnostic: &str) {
+    if system_log {
         eprintln!("{diagnostic}");
     }
 }

@@ -176,6 +176,7 @@ async fn discover_models_reads_openai_models_and_sends_api_key() {
         &format!("{endpoint}/v1/"),
         Some("sk-test"),
         None,
+        None,
     )
     .await
     .expect("model discovery should succeed");
@@ -206,6 +207,7 @@ async fn discover_models_decodes_chatgpt_codex_models_shape() {
         &endpoint,
         None,
         None,
+        None,
     )
     .await
     .expect("model discovery should accept the Codex-compatible models shape");
@@ -224,6 +226,7 @@ async fn discover_models_accepts_llama_models_response_with_non_slug_models() {
         &Client::new(),
         BackendProviderKind::OpenAiCompatible,
         &endpoint,
+        None,
         None,
         None,
     )
@@ -247,6 +250,7 @@ async fn discover_models_accepts_common_models_id_name_model_fields() {
         &Client::new(),
         BackendProviderKind::OpenAiCompatible,
         &endpoint,
+        None,
         None,
         None,
     )
@@ -273,6 +277,7 @@ async fn discover_models_reads_grok_models_v2_shape() {
         &endpoint,
         None,
         Some(&credential),
+        None,
     )
     .await
     .expect("Grok OAuth model discovery should accept the /models-v2 shape");
@@ -301,6 +306,7 @@ async fn discover_models_grok_426_is_a_client_version_gate() {
         &endpoint,
         None,
         Some(&credential),
+        None,
     )
     .await
     .expect_err("426 from /models-v2 must fail discovery");
@@ -351,6 +357,7 @@ async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
         &endpoint,
         None,
         Some(&credential),
+        None,
     )
     .await
     .expect("ChatGPT Codex model discovery should succeed");
@@ -373,7 +380,7 @@ async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
     );
     let requests = requests.lock().expect("requests lock");
     let request = requests.first().expect("captured request");
-    let version = crate::clients::chatgpt_codex::chatgpt_codex_client_version();
+    let version = crate::clients::chatgpt_codex::chatgpt_codex_client_version(None);
     assert!(
         request.starts_with(&format!("GET /models?client_version={version} ")),
         "Codex /models should advertise client_version query param: {request}"
@@ -456,6 +463,7 @@ async fn discover_models_reads_claude_models_with_oauth_headers() {
         &format!("{endpoint}/v1"),
         None,
         Some(&credential),
+        None,
     )
     .await
     .expect("Claude subscription model discovery should read /v1/models");
@@ -506,6 +514,7 @@ async fn a_claude_platform_probe_asks_only_whether_the_endpoint_answers() {
             &endpoint,
             Some("placeholder-secret"),
             None,
+            None,
         )
         .await
         .unwrap_or_else(|error| panic!("{status} is reachable: {error:#}"));
@@ -523,6 +532,7 @@ async fn a_claude_platform_probe_asks_only_whether_the_endpoint_answers() {
         &endpoint,
         None,
         None,
+        None,
     )
     .await
     .expect_err("a server error is not reachable");
@@ -534,6 +544,7 @@ async fn a_claude_platform_probe_asks_only_whether_the_endpoint_answers() {
         &Client::new(),
         BackendProviderKind::ClaudeMantle,
         "http://127.0.0.1:1",
+        None,
         None,
         None,
     )
@@ -553,6 +564,7 @@ async fn discover_models_reads_anthropic_key_models_without_oauth_beta() {
         BackendProviderKind::AnthropicApiKey,
         &format!("{endpoint}/v1"),
         Some("placeholder-key"),
+        None,
         None,
     )
     .await
@@ -609,6 +621,7 @@ async fn discover_models_claude_401_is_an_auth_error() {
         &format!("{endpoint}/v1"),
         None,
         Some(&credential),
+        None,
     )
     .await
     .expect_err("401 from /v1/models must fail discovery");
@@ -628,6 +641,7 @@ async fn discover_models_claude_without_credential_names_claude_login() {
         &Client::new(),
         BackendProviderKind::ClaudeCliSubscription,
         "claude-cli://subscription",
+        None,
         None,
         None,
     )

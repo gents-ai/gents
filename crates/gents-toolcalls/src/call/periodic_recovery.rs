@@ -348,7 +348,9 @@ mod tests {
 
     #[test]
     fn periodic_registry_matches_the_lean_tick_order() {
+        let lean_sweep_ids = std::cell::RefCell::new(Vec::new());
         gents_lean_vocab::families::periodic_recovery_registry::replay(|input: &SweepInput| {
+            lean_sweep_ids.borrow_mut().push(input.sweep_id.clone());
             let metadata = periodic_recovery_sweep_metadata();
             let position_of = |sweep_id: &str| {
                 metadata
@@ -365,5 +367,14 @@ mod tests {
                 ),
             }
         });
+        let lean_sweep_ids = lean_sweep_ids.into_inner();
+        for metadata in periodic_recovery_sweep_metadata() {
+            for sweep_id in metadata.sweep_ids {
+                assert!(
+                    lean_sweep_ids.iter().any(|lean| lean == sweep_id),
+                    "periodic recovery sweep {sweep_id} is not a registered Lean sweep"
+                );
+            }
+        }
     }
 }

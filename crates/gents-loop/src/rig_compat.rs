@@ -21,13 +21,15 @@ where
 }
 
 pub trait ProviderModel:
-    rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static> + 'static
+    rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static>
+    + crate::provider_call::ForCall
+    + 'static
 {
 }
 
 impl<M> ProviderModel for M
 where
-    M: rig::completion::CompletionModel + 'static,
+    M: rig::completion::CompletionModel + crate::provider_call::ForCall + 'static,
     M::Response: 'static,
     M::StreamingResponse: 'static,
 {
@@ -51,15 +53,9 @@ pub mod completion {
     pub use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 }
 
-/// The HTTP exchange types Rig's client hands a transport and takes back, for
-/// code that inspects or rewrites an exchange. `Request`, `Response` and `Uri`
-/// are the `http` crate's. Rig's client trait, its lazy body and its multipart
-/// form are deliberately absent: a module that implements the trait names Rig
-/// and stays on the ratchet's list.
-pub mod http {
-    pub use rig::http_client::sse::BoxedStream;
-    pub use rig::http_client::{Error, Request, Response, Result, StreamingResponse, Uri};
-}
+pub mod call;
+pub mod http;
+pub mod model;
 
 pub fn charged_usage_total(usage: rig::completion::Usage) -> u64 {
     usage.input_tokens.saturating_add(usage.output_tokens)
@@ -560,7 +556,6 @@ fn from_rig_image(image: &rig::completion::message::Image) -> message::Image {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     match msg {
         rig::completion::Message::System { content } => message::Message::System {
@@ -577,7 +572,6 @@ pub fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_user_content(
     content: &rig::completion::message::UserContent,
 ) -> message::UserContent {
@@ -603,7 +597,6 @@ pub fn from_rig_user_content(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_assistant_content(
     content: &rig::completion::message::AssistantContent,
 ) -> message::AssistantContent {

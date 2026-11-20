@@ -10,7 +10,7 @@ use super::{
 
 fn one_attempt(timeout: Duration) -> GraphqlRequestOptions {
     GraphqlRequestOptions {
-        timeout,
+        timeout: Some(timeout),
         max_attempts: 1,
         retry_backoff: Duration::ZERO,
     }
@@ -90,24 +90,34 @@ async fn graphql_response_errors_remain_distinct_from_transport_failures() {
         server.abort();
         let _ = server.await;
         let error = response.expect_err(kind);
-        assert_diagnostic(&error, &endpoint);
         match (kind, transport_source(&error)) {
             ("status", Some(source)) => {
+                let message = error.to_string();
+                assert_eq!(message.matches("\nNext:\n").count(), 1, "{message}");
+                assert!(
+                    message.contains("does not admit this identity"),
+                    "{message}"
+                );
+                assert!(!message.contains("gents init"), "{message}");
                 assert_eq!(source.status(), Some(StatusCode::FORBIDDEN));
                 assert!(!source.is_connect() && !source.is_timeout() && !source.is_body());
             }
             ("decode", Some(source)) => {
+                assert_diagnostic(&error, &endpoint);
                 assert!(source.is_decode());
                 assert!(!source.is_connect() && !source.is_timeout() && !source.is_body());
             }
-            ("graphql", None) => assert!(error.to_string().contains("timeout")),
+            ("graphql", None) => {
+                assert_diagnostic(&error, &endpoint);
+                assert!(error.to_string().contains("timeout"));
+            }
             _ => panic!("{kind} changed classification: {}", ErrorChain(&error)),
         }
     }
 }
 
-#[test]
-fn authenticated_delegation_preserves_actor_without_minting_a_token() {
+#[tokio::test]
+async fn authenticated_delegation_preserves_actor_without_minting_a_token() {
     let actor =
         identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76".to_owned())
             .unwrap();
@@ -118,7 +128,7 @@ fn authenticated_delegation_preserves_actor_without_minting_a_token() {
     )
     .unwrap();
     assert_eq!(
-        endpoint.authorization().unwrap().as_deref(),
+        endpoint.runtime_authorization().await.unwrap().as_deref(),
         Some("Bearer original-caller-token")
     );
     let access = super::ConfigAccess::Graphql(endpoint);

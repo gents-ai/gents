@@ -64,6 +64,16 @@ impl GraphqlFailure {
         self.retryable_conflict && !self.is_permission_denied()
     }
 
+    /// Whether DefraDB refused a delegation the request carried because it
+    /// does not hold at the provider's time
+    /// (`Identity.HeldAudience.Answer.outsideWindow`).
+    pub fn is_delegation_outside_window(&self) -> bool {
+        self.errors.as_array().into_iter().flatten().any(|error| {
+            error.pointer("/extensions/code").and_then(Value::as_str)
+                == Some(crate::delegation_audience::DELEGATION_OUTSIDE_WINDOW_CODE)
+        })
+    }
+
     pub fn is_permission_denied(&self) -> bool {
         self.errors.as_array().into_iter().flatten().any(|error| {
             error.pointer("/extensions/code").and_then(Value::as_str)

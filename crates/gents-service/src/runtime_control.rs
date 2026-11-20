@@ -80,7 +80,8 @@ pub async fn control(
     let mut request = client.post(url).json(&command);
     if let Some(authorization) = authorization {
         request = authorization
-            .authorize(request)
+            .authorize_runtime(request)
+            .await
             .map_err(|error| ControlFailure::Authorization(Box::new(error)))?;
     }
     let mut response = match request.send().await {

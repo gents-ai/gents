@@ -57,7 +57,9 @@ inherits `manage_agents` through a parent, so it confers none of
 `administrator`'s Node read, update or delete, nor the Agent, configuration and
 session permissions those confer through `parent`
 (`SelfConfig.agent_manager_is_catalog_only`). An administrator or the Node owner
-manages it. Decision (maintainer, 2026-11-11, #3656).
+manages it. Decision (maintainer, 2026-11-11, #3656). Its only subject is the
+userset of a Node's administrators (`agent_manager_admits_no_actor`; decision
+2026-11-13).
 
 `default_agent_selections` holds a Node's default Agent selection, one document
 per Node (`SelfConfig.initDefaultSelection`). Its update is its parent Node's
@@ -96,7 +98,7 @@ collections it names (`Identity.ApplicationPairingAccess`). -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
       relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
-        ⟨"runtime_reader", ["actor"], []⟩, ⟨"agent_manager", ["actor"], []⟩]
+        ⟨"runtime_reader", ["actor"], []⟩, ⟨"agent_manager", ["nodes->administrator"], []⟩]
       permissions := [permission "read" ["administrator", "runtime_reader"] [],
         permission "update" ["administrator"] [], permission "delete" ["administrator"] [],
         permission "manage_agents" ["administrator", "agent_manager"] []] }
@@ -438,8 +440,50 @@ def allowedIn : List ResourceDefinition → Nat → State → DID → String →
             allowedIn definitions fuel state actor target targetId targetRelation)
     | _, _ => false
 
+/-- Document-specific ACP grants, independent of a native NAC administrator's
+query DAC bypass. Native conformance observes named document permissions; ordinary
+client query isolation also depends on the native node permissions it holds. -/
 def allowed (fuel : Nat) (state : State) (actor resource id permission : String) : Bool :=
   allowedIn policy fuel state actor resource id permission
+
+/-- What a read observes, given whether the reader bypasses document ACP and
+what the document policy answers.
+
+External premise (defradb.rs #2744, `LensedDocFetcher::dac_bypass` read by
+`QueryRunner::lent`; upstream models `NacDacBypass.tla` and `NacOrder.lean`):
+while node access control is on, a named caller that it grants `bypass-dac`
+reads every document on that node, whatever document ACP answers, decided at
+the read's own snapshot. The NAC owner holds every node permission, and Gents
+enables NAC with the node key as owner (`with_node_acp_enabled` on a node
+built with that identity), so the hosting runtime's node key reads every
+document on its own node. A native admin (`GrantSets.householdOwner`) holds
+`bypass-dac` too, but every request Gents makes as a managed Agent denies
+itself the bypass (defradb.rs #3024, `RequestContext::with_dac_bypass_denied`),
+so an Agent that is a native admin still reads only what document ACP grants
+(`Configuration.toolSessionReadAllowed`).
+
+Decision (maintainer, 2026-11-13, gents#3747): accepted and modeled as it is.
+`allowed` remains the document policy's own answer and still decides every
+other actor, including another node's key and every Agent. Giving NAC an owner
+other than the node key, or an upstream switch that keeps the owner under
+document ACP, is the deferred larger question (gents#3683). -/
+def readObserved (bypass documentAcp : Bool) : Bool := bypass || documentAcp
+
+def nativeRead (bypass : Bool) (fuel : Nat) (state : State) (actor resource id : String) : Bool :=
+  readObserved bypass (allowed fuel state actor resource id "read")
+
+/-- The hosting runtime's node key reads whatever the relationships say, so no
+revocation withdraws its read. -/
+theorem bypass_reads_every_document (fuel : Nat) (state : State) (actor resource id : String) :
+    nativeRead true fuel state actor resource id = true := by
+  simp [nativeRead, readObserved]
+
+/-- Every actor without the bypass reads exactly what document ACP grants, so
+a revocation that narrows document ACP narrows its read. -/
+theorem without_bypass_document_acp_decides (fuel : Nat) (state : State)
+    (actor resource id : String) :
+    nativeRead false fuel state actor resource id = allowed fuel state actor resource id "read" := by
+  simp [nativeRead, readObserved]
 
 /-- An Agent-created Agent is owned by the creating Agent. The Node parent
 separately gives its user owner inherited control; an ungranted sibling has no
@@ -845,11 +889,14 @@ management remains a native ACP1 operation. Missing or conflicting evidence
 cannot select a node or another agent as a substitute actor.
 
 External premise (defradb.rs #2770): outside a native transaction a
-relationship change also requires node `get-collection`, which an Agent
-creator does not hold. Callback and fork-child repair therefore commit the
-grant and the marker in one native transaction as the creator, so only the
-`grantSucceeded = markSucceeded` outcomes arise there; the unequal outcomes
-remain modeled for children whose grant committed before that premise. -/
+relationship change also requires node `get-collection`. An Agent creator
+holds it through its baseline since defradb.rs #2744 made every document
+write require it (`NodeProvisioning.requiredPermissions`), so the permission
+no longer forces the transaction. Callback and fork-child repair still commit
+the grant and the marker in one native transaction as the creator, now for
+atomicity alone, so only the `grantSucceeded = markSucceeded` outcomes arise
+there; the unequal outcomes remain modeled for children whose grant committed
+separately. -/
 def recoverParent (state : ParentPublication)
     (nativeOwner claimedCreator authenticatedCreator : Option DID)
     (grantSucceeded markSucceeded : Bool) : ParentPublication :=
@@ -999,6 +1046,123 @@ theorem queued_revocation_needs_current_permission :
     (executeWithCachedPermission revoked).executed = true ∧
       (executeWithCurrentPermission revoked).executed = false := by decide
 
+/-- Whether the hosting runtime may use a document it reads: a credential it
+serves with, a backend it lists or probes, the Node whose hop cap bounds a
+spawn, or the Node through which it admits agent creation. It is document
+ACP's own `read` answer for the runtime's DID, never what its read observes.
+
+Decision (maintainer, 2026-11-17, gents#3935): the read past document ACP
+accepted in gents#3747 (`readObserved`) stays, and "may use" is a separate
+decision from "can read", so revoking `runtime_reader` on the Node or
+`runtime_writer` on a credential still stops the runtime from using them.
+External premise: DefraDB answers this through a named document capability
+check for an explicit DID (`DocumentAccessMode::Named`), which evaluates the
+document policy with the `bypass-dac` read switched off, on the snapshot of
+the transaction that makes the use. A use is decided in the same transaction
+as its effect (`queued_revocation_needs_current_permission`). -/
+def runtimeMayUse (fuel : Nat) (state : State) (runtime resource id : String) : Bool :=
+  allowed fuel state runtime resource id "read"
+
+/-- What the runtime acts on: a document it observes and may use. -/
+def usedRead (bypass : Bool) (fuel : Nat) (state : State) (runtime resource id : String) : Bool :=
+  nativeRead bypass fuel state runtime resource id && runtimeMayUse fuel state runtime resource id
+
+/-- Use is the read an actor without the bypass would observe. -/
+theorem runtime_use_is_the_read_without_bypass (fuel : Nat) (state : State)
+    (runtime resource id : String) :
+    runtimeMayUse fuel state runtime resource id = nativeRead false fuel state runtime resource id := by
+  simp [runtimeMayUse, nativeRead, readObserved]
+
+/-- The bypass changes what the runtime reads, never what it uses. -/
+theorem bypass_does_not_change_use (fuel : Nat) (state : State) (runtime resource id : String) :
+    usedRead true fuel state runtime resource id = usedRead false fuel state runtime resource id := by
+  cases h : runtimeMayUse fuel state runtime resource id <;>
+    simp_all [usedRead, nativeRead, readObserved, runtimeMayUse]
+
+/-- A revocation never widens use. -/
+theorem revocation_never_widens_use (fuel : Nat) (state : State) (relation : Relation)
+    (runtime resource id : String)
+    (h : runtimeMayUse fuel (apply state (.revoke relation)) runtime resource id = true) :
+    runtimeMayUse fuel state runtime resource id = true :=
+  allowed_mono fuel (apply state (.revoke relation)) state rfl
+    (fun _ member => (List.mem_filter.mp member).1) runtime resource id "read" h
+
+/-- The runtime work whose use #3935 decides, and the document deciding it. -/
+inductive RuntimeUse where
+  | oauthCredential
+  | backend
+  | hopCap
+  | agentCreation
+  deriving BEq, DecidableEq, Repr
+
+def RuntimeUse.all : List RuntimeUse := [.oauthCredential, .backend, .hopCap, .agentCreation]
+
+def RuntimeUse.wire : RuntimeUse → String
+  | .oauthCredential => "oauth_credential"
+  | .backend => "backend"
+  | .hopCap => "hop_cap"
+  | .agentCreation => "agent_creation"
+
+/-- An `OAuthCredential` is `secret_configuration` and an
+`InferenceBackendMetadata` is `configuration`, each with the Node as parent;
+the hop cap and agent creation read the Node itself. -/
+def RuntimeUse.document : RuntimeUse → String × String
+  | .oauthCredential => ("secret_configuration", "credential")
+  | .backend => ("configuration", "backend")
+  | .hopCap => ("nodes", "node")
+  | .agentCreation => ("nodes", "node")
+
+/-- A User-owned Node granting `runtime_reader`, a credential it parents that
+grants `runtime_writer`, and a backend it parents. -/
+def runtimeUseFixture : State :=
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"secret_configuration", "credential", "user"⟩,
+      ⟨"configuration", "backend", "user"⟩],
+    relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
+      ⟨"secret_configuration", "credential", "parent", .object "nodes" "node"⟩,
+      ⟨"secret_configuration", "credential", "runtime_writer", .actor "runtime"⟩,
+      ⟨"configuration", "backend", "parent", .object "nodes" "node"⟩],
+    enrolled := [] }
+
+def nodeReaderGrant : Relation := ⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩
+def credentialWriterGrant : Relation :=
+  ⟨"secret_configuration", "credential", "runtime_writer", .actor "runtime"⟩
+
+def runtimeUseRevoked (nodeReader credentialWriter : Bool) : State :=
+  let state := if nodeReader then apply runtimeUseFixture (.revoke nodeReaderGrant) else runtimeUseFixture
+  if credentialWriter then apply state (.revoke credentialWriterGrant) else state
+
+def runtimeMayUseFor (use : RuntimeUse) (nodeReader credentialWriter : Bool) : Bool :=
+  runtimeMayUse 5 (runtimeUseRevoked nodeReader credentialWriter) "runtime"
+    use.document.1 use.document.2
+
+def hostingRuntimeReads (bypass : Bool) (use : RuntimeUse) (nodeReader credentialWriter : Bool) : Bool :=
+  nativeRead bypass 5 (runtimeUseRevoked nodeReader credentialWriter) "runtime"
+    use.document.1 use.document.2
+
+/-- With its grants in place the runtime uses every document. -/
+theorem granted_runtime_uses_every_document :
+    RuntimeUse.all.map (runtimeMayUseFor · false false) = [true, true, true, true] := by
+  native_decide
+
+/-- Revoking the Node's `runtime_reader` and the credential's `runtime_writer`
+stops every use, while the hosting runtime still reads every one of them. -/
+theorem revoked_grants_stop_every_use :
+    RuntimeUse.all.map (runtimeMayUseFor · true true) = [false, false, false, false] ∧
+      RuntimeUse.all.map (hostingRuntimeReads true · true true) = [true, true, true, true] ∧
+      RuntimeUse.all.map (hostingRuntimeReads false · true true) = [false, false, false, false] := by
+  native_decide
+
+/-- Revoking `runtime_reader` stops the backend, hop-cap and agent-creation
+uses; the credential stays usable through its own `runtime_writer`. -/
+theorem revoked_node_reader_leaves_the_credential_writer :
+    RuntimeUse.all.map (runtimeMayUseFor · true false) = [true, false, false, false] := by
+  native_decide
+
+/-- Revoking only `runtime_writer` leaves the credential usable through its
+Node parent's `runtime_reader`: stopping a credential's use withdraws both. -/
+theorem revoked_credential_writer_alone_leaves_the_parent_read :
+    runtimeMayUseFor .oauthCredential false true = true := by native_decide
+
 def check (state : State) : Action → Option Bool
   | .check actor resource id permission => some (allowed 5 state actor resource id permission)
   | _ => none
@@ -1048,6 +1212,124 @@ theorem management_change_collides :
 
 theorem type_change_collides :
     (policyIdInput policy == policyIdInput policyWithDifferentTypes) = true := by native_decide
+
+/-- The subject shape a relation type names. External premise: the pinned
+DefraDB `acp::policy_yaml::build_subject_restriction`, enforced when a
+relationship is added: `actor` admits any actor DID and the all-actors
+wildcard, a bare resource admits an object of it, and `resource->relation`
+admits that userset. -/
+def subjectType : Subject → String
+  | .wildcard | .actor _ => "actor"
+  | .object resource _ => resource
+  | .entitySet resource _ relation => resource ++ "->" ++ relation
+
+/-- A relation that declares no type admits every subject. -/
+def typeAdmitted (definitions : List ResourceDefinition) (resource relation type : String) : Bool :=
+  match (definitions.find? (·.name == resource)).bind
+      (fun definition => definition.relations.find? (·.name == relation)) with
+  | some definition => definition.types.isEmpty || definition.types.contains type
+  | none => false
+
+def subjectAdmittedIn (definitions : List ResourceDefinition) (relation : Relation) : Bool :=
+  typeAdmitted definitions relation.resource relation.relation (subjectType relation.subject)
+
+def subjectAdmitted (relation : Relation) : Bool := subjectAdmittedIn policy relation
+
+/-- A relation's declared types name subject shapes, never kinds of actor: no
+policy admits one actor DID as a relation's subject and refuses another. A
+User, an Agent, an enrolled member and an unknown DID are the same subject to
+document ACP. -/
+theorem subject_types_do_not_separate_actors (definitions : List ResourceDefinition)
+    (resource id relation : String) (first second : DID) :
+    subjectAdmittedIn definitions ⟨resource, id, relation, .actor first⟩ =
+      subjectAdmittedIn definitions ⟨resource, id, relation, .actor second⟩ := rfl
+
+theorem agent_manager_types :
+    typeAdmitted policy "nodes" "agent_manager" "actor" = false ∧
+    typeAdmitted policy "nodes" "agent_manager" ("nodes" ++ "->" ++ "administrator") = true := by
+  native_decide
+
+/-- Decision (maintainer, 2026-11-13, "Node admin holds it"): `agent_manager`
+takes only the userset of a Node's administrators. No actor DID and no
+wildcard is its subject, so the catalog cannot be given directly to an Agent,
+to an unenrolled DID or to everyone. By
+`subject_types_do_not_separate_actors` no type could have admitted an enrolled
+User and refused an Agent; the userset is what document ACP can say. An
+enrollment approval makes its member a Node administrator
+(`Identity.EnrollmentGrant.approve_grants_node_administrator_and_operator_user`),
+so every enrolled User holds `manage_agents` through `administrator`
+(`administrator_holds_catalog`). The one way to give an actor the catalog is to
+make it a Node administrator; there is no catalog-only holder. -/
+theorem agent_manager_admits_no_actor (node : String) (did : DID) :
+    subjectAdmitted ⟨"nodes", node, "agent_manager", .actor did⟩ = false ∧
+    subjectAdmitted ⟨"nodes", node, "agent_manager", .wildcard⟩ = false ∧
+    subjectAdmitted ⟨"nodes", node, "agent_manager", .entitySet "nodes" node "administrator"⟩ =
+      true :=
+  ⟨agent_manager_types.1, agent_manager_types.1, agent_manager_types.2⟩
+
+/-- A relationship is added when its requester manages the relation and the
+relation takes the subject. `apply` models the first condition alone; this is
+the whole native admission. -/
+def grantAdmitted (state : State) (actor : DID) (relation : Relation) : Bool :=
+  mayManage state actor relation && subjectAdmitted relation
+
+/-- Whoever asks, on whatever state: no actor and no wildcard is granted
+`agent_manager`. -/
+theorem no_actor_is_granted_agent_manager (state : State) (grantor : DID) (node : String)
+    (did : DID) :
+    grantAdmitted state grantor ⟨"nodes", node, "agent_manager", .actor did⟩ = false ∧
+    grantAdmitted state grantor ⟨"nodes", node, "agent_manager", .wildcard⟩ = false := by
+  constructor
+  · simp only [grantAdmitted, (agent_manager_admits_no_actor node did).1, Bool.and_false]
+  · simp only [grantAdmitted, (agent_manager_admits_no_actor node did).2.1, Bool.and_false]
+
+/-- A Node owned by `user`. `member` is an enrolled User and `engineer` the
+Engineer; both hold `administrator`. The Node's administrators are its
+`agent_manager` userset. `agent` holds no Node relation. -/
+def catalogFixture : State :=
+  { objects := [⟨"nodes", "node", "user"⟩],
+    relations := [⟨"nodes", "node", "administrator", .actor "member"⟩,
+      ⟨"nodes", "node", "administrator", .actor "engineer"⟩,
+      ⟨"nodes", "node", "agent_manager", .entitySet "nodes" "node" "administrator"⟩],
+    enrolled := ["member"] }
+
+/-- The Node owner and every administrator, enrolled User or Engineer, hold
+`manage_agents`; an actor with no Node relation does not. -/
+theorem administrator_holds_catalog :
+    ["user", "member", "engineer", "agent"].map (fun actor =>
+      allowed 8 catalogFixture actor "nodes" "node" "manage_agents") =
+      [true, true, true, false] := by native_decide
+
+/-- Revoking an actor's `administrator` removes its catalog, with the userset
+relationship still in place: the userset holds administrators and nobody else.
+Another administrator is unaffected. -/
+theorem revoked_administrator_loses_catalog :
+    let revoked := apply catalogFixture
+      (.revokeAs "user" ⟨"nodes", "node", "administrator", .actor "member"⟩)
+    ["member", "engineer", "user"].map (fun actor =>
+      allowed 8 revoked actor "nodes" "node" "manage_agents") = [false, true, true] := by
+  native_decide
+
+/-- The policy before the decision, which admitted any actor as
+`agent_manager`. -/
+def policyWithActorCatalog : List ResourceDefinition := policy.map fun resource =>
+  if resource.name == "nodes" then
+    { resource with relations := resource.relations.map fun relation =>
+        if relation.name == "agent_manager" then { relation with types := ["actor"] } else relation }
+  else resource
+
+/-- The restriction changes a relation's types and nothing the policy ID
+hashes, so the ID is the one the earlier policy had. A store created before
+the decision holds the earlier policy at that ID, and registering the present
+one there is refused (`conflicting_policy_cannot_replace`): the startup
+migration that registers the Household policy fails, so such a store does not
+start on this policy, and nothing replaces its policy. While it runs an earlier
+build it still admits a direct `agent_manager` grant. Accepted for a release
+that only initialises fresh stores; open point in #3683. -/
+theorem catalog_restriction_keeps_policy_id :
+    (policyIdInput policy == policyIdInput policyWithActorCatalog) = true ∧
+    typeAdmitted policyWithActorCatalog "nodes" "agent_manager" "actor" = true := by
+  native_decide
 
 def objectJson (object : Object) : Json := Json.mkObj
   [("resource", toJson object.resource), ("id", toJson object.id), ("owner", toJson object.owner)]

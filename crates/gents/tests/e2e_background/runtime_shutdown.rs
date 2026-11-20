@@ -3,10 +3,12 @@ use crate::support::accepted_turn::{
     AcceptedTurnSpec,
 };
 use crate::support::fixtures::configure_agent_tools_as;
+use crate::support::live_inference::{rows_when, wait_for_request_terminal};
 use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
 use gents_session::session::tool_call_state::CancelCause;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::STALL_CEILING;
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -111,88 +113,33 @@ async fn boot_background_turn(
     }
 }
 
-async fn load_tool_call(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    tool_call_id: &str,
-) -> ToolCallRow {
-    fetch_tool_call(access, session_id, tool_call_id)
-        .await
-        .expect("AgentToolCall row")
-}
-
-async fn fetch_tool_call(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    tool_call_id: &str,
-) -> Option<ToolCallRow> {
-    let session_id = escape_graphql_string(session_id);
-    let tool_call_id = escape_graphql_string(tool_call_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    tool_call_id: {{ _eq: "{tool_call_id}" }}
-                }}
-                limit: 1
-            ) {{
-                tool_name
-                tool_call_id
-                lifecycle_state
-                cancel_cause
-                await_mode
-            }}
-        }}"#
-    );
-    let response = access.execute(&query).await.expect("read AgentToolCall");
-    response
-        .get("data")
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(serde_json::Value::as_array)
+fn first_tool_call(data: &Value) -> Option<ToolCallRow> {
+    data["AgentToolCall"]
+        .as_array()
         .and_then(|rows| rows.first())
-        .and_then(|row| serde_json::from_value(row.clone()).ok())
+        .map(|row| serde_json::from_value(row.clone()).expect("decode AgentToolCall row"))
 }
 
-async fn wait_for_named_tool_call(
+async fn tool_call_when<F>(
     access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
-    tool_name: &str,
-) -> ToolCallRow {
+    selector: (&str, &str),
+    predicate: F,
+) -> ToolCallRow
+where
+    F: Fn(&ToolCallRow) -> bool,
+{
     let session_id = escape_graphql_string(session_id);
-    let tool_name = escape_graphql_string(tool_name);
-    for _ in 0..200 {
-        let response = access
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, tool_name: {{ _eq: "{tool_name}" }} }}, limit: 1) {{ tool_call_id tool_name lifecycle_state cancel_cause await_mode }} }}"#
-            ))
-            .await.expect("read named tool call");
-        if let Some(row) = response
-            .get("data")
-            .and_then(|data| data.get("AgentToolCall"))
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| serde_json::from_value(row.clone()).ok())
-        {
-            return row;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    let requests = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID request_id lifecycle_state deadline valid_until claimed_at terminalized_at failure_reason }} }}"#
-        ))
-        .await.expect("read request diagnostics");
-    let tools = access
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID request_id tool_call_id tool_name lifecycle_state cancel_cause }} }}"#
-        ))
-        .await.expect("read tool diagnostics");
-    panic!(
-        "tool {tool_name} was not durably persisted before provider follow-up; requests={:?}; tools={:?}",
-        requests,
-        tools,
-    )
+    let (field, value) = selector;
+    let value = escape_graphql_string(value);
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, {field}: {{ _eq: "{value}" }} }}, limit: 1) {{ tool_call_id lifecycle_state cancel_cause }} }}"#
+    );
+    let data = rows_when(access, "AgentToolCall", &query, |data| {
+        first_tool_call(data).is_some_and(|row| predicate(&row))
+    })
+    .await;
+    first_tool_call(&data).expect("AgentToolCall row")
 }
 
 fn finish_dynamic_turn(turn: &AcceptedBackgroundTurn) {
@@ -202,32 +149,6 @@ fn finish_dynamic_turn(turn: &AcceptedBackgroundTurn) {
             &turn.prompt,
             ["parent complete"],
         ),
-    );
-}
-
-async fn wait_for_initial_request_terminal(turn: &AcceptedBackgroundTurn) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let request_id = escape_graphql_string(&turn.request_id);
-    let state = loop {
-        let response = turn.fixture.access.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{ lifecycle_state }} }}"#,
-        )).await.expect("read accepted request lifecycle");
-        let state = response["data"]["AgentRequest"]
-            .as_array()
-            .and_then(|rows| rows.first())
-            .and_then(|row| row["lifecycle_state"].as_str());
-        if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(state) {
-            break state.unwrap().to_owned();
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "initial accepted request did not terminalize: {response}"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    };
-    assert_eq!(
-        state, "completed",
-        "initial accepted request did not complete"
     );
 }
 
@@ -274,7 +195,11 @@ impl Drop for SpawnedChildGuard {
 async fn runtime_shutdown_terminates_a_spawned_background_process() {
     let turn = boot_background_turn("r6-background-shutdown-stop", Vec::new()).await;
     finish_dynamic_turn(&turn);
-    wait_for_initial_request_terminal(&turn).await;
+    assert_eq!(
+        wait_for_request_terminal(&turn.fixture.access, &turn.request_id).await,
+        "completed",
+        "initial accepted request did not complete"
+    );
     let directory = tempfile::tempdir().unwrap();
     let pid_path = directory.path().join("pid");
     let gate = directory.path().join("gate");
@@ -322,9 +247,15 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
         prompt,
     )
     .await;
-    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
+    let row = tool_call_when(
+        &turn.fixture.access,
+        &turn.session_id,
+        ("tool_name", "bash"),
+        |_| true,
+    )
+    .await;
     let tool_call_id = row.tool_call_id.expect("background handle");
-    let pid: i32 = tokio::time::timeout(Duration::from_secs(30), async {
+    let pid: i32 = tokio::time::timeout(STALL_CEILING, async {
         loop {
             if let Ok(recorded) = tokio::fs::read_to_string(&pid_path).await {
                 if let Ok(pid) = recorded.trim().parse() {
@@ -348,17 +279,13 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
     );
     drop(guard);
 
-    let settled = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
-            if row.lifecycle_state.as_deref() != Some("running") {
-                return row;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the stopped worker settles its row while the node is open");
+    let settled = tool_call_when(
+        &turn.fixture.access,
+        &turn.session_id,
+        ("tool_call_id", tool_call_id.as_str()),
+        |row| row.lifecycle_state.as_deref() != Some("running"),
+    )
+    .await;
     assert_eq!(settled.lifecycle_state.as_deref(), Some("cancelled"));
     assert_eq!(
         settled

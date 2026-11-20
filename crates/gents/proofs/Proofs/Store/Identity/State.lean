@@ -10,7 +10,11 @@ abbrev NodeKey := String
 
 /-- User signing keys remain on clients; desktop and CLI have distinct client identities.
 Users sign configuration and plugin installation. A user or an authorized Agent
-may create an Agent under its own identity; the runtime never signs as a user. The node key authenticates P2P
+may create an Agent under its own identity; the runtime never signs as a user. It submits
+a User's write to a Vera node only under a delegation that User signed for this node, except
+an update or delete from a stored command (`Identity.UserDelegation.Carrier.stored`), which
+carries no delegation and which the provider admits on the User's permission alone
+(`Identity.UserDelegation.admit`). The node key authenticates P2P
 pairing and peer admission, creates and updates schemas and indexes, registers policies,
 and owns node-local operational data whose cause is not
 agent work (readiness, shared backend health, credential refresh). The Node configuration

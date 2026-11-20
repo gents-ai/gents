@@ -357,7 +357,40 @@ pub struct JobRowView {
     pub resume_of: Option<String>,
 }
 
+/// Lean `Background.maxBackgroundedPerParent`: the host ceiling on background
+/// calls one parent request holds. The store's sibling contention retries
+/// (`REQUEST_SIBLING_MAX_ATTEMPTS`) are sized from it, so an Agent's Tools
+/// `host.max_background_tool_calls` can only lower it.
 pub const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
+
+/// The background calls one parent request may hold for its Agent: Bash runs,
+/// remote service calls and plugin jobs counted together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackgroundLimit(usize);
+
+impl BackgroundLimit {
+    /// Lean `Background.backgroundLimit`: unset is the host ceiling, and a
+    /// value the Tools validation owner would reject never raises the budget
+    /// past it.
+    pub fn resolve(configured: Option<i64>) -> Self {
+        Self(
+            configured
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(MAX_BACKGROUNDED_TOOLS_PER_PARENT)
+                .min(MAX_BACKGROUNDED_TOOLS_PER_PARENT),
+        )
+    }
+
+    pub fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl Default for BackgroundLimit {
+    fn default() -> Self {
+        Self(MAX_BACKGROUNDED_TOOLS_PER_PARENT)
+    }
+}
 
 #[cfg(test)]
 mod tests;

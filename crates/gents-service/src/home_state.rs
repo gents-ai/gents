@@ -273,11 +273,16 @@ pub async fn resolve_graphql_endpoint(
                 && url.fragment().is_none(),
             "GraphQL endpoint must be an HTTP URL without credentials, query or fragment"
         );
-        return client_signed_endpoint(graphql, &identity);
+        let status = gents::client_runtime::fetch_runtime_connection_payload(graphql).await?;
+        let node_did = status["node_did"]
+            .as_str()
+            .filter(|did| !did.is_empty())
+            .context("the runtime did not identify its Node")?;
+        return client_signed_endpoint(graphql, &identity, node_did);
     }
 
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
-        return home_endpoint_as(&home_dir, runtime_state.graphql, &identity);
+        return home_endpoint_as(&home_dir, runtime_state.graphql, &identity).await;
     }
 
     anyhow::ensure!(
@@ -292,6 +297,7 @@ pub async fn resolve_graphql_endpoint(
         format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"),
         &identity,
     )
+    .await
 }
 
 /// Client document access retains the user's identity. Credentials remain bound to
@@ -306,58 +312,66 @@ pub async fn home_graphql_endpoint(
 async fn home_graphql_endpoint_with_paths(
     home_dir: &Path,
     url: impl Into<String>,
-    paths: &gents_desktop_core::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> Result<GraphqlEndpoint> {
     let identity = client_identity_in(home_dir, paths).await?;
-    home_endpoint_as(home_dir, url, &identity)
+    home_endpoint_as(home_dir, url, &identity).await
 }
 
-fn home_endpoint_as(
+async fn home_endpoint_as(
     home_dir: &Path,
     url: impl Into<String>,
-    identity: &gents_desktop_core::client::PrincipalIdentity,
+    identity: &gents_store::client_journal::principal_identity::PrincipalIdentity,
 ) -> Result<GraphqlEndpoint> {
     let url = url.into();
     anyhow::ensure!(
         endpoint_serves_home(home_dir, &url),
         "endpoint is not this home's runtime"
     );
-    client_signed_endpoint(url, identity)
+    let node_did = resolve_node_did(Some(home_dir), None)?;
+    client_signed_endpoint(url, identity, &node_did)
 }
 
+/// The endpoint reads its runtime's public status before its first request
+/// and mints for the audience it reports; a request refused for its
+/// credential reads the status again (`Identity.HeldAudience.resend`), so an
+/// endpoint held across a restart under another audience recovers on its next
+/// request. The CLI keeps what the status reports only with its endpoint.
 fn client_signed_endpoint(
     url: impl Into<String>,
-    identity: &gents_desktop_core::client::PrincipalIdentity,
+    identity: &gents_store::client_journal::principal_identity::PrincipalIdentity,
+    node_did: &str,
 ) -> Result<GraphqlEndpoint> {
+    let url = url.into();
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         identity.private_key_bytes(),
     )?;
     Ok(gents::runtime::lifecycle_hooks::compose_endpoint(
-        GraphqlEndpoint::as_principal(url, identity.did())
-            .with_client_signing_capability(capability)?
+        gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(capability)
+            .endpoint(node_did, &url)?
             .with_client_signed_agent_creates(),
     )?)
 }
 
 /// The CLI is a separate client principal, even when desktop and CLI share a user home.
-pub fn cli_identity_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+pub fn cli_identity_paths() -> Result<gents_store::client_journal::paths::DesktopPaths> {
     Ok(cli_identity_paths_under(&desktop_paths()?))
 }
 
 /// Unit tests share one throwaway CLI client home; see [`use_unit_test_homes`].
-fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+fn desktop_paths() -> Result<gents_store::client_journal::paths::DesktopPaths> {
     #[cfg(any(test, feature = "test-home-guard"))]
     if let Some(homes) = unit_test_homes() {
-        return Ok(gents_desktop_core::client::DesktopPaths::from_root(
+        return Ok(gents_store::client_journal::paths::DesktopPaths::from_root(
             homes.path().join("desktop"),
         ));
     }
-    gents_desktop_core::client::DesktopPaths::discover()
+    gents_store::client_journal::paths::DesktopPaths::discover()
 }
 
 fn cli_identity_paths_under(
-    desktop: &gents_desktop_core::client::DesktopPaths,
-) -> gents_desktop_core::client::DesktopPaths {
+    desktop: &gents_store::client_journal::paths::DesktopPaths,
+) -> gents_store::client_journal::paths::DesktopPaths {
     desktop.cli_client()
 }
 
@@ -449,7 +463,7 @@ fn home_is_set_up(home: &Path) -> std::io::Result<bool> {
 
 fn missing_client_identity(
     home: &Path,
-    paths: &gents_desktop_core::client::DesktopPaths,
+    paths: &gents_store::client_journal::paths::DesktopPaths,
 ) -> ClientIdentityError {
     match home_is_set_up(home) {
         Ok(true) => ClientIdentityError::MissingForSetUpHome {
@@ -463,8 +477,11 @@ fn missing_client_identity(
 
 fn existing_client_identity(
     home: &Path,
-    paths: &gents_desktop_core::client::DesktopPaths,
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    paths: &gents_store::client_journal::paths::DesktopPaths,
+) -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     if !paths
         .identity_key_path()
         .try_exists()
@@ -472,7 +489,7 @@ fn existing_client_identity(
     {
         return Err(missing_client_identity(home, paths));
     }
-    gents_desktop_core::client::PrincipalIdentity::load_existing(paths)
+    gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(paths)
         .map_err(ClientIdentityError::load)
 }
 
@@ -483,7 +500,10 @@ fn existing_client_identity(
 /// [`ClientIdentityError::MissingForSetUpHome`].
 pub async fn client_identity_for(
     home: &Path,
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+) -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     client_identity_in(
         home,
         &cli_identity_paths().map_err(ClientIdentityError::load)?,
@@ -493,8 +513,11 @@ pub async fn client_identity_for(
 
 async fn client_identity_in(
     home: &Path,
-    paths: &gents_desktop_core::client::DesktopPaths,
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    paths: &gents_store::client_journal::paths::DesktopPaths,
+) -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     let key_present = tokio::fs::try_exists(paths.identity_key_path())
         .await
         .map_err(ClientIdentityError::load)?;
@@ -516,20 +539,25 @@ async fn client_identity_in(
 
 /// `init` creating a new Node's store: the Node it makes is owned by this
 /// identity, so creating one is part of setting the home up.
-pub async fn client_identity_for_new_node(
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+pub async fn client_identity_for_new_node() -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     let paths = cli_identity_paths().map_err(ClientIdentityError::load)?;
     load_or_create_client_identity(&paths).await
 }
 
 async fn load_or_create_client_identity(
-    paths: &gents_desktop_core::client::DesktopPaths,
-) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
+    paths: &gents_store::client_journal::paths::DesktopPaths,
+) -> std::result::Result<
+    gents_store::client_journal::principal_identity::PrincipalIdentity,
+    ClientIdentityError,
+> {
     paths
         .ensure_root_dirs()
         .await
         .map_err(ClientIdentityError::load)?;
-    gents_desktop_core::client::PrincipalIdentity::load_or_create(paths)
+    gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(paths)
         .await
         .map_err(ClientIdentityError::load)
 }
@@ -602,21 +630,26 @@ mod tests {
     #[tokio::test]
     async fn cli_and_desktop_keep_distinct_stable_identities() {
         let home = tempfile::tempdir().unwrap();
-        let desktop = gents_desktop_core::client::DesktopPaths::from_root(home.path());
+        let desktop = gents_store::client_journal::paths::DesktopPaths::from_root(home.path());
         let cli = super::cli_identity_paths_under(&desktop);
         desktop.ensure_root_dirs().await.unwrap();
         cli.ensure_root_dirs().await.unwrap();
         let desktop_identity =
-            gents_desktop_core::client::PrincipalIdentity::load_or_create(&desktop)
-                .await
-                .unwrap();
-        let cli_identity = gents_desktop_core::client::PrincipalIdentity::load_or_create(&cli)
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &desktop,
+            )
+            .await
+            .unwrap();
+        let cli_identity =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &cli,
+            )
             .await
             .unwrap();
         assert_ne!(desktop_identity.did(), cli_identity.did());
         assert_eq!(
             cli_identity.did(),
-            gents_desktop_core::client::PrincipalIdentity::load_existing(&cli)
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(&cli)
                 .unwrap()
                 .did()
         );
@@ -625,16 +658,28 @@ mod tests {
     #[tokio::test]
     async fn home_endpoint_requires_and_uses_the_cli_principal() {
         let home = tempfile::tempdir().unwrap();
-        let paths = gents_desktop_core::client::DesktopPaths::from_root(home.path().join("cli"));
+        let paths =
+            gents_store::client_journal::paths::DesktopPaths::from_root(home.path().join("cli"));
         let url = "http://127.0.0.1:9191/api/v0/graphql";
-        std::fs::write(super::init_config_path(home.path()), "{}").unwrap();
+        std::fs::write(
+            super::init_config_path(home.path()),
+            serde_json::json!({
+                "home": home.path(), "node_name": "runtime", "node_did": "did:key:runtime",
+                "key_path": null, "tool_ceiling": crate::args::ToolCeilingArg::Readwrite, "tool_root": null,
+            })
+            .to_string(),
+        )
+        .unwrap();
         assert!(
             super::home_graphql_endpoint_with_paths(home.path(), url, &paths)
                 .await
                 .is_err()
         );
         paths.ensure_root_dirs().await.unwrap();
-        let identity = gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths)
+        let identity =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &paths,
+            )
             .await
             .unwrap();
         let endpoint = super::home_graphql_endpoint_with_paths(home.path(), url, &paths)
@@ -642,6 +687,19 @@ mod tests {
             .unwrap();
         let access = gents_store::config_client::ConfigAccess::Graphql(endpoint);
         assert_eq!(access.actor_did().as_deref(), Some(identity.did()));
+        let signer = access.client_signer().unwrap();
+        let payload = b"client-held command signing";
+        let signature = gents_store::identity::NodeIdentity::sign(&signer, payload)
+            .await
+            .unwrap();
+        assert!(gents_store::identity::NodeIdentity::verify(
+            &identity,
+            identity.did(),
+            payload,
+            &signature,
+        )
+        .await
+        .unwrap());
         assert!(super::home_graphql_endpoint_with_paths(
             home.path(),
             "https://unrelated.example/api/v0/graphql",
@@ -649,6 +707,196 @@ mod tests {
         )
         .await
         .is_err());
+    }
+
+    /// A runtime whose status and audience the test sets: it refuses a User's
+    /// identity token with the edge's code while it reports an audience, and
+    /// a delegation for any other deployment.
+    struct Runtime {
+        url: String,
+        node: std::sync::Arc<gents_store::identity::KeyIdentity>,
+        status: std::sync::Arc<std::sync::Mutex<serde_json::Value>>,
+        presented: std::sync::Arc<std::sync::Mutex<Vec<Option<u64>>>>,
+    }
+
+    impl Runtime {
+        fn reports(&self, status: serde_json::Value) {
+            *self.status.lock().unwrap() = status;
+        }
+
+        fn presented(&self) -> Vec<Option<u64>> {
+            std::mem::take(&mut *self.presented.lock().unwrap())
+        }
+    }
+
+    fn presented_for(headers: &axum::http::HeaderMap) -> Option<u64> {
+        use base64::Engine as _;
+        let bearer = headers.get("authorization")?.to_str().ok()?;
+        let claims = bearer.strip_prefix("Bearer ")?.split('.').nth(1)?;
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(claims)
+                .ok()?,
+        )
+        .ok()?;
+        claims["aud"].as_str()?.strip_prefix("vera:")?.parse().ok()
+    }
+
+    fn ready(deployment: Option<u64>) -> serde_json::Value {
+        let mut status = serde_json::json!({ "node_did": "did:key:test-runtime", "client_authentication": {"kind":"local"}, "lifecycle": "ready" });
+        if let Some(deployment) = deployment {
+            status["client_authentication"] = serde_json::json!({"kind":"vera","worker":"did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK","deployment":deployment});
+            status["delegation_audience"] = serde_json::json!({
+                "worker": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+                "deployment": deployment,
+            });
+        }
+        status
+    }
+
+    async fn runtime() -> Runtime {
+        use axum::http::StatusCode;
+        let status = std::sync::Arc::new(std::sync::Mutex::new(
+            serde_json::json!({ "lifecycle": "starting" }),
+        ));
+        let presented = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let node = std::sync::Arc::new(
+            tokio::task::spawn_blocking(|| gents_store::test_support::test_identity("runtime"))
+                .await
+                .unwrap(),
+        );
+        let (reported, taking, seen, signer) = (
+            status.clone(),
+            status.clone(),
+            presented.clone(),
+            node.clone(),
+        );
+        let router = axum::Router::new()
+            .route(
+                "/status",
+                axum::routing::get(
+                    move |query: axum::extract::RawQuery| {
+                        let (reported, signer) = (reported.clone(), signer.clone());
+                        async move {
+                            let mut status = reported.lock().unwrap().clone();
+                            if status.get("node_did").is_some() {
+                                status["node_did"] =
+                                    gents_store::identity::NodeIdentity::did(signer.as_ref()).into();
+                                if let Some(nonce) = query.0.as_deref().and_then(|query| {
+                                    query.split('&').find_map(|pair| {
+                                        let (name, nonce) = pair.split_once('=')?;
+                                        (name
+                                            == gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                                            .then(|| {
+                                                gents_protocol::home_attestation::HomeNonce::parse(
+                                                    nonce,
+                                                )
+                                                .ok()
+                                            })
+                                            .flatten()
+                                    })
+                                }) {
+                                    gents_store::identity::home_status::attest(
+                                        Some(signer.as_ref()),
+                                        &nonce,
+                                        &mut status,
+                                    )
+                                    .await;
+                                }
+                            }
+                            axum::Json(status)
+                        }
+                    },
+                ),
+            )
+            .fallback(move |headers: axum::http::HeaderMap| {
+                let (taking, seen) = (taking.clone(), seen.clone());
+                async move {
+                    let audience = presented_for(&headers);
+                    seen.lock().unwrap().push(audience);
+                    let takes = taking.lock().unwrap()["delegation_audience"]["deployment"].as_u64();
+                    match (takes, audience) {
+                        (None, None) => (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({"data": {"Node": []}})),
+                        ),
+                        (Some(takes), Some(presented)) if takes == presented => (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({"data": {"Node": []}})),
+                        ),
+                        (Some(_), None) => (
+                            StatusCode::UNAUTHORIZED,
+                            axum::Json(serde_json::json!({
+                                "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+                            })),
+                        ),
+                        _ => (StatusCode::FORBIDDEN, axum::Json(serde_json::json!({}))),
+                    }
+                }
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        Runtime {
+            url: format!("http://{address}/api/v0/graphql"),
+            node,
+            status,
+            presented,
+        }
+    }
+
+    async fn cli_endpoint(runtime: &Runtime) -> gents_store::config_client::GraphqlEndpoint {
+        let home = tempfile::tempdir().unwrap();
+        let paths = gents_store::client_journal::paths::DesktopPaths::from_root(home.path());
+        paths.ensure_root_dirs().await.unwrap();
+        let identity =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+                &paths,
+            )
+            .await
+            .unwrap();
+        super::client_signed_endpoint(
+            runtime.url.as_str(),
+            &identity,
+            gents_store::identity::NodeIdentity::did(runtime.node.as_ref()),
+        )
+        .unwrap()
+    }
+
+    async fn reads(endpoint: &gents_store::config_client::GraphqlEndpoint) -> bool {
+        gents_store::config_client::post_graphql(endpoint, "query { Node { _docID } }")
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_cli_endpoint_built_before_its_runtime_answered_recovers_on_first_use() {
+        let runtime = runtime().await;
+        let endpoint = cli_endpoint(&runtime).await;
+        runtime.reports(ready(Some(1)));
+        assert!(reads(&endpoint).await);
+        assert_eq!(runtime.presented(), vec![Some(1)]);
+    }
+
+    #[tokio::test]
+    async fn a_long_cli_command_survives_a_restart_under_another_audience() {
+        let runtime = runtime().await;
+        runtime.reports(ready(Some(1)));
+        let endpoint = cli_endpoint(&runtime).await;
+        assert!(reads(&endpoint).await);
+        assert_eq!(runtime.presented(), vec![Some(1)]);
+        runtime.reports(ready(Some(2)));
+        assert!(reads(&endpoint).await);
+        assert_eq!(runtime.presented(), vec![Some(1), Some(2)]);
+    }
+
+    #[tokio::test]
+    async fn a_cli_endpoint_on_a_local_home_presents_its_identity_token_once() {
+        let runtime = runtime().await;
+        runtime.reports(ready(None));
+        let endpoint = cli_endpoint(&runtime).await;
+        assert!(reads(&endpoint).await);
+        assert_eq!(runtime.presented(), vec![None]);
     }
 
     #[test]

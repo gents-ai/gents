@@ -494,8 +494,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
             ? "nodeNotSelected"
             : admissionStatus === input.operationalState?.connection
               ? "runtimeNotConnected"
-              : admissionStatus.layer === "p2p" ||
-                  admissionStatus.layer === "route"
+              : admissionStatus.layer === "route"
                 ? "routeNotReady"
                 : "agentUnavailable";
       return {

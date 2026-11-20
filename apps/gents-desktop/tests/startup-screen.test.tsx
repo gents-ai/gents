@@ -21,11 +21,9 @@ const shownStep = (text: string) =>
   });
 
 const savedPeer = {
-  peerId: deployment.peerId,
   label: deployment.label,
   nodeDid: deployment.nodeDid,
-  addr: deployment.addr,
-  source: deployment.source,
+
   graphql: deployment.graphql,
   local: false,
 };
@@ -38,34 +36,26 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
       ...(configured
         ? {}
         : { initNodeName: null, initNodeDid: null, nodeHomeExists: false }),
-      savedPeers: configured ? [savedPeer] : [],
+      savedRuntimes: configured ? [savedPeer] : [],
     },
     client: running
       ? {
           clientDid: "did:key:startup-fixture",
-          p2pHealth: {
-            status: "healthy",
-            connectedPeerCount: 1,
-            consecutiveFailures: 0,
-            lastError: null,
-            lastOkAt: null,
-            lastFailureAt: null,
-          },
+
           syncHealth: {
             state: "healthy",
             cause: null,
             nextAction: null,
-            lastError: null,
+
             runtimeCount: 1,
             connectedRuntimeCount: 1,
-            activationErrorCount: 0,
           },
-          enrollmentRequests: [],
+          accessRequests: [],
           rowCount: 42,
           approxSerializedBytes: 2048,
           operatorConfigAuthoritativeNodeDids: configured ? [deployment.nodeDid] : [],
           deployments: [deployment],
-          endedAccess: [],
+          unkeptChanges: [],
         }
       : null,
   };
@@ -369,7 +359,7 @@ describe("desktop startup screen", () => {
         initNodeDid: null,
         nodeHomeExists: false,
         clientStateExists: false,
-        savedPeers: [{ ...savedPeer, source: "local-standard" }],
+        savedRuntimes: [{ ...savedPeer, local: true }],
       },
       client: null,
     };
@@ -426,7 +416,7 @@ describe("desktop startup screen", () => {
         initNodeDid: null,
         nodeHomeExists: false,
         clientStateExists: false,
-        savedPeers: [{ ...savedPeer, source: "local-standard" }],
+        savedRuntimes: [{ ...savedPeer, local: true }],
       },
       client: null,
     };

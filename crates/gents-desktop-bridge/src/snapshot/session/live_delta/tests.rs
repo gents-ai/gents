@@ -1,5 +1,6 @@
 use super::*;
-use gents_desktop_core::client::{ClientStoreRows, StoreProjectionRevision};
+use gents_observe::client_projection::observe::StoreProjectionRevision;
+use gents_observe::client_projection::store::ClientStoreRows;
 use gents_protocol::output::rows::OutputSegmentRow;
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
@@ -104,7 +105,8 @@ fn observed_store_can_stay_payload_free_while_scoped_rows_produce_a_verified_suf
     let mut rows = rows();
     let initial = ClientStore::from_rows(rows.clone());
     let cursor = cursor(&initial);
-    let observed = gents_desktop_core::client::ObservedStores::new().ensure("did:test:node");
+    let observed =
+        gents_observe::client_projection::observe::ObservedStores::new().ensure("did:test:node");
     observed.replace_snapshot(initial);
     assert!(observed.snapshot().output_segments.is_empty());
     rows.output_segments.push(segment(1, " world 🌍"));
@@ -238,11 +240,11 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
 
 #[tokio::test]
 async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapshot_cursor() {
-    use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+    use gents_store::client_journal::paths::DesktopPaths;
     let home = tempfile::tempdir().unwrap();
-    let core = ClientCore::start_with_paths_and_options(
+    let core = ClientRuntime::start_with_paths_and_options(
         DesktopPaths::from_root(home.path()),
-        ClientCoreOptions::local_simulated_route(),
+        crate::client_test_support::file_journal_options(),
     )
     .await
     .unwrap();
@@ -260,13 +262,19 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         .to_string(),
     )
     .unwrap();
-    core.add_local_standard_peer_route_for_test(
-        "Live test",
-        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-        &node_did,
-        &graphql,
-        runtime_home.to_str().unwrap(),
+    crate::client_test_support::runtime_metadata(
+        &server,
+        &crate::client_test_support::RuntimeKey::of_principal(core.node_identity()),
     )
+    .await;
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: node_did.to_string(),
+        label: ("Live test").to_string(),
+        graphql: graphql.to_string(),
+        local_node_home: Some((runtime_home.to_str().unwrap()).to_string()),
+        access_request: None,
+        access_state: None,
+    })
     .await
     .unwrap();
     let mut rows = rows();
@@ -422,8 +430,11 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     )
     .await
     .unwrap_err();
-    let denied = crate::error::BridgeError::classify_transport_error(error);
-    assert_eq!(denied.code, crate::error::BridgeErrorCode::PermissionDenied);
+    let denied = gents_store::client_error::BridgeError::classify_transport_error(error);
+    assert_eq!(
+        denied.code,
+        gents_store::client_error::BridgeErrorCode::PermissionDenied
+    );
     assert!(!denied.message.contains("private metadata"));
     server.verify().await;
     server.reset().await;

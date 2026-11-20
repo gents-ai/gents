@@ -122,7 +122,6 @@ pub struct EventSource {
     desired_collections: RapidHashSet<String>,
     subscription_seed_failures: BTreeMap<String, String>,
     reconciled_generation: u64,
-    #[allow(dead_code)]
     cancel: CancellationToken,
     source_schema_cache: SourceSchemaCache,
     collection_id_to_name: RapidHashMap<String, String>,

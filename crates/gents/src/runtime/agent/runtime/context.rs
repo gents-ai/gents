@@ -36,6 +36,22 @@ pub(super) struct RuntimeContext {
     pub(super) enrollment_authority: gents_p2p::p2p_reconcile::EnrollmentAuthorityHandle,
 }
 
+struct ResolvedWorker {
+    agent_config: Arc<gents_inference::resolved::ResolvedAgent>,
+    tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
+    provider_family: Option<String>,
+    replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
+    account_hops: u32,
+    prompt_builder: LayeredPromptBuilder,
+    preamble: String,
+    loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    background_tool_registry: BackgroundToolRegistry,
+    remote_tools: Option<gents_documents::RemoteTools>,
+    job_tools: rapidhash::RapidHashMap<String, gents_toolcalls::background::job::JobBinding>,
+    output_obligations: Vec<(String, gents_documents::WriteToolOutputObligation)>,
+    root_execution_guard: Option<gents_tools::surface::RootExecutionGuard>,
+}
+
 pub(super) struct AgentResolution {
     pub(super) agent_did: String,
     pub(super) rejection_reason: Option<String>,
@@ -186,59 +202,64 @@ impl RuntimeContext {
         let provider_family = Some(client.provider_family().to_owned());
         let replay_issuer = client.replay_issuer()?;
         let account_hops = client.account_hops();
+        let worker = ResolvedWorker {
+            agent_config,
+            tool_config,
+            provider_family,
+            replay_issuer,
+            account_hops,
+            prompt_builder,
+            preamble,
+            loop_tools,
+            background_tool_registry,
+            remote_tools: tool_surface.remote_tools().cloned(),
+            job_tools: gents_toolcalls::background::job::JobBinding::bind_all(
+                tool_surface.plugin_resolutions(),
+            ),
+            output_obligations: tool_surface.output_obligations(),
+            root_execution_guard: tool_surface.root_execution_guard().cloned(),
+        };
 
         gents_inference::llm::backend_client::with_backend_client!(client, |client| {
             Box::pin(self.run_agent_with_client(
-                agent_config,
-                tool_config,
-                provider_family,
-                replay_issuer,
-                account_hops,
+                worker,
                 request_rx,
                 capacity,
                 slot_generation,
                 shutdown,
-                prompt_builder,
-                preamble,
-                loop_tools.clone(),
-                background_tool_registry,
-                tool_surface.remote_tools().cloned(),
-                gents_toolcalls::background::job::JobBinding::bind_all(
-                    tool_surface.plugin_resolutions(),
-                ),
-                tool_surface.output_obligations(),
-                tool_surface.root_execution_guard().cloned(),
                 client,
             ))
             .await
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn run_agent_with_client<C>(
+    async fn run_agent_with_client<C>(
         &self,
-        agent_config: Arc<gents_inference::resolved::ResolvedAgent>,
-        tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
-        provider_family: Option<String>,
-        replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
-        account_hops: u32,
+        worker: ResolvedWorker,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
-        prompt_builder: LayeredPromptBuilder,
-        preamble: String,
-        loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
-        background_tool_registry: BackgroundToolRegistry,
-        remote_tools: Option<gents_documents::RemoteTools>,
-        job_tools: rapidhash::RapidHashMap<String, gents_toolcalls::background::job::JobBinding>,
-        output_obligations: Vec<(String, gents_documents::WriteToolOutputObligation)>,
-        root_execution_guard: Option<gents_tools::surface::RootExecutionGuard>,
         client: C,
     ) -> Result<()>
     where
         C: ProviderClient,
     {
+        let ResolvedWorker {
+            agent_config,
+            tool_config,
+            provider_family,
+            replay_issuer,
+            account_hops,
+            prompt_builder,
+            preamble,
+            loop_tools,
+            background_tool_registry,
+            remote_tools,
+            job_tools,
+            output_obligations,
+            root_execution_guard,
+        } = worker;
         let model = Arc::new(build_admitted_model(
             client,
             self.admission_registry.clone(),

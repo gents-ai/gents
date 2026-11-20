@@ -8,10 +8,11 @@ use super::start_wait::{
     ensure_not_cancelled, finish_start_wait, relock_start, wait_unlocked, LifecycleGuard, StartWait,
 };
 use super::status::emit_status;
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::ManagedServerStatus;
 use gents_service::args::ServiceAction;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use std::future::Future;
 use std::path::Path;
 use std::time::Duration;

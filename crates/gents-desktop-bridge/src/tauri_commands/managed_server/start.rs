@@ -18,14 +18,15 @@ use super::readiness::{
 };
 use super::start_wait::{begin_start_wait, finish_start_wait, LifecycleGuard};
 use super::status::{emit_status, project_external_status, status_from};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{ManagedServerStartRequest, ManagedServerStatus};
-use gents_desktop_core::local_runtime::{init_standard_local_runtime, DesktopInitOptions};
+use gents::client_runtime::{init_standard_local_runtime, DesktopInitOptions};
 use gents_desktop_core::preference::StoredManagedServer;
 use gents_protocol::operations::service::ServiceLifecycleAction;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
 use gents_service::args::ServiceAction;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use tauri::{AppHandle, Runtime};
 
 pub(super) async fn start_managed_server<'a, R>(
@@ -75,7 +76,7 @@ where
     .await?;
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
-    let reader = user_status_signer(state, &node_home).await;
+    let reader = user_status_signer(state).await;
     let (ready, initial_enabled, _lifecycle) =
         match matching_external_server(&node_home, reader.as_ref()).await? {
             Some(external) => (Some(external), false, lifecycle),
@@ -144,7 +145,7 @@ where
             ));
         }
         if let (Some(core), Some(target)) = (current_core(state), pairing_target(&external)) {
-            core.refresh_local_standard_peer(&node_home, &target.node_name)
+            core.refresh_local_runtime(&node_home, &target.node_name)
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
         }
@@ -171,11 +172,8 @@ where
             .await?;
         }
         if gents_service::server_host::initialized_home(&node_home) {
-            ensure_default_port_identity(
-                &node_home,
-                user_status_signer(state, &node_home).await.as_ref(),
-            )
-            .await?;
+            ensure_default_port_identity(&node_home, user_status_signer(state).await.as_ref())
+                .await?;
         }
         gents_server::server_host::ensure_standard_home(
             tauri::async_runtime::handle().inner(),
@@ -202,11 +200,7 @@ where
             },
         )
         .await?;
-        ensure_default_port_identity(
-            &node_home,
-            user_status_signer(state, &node_home).await.as_ref(),
-        )
-        .await?;
+        ensure_default_port_identity(&node_home, user_status_signer(state).await.as_ref()).await?;
         run_native(launchable_native_service(app, state)?, |service| {
             service_action(&service, install_action())
         })
@@ -280,11 +274,8 @@ where
     }
     let stored = load_bound_preference(state).await?;
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
-    let mut status = if let Some(external) = matching_external_server(
-        &node_home,
-        user_status_signer(state, &node_home).await.as_ref(),
-    )
-    .await?
+    let mut status = if let Some(external) =
+        matching_external_server(&node_home, user_status_signer(state).await.as_ref()).await?
     {
         project_external_status(external, &native)
     } else {

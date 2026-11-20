@@ -808,6 +808,14 @@ async fn execute_running_invocation(
             "existing workspace differs from the frozen callback provenance"
         );
     }
+    let provenance = gents_session::workspace::WorkspaceProvenance {
+        owner_node_did: invocation.owner_node_did.clone(),
+        writer_principal: writer_agent.to_owned(),
+        integrator_principal: integrator_agent.to_owned(),
+        caused_by_invocation_id: invocation.invocation_id.clone(),
+        caused_by_correlation: correlation_from_source(source),
+        route: gents_protocol::trigger_delivery::HandoffRoute::from_fields(&invocation.input),
+    };
     if existing_workspace.is_none() {
         anyhow::ensure!(
             matches!(
@@ -819,23 +827,13 @@ async fn execute_running_invocation(
         let action_for_reservation = action.clone();
         let repository_for_reservation = repository.clone();
         let ceiling_for_reservation = ceiling.map(Path::to_path_buf);
-        let owner = invocation.owner_node_did.clone();
-        let writer = writer_agent.to_owned();
-        let integrator = integrator_agent.to_owned();
-        let invocation_id = invocation.invocation_id.clone();
-        let correlation = correlation_from_source(source);
-        let route = gents_protocol::trigger_delivery::HandoffRoute::from_fields(&invocation.input);
+        let provenance = provenance.clone();
         let reservation = tokio::task::spawn_blocking(move || {
             gents_session::workspace::prepare_workspace_reservation(
                 &action_for_reservation,
                 &repository_for_reservation,
                 ceiling_for_reservation.as_deref(),
-                &owner,
-                &writer,
-                &integrator,
-                &invocation_id,
-                &correlation,
-                &route,
+                &provenance,
             )
         })
         .await
@@ -865,15 +863,10 @@ async fn execute_running_invocation(
     let correlation = correlation_from_source(source);
     let execute_result = {
         let mut ctx = HostExecutorContext {
-            owner_node_did: invocation.owner_node_did.clone(),
+            provenance,
             repository,
             ceiling,
             capabilities,
-            writer_principal: writer_agent.to_owned(),
-            integrator_principal: integrator_agent.to_owned(),
-            caused_by_invocation_id: invocation.invocation_id.clone(),
-            caused_by_correlation: correlation.clone(),
-            route: gents_protocol::trigger_delivery::HandoffRoute::from_fields(&invocation.input),
             documents: &mut docs,
         };
         execute_create_workspace_plan(&plan, &mut journal, &mut ctx)

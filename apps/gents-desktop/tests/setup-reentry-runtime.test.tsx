@@ -386,7 +386,7 @@ describe("setup re-entry at the provider step", () => {
 
   it("skips the runtime gate for a remote node", async () => {
     const { api, app } = harness();
-    const remote = { ...deployment, nodeDid: "did:key:zRemote", source: "enrolled" };
+    const remote = { ...deployment, nodeDid: "did:key:zRemote", local: false };
     publish(app, [remote]);
     renderIn(
       app,

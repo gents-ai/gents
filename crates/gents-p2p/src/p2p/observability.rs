@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct P2pSyncStatusSnapshot {
     pub push_backlog: P2pPushBacklogSnapshot,
@@ -29,6 +29,9 @@ pub struct P2pSyncStatusSnapshot {
     pub car_present_cids: u64,
     pub car_served_cids: u64,
     pub car_filtered_cids: u64,
+    pub car_served_bytes: u64,
+    pub car_received_already_held: u64,
+    pub car_served_per_requested: f64,
     pub provider_rotations: u64,
     pub provider_demotions_total: u64,
     pub provider_cooldown_skips_total: u64,
@@ -220,8 +223,7 @@ pub async fn observe_embedded_sync_status(
     node: &defra_node::Node,
 ) -> anyhow::Result<P2pSyncStatusSnapshot> {
     use anyhow::Context;
-    let p2p =
-        gents_store::identity::node_p2p(node).context("embedded node has no P2P transport")?;
+    let p2p = crate::node_access::operations(node).context("embedded node has no P2P transport")?;
     let upstream = tokio::time::timeout(std::time::Duration::from_secs(5), p2p.sync_status())
         .await
         .context("native P2P sync observation timed out")??;
@@ -406,6 +408,9 @@ mod tests {
             car_present_cids: 25,
             car_served_cids: 26,
             car_filtered_cids: 27,
+            car_served_bytes: 4096,
+            car_received_already_held: 2,
+            car_served_per_requested: 26.0 / 24.0,
             provider_rotations: 28,
             provider_demotions_total: 74,
             provider_cooldown_skips_total: 75,
@@ -613,6 +618,9 @@ mod tests {
                 car_present_cids: 25,
                 car_served_cids: 26,
                 car_filtered_cids: 27,
+                car_served_bytes: 4096,
+                car_received_already_held: 2,
+                car_served_per_requested: 26.0 / 24.0,
                 provider_rotations: 28,
                 provider_demotions_total: 74,
                 provider_cooldown_skips_total: 75,

@@ -1,0 +1,4 @@
+---- MODULE MCNativeWorkerRecordObservationFixedWindow ----
+EXTENDS NativeWorkerRecordObservation
+
+====

@@ -195,7 +195,7 @@ where
     H: Default + rig::http_client::HttpClientExt + std::fmt::Debug + Clone + Send + Sync + 'static,
 {
     use rig::{client::CompletionClient, completion::CompletionModel};
-    let client = crate::clients::inference_http::build_openai_chat_completions_client(
+    let client = crate::llm::rig_compat::providers::build_openai_chat_completions_client(
         "test",
         "https://provider.invalid/v1",
         http,
@@ -222,7 +222,12 @@ async fn provider_stream_guard_prevents_rig_synthesizing_success_at_raw_http_eof
         crate::rendered_request::RenderedRequestCapturingHttpClient::new(FakeProviderHttp {
             terminal: false,
         });
-    let error = first_rig_terminal(guarded).await.unwrap_err();
+    let error = first_rig_terminal(crate::llm::rig_compat::http::Lifted::new(
+        guarded,
+        Default::default(),
+    ))
+    .await
+    .unwrap_err();
     assert!(
         error.contains("without an explicit protocol terminal event"),
         "{error}"
@@ -231,5 +236,12 @@ async fn provider_stream_guard_prevents_rig_synthesizing_success_at_raw_http_eof
         crate::rendered_request::RenderedRequestCapturingHttpClient::new(FakeProviderHttp {
             terminal: true,
         });
-    assert!(first_rig_terminal(guarded).await.is_ok());
+    assert!(
+        first_rig_terminal(crate::llm::rig_compat::http::Lifted::new(
+            guarded,
+            Default::default()
+        ))
+        .await
+        .is_ok()
+    );
 }

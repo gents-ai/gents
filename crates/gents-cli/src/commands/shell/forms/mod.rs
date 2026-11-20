@@ -9,7 +9,7 @@ mod trigger;
 use std::fmt::Display;
 use std::path::Path;
 
-use gents_desktop_core::client::{
+use gents::client_operations::{
     apply_config_components_on, upsert_event_source_on, upsert_schedule_on, upsert_skill_on,
     upsert_tool_service_registry_on, upsert_trigger_on,
 };

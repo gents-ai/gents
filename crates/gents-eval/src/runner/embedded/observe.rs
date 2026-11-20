@@ -650,6 +650,7 @@ mod tests {
         use gents_store::identity::NodeIdentity;
         use gents_toolcalls::call::lifecycle::admission_fixture::{
             pending_client_fixture_request, publish_accepted_on_claimed_request,
+            AcceptedFixtureCall,
         };
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
         let db = crate::support::test_db_from_home(home);
@@ -709,12 +710,14 @@ mod tests {
             db.node.clone(),
             &mut request,
             &did,
-            0,
-            "fs_read",
-            "call-1",
-            serde_json :: json ! ({ "path" : "x" }),
-            AwaitMode::Foreground,
-            true,
+            AcceptedFixtureCall {
+                turn: 0,
+                tool_name: "fs_read",
+                tool_call_id: "call-1",
+                arguments: serde_json :: json ! ({ "path" : "x" }),
+                await_mode: AwaitMode::Foreground,
+                start_running: true,
+            },
         )
         .await
         .unwrap();

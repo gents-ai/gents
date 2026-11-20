@@ -65,4 +65,3 @@ export * from "./capturedContext.js";
 
 export { parseMailboxQuestion } from "./mailboxQuestion.js";
 
-export * from "./enrollmentActivation.js";

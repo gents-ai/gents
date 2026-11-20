@@ -72,7 +72,7 @@ export async function startLiveDesktop(
   try {
     const initialSnapshot = await runner.fetchSnapshot();
     const deployment = expectFirstDeployment(initialSnapshot);
-    const driver = renderTauriAppDriverWithBridge(runner, deployment.peerId);
+    const driver = renderTauriAppDriverWithBridge(runner, deployment.nodeDid);
     return { runner, driver, deployment };
   } catch (error) {
     await runner.dispose();

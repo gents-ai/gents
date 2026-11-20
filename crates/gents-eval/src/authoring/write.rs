@@ -660,12 +660,14 @@ async fn admit_caller(home: &mut EmbeddedHome, host: &dyn WriteHost) -> Result<C
     let caller = host.caller_identity().await?;
     let capability = caller.client_signing_capability()?;
     home.set_evaluator(caller.clone(), capability);
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(
-            &ConfigAccess::local_as(home.node.clone(), home.did().parse()?),
-            &caller.did().parse()?,
-        )
-        .await?;
+    gents_store::identity::GrantSet::for_recipient(
+        gents_store::identity::Recipient::AuthoringOperator,
+    )
+    .grant_direct(
+        &ConfigAccess::local_as(home.node.clone(), home.did().parse()?),
+        &caller.did().parse()?,
+    )
+    .await?;
     home.client_access(caller.did())
 }
 

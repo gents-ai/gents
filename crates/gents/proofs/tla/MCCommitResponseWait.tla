@@ -1,0 +1,4 @@
+---- MODULE MCCommitResponseWait ----
+EXTENDS CommitResponseWait
+
+====

@@ -2,6 +2,7 @@ import Lean
 import Proofs.Store.Identity.Household
 import Proofs.Session.Request.CrossActorAuthorization
 import Proofs.Session.Request.ClientSignedEditHandoff
+import Proofs.Store.Identity.UserDelegation
 
 namespace Identity.SessionInputEdit
 
@@ -98,6 +99,25 @@ def apply (prior : Outcome) (intent : Request.CrossActorAuthorization.Intent)
       | _, _ => .pending
   | .denied => .rejected
   | _ => .pending
+
+/-- What processing a stored command answers once the runtime has asked
+whether the writes it carries for its User may be made
+(`Identity.UserDelegation.admit`), before anything is written. Decision
+(gents#3831): a refusal is answered with a rejected receipt naming the
+refusal, in place of a transaction that fails and is retried; the client signs
+a new command. An admitted command goes on to `apply`, shown as pending. -/
+def answer (admission : Identity.UserDelegation.Admission) : Outcome :=
+  if admission.runs then .pending else .rejected
+
+theorem a_refused_user_write_is_answered_with_a_rejection
+    (admission : Identity.UserDelegation.Admission) (refused : admission.runs = false) :
+    answer admission = .rejected := by
+  simp [answer, refused]
+
+theorem an_admitted_user_write_goes_on_to_apply
+    (admission : Identity.UserDelegation.Admission) (admitted : admission.runs = true) :
+    answer admission = .pending := by
+  simp [answer, admitted]
 
 theorem committed_edit_not_rechecked
     (intent : Request.CrossActorAuthorization.Intent)

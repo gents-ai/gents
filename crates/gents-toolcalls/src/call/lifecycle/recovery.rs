@@ -592,14 +592,16 @@ impl super::ToolCallLifecycle {
                 crate::background::completion::append_background_tool_completion(
                     node,
                     &lifecycle.access()?,
-                    lifecycle.session_id(),
-                    &request_id,
-                    &doc_id,
-                    lifecycle.tool_name(),
-                    status,
-                    "",
-                    Some(reason),
-                    gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    &crate::background::completion::BackgroundToolCompletion {
+                        parent_session_id: lifecycle.session_id(),
+                        parent_request_id: &request_id,
+                        tool_call_doc_id: &doc_id,
+                        tool_name: lifecycle.tool_name(),
+                        status,
+                        result: "",
+                        reason: Some(reason),
+                        wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+                    },
                 )
                 .await
             }
@@ -687,14 +689,16 @@ impl super::ToolCallLifecycle {
                     node,
                     access,
                     request_doc_id,
-                    session_id,
-                    request_id,
-                    &row.doc_id,
-                    &row.tool_name,
-                    status,
-                    &output,
-                    reason,
-                    wake,
+                    &crate::background::completion::BackgroundToolCompletion {
+                        parent_session_id: session_id,
+                        parent_request_id: request_id,
+                        tool_call_doc_id: &row.doc_id,
+                        tool_name: &row.tool_name,
+                        status,
+                        result: &output,
+                        reason,
+                        wake,
+                    },
                 )
                 .await;
             match appended {
@@ -813,7 +817,6 @@ mod tests {
             RecoveryOutcome::TaskDeleted => "taskDeleted",
             RecoveryOutcome::SessionStopped => "sessionStopped",
         };
-        let mut checked = 0;
         for case in
             gents_lean_vocab::families::contracts_restart_classification::cases::<String, String>()
         {
@@ -831,56 +834,32 @@ mod tests {
                         .map(|outcome| outcome.notification_reason().to_owned()),
                 },
             );
-            checked += 1;
         }
-        for case in gents_lean_vocab::lean_recovery_sweep_cases() {
-            let (Some(process), Some(false), Some(task_deleted)) = (
-                case.process_outcome.as_deref(),
-                case.execution_registered,
-                case.owner_task_deleted,
-            ) else {
-                continue;
-            };
-            if case.parent_live != Some(true)
-                && case.parent_interrupted != Some(true)
-                && case.parent_terminal != Some(true)
-            {
-                continue;
-            }
+        for case in gents_lean_vocab::families::recovery_sweeps_orphan_classified::cases() {
+            let input = &case.input;
             let outcome = classify_orphaned_background_tool(
-                &row(case.deadline_expired == Some(true)),
-                verdict(process),
-                task_deleted,
-                case.owner_session_stopped == Some(true),
+                &row(input.deadline_expired),
+                verdict(&input.process_outcome),
+                input.owner_task_deleted,
+                input.owner_session_stopped,
                 Utc::now(),
             );
-            assert_eq!(
-                outcome.map(lean_cause),
-                case.recovery_cause.as_deref(),
-                "{}",
-                case.name
+            case.check(
+                gents_lean_vocab::families::recovery_sweeps_orphan_classified::OrphanCause {
+                    recovery_cause: outcome.map(lean_cause).map(str::to_owned),
+                },
             );
-            checked += 1;
         }
-        let mut registered_session_stop_cases = 0;
-        for case in gents_lean_vocab::lean_recovery_sweep_cases() {
-            if case.execution_registered != Some(true) || case.owner_session_stopped != Some(true) {
-                continue;
-            }
-            let Some(process) = case.process_outcome.as_deref() else {
-                continue;
-            };
-            let outcome = classify_registered_session_stop(verdict(process));
-            assert_eq!(
-                outcome.map(lean_cause),
-                case.recovery_cause.as_deref(),
-                "{}",
-                case.name
+        for case in
+            gents_lean_vocab::families::recovery_sweeps_orphan_registered_session_stop::cases()
+        {
+            let outcome = classify_registered_session_stop(verdict(&case.input.process_outcome));
+            case.check(
+                gents_lean_vocab::families::recovery_sweeps_orphan_registered_session_stop::OrphanCause {
+                    recovery_cause: outcome.map(lean_cause).map(str::to_owned),
+                },
             );
-            registered_session_stop_cases += 1;
         }
-        assert_eq!(registered_session_stop_cases, 2);
-        assert!(checked >= 12, "only {checked} generated native witnesses");
     }
 
     /// The persisted `completionPending:<reason>` suffix is the replay
@@ -1020,14 +999,16 @@ async fn append_recovered_background_tool_completion(
         node,
         access,
         parent_request_doc_id,
-        &row.session_id,
-        parent_request_id,
-        &row.doc_id,
-        &row.tool_name,
-        status,
-        "",
-        Some(reason),
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        &crate::background::completion::BackgroundToolCompletion {
+            parent_session_id: &row.session_id,
+            parent_request_id,
+            tool_call_doc_id: &row.doc_id,
+            tool_name: &row.tool_name,
+            status,
+            result: "",
+            reason: Some(reason),
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+        },
     )
     .await
     {
@@ -1725,6 +1706,9 @@ impl RecoveryOutcome {
     }
 }
 
+#[cfg(all(test, feature = "vera"))]
+mod vera_tests;
+
 #[cfg(test)]
 mod actor_read_tests {
     use super::*;
@@ -1748,7 +1732,8 @@ mod actor_read_tests {
             escape_graphql_string(&doc_id),
             escape_graphql_string(&parent.request().doc_id),
         );
-        let node_view = gents_store::config_client::ConfigAccess::local(node.clone())
+        let node_view = gents_store::test_support::unrelated_document_reader(&node)
+            .await
             .execute(&query)
             .await;
         if let Ok(response) = node_view {

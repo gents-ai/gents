@@ -194,7 +194,7 @@ fn queried_timeline_page_drops_old_orphans_below_the_selected_sequence_window() 
 #[test]
 fn live_delta_requires_a_canonical_source() {
     let store = active_store();
-    let revision = gents_desktop_core::client::StoreProjectionRevision {
+    let revision = gents_observe::client_projection::observe::StoreProjectionRevision {
         store_version: 9,
         provenance_version: 1,
         request_event_version: 1,
@@ -836,8 +836,8 @@ fn timeline_page(
     queried_rows: usize,
     source_exhausted: bool,
     has_newer: bool,
-) -> gents_desktop_core::client::SessionTranscriptQueryPage {
-    gents_desktop_core::client::SessionTranscriptQueryPage {
+) -> gents_observe::client_projection::query::SessionTranscriptQueryPage {
+    gents_observe::client_projection::query::SessionTranscriptQueryPage {
         store: ClientStore::default(),
         canonical_dependencies: Default::default(),
         query_count: 2,

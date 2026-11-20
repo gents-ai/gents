@@ -13,15 +13,6 @@ private def statusToken : RuntimeConnectionObservation.Status → String
   | .refused => "refused"
   | .noEndpoint => "noEndpoint"
 
-private def failureToken : EnrollmentActivationObservation.Failure → String
-  | .authentication => "authentication"
-  | .route => "route"
-
-private def transportToken : Transport → String
-  | .healthy => "healthy"
-  | .degraded => "degraded"
-  | .wedged => "wedged"
-
 def stateToken : State → String
   | .healthy => "healthy"
   | .waiting => "waiting"
@@ -32,16 +23,11 @@ def causeToken : Cause → String
   | .runtimeDisconnected => "runtime_disconnected"
   | .runtimeRefused => "runtime_refused"
   | .runtimeNoEndpoint => "runtime_no_endpoint"
-  | .enrollmentAuthentication => "enrollment_authentication"
-  | .enrollmentRoute => "enrollment_route"
-  | .discoveryDegraded => "discovery_degraded"
-  | .discoveryOffline => "discovery_offline"
 
 def nextActionToken : NextAction → String
   | .wait => "wait"
   | .restoreAccess => "restore_access"
   | .connectRuntime => "connect_runtime"
-  | .enrollAgain => "enroll_again"
 
 private def statusOf : String → Option RuntimeConnectionObservation.Status
   | "connecting" => some .connecting
@@ -51,21 +37,8 @@ private def statusOf : String → Option RuntimeConnectionObservation.Status
   | "noEndpoint" => some .noEndpoint
   | _ => none
 
-private def failureOf : String → EnrollmentActivationObservation.Failure
-  | "authentication" => .authentication
-  | _ => .route
-
-private def transportOf : String → Transport
-  | "healthy" => .healthy
-  | "degraded" => .degraded
-  | _ => .wedged
-
 structure FactsInput where
   runtimes : List (Option String)
-  enrollment : List String
-  transport : String
-  configuredPeers : Nat
-  dialedPeers : Nat
   deriving Lean.ToJson
 
 structure ViewOutput where
@@ -77,16 +50,10 @@ structure ViewOutput where
   deriving Lean.ToJson
 
 private def factsInput (facts : Facts) : FactsInput :=
-  { runtimes := facts.runtimes.map (·.map statusToken)
-    enrollment := facts.enrollment.map failureToken
-    transport := transportToken facts.discovery.transport
-    configuredPeers := facts.discovery.configuredPeers
-    dialedPeers := facts.discovery.dialedPeers }
+  { runtimes := facts.runtimes.map (·.map statusToken) }
 
 private def factsOf (i : FactsInput) : Facts :=
-  { runtimes := i.runtimes.map (·.bind statusOf)
-    enrollment := i.enrollment.map failureOf
-    discovery := ⟨transportOf i.transport, i.configuredPeers, i.dialedPeers⟩ }
+  { runtimes := i.runtimes.map (·.bind statusOf) }
 
 @[conformance_family]
 def projection : Family FactsInput ViewOutput where

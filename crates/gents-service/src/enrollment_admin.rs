@@ -155,8 +155,9 @@ pub async fn load_enrollment_query(
 }
 
 /// The signed pending request and the two accesses one approval runs with:
-/// the home's User, which ACP checks for the Node `administrator` grant, and
-/// the runtime principal, which records the receipt and node permissions.
+/// the home's User, which ACP checks for the Node `administrator` grant and
+/// which, as the NAC owner, issues the node permissions, and the runtime
+/// principal, which records the receipt.
 struct PendingApproval {
     runtime: std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
     approver: gents_store::config_client::ConfigAccess,
@@ -212,6 +213,7 @@ impl PendingApproval {
         gents_store::identity::EnrollmentApproval {
             approver: &self.approver,
             runtime: &self.runtime_access,
+            nac_owner: &self.approver,
             node: self.runtime.as_ref(),
             request: &self.request,
             expected,

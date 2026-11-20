@@ -17,9 +17,11 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use tokio_util::sync::CancellationToken;
 
+use crate::support::live_inference::rows_when;
 use crate::support::snapshots::SnapshotReader;
 use crate::support::{self, TestDb};
 use gents_p2p::test_support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
+use gents_store::test_support::STALL_CEILING;
 
 struct Stop(CancellationToken);
 impl Drop for Stop {
@@ -28,15 +30,19 @@ impl Drop for Stop {
     }
 }
 
+fn enrollment_route_query(peer: &str) -> String {
+    format!(
+        r#"{{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{}" }}, source: {{ _eq: "enrollment" }} }}) {{
+            template enrollment_request_digest enrollment_authorization_sequence
+            enrollment_authorization_expires_at
+        }} }}"#,
+        escape_graphql_string(peer)
+    )
+}
+
 async fn enrollment_route(db: &TestDb, peer: &str) -> Vec<serde_json::Value> {
     ConfigAccess::local(db.node.clone())
-        .execute(&format!(
-            r#"{{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{}" }}, source: {{ _eq: "enrollment" }} }}) {{
-                template enrollment_request_digest enrollment_authorization_sequence
-                enrollment_authorization_expires_at
-            }} }}"#,
-            escape_graphql_string(peer)
-        ))
+        .execute(&enrollment_route_query(peer))
         .await
         .unwrap()["data"]["PeerPairingDesired"]
         .as_array()
@@ -45,23 +51,19 @@ async fn enrollment_route(db: &TestDb, peer: &str) -> Vec<serde_json::Value> {
 }
 
 async fn wait_for_route_sequence(db: &TestDb, peer: &str, sequence: i64) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut changes = ConfigAccess::local(db.node.clone())
-        .subscribe_changes("PeerPairingDesired")
-        .await;
-    loop {
-        let rows = enrollment_route(db, peer).await;
-        if let [row] = rows.as_slice() {
-            if row["enrollment_authorization_sequence"].as_i64() == Some(sequence) {
-                return row.clone();
-            }
-        }
-        assert!(
-            Instant::now() < deadline,
-            "enrollment route never reached sequence {sequence}: {rows:?}"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
-    }
+    let rows = rows_when(
+        &ConfigAccess::local(db.node.clone()),
+        "PeerPairingDesired",
+        &enrollment_route_query(peer),
+        |data| {
+            matches!(
+                data["PeerPairingDesired"].as_array().map(Vec::as_slice),
+                Some([row]) if row["enrollment_authorization_sequence"].as_i64() == Some(sequence)
+            )
+        },
+    )
+    .await;
+    rows["PeerPairingDesired"][0].clone()
 }
 
 #[tokio::test]
@@ -96,7 +98,6 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         .await
         .unwrap();
     let store = GraphqlEnrollmentStore::new(server.node.clone(), server.node_identity.clone());
-    let deadline = Instant::now() + Duration::from_secs(30);
     let mut changes = ConfigAccess::local(server.node.clone())
         .subscribe_changes("NetworkEnrollmentRequest")
         .await;
@@ -111,11 +112,12 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "initial enrollment request did not arrive"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("initial enrollment request did not arrive; NetworkEnrollmentRequest stalled for {STALL_CEILING:?}");
+        }
     }
     store
         .decide_request_with_lease(
@@ -189,15 +191,16 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         server.node.clone(),
         server.node_identity.clone(),
         server_owner,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let pairing_task = tokio::spawn(run_pairing_reconciler(
         server.node.clone(),
         server.node_identity.clone(),
         server_authority,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
-    let deadline = Instant::now() + Duration::from_secs(30);
     let mut changes = gents_store::subscription_source::subscribe_collections(
         &member.node,
         [
@@ -223,17 +226,19 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         ) {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "member did not observe the initial signed route"
-        );
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("member did not observe the initial signed route; its enrollment documents stalled for {STALL_CEILING:?}");
+        }
     }
     let (member_owner, _member_authority) = enrollment_authority_channel();
     let member_task = tokio::spawn(run_enrollment_reconciler(
         member.node.clone(),
         member.node_identity.clone(),
         member_owner,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
     let deadline = Instant::now() + Duration::from_secs(110);
@@ -304,6 +309,7 @@ async fn re_enrolling_an_active_member_renews_its_lease_in_place() {
         server.node.clone(),
         server.node_identity.clone(),
         owner,
+        gents_p2p::p2p_reconcile::intervals::P2pIntervals::default(),
         cancel.clone(),
     ));
 
