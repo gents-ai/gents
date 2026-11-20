@@ -26,13 +26,14 @@ use crate::support::fixtures::{agent_target, configure_agent_tools};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
     live_target, terminal_assistant_answer, wait_for_assistant_answer, wait_for_request_terminal,
-    InferenceTarget, LiveAgentSpec, LiveUser, STALL_CEILING,
+    InferenceTarget, LiveAgentSpec, LiveUser,
 };
 use crate::support::{
     first_optional_row,
     snapshots::{fetch_runtime_snapshot, SnapshotChanges, SnapshotReader},
     test_db, TestDb,
 };
+use gents_store::test_support::STALL_CEILING;
 
 const RESEARCHER_AGENT_NAME: &str = "live-researcher";
 const BACKGROUND_WORKER_AGENT_NAME: &str = "live-background-worker";

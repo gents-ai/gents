@@ -23,11 +23,11 @@ use crate::support::builder_runtime::{
 };
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
-use crate::support::live_inference::STALL_CEILING;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const MODEL: &str = "steering-model";
 const BACKEND: &str = "steering-backend";

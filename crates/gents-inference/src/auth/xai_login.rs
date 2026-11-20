@@ -74,9 +74,6 @@ struct TokenSuccess {
 struct TokenErrorBody {
     #[serde(default)]
     error: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    error_description: Option<String>,
 }
 
 pub async fn request_device_code(http: &reqwest::Client) -> Result<DeviceCodeChallenge> {
