@@ -45,9 +45,17 @@ pub(super) struct HeldAudienceCell(Arc<Held>);
 struct Held {
     audience: RwLock<Option<DelegationAudience>>,
     clock: RwLock<Option<HomeClock>>,
+    /// Held from a status read's nonce until what it read is kept, so a
+    /// read that started earlier never replaces one that started later
+    /// (TLA+ `HeldAudienceReads`).
+    reads: tokio::sync::Mutex<()>,
     resolver: Option<(String, Arc<dyn ResolveAudience>)>,
     device: DeviceClock,
 }
+
+/// How long a status read may hold the cell's status lock; an unanswered
+/// read keeps nothing.
+const STATUS_READ_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl HeldAudienceCell {
     pub(super) fn new(audience: Option<DelegationAudience>) -> Self {
@@ -68,6 +76,10 @@ impl HeldAudienceCell {
                 .unwrap_or_else(|poison| poison.into_inner()),
             self.0.device.now(),
         )
+    }
+
+    pub(super) async fn reading(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.0.reads.lock().await
     }
 
     fn set_clock(&self, clock: Option<HomeClock>) {
@@ -126,6 +138,7 @@ impl HeldAudienceCell {
         Self(Arc::new(Held {
             audience: RwLock::new(self.get()),
             clock: RwLock::new(clock),
+            reads: tokio::sync::Mutex::new(()),
             resolver: Some((node, resolver)),
             device: self.0.device.clone(),
         }))
@@ -137,6 +150,7 @@ impl HeldAudienceCell {
         Self(Arc::new(Held {
             audience: RwLock::new(self.get()),
             clock: RwLock::new(clock),
+            reads: tokio::sync::Mutex::new(()),
             resolver: self.0.resolver.clone(),
             device: DeviceClock(Some(device)),
         }))
@@ -209,10 +223,40 @@ impl GraphqlEndpoint {
             }),
             None => {
                 let endpoint = self.clone();
-                tokio::spawn(async move { endpoint.reread_runtime_home().await })
+                tokio::spawn(async move { endpoint.fetch_runtime_home().await })
             }
         };
-        Box::pin(async move { read.await.ok().flatten() })
+        Box::pin(async move {
+            tokio::time::timeout(STATUS_READ_LIMIT, read)
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        })
+    }
+
+    /// Read the home's status and keep what it reports when it is the
+    /// home's, holding the cell's status lock from the read's nonce until it
+    /// is kept (TLA+ `HeldAudienceReads`); `None` when no status could be
+    /// read.
+    async fn reread_status(&self) -> Option<Result<HeldAudienceChange, HomeStatusRefusal>> {
+        let _reading = self.delegation_audience.reading().await;
+        self.read_and_keep().await
+    }
+
+    /// [`Self::reread_status`] for a caller holding the status lock.
+    async fn read_and_keep(&self) -> Option<Result<HeldAudienceChange, HomeStatusRefusal>> {
+        Some(match self.read_status().await? {
+            Ok(home) => Ok(self.keep_status(&home).await),
+            Err(refusal) => Err(refusal),
+        })
+    }
+
+    async fn keep_status(&self, home: &AuthenticatedHome) -> HeldAudienceChange {
+        if self.delegation_audience.0.resolver.is_none() {
+            self.keep_runtime_authentication(home).await;
+        }
+        self.delegation_audience.observe(home)
     }
 
     fn presented_credential(&self) -> PresentedCredential {
@@ -244,11 +288,7 @@ impl GraphqlEndpoint {
         if refusal == CredentialRefusal::Other {
             return None;
         }
-        let home = self.read_status().await?;
-        Some((
-            refusal,
-            home.map(|home| self.delegation_audience.observe(&home)),
-        ))
+        Some((refusal, self.reread_status().await?))
     }
 
     /// The audience this endpoint mints request-bound delegations for, with
@@ -264,20 +304,19 @@ impl GraphqlEndpoint {
         if !self.mints_delegations() {
             return Ok(None);
         }
-        let held = self.delegation_audience.get();
-        let (clock, _) = self.delegation_audience.minting_clock();
-        if gents_protocol::delegation_audience::reread_before_request_bound(
-            held.as_ref(),
-            clock.is_some(),
-        ) {
-            match self.read_status().await {
-                Some(Ok(home)) => {
-                    self.delegation_audience.observe(&home);
-                }
-                Some(Err(refusal)) => {
+        let reread = || {
+            let (clock, _) = self.delegation_audience.minting_clock();
+            gents_protocol::delegation_audience::reread_before_request_bound(
+                self.delegation_audience.get().as_ref(),
+                clock.is_some(),
+            )
+        };
+        if reread() {
+            let _reading = self.delegation_audience.reading().await;
+            if reread() {
+                if let Some(Err(refusal)) = self.read_and_keep().await {
                     return Err(ConfigClientError::HomeStatusUnauthenticated(refusal));
                 }
-                None => {}
             }
         }
         let (clock, now) = self.delegation_audience.minting_clock();
@@ -295,9 +334,12 @@ impl GraphqlEndpoint {
     /// read first when this endpoint mints delegations and holds no clock of
     /// its home.
     pub(super) async fn home_time(&self) -> u64 {
-        if self.mints_delegations() && self.delegation_audience.minting_clock().0.is_none() {
-            if let Some(Ok(home)) = self.read_status().await {
-                self.delegation_audience.observe(&home);
+        let unclocked =
+            || self.mints_delegations() && self.delegation_audience.minting_clock().0.is_none();
+        if unclocked() {
+            let _reading = self.delegation_audience.reading().await;
+            if unclocked() {
+                self.read_and_keep().await;
             }
         }
         let (clock, now) = self.delegation_audience.minting_clock();
@@ -1061,3 +1103,6 @@ mod tests {
         assert!(expiries[1].unwrap() >= provider_time + 120, "{expiries:?}");
     }
 }
+
+#[cfg(test)]
+mod ordering_tests;

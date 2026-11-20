@@ -559,6 +559,19 @@ See `../README.md` for how this fits the broader formal-verification model.
   the seeded fire before disabling and judges once a witness Trigger, due
   after the disabled one, fires (`Settled`). RED: `NoSeedWait`, `NoWitness`
   (observer), `NoRecheck`, `AckBeforeWatch` (product).
+- `HeldAudienceReads` — concurrent reads of a home's signed status by the
+  clones of one endpoint, which share one held audience, clock and client
+  authentication (#3963). A read starts after a credential refusal, before a
+  request-bound delegation or a dated write, or to discover the runtime's
+  client authentication; the home restarts between reads and a reader may be
+  dropped mid-read. Green holds the cell's status lock from the read's nonce
+  until what it read is kept and mints from the cell: `AudienceNeverOlder`,
+  `ClockNeverOlder`, `MintsNewest`, `ReadsDoNotOverlap` and
+  `EveryReaderMints` hold. RED: `Unordered` (the code before #3963: an
+  earlier read replaces a later deployment), `Clock` (the same with no
+  restart, regressing the clock and authentication), `Overlap` (two
+  recoveries read and keep at once) and `OwnRead` (ordered reads, but a
+  request mints from its own read's answer after a newer one was kept).
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking

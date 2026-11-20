@@ -1,0 +1,3 @@
+---- MODULE MCHeldAudienceReadsOwnRead ----
+EXTENDS HeldAudienceReads
+====
