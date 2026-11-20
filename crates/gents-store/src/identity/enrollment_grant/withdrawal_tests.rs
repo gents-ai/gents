@@ -105,6 +105,33 @@ async fn home(provider: Provider) -> anyhow::Result<Home> {
             }
         }),
     );
+    let served: Arc<std::sync::OnceLock<std::sync::Weak<defra_node::Node>>> = Arc::default();
+    let status = status.route(
+        gents_protocol::owed_settlement::OWED_AWAIT_PATH,
+        axum::routing::post({
+            let served = served.clone();
+            move |identity: defra_http::ExtractIdentity,
+                  axum::Json(request): axum::Json<
+                gents_protocol::owed_settlement::OwedAwaitRequest,
+            >| {
+                let served = served.clone();
+                async move {
+                    let node = served
+                        .get()
+                        .and_then(std::sync::Weak::upgrade)
+                        .expect("the fixture's node serves the wait");
+                    let wait = crate::config_client::owed::serve_await(
+                        &node,
+                        &identity.context(),
+                        &request.transaction,
+                    )
+                    .await
+                    .expect("the wait answers");
+                    axum::Json(gents_protocol::owed_settlement::OwedAwaitReport { wait })
+                }
+            }
+        }),
+    );
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let grants = crate::config_client::OwnerStagedRoute::new();
@@ -122,6 +149,9 @@ async fn home(provider: Provider) -> anyhow::Result<Home> {
         builder = builder.with_embedded_vera(vera(directory.path(), &runtime)?);
     }
     let node = Arc::new(builder.build().await?);
+    served
+        .set(Arc::downgrade(&node))
+        .expect("the fixture's node is set once");
     grants.serve(&node, runtime.clone());
     let as_owner = defra_core::RequestContext::default().with_identity(Some(owner.did().into()));
     for permission in crate::identity::node_runtime_permissions() {
@@ -827,4 +857,105 @@ async fn a_removal_overtaking_a_deliberate_grant_on_a_local_home_is_restored() -
 async fn a_removal_overtaking_a_deliberate_grant_on_a_vera_home_is_restored() -> anyhow::Result<()>
 {
     a_removal_overtaking_a_takeover_is_restored(Provider::Vera, Takeover::DeliberateGrant).await
+}
+
+async fn a_dependent_read_runs_only_once_its_grant_settled(
+    provider: Provider,
+) -> anyhow::Result<()> {
+    let home = home(provider).await?;
+    let (_member_key, member) = enrolled_client().await?;
+    let node_doc = home.node_doc.clone();
+    let input = json!({
+        "request_id": "shared",
+        "member_did": member.as_str(),
+        "granted_at": "2026-11-20T00:00:00Z",
+        "node_doc_id": node_doc,
+        "parent_linked": true,
+    });
+    let ticket = home
+        .runtime()?
+        .transact_signed_conflict_rebuild("test.own_grant.share", |txn| {
+            let (input, node_doc) = (&input, &node_doc);
+            Box::pin(async move {
+                let created = txn
+                    .execute_client_signed_create(
+                        "mutation($input: NetworkEnrollmentGrantMutationInputArg!) { create_NetworkEnrollmentGrant(input: $input) { _docID } }",
+                        &json!({ "input": input }),
+                        gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT,
+                    )
+                    .await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &created,
+                    RECEIPT_COLLECTION,
+                )
+                .map_err(EnrollmentGrantError::RecordUnconfirmed)?;
+                txn.add_resource_relationship(RECEIPT_COLLECTION, &doc, "parent", "nodes", node_doc)
+                    .await?;
+                Ok::<_, EnrollmentGrantError>(txn.owed_access_ticket()?)
+            })
+        })
+        .await?;
+    let wait = ticket
+        .wait(crate::config_client::owed::OWN_GRANT_DEADLINE)
+        .await?;
+    assert_eq!(
+        crate::config_client::owed::dependent_step(wait),
+        crate::config_client::owed::DependentStep::Proceed,
+        "{provider:?}: {wait:?}"
+    );
+    ticket.require_settled().await?;
+    let seen = load_enrollment_grant_receipts(&home.owner().await?, member.as_str()).await?;
+    assert!(
+        seen.iter().any(|receipt| receipt.request_id == "shared"),
+        "{provider:?}: {seen:?}"
+    );
+    home.shutdown().await
+}
+
+#[tokio::test]
+async fn a_dependent_read_on_a_local_home_runs_once_its_grant_settled() -> anyhow::Result<()> {
+    a_dependent_read_runs_only_once_its_grant_settled(Provider::Local).await
+}
+
+#[tokio::test]
+async fn a_dependent_read_on_a_vera_home_runs_once_its_grant_settled() -> anyhow::Result<()> {
+    a_dependent_read_runs_only_once_its_grant_settled(Provider::Vera).await
+}
+
+#[tokio::test]
+async fn a_client_waits_over_http_for_its_own_access_changes_on_a_vera_home() -> anyhow::Result<()>
+{
+    let home = home(Provider::Vera).await?;
+    let owner = ConfigAccess::Graphql(home.owner_endpoint.clone());
+    home.owner_endpoint.runtime_authorization().await?;
+    let input = json!({"node_did": "did:key:z6MkOwedAwaitFixture", "enabled": true});
+    let ticket = owner
+        .transact_write("test.own_grant.http", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                    &json!({"input": input}),
+                    gents_protocol::schemas::NODE,
+                )
+                .await?;
+                txn.owed_access_ticket()
+            })
+        })
+        .await?;
+    assert!(
+        matches!(
+            ticket,
+            crate::config_client::owed::OwedAccessTicket::Http { .. }
+        ),
+        "a Vera home's client transaction waits through the runtime"
+    );
+    assert_eq!(
+        ticket
+            .wait(crate::config_client::owed::OWN_GRANT_DEADLINE)
+            .await?,
+        crate::config_client::owed::GrantWait::Settled
+    );
+    ticket.require_settled().await?;
+    home.shutdown().await
 }

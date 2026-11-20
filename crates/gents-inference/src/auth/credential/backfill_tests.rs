@@ -343,16 +343,16 @@ async fn a_refresh_adopts_a_replaced_document() {
     removed.access_token_expires_at = Utc::now() - Duration::seconds(30);
     let body = token_response(json!({ "principal_type": "user", "principal_id": "principal-1" }));
     let (url, handle) = one_shot_token_server(200, body).await;
-    let bearer = DbCredentialBearer::with_cache(
+    let bearer = DbCredentialBearer::new(
         node.clone(),
         did,
         XAI_OAUTH_PROVIDER,
         credential_id,
         true,
-        Some(removed),
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
     )
+    .with_cache_seed(removed)
     .with_token_url(url);
     let refreshed = bearer.current_bearer().await;
     let request = handle.await.expect("server");

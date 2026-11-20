@@ -128,3 +128,56 @@ pub async fn removals(
         }
     }
 }
+
+/// Wait, for the caller, until the access changes its own committed
+/// transaction owes are settled or come to rest
+/// (`Identity.OwedRegistration.dependentStep`).
+pub async fn await_owed(
+    State(state): State<RuntimeHttpState>,
+    identity: ExtractIdentity,
+    Json(request): Json<gents_protocol::owed_settlement::OwedAwaitRequest>,
+) -> Response {
+    if identity.did().is_none() {
+        return failure(StatusCode::UNAUTHORIZED, "Connect this client first.");
+    }
+    if request.node_did != state.node_did {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "The requested node does not serve this endpoint.",
+        );
+    }
+    let Some(runtime) = state.activation_runtime.get() else {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The runtime is still starting.",
+        );
+    };
+    match gents_store::config_client::owed::serve_await(
+        runtime.observation_node(),
+        &identity.context(),
+        &request.transaction,
+    )
+    .await
+    {
+        Ok(wait) => {
+            let mut response =
+                Json(gents_protocol::owed_settlement::OwedAwaitReport { wait }).into_response();
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            );
+            response
+        }
+        Err(gents_store::config_client::ConfigClientError::OwedAwaitTransaction) => failure(
+            StatusCode::BAD_REQUEST,
+            "The transaction to wait for is not one this node opened.",
+        ),
+        Err(error) => {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "owed access wait failed");
+            failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The runtime cannot answer now.",
+            )
+        }
+    }
+}

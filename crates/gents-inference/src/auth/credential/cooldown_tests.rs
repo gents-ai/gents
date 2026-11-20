@@ -210,16 +210,16 @@ async fn a_reused_slot_names_the_new_account() {
         .await
         .unwrap()
         .unwrap();
-    let bearer = DbCredentialBearer::with_cache(
+    let bearer = DbCredentialBearer::new(
         node.clone(),
         did,
         provider,
         credential_id.clone(),
         true,
-        Some(cached),
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
-    );
+    )
+    .with_cache_seed(cached);
     access
         .transact_write("test.remove", |txn| {
             let credential_id = credential_id.clone();
@@ -263,16 +263,16 @@ async fn a_disabled_or_removed_row_names_the_account() {
         .await
         .unwrap()
         .unwrap();
-    let bearer = DbCredentialBearer::with_cache(
+    let bearer = DbCredentialBearer::new(
         node.clone(),
         did,
         provider,
         credential_id.clone(),
         true,
-        Some(cached),
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
-    );
+    )
+    .with_cache_seed(cached);
     set_account_enabled(&user_access, did, &credential_id, false)
         .await
         .unwrap();
