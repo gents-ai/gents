@@ -4,7 +4,7 @@ use gents_protocol::node_readiness::{
 };
 use serde_json::{json, Value};
 
-use crate::http::prometheus::MetricsQueryData;
+use crate::http::prometheus::store::MetricsQueryData;
 use crate::http::router::RuntimeHttpState;
 use crate::http::version::version_response;
 
@@ -188,7 +188,7 @@ mod tests {
 
     use super::*;
     use crate::http::liveness::{ActiveRequest, ActiveToolCall, RuntimeLivenessSnapshot};
-    use crate::http::prometheus::{MetricsBackendRow, MetricsQueryData, MetricsRuntimeRow};
+    use crate::http::prometheus::store::{MetricsBackendRow, MetricsQueryData, MetricsRuntimeRow};
     use gents_protocol::row::{
         AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState, NodeReadinessRow,
         NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
