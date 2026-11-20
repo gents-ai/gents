@@ -148,6 +148,7 @@ PACKAGE_FEATURES = {
 VERA_TESTS = {
     "gents-store": "local::document_acp::",
     "gents-tools": "surface::source_policy::embedded_vera_tests::",
+    "gents-toolcalls": "call::lifecycle::recovery::vera_tests::",
 }
 
 # Packages with no test of their own, each with why. The list only shrinks: a

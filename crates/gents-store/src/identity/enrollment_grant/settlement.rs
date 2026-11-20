@@ -96,7 +96,7 @@ async fn owed_members(
     })
     .render();
     let response = runtime
-        .read(&rendered)
+        .read_for_decision(&rendered)
         .await
         .map_err(EnrollmentGrantError::Read)?;
     let mut members: Vec<String> = decode_receipts(&response)?
@@ -339,7 +339,7 @@ async fn removal_receipts(
         filter = filter.and(Filter::eq(fields::NODE_DOC_ID, doc));
     }
     let rendered = Query::select(Selection::doc_id()).filter(filter).render();
-    let response = runtime.read(&rendered).await?;
+    let response = runtime.read_for_decision(&rendered).await?;
     Ok(
         gents_protocol::graphql::graphql_rows_from_response(&response, super::RECEIPT_COLLECTION)
             .iter()
