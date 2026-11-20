@@ -197,7 +197,7 @@ describe("the search palette", () => {
     expect(options("Actions")).toEqual([
       "New session",
       "Go to sessions",
-      "Go to packs",
+      "Go to mailbox",
       "Show 4 more",
     ]);
     const input = screen.getByRole("combobox", { name: "Search" });
@@ -212,14 +212,14 @@ describe("the search palette", () => {
     expect(options("Actions")).toEqual([
       "New session",
       "Go to sessions",
-      "Go to packs",
       "Go to mailbox",
+      "Go to packs",
       "Go to nodes",
       "Open settings",
       "Switch node…",
     ]);
     /* the palette stays open, on the first row it revealed */
-    expect(screen.getByRole("option", { name: "Go to mailbox" })).toHaveAttribute(
+    expect(screen.getByRole("option", { name: "Go to packs" })).toHaveAttribute(
       "aria-selected",
       "true",
     );

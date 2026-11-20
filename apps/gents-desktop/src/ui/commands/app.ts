@@ -41,18 +41,18 @@ registerCommand({
   run: () => navigate({ name: "automations" }),
 });
 registerCommand({
-  id: "page.packs",
-  title: "Go to packs",
-  group: "Pages",
-  icon: Package,
-  run: () => navigate({ name: "packs" }),
-});
-registerCommand({
   id: "page.mailbox",
   title: "Go to mailbox",
   group: "Pages",
   icon: Inbox,
   run: () => navigate({ name: "mailbox" }),
+});
+registerCommand({
+  id: "page.packs",
+  title: "Go to packs",
+  group: "Pages",
+  icon: Package,
+  run: () => navigate({ name: "packs" }),
 });
 registerCommand({
   id: "page.nodes",
