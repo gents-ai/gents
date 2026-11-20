@@ -125,10 +125,16 @@ fn variable_name(name: &str, raw: &str) -> Result<(), PackOperationError> {
     if !well_formed {
         return Err(PackOperationError::VariableName(raw.to_owned()));
     }
-    if name.ends_with("_MODEL") || name.ends_with("_ENDPOINT") {
+    if is_inference_variable(name) {
         return Err(PackOperationError::VariableInference(name.to_owned()));
     }
     Ok(())
+}
+
+/// Whether `name` names an inference model or endpoint, which an install
+/// takes from its inference slots and never as a supplied variable.
+pub fn is_inference_variable(name: &str) -> bool {
+    name.ends_with("_MODEL") || name.ends_with("_ENDPOINT")
 }
 
 /// The install variables `values` supply, each `NAME=VALUE` or
@@ -204,6 +210,18 @@ pub fn install_value(actor: PackActor, variables: &PackVariables, name: &str) ->
         VariableSource::Shared => shared.cloned(),
         VariableSource::Environment => std::env::var(name).ok(),
         VariableSource::Scoped | VariableSource::Unset => None,
+    }
+}
+
+/// The value a runtime planning a hosted install reads for `name`: what the
+/// installer sent, which holds every value its own environment gave
+/// ([`crate::pack::install_flow::environment_variables`]). Only an inference
+/// name, which is never sent, still reads this process's environment.
+pub fn hosted_install_value(variables: &PackVariables, name: &str) -> Option<String> {
+    if is_inference_variable(name) {
+        install_value(PackActor::User, variables, name)
+    } else {
+        variables.shared.get(name).cloned()
     }
 }
 

@@ -680,34 +680,42 @@ pub fn supplied_variables(variables: &[String], bind_agents: &[String]) -> Resul
 /// configurations read that `supplied` does not already give, as
 /// `NAME=VALUE`. A hosted install sends them with its request, so the runtime
 /// plans the same graph as the client instead of reading its own
-/// environment (gents#3857). Agent bindings, the runtime's node variable and
-/// inference names (which are never supplied as variables) stay out.
+/// environment ([`crate::operations::pack::hosted_install_value`]). Agent
+/// bindings, the runtime's node variable and inference names (which are
+/// never supplied as variables) stay out.
 pub fn environment_variables(
     packs: &[&ResolvedPack],
     supplied: &PackVariables,
     environment: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Vec<String>> {
-    let names = std::cell::RefCell::new(std::collections::BTreeSet::new());
+    let mut names = std::collections::BTreeSet::new();
     for pack in packs {
         let Some(path) = pack.manifest().config.as_deref() else {
             continue;
         };
         let config: serde_json::Value = serde_json::from_slice(pack.asset(path)?)
             .context("parsing pack config for install variables")?;
-        // Every name resolves (to nothing) here: only the names are wanted.
-        let _ = crate::pack::interpolate::inspect_install_variables(&config, &|name| {
-            names.borrow_mut().insert(name.to_owned());
-            Some(String::new())
-        });
+        // Interpolation reads an empty value as unset, which would end the
+        // scan at the first name without a default.
+        let uses =
+            crate::pack::interpolate::inspect_install_variables(&config, &|_| Some("named".into()))
+                .map_err(|missing| {
+                    anyhow::anyhow!(
+                        "pack config references unset environment variables: {}",
+                        missing.join(", ")
+                    )
+                })?;
+        names.extend(
+            uses.into_iter()
+                .flat_map(|entry| entry.variables.into_keys()),
+        );
     }
     Ok(names
-        .into_inner()
         .into_iter()
         .filter(|name| {
             name != "GENTS_PACK_NODE_DID"
                 && !crate::pack::is_agent_binding_variable(name)
-                && !name.ends_with("_MODEL")
-                && !name.ends_with("_ENDPOINT")
+                && !crate::operations::pack::is_inference_variable(name)
                 && !supplied.shared.contains_key(name)
         })
         .filter_map(|name| environment(&name).map(|value| format!("{name}={value}")))
@@ -790,5 +798,44 @@ mod tests {
         assert!(!has_plugin_references(
             &json!({"tools": [{"integrations": {"plugins": []}}]})
         ));
+    }
+
+    /// A hosted install sends the installer's value of every name its
+    /// configurations read, also past a string whose name has no default, and
+    /// leaves out what the install supplies or the runtime decides itself.
+    #[test]
+    fn a_hosted_install_sends_every_name_its_configurations_read() {
+        let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+        let path = dir.join("pack_config.json");
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["agents"][0]["description"] = json!(
+            "${GENTS_PACK_NODE_DID} ${OPENAI_MODEL} ${SUPPLIED} ${GENTS_PACK_BIND_AGENT_FIXTURE_DEPENDEE:-}"
+        );
+        config["contexts"][0]["display_name"] = json!("${FACTORY_DEV:-unset} ${LATER}");
+        config["tools"][0]["display_name"] = json!("${API_TOKEN}");
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+        let pack = ResolvedPack::received(
+            crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
+            crate::pack::PackSource::Installed,
+        )
+        .unwrap();
+        let supplied = supplied_variables(
+            &["SUPPLIED=given".to_owned()],
+            &["fixture-dependee=did:key:agent".to_owned()],
+        )
+        .unwrap();
+        let sent =
+            environment_variables(&[&pack], &supplied, &|name| Some(format!("{name}-value")))
+                .unwrap();
+        assert_eq!(
+            sent,
+            [
+                "API_TOKEN=API_TOKEN-value",
+                "FACTORY_DEV=FACTORY_DEV-value",
+                "LATER=LATER-value",
+            ]
+        );
     }
 }
