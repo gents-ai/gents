@@ -664,6 +664,7 @@ async fn a_client_signed_create_in_the_runtime_process_on_the_node_store_is_unch
     Ok(())
 }
 
+mod client_request;
 mod heartbeats;
 mod in_txn;
 mod latency;
