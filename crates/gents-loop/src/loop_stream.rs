@@ -61,11 +61,11 @@ pub use contract::{
     TaggedMessage, TurnCompactionError, TurnCompactionOutcome, TurnCompactionRequest,
     TurnReductionCommit,
 };
+pub use invalid_tool_progress::DEFAULT_MAX_INVALID_TOOL_CALLS;
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
     OneShotNoVisibleOutput, OneShotProviderFailure,
 };
-pub use invalid_tool_progress::DEFAULT_MAX_INVALID_TOOL_CALLS;
 pub use repeated_tool_failure::{
     DEFAULT_REPEATED_TOOL_FAILURE_LIMIT, REPEATED_TOOL_FAILURE_PREFIX, REPEATED_TOOL_SUCCESS_PREFIX,
 };
