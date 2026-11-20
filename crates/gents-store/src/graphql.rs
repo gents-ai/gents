@@ -43,6 +43,12 @@ pub enum GraphqlResponseError {
     MissingCreatedIdentity { collection: String },
     #[error("decode composite commit rows")]
     DecodeCompositeCommits(#[source] serde_json::Error),
+    #[error("composite commit {cid} names an unreadable signer")]
+    CommitSigner {
+        cid: String,
+        #[source]
+        source: Box<crate::identity::IdentityError>,
+    },
     #[error("{operation} returned no _version array")]
     MissingVersionArray { operation: String },
     #[error(

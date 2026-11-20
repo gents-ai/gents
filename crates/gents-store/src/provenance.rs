@@ -5,12 +5,12 @@ use std::collections::BTreeSet;
 
 use serde::Serialize;
 
-use crate::config_client::{ConfigClientError, ConfigRead};
+use crate::config_client::ConfigRead;
 use crate::graphql::{
     composite_commits_at, composite_commits_query, unique_newest_composite_commit, CompositeCommit,
     GraphqlResponseError,
 };
-use crate::identity::{commit_signer_did, IdentityError};
+use crate::identity::commit_signer_did;
 
 /// The DIDs behind a document's versions. Each version's composite (`_C`)
 /// block is signed and links its field blocks by CID, so its signature covers
@@ -34,56 +34,22 @@ pub struct DocumentSigners {
     pub unsigned: bool,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum DocumentSignersError {
-    #[error("read the version history of document {doc_id}")]
-    Read {
-        doc_id: String,
-        #[source]
-        source: Box<ConfigClientError>,
-    },
-    #[error("decode the version history of document {doc_id}")]
-    Decode {
-        doc_id: String,
-        #[source]
-        source: Box<GraphqlResponseError>,
-    },
-    #[error("name the signer of version {cid} of document {doc_id}")]
-    Signer {
-        doc_id: String,
-        cid: String,
-        #[source]
-        source: Box<IdentityError>,
-    },
-}
-
 /// Read one document's version history as `access` and name its signers.
 pub async fn document_signers(
     access: &dyn ConfigRead,
     doc_id: &str,
-) -> Result<DocumentSigners, DocumentSignersError> {
+) -> Result<DocumentSigners, GraphqlResponseError> {
     let response = access
         .execute_read(&composite_commits_query(doc_id))
-        .await
-        .map_err(|source| DocumentSignersError::Read {
-            doc_id: doc_id.to_owned(),
-            source: Box::new(source),
-        })?;
+        .await?;
     let commits = composite_commits_at(
         response.get("data").and_then(|data| data.get("_commits")),
         "_commits",
-    )
-    .map_err(|source| DocumentSignersError::Decode {
-        doc_id: doc_id.to_owned(),
-        source: Box::new(source),
-    })?;
-    signers_of(doc_id, commits)
+    )?;
+    signers_of(commits)
 }
 
-fn signers_of(
-    doc_id: &str,
-    commits: Vec<CompositeCommit>,
-) -> Result<DocumentSigners, DocumentSignersError> {
+fn signers_of(commits: Vec<CompositeCommit>) -> Result<DocumentSigners, GraphqlResponseError> {
     let signed = commits
         .iter()
         .map(|commit| {
@@ -93,14 +59,13 @@ fn signers_of(
                 .filter(|signature| !signature.identity.is_empty())
                 .map(|signature| commit_signer_did(&signature.identity, &signature.signature_type))
                 .transpose()
-                .map_err(|source| DocumentSignersError::Signer {
-                    doc_id: doc_id.to_owned(),
+                .map_err(|source| GraphqlResponseError::CommitSigner {
                     cid: commit.cid.clone(),
                     source: Box::new(source),
                 })?;
             Ok((commit.cid.as_str(), commit.height, did))
         })
-        .collect::<Result<Vec<_>, DocumentSignersError>>()?;
+        .collect::<Result<Vec<_>, GraphqlResponseError>>()?;
     let signer_of = |cid: &str| {
         signed
             .iter()
@@ -118,12 +83,7 @@ fn signers_of(
     let latest = match unique_newest_composite_commit(commits.clone(), "name the latest signer") {
         Ok(newest) => newest.and_then(|newest| signer_of(&newest.cid)),
         Err(GraphqlResponseError::AmbiguousVersion { .. }) => None,
-        Err(source) => {
-            return Err(DocumentSignersError::Decode {
-                doc_id: doc_id.to_owned(),
-                source: Box::new(source),
-            })
-        }
+        Err(other) => return Err(other),
     };
     let writers = signed
         .iter()

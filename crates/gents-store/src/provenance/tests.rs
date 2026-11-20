@@ -24,7 +24,7 @@ fn commit(cid: &str, height: i64, signature: Option<&CommitSignature>) -> Compos
 fn an_unreadable_or_partial_history_is_never_attributed() {
     let (alice, alice_sig) = ed25519_signer();
     let (bob, bob_sig) = ed25519_signer();
-    let signers = |commits| signers_of("doc", commits).unwrap();
+    let signers = |commits| signers_of(commits).unwrap();
 
     assert_eq!(
         signers(Vec::new()),

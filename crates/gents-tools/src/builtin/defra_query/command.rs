@@ -427,7 +427,8 @@ pub(super) async fn execute_typed_command(
                 .to_owned();
             let signers = gents_store::provenance::document_signers(access, &doc_id)
                 .await
-                .map_err(anyhow::Error::from)?;
+                .map_err(anyhow::Error::from)
+                .with_context(|| format!("name the signers of document {doc_id}"))?;
             row["_signer"] = serde_json::to_value(signers).map_err(anyhow::Error::from)?;
         }
     }
