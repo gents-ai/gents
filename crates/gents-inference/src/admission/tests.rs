@@ -420,17 +420,14 @@ async fn await_call_rows(
     awaited: &str,
     ready: impl Fn(&[Value]) -> bool,
 ) -> Vec<Value> {
-    let mut changes =
-        gents_store::subscription_source::subscribe_collections(node, ["InferenceCall"]).unwrap();
-    loop {
+    gents_store::test_support::read_when_changed(node, "InferenceCall", awaited, async || {
         let rows = call_rows(node, signer).await;
         if ready(&rows) {
-            return rows;
+            return Ok(rows);
         }
-        if changes.recv().await.is_none() {
-            panic!("InferenceCall changes closed while awaiting {awaited}, last rows={rows:?}");
-        }
-    }
+        Err(Value::Array(rows))
+    })
+    .await
 }
 
 async fn wait_for_call_row_count(

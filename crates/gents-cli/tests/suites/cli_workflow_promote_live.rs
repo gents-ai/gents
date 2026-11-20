@@ -1,6 +1,6 @@
 use crate::support::*;
 
-use gents::support::snapshots::SnapshotReader;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

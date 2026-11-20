@@ -21,9 +21,9 @@ use serde_json::{json, Value};
 
 #[cfg(feature = "live-e2e")]
 use crate::support::live_inference::{live_target, InferenceTarget};
-use crate::support::snapshots::SnapshotReader;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
 use crate::support::{interrupt::BootedAgent, test_db, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 
 #[cfg(feature = "live-e2e")]

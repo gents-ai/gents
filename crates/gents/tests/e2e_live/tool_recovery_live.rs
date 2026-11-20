@@ -17,9 +17,10 @@ use crate::support::live_inference::{
     bind_target, boot_live_agent_with_ceiling, live_target, rows_when, wait_for_request_terminal,
 };
 use crate::support::snapshots::{
-    fetch_message_snapshots_for_session_as, fetch_tool_call_snapshots_for_session, SnapshotReader,
+    fetch_message_snapshots_for_session_as, fetch_tool_call_snapshots_for_session,
 };
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const WAIT: Duration = Duration::from_secs(180);
 

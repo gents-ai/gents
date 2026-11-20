@@ -9,9 +9,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
-use crate::support::snapshots::SnapshotReader;
 use crate::support::snapshots::{is_routed_ready_after, wait_for_runtime_snapshot_as};
 use crate::support::test_db;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const TRIGGER_ID: &str = "trigger-e2e-signup";
 const TASK_ID: &str = "task-e2e-signup";

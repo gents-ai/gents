@@ -69,7 +69,7 @@ async fn backend_restart_cluster_recovers() {
     }
 
     for (doc_id, request_id, marker) in &request_doc_ids {
-        let terminal_state = wait_for_request_terminal_state(&actors, doc_id, STALL_CEILING).await;
+        let terminal_state = wait_for_request_terminal_state(&actors, doc_id).await;
         if terminal_state != RequestLifecycleState::Completed {
             let snapshot = fetch_request_snapshot(&actors, doc_id).await;
             let calls = fetch_inference_calls(&actors, request_id).await;
@@ -225,7 +225,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         "observed execution lease must be expired by the fixture"
     );
 
-    let terminal_state = wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await;
+    let terminal_state = wait_for_request_terminal_state(&actors, &doc_id).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Failed,
@@ -320,8 +320,7 @@ async fn deadline_tight_fails_cleanly() {
     )
     .await;
 
-    let terminal_state =
-        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
+    let terminal_state = wait_for_request_terminal_state(&actors, &request_doc_id).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Failed,
@@ -397,8 +396,7 @@ async fn interactive_budget_is_quick() {
     )
     .await;
 
-    let terminal_state =
-        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
+    let terminal_state = wait_for_request_terminal_state(&actors, &request_doc_id).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Completed,
@@ -554,7 +552,7 @@ async fn start_stall_tape(
 async fn assert_stall_recovered(marker: &str, responses: Vec<StreamResponse>) {
     let (backend, _db, actors, agent, doc_id) =
         start_stall_tape(marker, responses, "interactive").await;
-    wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await;
+    wait_for_request_terminal_state(&actors, &doc_id).await;
     let request = fetch_terminal_request(&actors, &doc_id).await;
     let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
     assert_eq!(
@@ -620,7 +618,7 @@ async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await,
+        wait_for_request_terminal_state(&actors, &doc_id).await,
         RequestLifecycleState::Completed
     );
     assert_eq!(backend.observed_requests(marker), 2);
@@ -653,7 +651,7 @@ async fn repeated_provider_silence_parks_the_request_until_the_provider_answers(
     ));
     let (backend, _db, actors, agent, doc_id) =
         start_stall_tape(marker, responses, "interactive").await;
-    wait_for_request_terminal_state(&actors, &doc_id, STALL_CEILING).await;
+    wait_for_request_terminal_state(&actors, &doc_id).await;
     let request = fetch_terminal_request(&actors, &doc_id).await;
     let calls = fetch_inference_calls(&actors, &format!("req-{marker}")).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Completed);
@@ -695,8 +693,7 @@ async fn deterministic_400_tape() {
     .await;
 
     let agent = spawn_runtime(&db, agent).await;
-    let terminal_state =
-        wait_for_request_terminal_state(&actors, &request_doc_id, STALL_CEILING).await;
+    let terminal_state = wait_for_request_terminal_state(&actors, &request_doc_id).await;
 
     let calls = fetch_inference_calls(&actors, request_id).await;
     assert_eq!(

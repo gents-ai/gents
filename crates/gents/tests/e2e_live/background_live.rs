@@ -9,8 +9,8 @@ use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
     bind_target, boot_live_agent_with_ceiling, live_target, rows_when, wait_for_request_terminal,
 };
-use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 const SESSION: &str = "live-background-session";
 

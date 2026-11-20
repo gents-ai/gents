@@ -10,15 +10,14 @@ use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegmen
 use gents_protocol::output::{OutputSegment, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::test_support::STALL_CEILING;
 use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
 
 use crate::support::agent_requests::RequestActors;
 use crate::support::interrupt::BootedAgent;
-use crate::support::snapshots::SnapshotReader;
 use crate::support::TestDb;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 
 #[path = "inference_target.rs"]
 pub mod inference_target;
@@ -190,7 +189,8 @@ fn request_lifecycle(data: &serde_json::Value, request_id: &str) -> Option<Strin
 /// Waits for `request_id` to terminalize, observed as `reader`: ACP shows a
 /// request only to its related actors, so the reader is one of them or the
 /// node's native admin. Fails with the last rows read once the request has
-/// not changed for [`STALL_CEILING`].
+/// not changed for
+/// [`STALL_CEILING`](gents_store::test_support::STALL_CEILING).
 pub async fn wait_for_request_terminal<R>(reader: &R, request_id: &str) -> String
 where
     R: SnapshotReader + ?Sized,
@@ -218,12 +218,8 @@ where
 }
 
 /// Resolves with the first read of `query` that satisfies `predicate`,
-/// re-reading on each change to `collection`, and panics with the last rows
-/// once `collection` has not changed for [`STALL_CEILING`]. The predicate
-/// must change only together with a `collection` change that `reader`
-/// observes: a reader other than the rows' owner sees a child row when its
-/// session link is published, which is a later change to the child's own
-/// collection.
+/// re-reading on each change to `collection`, through
+/// [`read_when_changed`](gents_store::test_support::read_when_changed).
 pub async fn rows_when<R, F>(
     reader: &R,
     collection: &str,
@@ -234,19 +230,15 @@ where
     R: SnapshotReader + ?Sized,
     F: Fn(&serde_json::Value) -> bool,
 {
-    let mut changes = reader.subscribe_changes(collection).await;
-    loop {
+    gents_store::test_support::read_when_changed(reader, collection, "rows_when", async || {
         let rows = reader.read_data(query).await;
         if predicate(&rows) {
-            return rows;
+            Ok(rows)
+        } else {
+            Err(rows)
         }
-        if tokio::time::timeout(STALL_CEILING, changes.recv())
-            .await
-            .is_err()
-        {
-            panic!("{collection} stalled for {STALL_CEILING:?}: {rows}");
-        }
-    }
+    })
+    .await
 }
 
 pub async fn terminal_assistant_answer<R>(reader: &R, request_id: &str) -> String
@@ -632,7 +624,10 @@ impl LiveUser {
 }
 
 impl SnapshotReader for LiveUser {
-    async fn subscribe_changes(&self, collection: &str) -> super::snapshots::SnapshotChanges {
+    async fn subscribe_changes(
+        &self,
+        collection: &str,
+    ) -> gents_store::test_support::snapshot_reader::SnapshotChanges {
         self.access.subscribe_changes(collection).await
     }
     async fn read_data(&self, query: &str) -> serde_json::Value {
