@@ -619,6 +619,7 @@ mod tests {
                     );
                     clock.advance(400);
                     let allowed = gents_tools::plugin::approval::ask(
+                        None,
                         &home,
                         &request,
                         gents_tools::plugin::approval::WAIT,

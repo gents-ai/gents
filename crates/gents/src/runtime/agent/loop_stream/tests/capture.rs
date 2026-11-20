@@ -55,13 +55,15 @@ async fn rendered_capture_follows_the_lean_model() {
                 Box::pin(async {
                     gents_session::session::ensure_session_in_txn(
                         txn,
-                        &session_id,
-                        &node_did,
-                        &agent_did,
-                        None,
-                        None,
-                        None,
-                        &session_created_at,
+                        gents_session::session::NewAgentSession {
+                            session_id: &session_id,
+                            node_did: &node_did,
+                            agent_did: &agent_did,
+                            requester_did: None,
+                            title: None,
+                            provenance: None,
+                            created_at: &session_created_at,
+                        },
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())

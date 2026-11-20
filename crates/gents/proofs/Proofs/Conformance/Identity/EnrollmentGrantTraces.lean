@@ -30,6 +30,7 @@ structure ReceiptObservation where
   tuples : List String
   withdrawn : Bool
   owed : Bool
+  restore : Bool
   deriving ToJson
 
 structure StepObservation where
@@ -56,13 +57,17 @@ def applyStep (s : State) (step : StepInput) : State :=
   else if step.action == "owe_revoke_member" then revokeMemberBy nodeStanding s step.member
   else if step.action == "settle" then settle .owner s step.member
   else if step.action == "settle_by_node" then settle nodeStanding s step.member
+  else if step.action == "grant_other" then grantOther s ⟨step.member, tupleOf step.tuple⟩
+  else if step.action == "expire" then Step.apply s (.expire step.member)
+  else if step.action == "overtaking_removal" then overtakingRemoval s step.member
+  else if step.action == "restore" then restoreBy .owner s step.member
   else revoke s step.request
 
 def observe (subjects : List String) (s : State) : StepObservation :=
   { holdings := subjects.map fun subject => { subject, tuples := heldOf s subject }
     receipts := s.receipts.reverse.map fun r =>
       { request := r.request, member := r.member, tuples := r.tuples.map Tuple.name
-        withdrawn := r.withdrawn, owed := r.owed } }
+        withdrawn := r.withdrawn, owed := r.owed, restore := r.restore } }
 
 def trace (subjects : List String) (s : State) : List StepInput → List StepObservation
   | [] => []
@@ -100,6 +105,18 @@ def settleStep (member : String) : StepInput :=
 def settleByNodeStep (member : String) : StepInput :=
   { action := "settle_by_node", request := "", member, tuple := "", issued := 0 }
 
+def grantOtherStep (member tuple : String) : StepInput :=
+  { action := "grant_other", request := "", member, tuple, issued := 0 }
+
+def overtakingRemovalStep (member : String) : StepInput :=
+  { action := "overtaking_removal", request := "", member, tuple := "", issued := 0 }
+
+def restoreStep (member : String) : StepInput :=
+  { action := "restore", request := "", member, tuple := "", issued := 0 }
+
+def expireStep (member : String) : StepInput :=
+  { action := "expire", request := "", member, tuple := "", issued := 0 }
+
 /-- An approval failing at each point its issuing can fail at, abandoned, then
 retried. -/
 def abandonedAtEveryPoint : List (String × List StepInput) :=
@@ -136,8 +153,13 @@ def traceCases : List (String × List StepInput) :=
       [independentStep "member" "update-document", abandonStep "a"]),
    ("revoked-request-is-not-reissued",
       [grantStep "a" "member", revokeStep "a", interruptedStep "a" "member" 2,
-       grantStep "a" "member"]),
-   ("a-denial-the-node-finds-owes-administration-until-the-owner-settles",
+       grantStep "a" "member"])]
+    ++ abandonedAtEveryPoint
+
+/-- Owing, settling, restoring and refusing around an owed administration
+removal, and expiry. -/
+def owedTraceCases : List (String × List StepInput) :=
+  [("a-denial-the-node-finds-owes-administration-until-the-owner-settles",
       [grantStep "a" "member", oweRevokeStep "a", settleByNodeStep "member",
        settleStep "member", settleStep "member"]),
    ("a-revocation-the-node-finds-owes-every-generations-administration",
@@ -155,14 +177,59 @@ def traceCases : List (String × List StepInput) :=
        oweRevokeStep "b", settleStep "member"]),
    ("an-owed-withdrawal-survives-other-steps",
       [grantStep "a" "member", grantStep "c" "other", oweRevokeStep "a", revokeStep "c",
-       oweRevokeMemberStep "member", abandonStep "a", settleStep "other", settleStep "member"])]
-    ++ abandonedAtEveryPoint
+       oweRevokeMemberStep "member", abandonStep "a", settleStep "other", settleStep "member"]),
+   ("an-owed-member-is-refused-every-node-permission",
+      [grantStep "a" "member", oweRevokeStep "a", grantOtherStep "member" "read-document",
+       grantOtherStep "other" "read-document", settleStep "member",
+       grantOtherStep "member" "read-document"]),
+   ("a-deliberate-grant-closes-the-owed-removal",
+      [grantStep "a" "member", oweRevokeStep "a", grantOtherStep "member" "node-administrator",
+       settleStep "member", grantOtherStep "member" "update-document"]),
+   ("an-expiry-withdraws-like-a-revocation",
+      [grantStep "first" "member", grantStep "renewal" "member", expireStep "member",
+       settleByNodeStep "member", settleStep "member"]),
+   ("a-renewal-after-an-expiry-takes-the-removal-over",
+      [grantStep "first" "member", expireStep "member", grantStep "renewal" "member",
+       settleStep "member", expireStep "member", settleStep "member"]),
+   ("a-removal-overtaking-an-approval-is-restored",
+      [grantStep "a" "member", oweRevokeStep "a", grantStep "b" "member",
+       overtakingRemovalStep "member", settleStep "member", restoreStep "member",
+       restoreStep "member", revokeStep "b"]),
+   ("a-removal-overtaking-a-deliberate-grant-is-restored",
+      [grantStep "a" "member", oweRevokeStep "a", grantOtherStep "member" "node-administrator",
+       overtakingRemovalStep "member", restoreStep "member"]),
+   ("a-restoration-superseded-by-a-later-revocation-closes",
+      [grantStep "a" "member", oweRevokeStep "a", grantStep "b" "member",
+       overtakingRemovalStep "member", oweRevokeStep "b", restoreStep "member",
+       settleStep "member"])]
 
 @[conformance_family]
 def cases : Family CaseInput TraceOutput where
-  inputs := traceCases.map fun (name, steps) => { name, subjects := ["member", "other"], steps }
+  inputs := (traceCases ++ owedTraceCases).map fun (name, steps) =>
+    { name, subjects := ["member", "other"], steps }
   model := fun i =>
     { derived := derived.map Tuple.name
       steps := trace i.subjects { held := [], receipts := [] } i.steps }
+
+structure LapseInput where
+  name : String
+  provider : Option Nat
+  wall : Nat
+  leases : List Nat
+  deriving ToJson
+
+/-- Whether a membership lapsed: a provider ahead of, behind or absent from
+the wall clock, at and around each lease's end, with a renewal fresh or
+lapsed. -/
+@[conformance_family]
+def lapseCases : Family LapseInput Bool where
+  inputs :=
+    [("no-provider-before", none, 99, [100]), ("no-provider-at", none, 100, [100]),
+     ("provider-ahead", some 100, 90, [100]), ("provider-stale-home-back", some 50, 150, [100]),
+     ("provider-behind-live", some 90, 95, [100]), ("no-lease", some 500, 500, []),
+     ("renewed-before-expiry", some 120, 120, [100, 200]),
+     ("renewal-also-lapsed", some 250, 250, [100, 200])].map
+      fun (name, provider, wall, leases) => { name, provider, wall, leases }
+  model := fun i => membershipLapsed i.provider i.wall i.leases
 
 end Conformance.EnrollmentGrantTraces

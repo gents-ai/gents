@@ -444,7 +444,7 @@ pub async fn fetch_runtime_snapshot_as(
 
 /// Resolves with the first runtime snapshot satisfying `predicate`, failing
 /// once `NodeRuntime` has not changed for
-/// [`STALL_CEILING`](super::live_inference::STALL_CEILING).
+/// [`STALL_CEILING`](gents_store::test_support::STALL_CEILING).
 pub async fn wait_for_runtime_snapshot_as<F>(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,

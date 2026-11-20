@@ -189,7 +189,7 @@ impl ResolvedRuntimeSnapshot {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn from_parts(
         default_agent_did: String,
         agents: Vec<AgentWithTools>,
@@ -366,20 +366,21 @@ impl ResolvedRuntimeSnapshot {
     }
 
     pub fn configuration_fingerprint(&self) -> String {
-        configuration_fingerprint(
-            &self.default_agent_did,
-            &self.local_did,
-            &self.agents,
-            &self.tool_configs,
-            &self.tool_surfaces,
-            &self.backend_admission_configs,
-            &self.unavailable_agents,
-            &self.active_schedules,
-            &self.unavailable_schedules,
-            &self.active_event_triggers,
-            &self.unavailable_event_triggers,
-            &self.active_tasks,
-        )
+        SnapshotConfiguration {
+            default_agent_did: &self.default_agent_did,
+            local_did: &self.local_did,
+            agents: &self.agents,
+            tool_configs: &self.tool_configs,
+            tool_surfaces: &self.tool_surfaces,
+            backend_admission_configs: &self.backend_admission_configs,
+            unavailable_agents: &self.unavailable_agents,
+            active_schedules: &self.active_schedules,
+            unavailable_schedules: &self.unavailable_schedules,
+            active_event_triggers: &self.active_event_triggers,
+            unavailable_event_triggers: &self.unavailable_event_triggers,
+            active_tasks: &self.active_tasks,
+        }
+        .fingerprint()
     }
 }
 
@@ -533,176 +534,197 @@ impl ActiveRuntimeSnapshot {
     }
 
     pub fn configuration_fingerprint(&self) -> String {
-        configuration_fingerprint(
-            &self.default_agent_did,
-            &self.local_did,
-            &self.agents,
-            &self.tool_configs,
-            &self.tool_surfaces,
-            &self.backend_admission_configs,
-            &self.unavailable_agents,
-            &self.active_schedules,
-            &self.unavailable_schedules,
-            &self.active_event_triggers,
-            &self.unavailable_event_triggers,
-            &self.active_tasks,
-        )
+        SnapshotConfiguration {
+            default_agent_did: &self.default_agent_did,
+            local_did: &self.local_did,
+            agents: &self.agents,
+            tool_configs: &self.tool_configs,
+            tool_surfaces: &self.tool_surfaces,
+            backend_admission_configs: &self.backend_admission_configs,
+            unavailable_agents: &self.unavailable_agents,
+            active_schedules: &self.active_schedules,
+            unavailable_schedules: &self.unavailable_schedules,
+            active_event_triggers: &self.active_event_triggers,
+            unavailable_event_triggers: &self.unavailable_event_triggers,
+            active_tasks: &self.active_tasks,
+        }
+        .fingerprint()
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn configuration_fingerprint(
-    default_agent_did: &str,
-    local_did: &str,
-    agents: &RapidHashMap<String, Arc<ResolvedAgent>>,
-    tool_configs: &RapidHashMap<String, Arc<AgentToolSurfaceConfig>>,
-    tool_surfaces: &RapidHashMap<String, Arc<ToolSurface>>,
-    backend_admission_configs: &RapidHashMap<String, BackendAdmissionConfig>,
-    unavailable_agents: &RapidHashMap<String, UnavailableAgent>,
-    active_schedules: &RapidHashMap<String, ResolvedSchedule>,
-    unavailable_schedules: &RapidHashSet<String>,
-    active_event_triggers: &RapidHashMap<String, ResolvedEventTrigger>,
-    unavailable_event_triggers: &RapidHashSet<String>,
-    active_tasks: &RapidHashMap<String, ResolvedTask>,
-) -> String {
-    let mut fingerprint = String::new();
-    fingerprint.push_str("local_did:");
-    fingerprint.push_str(local_did);
-    fingerprint.push('\n');
-    fingerprint.push_str("default:");
-    fingerprint.push_str(default_agent_did);
-    fingerprint.push('\n');
+/// The configuration both snapshot stages carry; equal configurations
+/// fingerprint equally.
+struct SnapshotConfiguration<'a> {
+    default_agent_did: &'a str,
+    local_did: &'a str,
+    agents: &'a RapidHashMap<String, Arc<ResolvedAgent>>,
+    tool_configs: &'a RapidHashMap<String, Arc<AgentToolSurfaceConfig>>,
+    tool_surfaces: &'a RapidHashMap<String, Arc<ToolSurface>>,
+    backend_admission_configs: &'a RapidHashMap<String, BackendAdmissionConfig>,
+    unavailable_agents: &'a RapidHashMap<String, UnavailableAgent>,
+    active_schedules: &'a RapidHashMap<String, ResolvedSchedule>,
+    unavailable_schedules: &'a RapidHashSet<String>,
+    active_event_triggers: &'a RapidHashMap<String, ResolvedEventTrigger>,
+    unavailable_event_triggers: &'a RapidHashSet<String>,
+    active_tasks: &'a RapidHashMap<String, ResolvedTask>,
+}
 
-    let mut agent_dids = agents.keys().cloned().collect::<Vec<_>>();
-    agent_dids.sort();
-    for agent_did in agent_dids {
-        let agent = agents
-            .get(&agent_did)
-            .expect("agent id came from agents map");
-        fingerprint.push_str("agent:");
-        fingerprint.push_str(&agent_did);
-        fingerprint.push('=');
-        fingerprint.push_str(&format!("{agent:?}"));
+impl SnapshotConfiguration<'_> {
+    fn fingerprint(self) -> String {
+        let SnapshotConfiguration {
+            default_agent_did,
+            local_did,
+            agents,
+            tool_configs,
+            tool_surfaces,
+            backend_admission_configs,
+            unavailable_agents,
+            active_schedules,
+            unavailable_schedules,
+            active_event_triggers,
+            unavailable_event_triggers,
+            active_tasks,
+        } = self;
+        let mut fingerprint = String::new();
+        fingerprint.push_str("local_did:");
+        fingerprint.push_str(local_did);
         fingerprint.push('\n');
-        if let Some(tool_config) = tool_configs.get(&agent_did) {
-            fingerprint.push_str("tool_config:");
+        fingerprint.push_str("default:");
+        fingerprint.push_str(default_agent_did);
+        fingerprint.push('\n');
+
+        let mut agent_dids = agents.keys().cloned().collect::<Vec<_>>();
+        agent_dids.sort();
+        for agent_did in agent_dids {
+            let agent = agents
+                .get(&agent_did)
+                .expect("agent id came from agents map");
+            fingerprint.push_str("agent:");
             fingerprint.push_str(&agent_did);
             fingerprint.push('=');
-            fingerprint.push_str(&format!("{tool_config:?}"));
+            fingerprint.push_str(&format!("{agent:?}"));
+            fingerprint.push('\n');
+            if let Some(tool_config) = tool_configs.get(&agent_did) {
+                fingerprint.push_str("tool_config:");
+                fingerprint.push_str(&agent_did);
+                fingerprint.push('=');
+                fingerprint.push_str(&format!("{tool_config:?}"));
+                fingerprint.push('\n');
+            }
+        }
+
+        let mut tool_ids = tool_surfaces.keys().cloned().collect::<Vec<_>>();
+        tool_ids.sort();
+        for agent_did in tool_ids {
+            let tool_surface = tool_surfaces
+                .get(&agent_did)
+                .expect("agent id came from tool surface map");
+            fingerprint.push_str("tools:");
+            fingerprint.push_str(&agent_did);
+            fingerprint.push('=');
+            fingerprint.push_str(&format!("{tool_surface:?}"));
             fingerprint.push('\n');
         }
-    }
 
-    let mut tool_ids = tool_surfaces.keys().cloned().collect::<Vec<_>>();
-    tool_ids.sort();
-    for agent_did in tool_ids {
-        let tool_surface = tool_surfaces
-            .get(&agent_did)
-            .expect("agent id came from tool surface map");
-        fingerprint.push_str("tools:");
-        fingerprint.push_str(&agent_did);
-        fingerprint.push('=');
-        fingerprint.push_str(&format!("{tool_surface:?}"));
-        fingerprint.push('\n');
-    }
-
-    let mut backend_ids = backend_admission_configs
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    backend_ids.sort();
-    for backend_id in backend_ids {
-        let config = backend_admission_configs
-            .get(&backend_id)
-            .expect("backend id came from backend admission config map");
-        fingerprint.push_str("backend_admission:");
-        fingerprint.push_str(&backend_id);
-        fingerprint.push('=');
-        fingerprint.push_str(&format!("{config:?}"));
-        fingerprint.push('\n');
-    }
-
-    let mut unavailable_ids = unavailable_agents.keys().cloned().collect::<Vec<_>>();
-    unavailable_ids.sort();
-    for agent_did in unavailable_ids {
-        let reason = unavailable_agents
-            .get(&agent_did)
-            .expect("agent id came from unavailable agent map");
-        fingerprint.push_str("unavailable:");
-        fingerprint.push_str(&agent_did);
-        fingerprint.push('=');
-        fingerprint.push_str(&reason.diagnostic);
-        fingerprint.push(':');
-        fingerprint.push_str(&format!(
-            "{:?}:{}",
-            reason.public_reason, reason.awaiting_first_probe
-        ));
-        fingerprint.push(':');
-        if let Some(identity) = &reason.watcher_identity {
-            fingerprint.push_str(identity.0.did());
+        let mut backend_ids = backend_admission_configs
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        backend_ids.sort();
+        for backend_id in backend_ids {
+            let config = backend_admission_configs
+                .get(&backend_id)
+                .expect("backend id came from backend admission config map");
+            fingerprint.push_str("backend_admission:");
+            fingerprint.push_str(&backend_id);
+            fingerprint.push('=');
+            fingerprint.push_str(&format!("{config:?}"));
+            fingerprint.push('\n');
         }
-        fingerprint.push('\n');
-    }
 
-    let mut schedule_ids = active_schedules.keys().cloned().collect::<Vec<_>>();
-    schedule_ids.sort();
-    for schedule_id in schedule_ids {
-        let schedule = active_schedules
-            .get(&schedule_id)
-            .expect("schedule id came from active schedules map");
-        fingerprint.push_str("schedule:");
-        fingerprint.push_str(&schedule_id);
-        fingerprint.push('=');
-        fingerprint.push_str(&format!("{schedule:?}"));
-        fingerprint.push('\n');
-    }
+        let mut unavailable_ids = unavailable_agents.keys().cloned().collect::<Vec<_>>();
+        unavailable_ids.sort();
+        for agent_did in unavailable_ids {
+            let reason = unavailable_agents
+                .get(&agent_did)
+                .expect("agent id came from unavailable agent map");
+            fingerprint.push_str("unavailable:");
+            fingerprint.push_str(&agent_did);
+            fingerprint.push('=');
+            fingerprint.push_str(&reason.diagnostic);
+            fingerprint.push(':');
+            fingerprint.push_str(&format!(
+                "{:?}:{}",
+                reason.public_reason, reason.awaiting_first_probe
+            ));
+            fingerprint.push(':');
+            if let Some(identity) = &reason.watcher_identity {
+                fingerprint.push_str(identity.0.did());
+            }
+            fingerprint.push('\n');
+        }
 
-    let mut unavailable_schedule_ids = unavailable_schedules.iter().cloned().collect::<Vec<_>>();
-    unavailable_schedule_ids.sort();
-    for schedule_id in unavailable_schedule_ids {
-        fingerprint.push_str("unavailable_schedule:");
-        fingerprint.push_str(&schedule_id);
-        fingerprint.push('\n');
-    }
+        let mut schedule_ids = active_schedules.keys().cloned().collect::<Vec<_>>();
+        schedule_ids.sort();
+        for schedule_id in schedule_ids {
+            let schedule = active_schedules
+                .get(&schedule_id)
+                .expect("schedule id came from active schedules map");
+            fingerprint.push_str("schedule:");
+            fingerprint.push_str(&schedule_id);
+            fingerprint.push('=');
+            fingerprint.push_str(&format!("{schedule:?}"));
+            fingerprint.push('\n');
+        }
 
-    let mut event_trigger_ids = active_event_triggers.keys().cloned().collect::<Vec<_>>();
-    event_trigger_ids.sort();
-    for trigger_id in event_trigger_ids {
-        let trigger = active_event_triggers
-            .get(&trigger_id)
-            .expect("event trigger id came from active event triggers map");
-        fingerprint.push_str("event_trigger:");
-        fingerprint.push_str(&trigger_id);
-        fingerprint.push('=');
-        fingerprint.push_str(&format!("{trigger:?}"));
-        fingerprint.push('\n');
-    }
+        let mut unavailable_schedule_ids =
+            unavailable_schedules.iter().cloned().collect::<Vec<_>>();
+        unavailable_schedule_ids.sort();
+        for schedule_id in unavailable_schedule_ids {
+            fingerprint.push_str("unavailable_schedule:");
+            fingerprint.push_str(&schedule_id);
+            fingerprint.push('\n');
+        }
 
-    let mut unavailable_event_trigger_ids = unavailable_event_triggers
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    unavailable_event_trigger_ids.sort();
-    for trigger_id in unavailable_event_trigger_ids {
-        fingerprint.push_str("unavailable_event_trigger:");
-        fingerprint.push_str(&trigger_id);
-        fingerprint.push('\n');
-    }
+        let mut event_trigger_ids = active_event_triggers.keys().cloned().collect::<Vec<_>>();
+        event_trigger_ids.sort();
+        for trigger_id in event_trigger_ids {
+            let trigger = active_event_triggers
+                .get(&trigger_id)
+                .expect("event trigger id came from active event triggers map");
+            fingerprint.push_str("event_trigger:");
+            fingerprint.push_str(&trigger_id);
+            fingerprint.push('=');
+            fingerprint.push_str(&format!("{trigger:?}"));
+            fingerprint.push('\n');
+        }
 
-    let mut task_ids = active_tasks.keys().cloned().collect::<Vec<_>>();
-    task_ids.sort();
-    for task_id in task_ids {
-        let task = active_tasks
-            .get(&task_id)
-            .expect("task id came from active tasks map");
-        fingerprint.push_str("task:");
-        fingerprint.push_str(&task_id);
-        fingerprint.push('=');
-        fingerprint.push_str(&format!("{task:?}"));
-        fingerprint.push('\n');
-    }
+        let mut unavailable_event_trigger_ids = unavailable_event_triggers
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        unavailable_event_trigger_ids.sort();
+        for trigger_id in unavailable_event_trigger_ids {
+            fingerprint.push_str("unavailable_event_trigger:");
+            fingerprint.push_str(&trigger_id);
+            fingerprint.push('\n');
+        }
 
-    fingerprint
+        let mut task_ids = active_tasks.keys().cloned().collect::<Vec<_>>();
+        task_ids.sort();
+        for task_id in task_ids {
+            let task = active_tasks
+                .get(&task_id)
+                .expect("task id came from active tasks map");
+            fingerprint.push_str("task:");
+            fingerprint.push_str(&task_id);
+            fingerprint.push('=');
+            fingerprint.push_str(&format!("{task:?}"));
+            fingerprint.push('\n');
+        }
+
+        fingerprint
+    }
 }
 
 #[cfg(test)]

@@ -83,6 +83,7 @@ pub(super) async fn enrollment_decision_handler(
                 "decision_doc_id": outcome.decision_doc_id,
                 "revision_doc_id": outcome.revision_doc_id,
                 "delivery_pending": outcome.delivery_pending,
+                "administration_removal_pending": outcome.administration_removal_pending,
             })),
         )
             .into_response(),

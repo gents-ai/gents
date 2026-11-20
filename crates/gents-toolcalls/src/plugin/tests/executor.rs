@@ -74,7 +74,7 @@ fn own_folder_grant_conforms_to_lean() {
             Target::InsideGentsHome => keys.clone(),
         };
         executor
-            .bind_scope(&gents_home, &record, &context, Some(&user_home))
+            .bind_scope(None, &gents_home, &record, &context, Some(&user_home))
             .unwrap()
             .granted(&target)
     });
@@ -324,7 +324,7 @@ mod bound {
                 ..Default::default()
             },
         );
-        approval::workspace::scope(approval, tool.call(args(path), &call))
+        tool.call(args(path), &call)
             .await
             .map_err(|error| format!("{error:#}"))
     }
@@ -440,18 +440,21 @@ mod bound {
         .unwrap();
         let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
         let input = serde_json::json!({"path": docs});
-        let bound = workspace::scope(
-            context,
-            executor.bind_input(
+        let approval_call = gents_tools::runtime_context::ToolHostContext {
+            approval: context.clone(),
+            ..Default::default()
+        }
+        .call();
+        let bound = executor
+            .bind_input(
                 &fx.record,
                 &input,
                 &BindContext::headless(Some(&work)),
-                &gents_loop::tool::ToolCallEnvelope::default(),
-            ),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+                &approval_call,
+            )
+            .await
+            .unwrap()
+            .unwrap();
         let changed = serde_json::json!({"path": docs, "operation": "different"});
         let error = executor
             .call_bound(
@@ -531,19 +534,17 @@ mod bound {
             let input = serde_json::json!({"path": docs});
             let bind = BindContext::headless(Some(&work));
             let bound = if added_after_binding {
+                let approval_call = gents_tools::runtime_context::ToolHostContext {
+                    approval: context.clone(),
+                    ..Default::default()
+                }
+                .call();
                 Some(
-                    workspace::scope(
-                        context.clone(),
-                        executor.bind_input(
-                            &fx.record,
-                            &input,
-                            &bind,
-                            &gents_loop::tool::ToolCallEnvelope::default(),
-                        ),
-                    )
-                    .await
-                    .unwrap()
-                    .unwrap(),
+                    executor
+                        .bind_input(&fx.record, &input, &bind, &approval_call)
+                        .await
+                        .unwrap()
+                        .unwrap(),
                 )
             } else {
                 None
@@ -551,6 +552,11 @@ mod bound {
             std::fs::create_dir(docs.join("nested")).unwrap();
             let alias = docs.join("nested/operator-alias");
             std::fs::hard_link(&permission_file, &alias).unwrap();
+            let approval_call = gents_tools::runtime_context::ToolHostContext {
+                approval: context.clone(),
+                ..Default::default()
+            }
+            .call();
             let error = match bound {
                 Some(bound) => format!(
                     "{:#}",
@@ -564,31 +570,22 @@ mod bound {
                         .await
                         .unwrap_err()
                 ),
-                None => workspace::scope(
-                    context.clone(),
-                    executor.bind_input(
-                        &fx.record,
-                        &input,
-                        &bind,
-                        &gents_loop::tool::ToolCallEnvelope::default(),
-                    ),
-                )
-                .await
-                .unwrap_err(),
+                None => executor
+                    .bind_input(&fx.record, &input, &bind, &approval_call)
+                    .await
+                    .unwrap_err(),
             };
             assert!(error.contains("protected runtime permissions"), "{error}");
             let file_input = serde_json::json!({"path": alias});
-            let error = workspace::scope(
-                context,
-                executor.bind_input(
-                    &fx.record,
-                    &file_input,
-                    &bind,
-                    &gents_loop::tool::ToolCallEnvelope::default(),
-                ),
-            )
-            .await
-            .unwrap_err();
+            let approval_call = gents_tools::runtime_context::ToolHostContext {
+                approval: context.clone(),
+                ..Default::default()
+            }
+            .call();
+            let error = executor
+                .bind_input(&fx.record, &file_input, &bind, &approval_call)
+                .await
+                .unwrap_err();
             assert!(
                 error.contains("permission files cannot be shared"),
                 "{error}"
@@ -652,7 +649,7 @@ mod bound {
         )
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
-        workspace::scope(context.clone(), async {
+        async {
             let output = in_session(&tool, &target, &other, true, context.clone())
                 .await
                 .unwrap();
@@ -676,7 +673,7 @@ mod bound {
                 .unwrap_err();
             assert!(error.contains("operator declined"), "{error}");
             declined.await.unwrap();
-        })
+        }
         .await;
         let ask = workspace::resolve(fx.home.path(), &key, None)
             .unwrap()
@@ -2181,25 +2178,26 @@ mod job_calls {
             session_id: session.clone(),
         };
         let request_id = uuid::Uuid::new_v4().to_string();
-        let create =
-            gents_session::request::lifecycle::materialize::build_session_message_request_with_input(
-                &cause,
-                &target,
-                "child work",
-                Some("child"),
-                &request_id,
-                Some(job_spawn_key(&chain, "slot-a", 0)),
-                1,
-                gents_protocol::request_input::RequestInput {
+        let create = gents_session::request::lifecycle::materialize::build_session_message_request(
+            &cause,
+            &target,
+            gents_session::request::lifecycle::materialize::SessionMessageRequest {
+                content: "child work",
+                title: Some("child"),
+                request_id: &request_id,
+                retry_key: Some(job_spawn_key(&chain, "slot-a", 0)),
+                hop: 1,
+                input: gents_protocol::request_input::RequestInput {
                     session_creation: Some(
                         gents_protocol::request_input::SessionCreationIntent::PluginJob,
                     ),
                     ..Default::default()
                 },
-                &access.managed_agent_signer().unwrap(),
-            )
-            .await
-            .unwrap();
+            },
+            &access.managed_agent_signer().unwrap(),
+        )
+        .await
+        .unwrap();
         let mut wrong_pin = create.clone();
         wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
         let wrong_plan =

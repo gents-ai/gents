@@ -175,8 +175,10 @@ impl ClientRuntime {
                     node_did,
                     session_id,
                     edit,
-                    request_doc_id,
-                    request_id,
+                    gents_session::request::lifecycle::SteeredMessage {
+                        request_doc_id,
+                        request_id,
+                    },
                 )
                 .await
             }

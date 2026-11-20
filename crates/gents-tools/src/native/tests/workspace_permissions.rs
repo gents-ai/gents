@@ -61,19 +61,16 @@ impl Fixture {
             ..Default::default()
         }
         .call();
-        workspace::scope(
-            context,
-            Tool::call(
-                &tool,
-                BashArgs {
-                    command: command.to_owned(),
-                    args: args.to_vec(),
-                    cwd: None,
-                    timeout_secs: None,
-                    raw_json: true,
-                },
-                &call,
-            ),
+        Tool::call(
+            &tool,
+            BashArgs {
+                command: command.to_owned(),
+                args: args.to_vec(),
+                cwd: None,
+                timeout_secs: None,
+                raw_json: true,
+            },
+            &call,
         )
         .await
     }
@@ -373,7 +370,7 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
         ..Default::default()
     }
     .call();
-    workspace::scope(scope, async {
+    async {
         for (directory, allowed) in [(&project, true), (&sibling, false)] {
             let marker = directory.join("executed");
             let call = Tool::call(
@@ -432,7 +429,7 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
         .await
         .unwrap();
         assert!(marker.is_file());
-    })
+    }
     .await;
     assert!(approval::pending_requests(fixture.home.path())
         .unwrap()

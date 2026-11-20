@@ -1298,6 +1298,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 Some(approval_session),
             );
             gents_tools::plugin::approval::ask(
+                None,
                 &approval_home,
                 &question,
                 gents_tools::plugin::approval::WAIT,

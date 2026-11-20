@@ -41,8 +41,10 @@ impl PoolKey {
         if runtime_home != self.runtime_home {
             return Err("language-server runtime protection changed; retry the action".into());
         }
-        let current = crate::plugin::approval::workspace::command_guard_home()
-            .map_err(|error| format!("{error:#}"))?;
+        let current = crate::plugin::approval::workspace::command_guard_home(
+            crate::runtime_context::host(call).approval.as_ref(),
+        )
+        .map_err(|error| format!("{error:#}"))?;
         if current != self.operator_guard_home {
             return Err("language-server operator protection changed; retry the action".into());
         }
@@ -710,8 +712,10 @@ impl LspPool {
     ) -> Result<RapidHashMap<String, PoolServerState>, String> {
         let runtime_home = crate::runtime_context::tool_runtime_context(call)
             .and_then(|context| context.runtime_home);
-        let operator_guard_home = crate::plugin::approval::workspace::command_guard_home()
-            .map_err(|error| format!("{error:#}"))?;
+        let operator_guard_home = crate::plugin::approval::workspace::command_guard_home(
+            crate::runtime_context::host(call).approval.as_ref(),
+        )
+        .map_err(|error| format!("{error:#}"))?;
         let guard_error = operator_guard_home.as_ref().and_then(|home| {
             gents_pack::plugin::allowed::CommandProtection::capture(
                 home,

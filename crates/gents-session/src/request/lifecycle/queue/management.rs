@@ -362,6 +362,14 @@ fn replacement_spec(
     Ok(spec)
 }
 
+/// The session whose pending queue an edit rewrites, and the requester whose
+/// messages it selects.
+pub(super) struct PendingEditActor<'a> {
+    pub(super) node_did: &'a str,
+    pub(super) session_id: &'a str,
+    pub(super) requester_did: &'a str,
+}
+
 pub async fn prepare_pending_user_edit(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
@@ -375,9 +383,11 @@ pub async fn prepare_pending_user_edit(
         access,
         signer,
         admission,
-        node_did,
-        session_id,
-        requester_did,
+        PendingEditActor {
+            node_did,
+            session_id,
+            requester_did,
+        },
         edit,
         None,
         None,
@@ -385,18 +395,20 @@ pub async fn prepare_pending_user_edit(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn prepare_pending_user_edit_with_deliveries(
+pub(super) async fn prepare_pending_user_edit_with_deliveries(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
     admission: AgentRequestAdmissionRecord,
-    node_did: &str,
-    session_id: &str,
-    requester_did: &str,
+    actor: PendingEditActor<'_>,
     edit: &PendingQueueEdit,
     deliveries: Option<&[QueueDelivery]>,
     first_request_id: Option<&str>,
 ) -> Result<Vec<AgentRequestCreate>> {
+    let PendingEditActor {
+        node_did,
+        session_id,
+        requester_did,
+    } = actor;
     anyhow::ensure!(
         access.actor_did().as_deref() == Some(signer.did()) && admission.signer_did == signer.did(),
         "Pending edit signer must match the authenticated caller."
@@ -948,13 +960,6 @@ pub fn pending_steer_edit(
 }
 
 #[cfg(test)]
-pub(super) struct PendingEditActor<'a> {
-    pub(super) node_did: &'a str,
-    pub(super) session_id: &'a str,
-    pub(super) requester_did: &'a str,
-}
-
-#[cfg(test)]
 pub(super) async fn replace_pending_user_messages(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
@@ -963,18 +968,14 @@ pub(super) async fn replace_pending_user_messages(
     edit: PendingQueueEdit,
     deliveries: &[QueueDelivery],
 ) -> Result<PendingQueueReceipt> {
-    let PendingEditActor {
-        node_did,
-        session_id,
-        requester_did,
-    } = actor;
+    let node_did = actor.node_did;
+    let session_id = actor.session_id;
+    let requester_did = actor.requester_did;
     let creates = prepare_pending_user_edit_with_deliveries(
         access,
         signer,
         admission,
-        node_did,
-        session_id,
-        requester_did,
+        actor,
         &edit,
         Some(deliveries),
         None,

@@ -13,6 +13,7 @@ mod enrollment_grant;
 mod error;
 mod file_key;
 pub mod grant_sets;
+pub mod home_status;
 pub(crate) mod macos;
 pub(crate) mod provision_client;
 mod registered;
@@ -29,10 +30,15 @@ pub use enrollment_approval::{
     EnrollmentApproval, EnrollmentApprovalError,
 };
 pub use enrollment_grant::{
-    administration_owed, after_removal, grant_enrollment_authority, load_enrollment_grant_receipts,
-    plan_grant, plan_membership_withdrawal, plan_owing, plan_withdrawal, settle_owed_withdrawals,
-    settlement_step, AfterRemoval, EnrollmentGrantError, EnrollmentGrantOutcome,
-    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal, SettlementStep,
+    administration_owed, after_removal, grant_enrollment_authority, lapse_clock,
+    load_enrollment_grant_receipts, membership_lapsed, owed_removals, permission_grant_admitted,
+    plan_grant, plan_membership_withdrawal, plan_owing, plan_withdrawal, restoration_step,
+    settle_owed_withdrawals, settlement_step, AfterRemoval, EnrollmentGrantError,
+    EnrollmentGrantOutcome, EnrollmentGrantReceipt, EnrollmentGrantTuple,
+    EnrollmentGrantWithdrawal, RestorationStep, SettlementStep,
+};
+pub(crate) use enrollment_grant::{
+    close_owed_removal, owed_removal_receipts, NODE_ADMINISTRATOR_RELATION,
 };
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
@@ -357,6 +363,18 @@ pub(crate) fn defradb_bearer_authorization_with_config(
 
 pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
+}
+
+impl KeyIdentity {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn sign_now(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        self.identity
+            .sign(payload)
+            .map_err(|source| IdentityError::SignPayload {
+                did: self.did.clone(),
+                source,
+            })
+    }
 }
 
 #[async_trait]

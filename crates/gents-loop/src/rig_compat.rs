@@ -556,7 +556,6 @@ fn from_rig_image(image: &rig::completion::message::Image) -> message::Image {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     match msg {
         rig::completion::Message::System { content } => message::Message::System {
@@ -573,7 +572,6 @@ pub fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_user_content(
     content: &rig::completion::message::UserContent,
 ) -> message::UserContent {
@@ -599,7 +597,6 @@ pub fn from_rig_user_content(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_assistant_content(
     content: &rig::completion::message::AssistantContent,
 ) -> message::AssistantContent {

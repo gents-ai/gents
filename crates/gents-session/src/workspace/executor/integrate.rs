@@ -100,10 +100,10 @@ fn integrate_workspace_action(
                 None,
             )
         })?;
-    if workspace.owner_node_did != ctx.owner_node_did {
+    if workspace.owner_node_did != ctx.provenance.owner_node_did {
         return Err(HostExecuteError::denied(format!(
             "workspace {} is owned by {}, not executing node {}",
-            action.workspace_id, workspace.owner_node_did, ctx.owner_node_did
+            action.workspace_id, workspace.owner_node_did, ctx.provenance.owner_node_did
         )));
     }
     let lifecycle = normalize_workspace_lifecycle_state(&workspace.lifecycle_state);

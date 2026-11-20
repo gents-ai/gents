@@ -818,11 +818,9 @@ pub struct DesktopSessionSnapshot {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub projection_revision: Option<SessionProjectionRevisionView>,
-    #[allow(dead_code)]
     #[serde(skip_serializing)]
     #[ts(skip)]
     pub messages: Vec<MessageView>,
-    #[allow(dead_code)]
     #[serde(skip_serializing)]
     #[ts(skip)]
     pub tool_calls: Vec<ToolCallView>,

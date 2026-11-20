@@ -53,21 +53,13 @@ impl Fixture {
         .call()
     }
 
-    async fn run<F>(&self, call: &gents_loop::tool::ToolCallEnvelope, future: F) -> F::Output
+    async fn run<F>(&self, future: F) -> F::Output
     where
         F: Future,
     {
-        tokio::time::timeout(
-            Duration::from_secs(30),
-            workspace::scope(
-                call.extensions()
-                    .get::<crate::runtime_context::ToolHostContext>()
-                    .and_then(|host| host.approval.clone()),
-                future,
-            ),
-        )
-        .await
-        .expect("file operation did not finish")
+        tokio::time::timeout(Duration::from_secs(30), future)
+            .await
+            .expect("file operation did not finish")
     }
 
     async fn write(&self, path: &Path) -> Result<String, ToolError> {
@@ -81,20 +73,17 @@ impl Fixture {
     ) -> Result<String, ToolError> {
         let tool =
             WriteFileTool::new(ToolContext::new(self.root.path().to_owned(), false).unwrap());
-        self.run(
+        self.run(Tool::call(
+            &tool,
+            WriteFileArgs {
+                path: path.to_str().unwrap().into(),
+                content: "hello world".into(),
+                raw_json: true,
+                expected_content_hash: None,
+                overwrite: false,
+            },
             call,
-            Tool::call(
-                &tool,
-                WriteFileArgs {
-                    path: path.to_str().unwrap().into(),
-                    content: "hello world".into(),
-                    raw_json: true,
-                    expected_content_hash: None,
-                    overwrite: false,
-                },
-                call,
-            ),
-        )
+        ))
         .await
     }
 
@@ -106,24 +95,21 @@ impl Fixture {
     ) -> Result<String, ToolError> {
         let tool = EditFileTool::new(ToolContext::new(self.root.path().to_owned(), false).unwrap());
         let call = self.call();
-        self.run(
+        self.run(Tool::call(
+            &tool,
+            EditFileArgs {
+                path: path.to_str().unwrap().into(),
+                old_text: "world".into(),
+                new_text: "reader".into(),
+                replace_all: false,
+                raw_json: true,
+                dry_run,
+                match_mode: None,
+                operation: None,
+                expected_content_hash: hash,
+            },
             &call,
-            Tool::call(
-                &tool,
-                EditFileArgs {
-                    path: path.to_str().unwrap().into(),
-                    old_text: "world".into(),
-                    new_text: "reader".into(),
-                    replace_all: false,
-                    raw_json: true,
-                    dry_run,
-                    match_mode: None,
-                    operation: None,
-                    expected_content_hash: hash,
-                },
-                &call,
-            ),
-        )
+        ))
         .await
     }
 
@@ -472,60 +458,51 @@ async fn operator_file_aliases_cannot_be_read_or_changed_with_full_access() {
     let context = ToolContext::new(fixture.root.path().to_owned(), false).unwrap();
     let call = fixture.call();
     let read = fixture
-        .run(
+        .run(Tool::call(
+            &ReadFileTool::new(context.clone(), 1024),
+            ReadFileArgs {
+                path: alias.to_str().unwrap().into(),
+                start_line: None,
+                end_line: None,
+                max_chars: None,
+                raw_json: true,
+            },
             &call,
-            Tool::call(
-                &ReadFileTool::new(context.clone(), 1024),
-                ReadFileArgs {
-                    path: alias.to_str().unwrap().into(),
-                    start_line: None,
-                    end_line: None,
-                    max_chars: None,
-                    raw_json: true,
-                },
-                &call,
-            ),
-        )
+        ))
         .await;
     assert!(read.unwrap_err().to_string().contains("operator"));
     let call = fixture.call();
     let write = fixture
-        .run(
+        .run(Tool::call(
+            &WriteFileTool::new(context.clone()),
+            WriteFileArgs {
+                path: alias.to_str().unwrap().into(),
+                content: "replaced".into(),
+                expected_content_hash: None,
+                overwrite: true,
+                raw_json: true,
+            },
             &call,
-            Tool::call(
-                &WriteFileTool::new(context.clone()),
-                WriteFileArgs {
-                    path: alias.to_str().unwrap().into(),
-                    content: "replaced".into(),
-                    expected_content_hash: None,
-                    overwrite: true,
-                    raw_json: true,
-                },
-                &call,
-            ),
-        )
+        ))
         .await;
     assert!(write.unwrap_err().to_string().contains("operator"));
     let call = fixture.call();
     let edit = fixture
-        .run(
+        .run(Tool::call(
+            &EditFileTool::new(context),
+            EditFileArgs {
+                path: alias.to_str().unwrap().into(),
+                old_text: String::from_utf8(original.clone()).unwrap(),
+                new_text: "replaced".into(),
+                replace_all: false,
+                raw_json: true,
+                dry_run: false,
+                match_mode: None,
+                operation: None,
+                expected_content_hash: None,
+            },
             &call,
-            Tool::call(
-                &EditFileTool::new(context),
-                EditFileArgs {
-                    path: alias.to_str().unwrap().into(),
-                    old_text: String::from_utf8(original.clone()).unwrap(),
-                    new_text: "replaced".into(),
-                    replace_all: false,
-                    raw_json: true,
-                    dry_run: false,
-                    match_mode: None,
-                    operation: None,
-                    expected_content_hash: None,
-                },
-                &call,
-            ),
-        )
+        ))
         .await;
     assert!(edit.unwrap_err().to_string().contains("operator"));
     assert_eq!(std::fs::read(&settings).unwrap(), original);
@@ -545,20 +522,17 @@ async fn ordinary_project_hard_links_remain_readable_and_editable() {
     let context = ToolContext::new(fixture.root.path().to_owned(), false).unwrap();
     let call = fixture.call();
     let read = fixture
-        .run(
+        .run(Tool::call(
+            &ReadFileTool::new(context.clone(), 1024),
+            ReadFileArgs {
+                path: alias.to_str().unwrap().into(),
+                start_line: None,
+                end_line: None,
+                max_chars: None,
+                raw_json: true,
+            },
             &call,
-            Tool::call(
-                &ReadFileTool::new(context.clone(), 1024),
-                ReadFileArgs {
-                    path: alias.to_str().unwrap().into(),
-                    start_line: None,
-                    end_line: None,
-                    max_chars: None,
-                    raw_json: true,
-                },
-                &call,
-            ),
-        )
+        ))
         .await
         .unwrap();
     assert!(read.contains("hello world"));
@@ -566,20 +540,17 @@ async fn ordinary_project_hard_links_remain_readable_and_editable() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello reader");
     let call = fixture.call();
     fixture
-        .run(
+        .run(Tool::call(
+            &WriteFileTool::new(context),
+            WriteFileArgs {
+                path: alias.to_str().unwrap().into(),
+                content: "updated".into(),
+                expected_content_hash: None,
+                overwrite: true,
+                raw_json: true,
+            },
             &call,
-            Tool::call(
-                &WriteFileTool::new(context),
-                WriteFileArgs {
-                    path: alias.to_str().unwrap().into(),
-                    content: "updated".into(),
-                    expected_content_hash: None,
-                    overwrite: true,
-                    raw_json: true,
-                },
-                &call,
-            ),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "updated");
@@ -600,20 +571,17 @@ async fn write_only_project_files_remain_overwritable() {
     let context = ToolContext::new(fixture.root.path().to_owned(), false).unwrap();
     let call = fixture.call();
     let result = fixture
-        .run(
+        .run(Tool::call(
+            &WriteFileTool::new(context),
+            WriteFileArgs {
+                path: path.to_str().unwrap().into(),
+                content: "updated".into(),
+                expected_content_hash: None,
+                overwrite: true,
+                raw_json: true,
+            },
             &call,
-            Tool::call(
-                &WriteFileTool::new(context),
-                WriteFileArgs {
-                    path: path.to_str().unwrap().into(),
-                    content: "updated".into(),
-                    expected_content_hash: None,
-                    overwrite: true,
-                    raw_json: true,
-                },
-                &call,
-            ),
-        )
+        ))
         .await;
     assert_eq!(
         std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,

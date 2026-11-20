@@ -35,47 +35,47 @@ pub(in crate::session) fn is_current_admission_input(
         ))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "independent transcript range filters"
-)]
+/// Which of a session's messages a history read returns: the sequence window,
+/// the request whose own admission input is left out, and the provider whose
+/// replay provenance is reattached.
+#[derive(Clone, Copy, Default)]
+pub struct SequencedMessageFilter<'a> {
+    pub through_sequence: Option<u32>,
+    pub after_sequence: Option<u32>,
+    pub exclude_request_doc_id: Option<&'a str>,
+    pub replay_profile: Option<gents_loop::provider_input::ProviderInputProfile>,
+}
+
 pub(in crate::session) async fn load_sequenced_messages(
     node: &EmbeddedNode,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
-    through_sequence: Option<u32>,
-    after_sequence: Option<u32>,
-    exclude_request_doc_id: Option<&str>,
-    replay_profile: Option<gents_loop::provider_input::ProviderInputProfile>,
+    filter: SequencedMessageFilter<'_>,
 ) -> Result<Vec<SequencedMessage>> {
     load_sequenced_messages_using(
         ReadAccess::Node(node),
         session_id,
         node_did,
         requester_did,
-        through_sequence,
-        after_sequence,
-        exclude_request_doc_id,
-        replay_profile,
+        filter,
     )
     .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "independent transcript range filters"
-)]
 pub async fn load_sequenced_messages_using(
     access: ReadAccess<'_, '_>,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
-    through_sequence: Option<u32>,
-    after_sequence: Option<u32>,
-    exclude_request_doc_id: Option<&str>,
-    replay_profile: Option<gents_loop::provider_input::ProviderInputProfile>,
+    filter: SequencedMessageFilter<'_>,
 ) -> Result<Vec<SequencedMessage>> {
+    let SequencedMessageFilter {
+        through_sequence,
+        after_sequence,
+        exclude_request_doc_id,
+        replay_profile,
+    } = filter;
     let session_scope = session_scope_filter(node_did, session_id, requester_did);
     let mut bounds = Vec::new();
     if let Some(sequence) = after_sequence {

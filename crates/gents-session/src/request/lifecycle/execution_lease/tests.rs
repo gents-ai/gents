@@ -19,9 +19,11 @@ async fn claimed_owner_with_short_lease(
         &agent.agent_did,
         identity.clone(),
         "hello",
-        60,
-        ExecutionOrigin::Interactive,
-        "lease-test",
+        crate::request::lifecycle::ExecutionBinding {
+            deadline_duration_secs: 60,
+            execution_origin: ExecutionOrigin::Interactive,
+            backend_id: "lease-test".into(),
+        },
         TriggerLineage::default(),
         Some(gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap()),
     )
@@ -1367,10 +1369,14 @@ async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
             &row,
             generation,
             expiry,
-            fresh.clone(),
-            epoch + chrono::Duration::seconds(now as i64),
-            Some(crate::request::lifecycle::RecoverySelectionChoice::NoMessage),
-            Some(RequestLifecycleState::Failed),
+            crate::request::lifecycle::RecoveryFacts {
+                fresh_generation: fresh.clone(),
+                observed_now: epoch + chrono::Duration::seconds(now as i64),
+                selection_choice: Some(
+                    crate::request::lifecycle::RecoverySelectionChoice::NoMessage,
+                ),
+                expected_outcome: Some(RequestLifecycleState::Failed),
+            },
         )
         .await
         .unwrap();

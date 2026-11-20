@@ -633,6 +633,9 @@ async fn sweep_enrollment(
         }
     };
     publish_ready(sender, projection.clone());
+    if let Err(error) = store.withdraw_lapsed_memberships().await {
+        tracing::warn!(%error, "a lapsed enrollment grant was not withdrawn; will retry");
+    }
     if member_renewal.due() {
         if let Err(error) = super::enrollment_member_renewal::sweep_member_renewals(
             node,
