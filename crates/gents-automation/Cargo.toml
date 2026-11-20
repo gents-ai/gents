@@ -30,7 +30,6 @@ gents-session.workspace = true
 gents-tools.workspace = true
 gents-toolcalls.workspace = true
 acp.workspace = true
-schema.workspace = true
 db.workspace = true
 document.workspace = true
 rapidhash = { workspace = true }

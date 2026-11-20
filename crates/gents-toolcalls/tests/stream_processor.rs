@@ -523,10 +523,12 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     let mut wake = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "concurrent-notification-wake",
-        runtime_did.clone(),
-        user.did(),
-        &agent_did,
-        &session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            runtime_did.clone(),
+            user.did(),
+            &agent_did,
+            &session_id,
+        ),
         "Review background completion",
         "scheduled",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

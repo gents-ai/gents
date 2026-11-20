@@ -85,13 +85,11 @@ async fn a_retry_reports_a_previous_start_that_is_still_closing() {
 #[test]
 fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
     let node = std::path::Path::new("/tmp/desktop/node");
-    let refused = anyhow::Error::new(
-        gents_store::schema::migration::MigrationError::UnknownLineage {
-            collection: "AgentSession".into(),
-            versions: "bafy-old".into(),
-        },
-    )
-    .context("ensure_migrations");
+    let refused = anyhow::Error::new(gents_store::schema::catalog::SchemaError::UnknownLineage {
+        collection: "AgentSession".into(),
+        versions: "bafy-old".into(),
+    })
+    .context("ensuring the runtime schema");
     let (error, store) = classify_client_start_error(&refused, node);
     assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
     assert!(

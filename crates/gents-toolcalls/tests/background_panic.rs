@@ -3,6 +3,7 @@ use gents_inference::llm::ToolCallHookAction;
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 
@@ -37,7 +38,7 @@ impl ToolDyn for PanickingTool {
 #[tokio::test]
 async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
 
     let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
@@ -58,10 +59,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
     let create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "request-background-panic",
-        db.node_identity.did(),
-        user.did(),
-        agent.did(),
-        session_id,
+        RequestScope::new(db.node_identity.did(), user.did(), agent.did(), session_id),
         "spawn",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

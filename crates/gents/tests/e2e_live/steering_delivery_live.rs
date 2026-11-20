@@ -1,5 +1,5 @@
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::{
     QueueDelivery, QueuePolicy, QueuePosition, QueueSource, RequestQueue,
@@ -219,10 +219,12 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
     let mut forged = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "forged-slot",
-        actors.node_did(),
-        actors.fixture.user.did(),
-        actors.agent_did(),
-        SESSION,
+        RequestScope::new(
+            actors.node_did(),
+            actors.fixture.user.did(),
+            actors.agent_did(),
+            SESSION,
+        ),
         "An invalid request must not take this slot.",
         "interactive",
         canonical_now(),

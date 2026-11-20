@@ -1,7 +1,7 @@
 use super::*;
 use gents_lean_vocab::families::hooks_contracts_goal_resume as wire;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -132,10 +132,7 @@ async fn request_rows(identity: &KeyIdentity, case: &wire::GoalResumeInput<Strin
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("request-{}", request.id),
-            identity.did(),
-            identity.did(),
-            identity.did(),
-            SESSION,
+            RequestScope::new(identity.did(), identity.did(), identity.did(), SESSION),
             "resumed predecessor",
             "interactive",
             &created_at,

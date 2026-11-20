@@ -12,7 +12,8 @@ use crate::turn::completion_factory::build_admitted_model;
 use crate::turn::prompt::LayeredPromptBuilder;
 use gents_inference::admission::AdmissionRegistry;
 use gents_protocol::row::AgentRequest;
-use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::BackgroundToolRegistry;
 use gents_tools::surface::{self, ToolRuntimeContext, ToolSurface};
 
 #[derive(Clone)]

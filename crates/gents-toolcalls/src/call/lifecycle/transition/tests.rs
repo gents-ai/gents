@@ -76,7 +76,7 @@ async fn orphan_sweep_excludes_job_rows() {
         &admission.node,
         &admission.node_did,
         &super::super::recovery_closeout_conformance::recovery_identities(&admission),
-        &crate::call::hook::BackgroundExecutionRegistry::default(),
+        &crate::call::hook::background_executions::BackgroundExecutionRegistry::default(),
     )
     .await
     .unwrap();

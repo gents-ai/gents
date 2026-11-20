@@ -29,7 +29,8 @@ use gents_inference::resolved::{
 };
 use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_store::identity::{NodeIdentity, RuntimeNode};
-use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::FailurePolicy;
 use gents_tools::mcp::health::HealthCheckerOptions;
 use gents_tools::mcp::pool::McpPool;
 use gents_tools::surface::{

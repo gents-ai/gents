@@ -1,6 +1,7 @@
 use gents_protocol::schemas;
 
-use crate::common;
+use super::common;
+use crate::schema::catalog::{ensure_runtime, SchemaError, BASELINE};
 
 fn without(fields: &[&str]) -> String {
     schemas::INFERENCE_BACKEND
@@ -37,8 +38,8 @@ async fn a_pre_identity_backend_lineage_is_refused_without_conversion() {
         let document = created.data.unwrap()["add_InferenceBackend"][0]["_docID"].clone();
         assert!(
             matches!(
-                gents_migration::ensure_migrations(&node).await,
-                Err(gents_migration::Error::UnknownLineage { .. })
+                ensure_runtime(&node).await,
+                Err(SchemaError::UnknownLineage { .. })
             ),
             "{fields:?}"
         );
@@ -56,29 +57,18 @@ async fn a_pre_identity_backend_lineage_is_refused_without_conversion() {
     }
 }
 
-/// A fresh store registers the current backend SDL directly; that version is canonical, so
-/// the store never reports it as off its own lineage.
+/// A fresh store registers the current backend SDL directly, on the baseline root.
 #[tokio::test]
-async fn a_fresh_store_registers_the_current_backend_sdl_on_the_canonical_lineage() {
-    let canonical =
-        gents_migration::canonical_versions().unwrap()[schemas::INFERENCE_BACKEND_NAME].clone();
-    let baseline = gents_migration::DEFAULT_BASELINE
+async fn a_fresh_store_registers_the_current_backend_sdl_on_the_baseline_root() {
+    let baseline = BASELINE
         .iter()
         .find(|entry| entry.name == schemas::INFERENCE_BACKEND_NAME)
         .unwrap();
     assert_eq!(baseline.sdl, schemas::INFERENCE_BACKEND);
-    assert_eq!(baseline.expected_version, Some(canonical.as_str()));
+    let canonical = baseline.expected_version.unwrap();
 
     let fresh = common::fresh_node().await;
-    let report = gents_migration::ensure_migrations(&fresh).await.unwrap();
-    assert!(
-        report
-            .warnings
-            .iter()
-            .all(|warning| !warning.starts_with(schemas::INFERENCE_BACKEND_NAME)),
-        "{:?}",
-        report.warnings
-    );
+    ensure_runtime(&fresh).await.unwrap();
     let version = fresh
         .get_collection(schemas::INFERENCE_BACKEND_NAME)
         .unwrap()
@@ -95,10 +85,6 @@ async fn a_fresh_store_registers_the_current_backend_sdl_on_the_canonical_lineag
         .unwrap()
         .unwrap();
     assert_eq!(direct_version.version_id, canonical);
-    let versions = fresh.get_all_collection_versions().await.unwrap();
-    assert!(gents_migration::non_canonical_store_lineages(&versions)
-        .unwrap()
-        .is_empty());
     fresh.shutdown().await.expect("shut down test node");
     direct.shutdown().await.expect("shut down test node");
 }

@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use super::admission_fixture::{published_admission_with_owner, PublishedAdmissionOptions};
 use super::{AwaitMode, ToolCallLifecycle};
 use crate::call::control::client::{apply_claimed, ClaimedTarget};
-use crate::call::hook::BackgroundExecutionRegistry;
+use crate::call::hook::background_executions::BackgroundExecutionRegistry;
 
 /// Applies a claimed `process_stop` the way the client-signed control owner
 /// does after verifying the client's intent: as the selected Agent, through
@@ -326,7 +326,8 @@ async fn client_unverified_stop_preserves_running_tool() {
             _ = token.cancelled() => {}
         }
         tokio::time::pause();
-        tokio::time::advance(crate::call::hook::LIVE_STOP_RELEASE_WAIT).await;
+        tokio::time::advance(crate::call::hook::background_executions::LIVE_STOP_RELEASE_WAIT)
+            .await;
         release_observed.notified().await;
         tokio::time::resume();
         let outcome = control.await.unwrap().unwrap();

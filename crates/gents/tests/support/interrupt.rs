@@ -288,10 +288,9 @@ async fn create_runtime_request_inner(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        node_did,
-        node_did,
-        agent_did,
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            node_did, node_did, agent_did, session_id,
+        ),
         content,
         execution_origin,
         created_at,

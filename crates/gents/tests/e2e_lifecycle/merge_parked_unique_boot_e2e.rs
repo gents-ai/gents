@@ -170,9 +170,9 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         .expect("reopen deadline")
         .expect("boot after a merge-parked unique-index conflict");
 
-    gents_store::schema::migration::ensure_migrations(&home.node)
+    gents_store::schema::ensure_runtime_schemas(&home.node)
         .await
-        .expect("ensure_migrations after boot");
+        .expect("ensure runtime schemas after boot");
 
     let mut docs = scan_endpoints(&home.node).await;
     docs.sort();

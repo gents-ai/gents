@@ -1,7 +1,7 @@
 use gents_protocol::request_admission::{
     validate_signing_fields, AgentRequestAdmissionKind, AgentRequestAdmissionRecord,
-    AgentRequestCreate, AgentRequestSigningFields, RequestAdmissionError, RequestPurpose,
-    RuntimeInternalSourceKind,
+    AgentRequestAdmissionWire, AgentRequestCreate, AgentRequestSigningFields,
+    RequestAdmissionError, RequestPurpose, RuntimeInternalSourceKind,
 };
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
@@ -132,19 +132,19 @@ pub fn verify_runtime_local_control_receipt(
 }
 
 pub fn row_admission(row: &AgentRequestRow) -> Result<AgentRequestAdmissionRecord> {
-    let admission = AgentRequestAdmissionRecord::from_wire_fields(
-        row.admission_kind.as_deref(),
-        row.admission_signer_did.as_deref(),
-        row.admission_signature.as_deref(),
-        row.enrollment_request_id.as_deref(),
-        row.enrollment_request_digest.as_deref(),
-        row.enrollment_admin_did.as_deref(),
-        row.enrollment_authorization_sequence,
-        row.enrollment_authorization_expires_at.as_deref(),
-        row.runtime_issuer_did.as_deref(),
-        row.runtime_source_request_id.as_deref(),
-        row.runtime_source_kind.as_deref(),
-    )
+    let admission = AgentRequestAdmissionRecord::from_wire(AgentRequestAdmissionWire {
+        kind: row.admission_kind.as_deref(),
+        signer_did: row.admission_signer_did.as_deref(),
+        signature: row.admission_signature.as_deref(),
+        enrollment_request_id: row.enrollment_request_id.as_deref(),
+        enrollment_request_digest: row.enrollment_request_digest.as_deref(),
+        enrollment_admin_did: row.enrollment_admin_did.as_deref(),
+        enrollment_authorization_sequence: row.enrollment_authorization_sequence,
+        enrollment_authorization_expires_at: row.enrollment_authorization_expires_at.as_deref(),
+        runtime_issuer_did: row.runtime_issuer_did.as_deref(),
+        runtime_source_request_id: row.runtime_source_request_id.as_deref(),
+        runtime_source_kind: row.runtime_source_kind.as_deref(),
+    })
     .map_err(RequestReceiptError::Admission)?;
     if admission.kind == AgentRequestAdmissionKind::Client
         && !(row

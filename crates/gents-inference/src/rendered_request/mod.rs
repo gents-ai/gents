@@ -10,10 +10,11 @@ pub use gents_loop::rendered_request::{
     scope, transport, AdmissionJoin, AssemblyBuildPath, AssemblyTrace, AssistantMessageId,
     CaptureOrderKey, CaptureScope, CaptureScopeKind, CaptureSeam, ContextAccounting,
     ContextCompactionReason, ContextInputComponents, ParsedProvenance, ProvenanceManifest,
-    ProvenanceStatus, RenderedCompletionRequest, RenderedRequestCaptureFactory,
-    RenderedRequestCaptureSink, RenderedRequestCapturingHttpClient, RenderedRequestComponents,
-    RenderedRequestContext, RenderedRequestSource, ThreadedToolResult, ASSEMBLY_TRACE_VERSION,
-    CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION, PROVENANCE_MANIFEST_VERSION,
+    ProvenanceStatus, ProviderRoute, RenderedAttempt, RenderedCompletionRequest,
+    RenderedRequestCaptureFactory, RenderedRequestCaptureSink, RenderedRequestCapturingHttpClient,
+    RenderedRequestComponents, RenderedRequestContext, RenderedRequestSource, ThreadedToolResult,
+    ASSEMBLY_TRACE_VERSION, CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION,
+    PROVENANCE_MANIFEST_VERSION,
 };
 pub use sink::defra_rendered_request_capture_factory_for_agent;
 #[cfg(any(test, feature = "test-fixtures"))]

@@ -50,7 +50,7 @@ gents-tools = { workspace = true }
 gents-toolcalls = { workspace = true }
 gents-automation = { workspace = true }
 gents-loop = { workspace = true }
-gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false, features = ["typescript"] }
+gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
 gents-service.workspace = true
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true

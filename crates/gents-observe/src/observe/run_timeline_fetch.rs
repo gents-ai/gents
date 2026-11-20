@@ -887,7 +887,7 @@ mod tests {
     #[tokio::test]
     async fn fetches_native_goal_history_without_projecting_usage_only_commits() {
         use gents_protocol::request_admission::{
-            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
         };
         use gents_store::identity::NodeIdentity;
         let (node_db, _user, _user_access, binding) =
@@ -928,10 +928,7 @@ mod tests {
         let mut request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "request-goal-history",
-            root.did(),
-            agent.did(),
-            agent.did(),
-            "session-goal-history",
+            RequestScope::new(root.did(), agent.did(), agent.did(), "session-goal-history"),
             "ship the timeline",
             "interactive",
             "2026-08-14T12:00:00Z",

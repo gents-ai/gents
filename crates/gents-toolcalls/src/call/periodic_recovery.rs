@@ -71,7 +71,7 @@ type PeriodicRecoverySweepFn = for<'a> fn(
     &'a std::sync::Arc<EmbeddedNode>,
     &'a str,
     &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    &'a crate::call::hook::BackgroundExecutionRegistry,
+    &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>>;
 
@@ -166,7 +166,7 @@ pub async fn run_periodic_recovery_sweeps_with_identities(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    background_executions: &crate::call::hook::BackgroundExecutionRegistry,
+    background_executions: &crate::call::hook::background_executions::BackgroundExecutionRegistry,
     goals: &dyn gents_session::session::message::SessionMessageGoals,
 ) -> Result<Vec<PeriodicRecoverySweepRun>> {
     let mut runs = Vec::with_capacity(PERIODIC_RECOVERY_SWEEP_EXECUTORS.len());
@@ -191,7 +191,7 @@ fn reconcile_terminal_parent_owned_tools<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
@@ -210,7 +210,7 @@ fn reconcile_orphaned_background_tools<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
@@ -229,7 +229,7 @@ fn reconcile_background_completion_side_effects<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
@@ -243,7 +243,7 @@ fn repair_terminal_requests<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
@@ -257,7 +257,7 @@ fn recover_inference_calls<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
@@ -271,7 +271,7 @@ fn settle_session_message_rows<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
@@ -311,7 +311,7 @@ fn recover_task_hook_records<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
@@ -330,7 +330,7 @@ fn redrive_owed_deliveries<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
-    _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _background_executions: &'a crate::call::hook::background_executions::BackgroundExecutionRegistry,
     _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {

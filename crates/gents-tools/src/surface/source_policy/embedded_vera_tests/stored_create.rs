@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
 use gents_store::config_client::owed::settle_owed_while_online;
@@ -82,10 +82,7 @@ async fn request(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         id,
-        home.node.did(),
-        user.did(),
-        agent,
-        "stored-create-session",
+        RequestScope::new(home.node.did(), user.did(), agent, "stored-create-session"),
         "hello",
         "interactive",
         chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),

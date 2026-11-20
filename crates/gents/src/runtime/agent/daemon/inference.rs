@@ -463,9 +463,8 @@ pub(super) mod tests {
     use gents_loop::tool::ToolDyn;
     use gents_protocol::row::AgentRequest;
     use gents_store::identity::{NodeIdentity, RuntimeNode};
-    use gents_toolcalls::call::hook::{
-        BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-    };
+    use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
+    use gents_toolcalls::call::hook::{BackgroundToolRegistry, FailurePolicy};
     use gents_tools::surface::AgentToolSurfaceConfig;
     use rig::completion::CompletionRequest;
     use std::sync::{atomic::Ordering, Arc};
@@ -811,10 +810,12 @@ pub(super) mod tests {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("request-{suffix}"),
-            agent_config.node_did(),
-            member.did(),
-            &agent_config.agent_did,
-            format!("session-{suffix}"),
+            gents_protocol::request_admission::RequestScope::new(
+                agent_config.node_did(),
+                member.did(),
+                &agent_config.agent_did,
+                format!("session-{suffix}"),
+            ),
             "run enrolled request",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

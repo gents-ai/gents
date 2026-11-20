@@ -31,7 +31,6 @@ gents-inference.workspace = true
 gents-p2p.workspace = true
 acp.workspace = true
 schema.workspace = true
-storage.workspace = true
 db.workspace = true
 document.workspace = true
 rapidhash = { workspace = true }
@@ -48,7 +47,6 @@ cursor.workspace = true
 defra-core.workspace = true
 gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
-gents-migration = { path = "../gents-migration" }
 defra-node.workspace = true
 events.workspace = true
 futures = "0.3"
@@ -64,7 +62,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 rig-core.workspace = true
-reqwest = { workspace = true, features = ["stream"] }
 tokio-util = "0.7"
 tempfile = "3"
 

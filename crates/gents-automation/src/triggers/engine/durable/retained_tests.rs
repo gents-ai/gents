@@ -1,6 +1,6 @@
 use super::*;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_store::config_client::ConfigAccess;
@@ -20,10 +20,7 @@ async fn signed_request(
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         id,
-        owner,
-        identity.did(),
-        identity.did(),
-        session,
+        RequestScope::new(owner, identity.did(), identity.did(), session),
         "Task assignment input",
         "interactive",
         "2026-10-21T00:00:00Z",

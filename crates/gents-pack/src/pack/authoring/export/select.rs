@@ -182,11 +182,7 @@ pub(super) fn close(
     let selected: BTreeSet<(Collection, String)> = queue.iter().cloned().collect();
     let mut documents = BTreeMap::new();
     let mut pulled = Vec::new();
-    let managed = |name: &str| {
-        gents_store::schema::migration::DEFAULT_REGISTRY
-            .managed_names()
-            .any(|managed| managed == name)
-    };
+    let managed = |name: &str| gents_store::schema::catalog::RUNTIME_CATALOG.manages(name);
     let mut collections = BTreeSet::new();
     for name in &selection.collections {
         if managed(name) {

@@ -28,8 +28,8 @@ by the owners Gents gives them, and a write tool an Agent signs would make
 the Agent their author. The mailbox is the one managed collection with a
 declaration of its own, the canonical `file_mailbox_item`, which its own
 validation fixes and the bounded write tool refuses separately. `managed` is
-the collection being in the product migration registry or replicated by the
-protocol. -/
+the collection being in the product's baseline schema catalog or replicated by
+the protocol. -/
 def writeDeclarationRefused («protected» managed mailbox : Bool) : Bool :=
   «protected» || (managed && !mailbox)
 

@@ -5,7 +5,7 @@ use std::time::Duration;
 use gents_documents::{TaskHook, TaskHookPhase};
 use gents_session::request::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
+use gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry;
 use gents_toolcalls::call::task_hooks::{
     recover_task_hook_records, HookCommandResult, RecordedHookAttempt, TaskHookRecord,
     TaskHookRecordStore,

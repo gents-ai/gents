@@ -60,9 +60,6 @@ tempfile = "3"
 kovan-map = "0.2.2"
 afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
 afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
-afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1", default-features = false, features = [
-    "afb-run",
-] }
 
 [dev-dependencies]
 gents-workspace-hack = { workspace = true }

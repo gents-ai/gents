@@ -1,5 +1,5 @@
 use super::*;
-use crate::call::hook::RetainedStopReceipt;
+use crate::call::hook::background_executions::RetainedStopReceipt;
 use crate::call::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
 use gents_protocol::tool_names::{
     AGENT_NEW_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,

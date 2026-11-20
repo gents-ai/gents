@@ -1,9 +1,12 @@
 use rapidhash::RapidHashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use gents_protocol::document_query::{Collection, Filter, Query, Selection};
 use gents_protocol::trigger_delivery::HandoffRoute;
+use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 
 use super::action_plan::{CreationPolicy, WorkspaceAdapterKind};
@@ -83,6 +86,98 @@ pub struct WorkspacePlacementDoc {
     pub dirty_base_summary: String,
     pub provisioning_state: String,
     pub observed_tree_hash: String,
+}
+
+const ISOLATED_WORKSPACE_FIELDS: &str = r#"
+    workspace_id
+    work_unit_id
+    repository_id
+    base_sha
+    branch
+    creation_policy
+    adapter
+    owner_node_did
+    writer_principal
+    integrator_principal
+    instruction_manifest
+    path_capability
+    seal_hash
+    lifecycle_state
+    caused_by_invocation_id
+    caused_by_correlation
+    handoff_id
+    reply_session_id
+    attempt
+"#;
+
+const PLACEMENT_FIELDS: &str = r#"
+    workspace_id
+    owner_node_did
+    host_path
+    repository_placement_id
+    adapter
+    adapter_version
+    dirty_base
+    dirty_base_summary
+    provisioning_state
+    observed_tree_hash
+"#;
+
+pub async fn read_isolated_workspace_doc(
+    access: &ConfigAccess,
+    workspace_id: &str,
+    owner_node_did: &str,
+) -> Result<Option<IsolatedWorkspaceDoc>> {
+    use gents_protocol::document_query::fields::isolated_workspace as fields;
+    read_node_scoped_doc(
+        access,
+        Query::select(Selection::owned(ISOLATED_WORKSPACE_FIELDS)).filter(
+            Filter::eq(fields::WORKSPACE_ID, workspace_id)
+                .and(Filter::eq(fields::OWNER_NODE_DID, owner_node_did)),
+        ),
+    )
+    .await
+}
+
+pub async fn read_workspace_placement_doc(
+    access: &ConfigAccess,
+    workspace_id: &str,
+    owner_node_did: &str,
+) -> Result<Option<WorkspacePlacementDoc>> {
+    use gents_protocol::document_query::fields::workspace_placement as fields;
+    read_node_scoped_doc(
+        access,
+        Query::select(Selection::owned(PLACEMENT_FIELDS)).filter(
+            Filter::eq(fields::WORKSPACE_ID, workspace_id)
+                .and(Filter::eq(fields::OWNER_NODE_DID, owner_node_did)),
+        ),
+    )
+    .await
+}
+
+async fn read_node_scoped_doc<C, T>(access: &ConfigAccess, query: Query<C>) -> Result<Option<T>>
+where
+    C: Collection,
+    T: DeserializeOwned,
+{
+    let response = access.read(&query.limit(2).render()).await?;
+    let mut found: Vec<T> = decode_access_rows(&response, C::NAME)?;
+    anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped {}", C::NAME);
+    Ok(found.pop())
+}
+
+pub(super) fn decode_access_rows<T>(
+    response: &serde_json::Value,
+    collection: &str,
+) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let values = response
+        .get("data")
+        .and_then(|data| data.get(collection))
+        .with_context(|| format!("{collection} query omitted rows"))?;
+    Ok(serde_json::from_value(values.clone())?)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

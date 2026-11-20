@@ -131,10 +131,12 @@ async fn enqueue_signed(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         entry.request_id.to_string(),
-        db.node_did(),
-        db.agent_did(),
-        db.agent_did(),
-        session_id,
+        gents_protocol::request_admission::RequestScope::new(
+            db.node_did(),
+            db.agent_did(),
+            db.agent_did(),
+            session_id,
+        ),
         format!("message {}", entry.request_id),
         "interactive",
         format!("2026-09-01T00:00:{arrival:02}Z"),

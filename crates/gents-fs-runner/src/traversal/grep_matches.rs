@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::context::RunnerContext;
 use crate::model::{Collected, GrepMatch};
 use crate::traversal::common::{
-    admit_next, should_ignore_path, sorted_children, Admitted, GitignoreStack, WalkState,
+    admit_next, should_ignore_path, sorted_children, Admitted, Sweep, WalkState,
 };
 
 const MAX_GREP_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -62,10 +62,9 @@ pub(crate) fn collect_grep_matches(
     pattern: &str,
     case_sensitive: bool,
     max_matches: usize,
-    mut walk: WalkState,
+    walk: WalkState,
 ) -> Result<CollectedGrep> {
-    let mut items = Vec::new();
-    let mut truncated = false;
+    let mut sweep = Sweep::new(walk);
     let mut file_stats = GrepFileStats::default();
     let needle = Needle::new(pattern, case_sensitive);
     let path_is_dir = path.is_dir();
@@ -74,117 +73,74 @@ pub(crate) fn collect_grep_matches(
     } else {
         path.parent().unwrap_or(path)
     };
+    let scan = GrepScan {
+        context,
+        traversal_root,
+        needle: &needle,
+        max_matches,
+    };
     if path_is_dir {
-        let mut ignores = GitignoreStack::new();
-        collect_grep_matches_inner(
-            context,
-            traversal_root,
-            path,
-            &needle,
-            max_matches,
-            &mut items,
-            &mut truncated,
-            &mut walk,
-            &mut file_stats,
-            &mut ignores,
-        )?;
+        collect_grep_matches_inner(&scan, path, &mut sweep, &mut file_stats)?;
     } else {
-        walk.admit_entry(context, path);
-        grep_file(
-            context,
-            traversal_root,
-            path,
-            &needle,
-            max_matches,
-            &mut items,
-            &mut truncated,
-            &mut walk,
-            &mut file_stats,
-            true,
-        )?;
+        sweep.walk.admit_entry(context, path);
+        grep_file(&scan, path, &mut sweep, &mut file_stats, true)?;
     }
-    let bytes_read = walk.bytes_read();
+    let bytes_read = sweep.walk.bytes_read();
     Ok(CollectedGrep {
-        collected: Collected {
-            items,
-            truncated,
-            walk: walk.into_stats(),
-        },
+        collected: sweep.finish(),
         bytes_read,
         file_stats,
         pattern_syntax: needle.syntax,
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn collect_grep_matches_inner(
-    context: &RunnerContext,
-    traversal_root: &Path,
-    dir: &Path,
-    needle: &Needle,
+struct GrepScan<'a> {
+    context: &'a RunnerContext,
+    traversal_root: &'a Path,
+    needle: &'a Needle,
     max_matches: usize,
-    matches: &mut Vec<GrepMatch>,
-    truncated: &mut bool,
-    walk: &mut WalkState,
+}
+
+fn collect_grep_matches_inner(
+    scan: &GrepScan<'_>,
+    dir: &Path,
+    sweep: &mut Sweep<GrepMatch>,
     file_stats: &mut GrepFileStats,
-    ignores: &mut GitignoreStack,
 ) -> Result<()> {
-    let pushed = ignores.push_dir(dir);
-    for entry in sorted_children(context, dir, walk)? {
-        if *truncated || walk.exhausted() {
+    let pushed = sweep.ignores.push_dir(dir);
+    for entry in sorted_children(scan.context, dir, &mut sweep.walk)? {
+        if sweep.truncated || sweep.walk.exhausted() {
             break;
         }
-        let (path, is_dir) = match admit_next(context, traversal_root, &entry, walk, ignores) {
+        let (path, is_dir) = match admit_next(
+            scan.context,
+            scan.traversal_root,
+            &entry,
+            &mut sweep.walk,
+            &sweep.ignores,
+        ) {
             Admitted::Skip => continue,
             Admitted::Stop => break,
             Admitted::Entry { path, is_dir } => (path, is_dir),
         };
         if is_dir {
-            collect_grep_matches_inner(
-                context,
-                traversal_root,
-                &path,
-                needle,
-                max_matches,
-                matches,
-                truncated,
-                walk,
-                file_stats,
-                ignores,
-            )?;
+            collect_grep_matches_inner(scan, &path, sweep, file_stats)?;
             continue;
         }
-        grep_file(
-            context,
-            traversal_root,
-            &path,
-            needle,
-            max_matches,
-            matches,
-            truncated,
-            walk,
-            file_stats,
-            false,
-        )?;
+        grep_file(scan, &path, sweep, file_stats, false)?;
     }
-    ignores.pop(pushed);
+    sweep.ignores.pop(pushed);
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn grep_file(
-    context: &RunnerContext,
-    traversal_root: &Path,
+    scan: &GrepScan<'_>,
     path: &Path,
-    needle: &Needle,
-    max_matches: usize,
-    matches: &mut Vec<GrepMatch>,
-    truncated: &mut bool,
-    walk: &mut WalkState,
+    sweep: &mut Sweep<GrepMatch>,
     file_stats: &mut GrepFileStats,
     explicit_file: bool,
 ) -> Result<()> {
-    if should_ignore_path(traversal_root, path) {
+    if should_ignore_path(scan.traversal_root, path) {
         return Ok(());
     }
     let Ok(file_metadata) = std::fs::metadata(path) else {
@@ -194,7 +150,10 @@ fn grep_file(
         file_stats.skipped_large_files += 1;
         return Ok(());
     }
-    if !walk.admit_bytes(context, path, file_metadata.len()) {
+    if !sweep
+        .walk
+        .admit_bytes(scan.context, path, file_metadata.len())
+    {
         return Ok(());
     }
     let Ok(bytes) = std::fs::read(path) else {
@@ -207,13 +166,13 @@ fn grep_file(
     }
     let contents = String::from_utf8_lossy(&bytes);
     for (idx, line) in contents.lines().enumerate() {
-        if matches.len() >= max_matches {
-            *truncated = true;
+        if sweep.items.len() >= scan.max_matches {
+            sweep.truncated = true;
             break;
         }
-        if needle.matches_line(line) {
-            matches.push(GrepMatch {
-                path: context.display_path(path),
+        if scan.needle.matches_line(line) {
+            sweep.items.push(GrepMatch {
+                path: scan.context.display_path(path),
                 line_number: idx + 1,
                 line: line.to_string(),
             });

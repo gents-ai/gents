@@ -109,7 +109,7 @@ pub(super) async fn seeded_request(
     request_id: &str,
 ) -> AgentRequest {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
 
     let actor: identity::Did = signer.did().parse().unwrap();
@@ -123,10 +123,7 @@ pub(super) async fn seeded_request(
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         request_id,
-        signer.node_did(),
-        signer.did(),
-        signer.did(),
-        &session_id,
+        RequestScope::new(signer.node_did(), signer.did(), signer.did(), &session_id),
         "hello",
         "interactive",
         "2026-04-15T00:00:00Z",

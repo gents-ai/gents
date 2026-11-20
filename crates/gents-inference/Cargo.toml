@@ -22,7 +22,6 @@ test-fixtures = ["gents-loop/test-fixtures", "test-home-guard", "axum/ws", "gent
 gents-store.workspace = true
 gents-documents.workspace = true
 acp.workspace = true
-schema.workspace = true
 db.workspace = true
 document.workspace = true
 rapidhash = { workspace = true }

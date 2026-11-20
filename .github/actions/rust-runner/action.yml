@@ -56,8 +56,7 @@ runs:
         mkdir -p "${RUNNER_TEMP}/tmp"
         echo "TMPDIR=${RUNNER_TEMP}/tmp" >> "${GITHUB_ENV}"
 
-    # gents-migration's build script compiles the fixture lens for WASM and
-    # the callback fixture and pack tests need WASI.
+    # The callback fixture and pack tests need WASI.
     - name: Install pinned Rust toolchain and WASM targets
       shell: bash
       run: .github/scripts/setup-rust.sh wasm32-wasip1

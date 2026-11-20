@@ -12,7 +12,7 @@ const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
     local_did: String,
-    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    background_executions: gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
     agents: Box<dyn AgentIdentityWatch>,
     cancel: CancellationToken,
@@ -31,7 +31,8 @@ pub(crate) async fn run_background_completion_observer(
 struct BackgroundCompletionObserver {
     node: Arc<EmbeddedNode>,
     local_did: String,
-    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    background_executions:
+        gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
     job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
     agents: Box<dyn AgentIdentityWatch>,
     cancel: CancellationToken,
@@ -43,7 +44,7 @@ impl BackgroundCompletionObserver {
     fn new(
         node: Arc<EmbeddedNode>,
         local_did: String,
-        background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+        background_executions: gents_toolcalls::call::hook::background_executions::BackgroundExecutionRegistry,
         job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
         agents: Box<dyn AgentIdentityWatch>,
         cancel: CancellationToken,

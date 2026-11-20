@@ -156,7 +156,9 @@ impl DefraSessionHook {
                     check_registry.set_stop_receipt(
                         &check_call,
                         &check_doc,
-                        crate::call::hook::RetainedStopReceipt::from_outcome(outcome),
+                        crate::call::hook::background_executions::RetainedStopReceipt::from_outcome(
+                            outcome,
+                        ),
                     );
                 }
                 check_registry.live_process_evidence(&check_call, &check_doc)
@@ -241,7 +243,7 @@ impl DefraSessionHook {
                         let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
                         if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome))
                             && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
-                            hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::call::hook::RetainedStopReceipt::from_outcome(&outcome));
+                            hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::call::hook::background_executions::RetainedStopReceipt::from_outcome(&outcome));
                             match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
                                 Ok(receipt) => {
                                     if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Backgrounded(receipt)); }
@@ -256,7 +258,7 @@ impl DefraSessionHook {
                             return;
                         }
                         if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome)) {
-                            let receipt = crate::call::hook::RetainedStopReceipt::from_outcome(&outcome);
+                            let receipt = crate::call::hook::background_executions::RetainedStopReceipt::from_outcome(&outcome);
                             hook.background_executions.retain_confirmed_worker(lifecycle, reservation, receipt);
                             if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
                             return;
@@ -283,7 +285,7 @@ impl DefraSessionHook {
                             let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
                             let needs_confirmation = gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome));
                             if needs_confirmation && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
-                                hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::call::hook::RetainedStopReceipt::from_outcome(&outcome));
+                                hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::call::hook::background_executions::RetainedStopReceipt::from_outcome(&outcome));
                                 match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
                                     Ok(receipt) => {
                                         if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Backgrounded(receipt)); }
@@ -298,7 +300,7 @@ impl DefraSessionHook {
                                 return;
                             }
                             if needs_confirmation {
-                                let receipt = crate::call::hook::RetainedStopReceipt::from_outcome(&outcome);
+                                let receipt = crate::call::hook::background_executions::RetainedStopReceipt::from_outcome(&outcome);
                                 hook.background_executions.retain_confirmed_worker(lifecycle, reservation, receipt);
                                 if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
                                 return;

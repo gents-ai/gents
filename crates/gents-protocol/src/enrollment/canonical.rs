@@ -1,4 +1,4 @@
-use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, FixedOffset, SecondsFormat, Utc};
 use sha2::{Digest as _, Sha256};
 
 use super::error::{EnrollmentError, Result};
@@ -7,6 +7,26 @@ use super::{
     ENROLLMENT_SCHEMA_DOMAIN, MAX_ENROLLMENT_FIELD_BYTES, OFFER_SIGNATURE_DOMAIN,
     REQUEST_SIGNATURE_DOMAIN, REVISION_SIGNATURE_DOMAIN, ROUTE_RECEIPT_SIGNATURE_DOMAIN,
 };
+
+pub const SIGNED_COMMAND_MAX_FUTURE_SKEW_SECS: i64 = 5;
+pub const SIGNED_COMMAND_MAX_AGE_SECS: i64 = 60;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignedCommandStaleness {
+    FromFuture,
+    Expired,
+}
+
+pub fn signed_command_staleness(
+    issued: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<SignedCommandStaleness> {
+    if issued > now + Duration::seconds(SIGNED_COMMAND_MAX_FUTURE_SKEW_SECS) {
+        return Some(SignedCommandStaleness::FromFuture);
+    }
+    (now - issued > Duration::seconds(SIGNED_COMMAND_MAX_AGE_SECS))
+        .then_some(SignedCommandStaleness::Expired)
+}
 
 pub fn canonical_enrollment_payload<'a>(fields: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
     canonical_domain_payload(ENROLLMENT_DIGEST_DOMAIN, fields)

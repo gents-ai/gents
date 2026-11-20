@@ -846,10 +846,12 @@ impl DefraSessionHook {
                     &self.node,
                     &self.actor_access()?,
                     &session_ref(&target),
-                    std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
-                        background_executions: self.background_executions.clone(),
-                        job_driver,
-                    }),
+                    std::sync::Arc::new(
+                        crate::call::hook::background_executions::RuntimeExecutionWitness {
+                            background_executions: self.background_executions.clone(),
+                            job_driver,
+                        },
+                    ),
                 )
                 .await?;
                 Ok(json_string(
