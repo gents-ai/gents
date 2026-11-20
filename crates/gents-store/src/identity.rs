@@ -313,6 +313,35 @@ pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
     Ok(lowercase_hex(&public_key_bytes))
 }
 
+/// The DID that signed a commit, from `_commits { signature { identity type } }`:
+/// the inverse of [`commit_signer_identity_for_did`]. DefraDB verifies the
+/// signature when the block arrives, so this names the node that wrote it.
+/// The DID is derived as DefraDB derives it at merge
+/// (`verified_signature_signer_did`), so a compressed secp256k1 or P-256
+/// header key names the same DID as its uncompressed form.
+pub fn commit_signer_did(identity: &str, signature_type: &str) -> Result<String> {
+    let parsed =
+        serde_json::from_value(serde_json::Value::from(signature_type)).map_err(|source| {
+            IdentityError::UnknownCommitSignatureType {
+                signature_type: signature_type.to_owned(),
+                source,
+            }
+        })?;
+    let key_type = match parsed {
+        defra_core::SignatureType::EdDSA => crypto::KeyType::Ed25519,
+        defra_core::SignatureType::ES256K => crypto::KeyType::Secp256k1,
+        defra_core::SignatureType::ES256 => crypto::KeyType::Secp256r1,
+        defra_core::SignatureType::BLSAugV1 => crypto::KeyType::Bls12381,
+    };
+    crypto::public_key_from_string(key_type, identity)
+        .and_then(|key| key.did())
+        .map_err(|source| IdentityError::UnreadableCommitSigner {
+            identity: identity.to_owned(),
+            signature_type: signature_type.to_owned(),
+            source,
+        })
+}
+
 /// DefraDB tolerates up to 60s of clock skew and its bearers carry no nonce,
 /// so a replayed bearer stays usable for at most two minutes.
 pub(crate) const DEFRADB_BEARER_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
