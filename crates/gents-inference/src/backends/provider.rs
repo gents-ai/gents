@@ -292,6 +292,7 @@ pub async fn discover_models(
     endpoint: &str,
     api_key: Option<&str>,
     oauth_credential: Option<&crate::auth::credential::OAuthCredential>,
+    client_version: Option<&str>,
 ) -> Result<Vec<AdvertisedModel>> {
     if kind.is_claude_platform() {
         return probe_platform_reachability(client, kind, endpoint).await;
@@ -326,6 +327,7 @@ pub async fn discover_models(
             let headers = match crate::clients::chatgpt_codex::build_chatgpt_codex_headers(
                 credential.account_id.as_deref(),
                 credential.is_fedramp,
+                client_version,
             ) {
                 Ok(headers) => headers,
                 Err(error) => {
@@ -340,7 +342,7 @@ pub async fn discover_models(
             }
             request = request.query(&[(
                 "client_version",
-                crate::clients::chatgpt_codex::chatgpt_codex_client_version(),
+                crate::clients::chatgpt_codex::chatgpt_codex_client_version(client_version),
             )]);
         } else if kind == BackendProviderKind::XaiGrokOAuth {
             let Some(credential) = oauth_credential else {
@@ -350,7 +352,7 @@ pub async fn discover_models(
                 );
             };
             request = request.bearer_auth(&credential.access_token);
-            let headers = match crate::clients::xai_grok::build_xai_grok_oauth_headers() {
+            let headers = match crate::clients::xai_grok::build_xai_grok_oauth_headers(client_version) {
                 Ok(headers) => headers,
                 Err(error) => {
                     tracing::Span::current().record("failure_class", "auth");

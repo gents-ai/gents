@@ -2,6 +2,7 @@ import Proofs.Store.Identity.Household
 import Proofs.Store.Identity.Automation
 import Proofs.Store.Identity.PackPlacementReaders
 import Proofs.Store.Identity.SignedCommand
+import Proofs.Store.DocumentAcpChoice
 
 namespace Identity.OwnerStaged
 
@@ -478,6 +479,105 @@ theorem runtime_selects_its_agent_for_the_configuring_user :
     [allowed 8 (agentSelected "user") "creator" "agents" "target" "read",
      allowed 8 (agentSelected "outsider") "creator" "agents" "target" "read"] = [true, false] := by
   native_decide
+
+/-! ### Readers of selected configuration (`Automation.publishEventConfiguration`,
+`Automation.publishCallbackReaders`)
+
+A Trigger, EventSource, Callback, CallbackBinding or CallbackModule is owned
+by the actor that created it, often a runtime Agent such as the Engineer.
+`reader` of configuration has no manager, so when a configuration actor that
+did not create the document selects another Agent, only the owner may grant
+that Agent `reader`. -/
+
+def readerAuthority : Authority := .configuration (some "node") .controlledAgent
+
+def runtimeTrigger : State :=
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "trigger", "runtime"⟩],
+    relations := [⟨"configuration", "trigger", "parent", .object "nodes" "node"⟩,
+      ⟨"nodes", "node", "administrator", .actor "admin"⟩],
+    enrolled := [] }
+
+def triggerReader (agent : String) : Relation :=
+  ⟨"configuration", "trigger", "reader", .actor agent⟩
+
+def triggerReadBy (requester agent : String) : State :=
+  request runtimeTrigger "runtime" agentsOf requester readerAuthority (triggerReader agent) true
+
+def triggerReadable (state : State) (agent : String) : Bool :=
+  allowed 8 state agent "configuration" "trigger" "read"
+
+theorem node_owner_cannot_grant_a_runtime_configuration_reader_directly :
+    triggerReadable (apply runtimeTrigger (.grantAs "user" (triggerReader "sibling"))) "sibling"
+      = false := by native_decide
+
+theorem runtime_grants_its_configuration_reader_for_the_configuring_user :
+    [triggerReadable (triggerReadBy "user" "sibling") "sibling",
+     triggerReadable (triggerReadBy "admin" "sibling") "sibling",
+     triggerReadable (triggerReadBy "outsider" "sibling") "sibling",
+     triggerReadable (triggerReadBy "user" "outsider") "outsider"] =
+      [true, true, false, false] := by
+  native_decide
+
+/-- How a configuration actor issues a change of a relation only the document's
+owner manages, on a home whose document access runs on `provider`. -/
+inductive Route where
+  /-- The actor changes the relation itself, and native ACP decides. -/
+  | direct
+  /-- The actor requests the change owner-staged (`decision`). -/
+  | ownerStaged
+  deriving DecidableEq, Repr
+
+/-- Decision (gents#3831): on the node's own store a configuration actor changes
+an owner-managed relation itself, as before; native ACP admits it for the
+owner and for the init User's admin relation, and refuses anyone else. A Vera
+home has no admin relation that reaches a document, so a change by an actor
+that does not own the document is refused there. On a Vera home the actor
+changes a document it owns itself, and requests any other change
+owner-staged: the runtime makes it as the owner when the owner is the runtime
+or one of its Agents, and nobody makes it when another identity owns the
+document. The actor's own document never waits on the Node authority the
+owner-staged request asks for. -/
+def configurationGrantRoute (provider : DocumentAcpChoice.Provider) (actorOwns : Bool) : Route :=
+  match provider, actorOwns with
+  | .nodeStore, _ => .direct
+  | .embeddedVera, true => .direct
+  | .embeddedVera, false => .ownerStaged
+
+theorem a_home_on_the_node_store_grants_configuration_as_before (actorOwns : Bool) :
+    configurationGrantRoute .nodeStore actorOwns = .direct := rfl
+
+theorem an_owner_grants_its_own_configuration_on_any_home
+    (provider : DocumentAcpChoice.Provider) :
+    configurationGrantRoute provider true = .direct := by
+  cases provider <;> rfl
+
+/-- On a Vera home a grant on configuration the actor does not own is requested
+owner-staged, and a change it makes is made by the document's owner: by the
+requester only when it owns the document, otherwise by the runtime as an owner
+that is the runtime or one of its Agents. -/
+theorem a_vera_home_grants_configuration_only_as_its_owner (state : State) (runtime : DID)
+    (agentsOf : DID → List DID) (requester : DID) (authority : Authority) (relation : Relation)
+    (owner : DID) :
+    configurationGrantRoute .embeddedVera false = .ownerStaged ∧
+      (outcome state runtime agentsOf requester authority relation = .direct →
+        foundOwner state runtime requester relation.resource relation.id = some requester) ∧
+      (outcome state runtime agentsOf requester authority relation = .staged owner →
+        owner = runtime ∨ owner ∈ agentsOf runtime) := by
+  refine ⟨rfl, ?_, staged_owner_is_runtime_or_its_agent state runtime agentsOf requester
+    authority relation owner⟩
+  intro direct
+  unfold outcome at direct
+  cases hA : authorized state requester relation authority <;>
+    cases hF : foundOwner state runtime requester relation.resource relation.id <;>
+    simp only [hA, hF, Bool.not_false, Bool.not_true, ite_true, ite_false, reduceCtorEq,
+      Bool.false_eq_true] at direct
+  rename_i found
+  by_cases same : found = requester
+  · simp [same]
+  · have differs : (found == requester) = false := by simpa using same
+    simp only [differs] at direct
+    by_cases staged : stagesAs runtime agentsOf found authority = true <;>
+      simp [staged] at direct
 
 /-- A document owned by neither the runtime nor one of its Agents is never
 staged, even for a requester that may update it. -/

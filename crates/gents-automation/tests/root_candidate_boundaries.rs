@@ -14,11 +14,11 @@ use std::sync::Arc;
 #[tokio::test]
 async fn other_provider_loop_has_no_codex_affinity() {
     let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
-    let model = ScriptedModel::new(vec![
+    let model = scripted([vec![
         RawStreamingChoice::Message("done".into()),
         RawStreamingChoice::FinalResponse(()),
-    ])
-    .with_provider_observer(Arc::new(|_, call| {
+    ]])
+    .observed(Arc::new(|_, call| {
         assert!(call.routing_affinity.is_none());
     }));
     let stream = run_loop_stream(
@@ -59,7 +59,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
             chunks.push(invalid_progress_call(8, "success"));
         }
         chunks.push(RawStreamingChoice::FinalResponse(()));
-        let model = ScriptedModel::new(chunks);
+        let model = scripted([chunks]);
         let stream = run_loop_stream(
             model.clone(),
             Some(hook.clone()),
@@ -84,7 +84,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
             error.contains("invalid_tool_call_budget_exhausted:"),
             "{error}"
         );
-        assert_eq!(model.seen_requests().await.len(), 1);
+        assert_eq!(model.requests().len(), 1);
         lifecycle
             .terminalize_owned(
                 gents_session::request::lifecycle::RequestTerminalOutcome::Failed,
@@ -157,7 +157,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         RawStreamingChoice::Message("reviewed".into()),
         RawStreamingChoice::FinalResponse(()),
     ]);
-    let model = ScriptedModel::new_turns(turns);
+    let model = scripted(turns);
     let tools = gents_tools::native::ToolSet::builder()
         .read_root(root.path())
         .bash_read_only()
@@ -181,7 +181,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
     )
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
-    let requests = model.seen_requests().await;
+    let requests = model.requests();
     assert_eq!(requests.len(), 3);
     let feedback = serde_json::to_string(
         &requests[1]
@@ -267,7 +267,7 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
             RawStreamingChoice::Message("unreached".into()),
             RawStreamingChoice::FinalResponse(()),
         ]);
-        let model = ScriptedModel::new_turns(turns);
+        let model = scripted(turns);
         let tools = gents_tools::native::ToolSet::builder()
             .read_root(root.path())
             .bash_read_only()
@@ -297,7 +297,7 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
             error.contains("invalid_tool_call_budget_exhausted:"),
             "unexpected owned loop error: {error}"
         );
-        assert_eq!(model.seen_requests().await.len(), 8);
+        assert_eq!(model.requests().len(), 8);
         let data = agent_query(
             &lifecycle.access().unwrap(),
             "{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }",
@@ -345,7 +345,7 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
         RawStreamingChoice::Message("unreached".into()),
         RawStreamingChoice::FinalResponse(()),
     ]);
-    let model = ScriptedModel::new_turns(turns);
+    let model = scripted(turns);
     let tools = gents_tools::native::ToolSet::builder()
         .read_root(root.path())
         .bash_read_only()
@@ -377,7 +377,7 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
         .iter()
         .all(|result| result.contains("duration_ms")));
     assert!(collected.tool_results[3].contains("repeated_tool_call_not_run"));
-    assert_eq!(model.seen_requests().await.len(), 5);
+    assert_eq!(model.requests().len(), 5);
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -406,7 +406,7 @@ async fn repeated_failures_are_identified_as_the_lean_model_derives_them() {
         ]);
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let stream = run_loop_stream(
-            ScriptedModel::new_turns(turns),
+            scripted(turns),
             Some(hook.clone()),
             TaggedMessage::unassociated(Message::user("call the tool")),
             Vec::new(),
@@ -501,7 +501,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
     let poison =
         serde_json::Value::String(gents_store::test_support::CORRUPT_TOOL_ARGS_589.to_string());
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "call-1".to_string(),
@@ -541,7 +541,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
         "the salvageable #589 payload must run the intended call, not waste a turn"
     );
 
-    let histories = model.seen_histories().await;
+    let histories = model.histories();
     assert_eq!(histories.len(), 2);
     assert_all_history_tool_args_object_shaped(&histories[1]);
     drop(node);
@@ -585,7 +585,7 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
 
     let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
 
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "call-1".to_string(),
@@ -645,7 +645,7 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         "a non-object-args call must terminalize failed/argumentInvalid, got: {rows:?}"
     );
 
-    let histories = model.seen_histories().await;
+    let histories = model.histories();
     assert_eq!(histories.len(), 2);
     assert_all_history_tool_args_object_shaped(&histories[1]);
 }
@@ -658,7 +658,7 @@ async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
         .with_goal_tools(std::sync::Arc::new(
             gents_automation::goal::goal_tools::GoalToolAnswers,
         ));
-    let model = ScriptedModel::new_turns(vec![
+    let model = scripted(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
                 "goal-call".into(),
@@ -696,7 +696,7 @@ async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
         .expect("unavailable attribution must terminate");
     assert!(error.contains("PromptCancelled"), "{error}");
     assert!(error.contains("attribution"), "{error}");
-    assert_eq!(model.seen_histories().await.len(), 1);
+    assert_eq!(model.histories().len(), 1);
 }
 
 fn threading_counter(
@@ -849,7 +849,7 @@ async fn threaded_assistant_turns_carry_ids_as_the_lean_model_threads_them() {
             RawStreamingChoice::Message("done".to_string()),
             RawStreamingChoice::FinalResponse(()),
         ]);
-        let model = ScriptedModel::new_turns(turns);
+        let model = scripted(turns);
         let stream = run_loop_stream(
             model.clone(),
             None::<gents_loop::session_hook::NoopSessionHook>,
@@ -861,8 +861,7 @@ async fn threaded_assistant_turns_carry_ids_as_the_lean_model_threads_them() {
         futures::pin_mut!(stream);
         while stream.next().await.is_some() {}
         let observed = model
-            .seen_histories()
-            .await
+            .histories()
             .iter()
             .skip(1)
             .map(|history| {

@@ -3505,6 +3505,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS
     );
     assert_eq!(
+        defaults["effective"]["title_timeout_secs"],
+        gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS
+    );
+    assert_eq!(
         defaults["effective"]["deadline_duration_secs"],
         gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS
     );
