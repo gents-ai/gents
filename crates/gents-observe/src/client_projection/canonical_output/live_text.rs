@@ -67,19 +67,24 @@ pub fn canonical_live_text(
         .lifecycle_state
         .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
     let view = super::project_canonical_live(
-        request_doc_id,
-        session_id,
-        request_doc_id,
-        &source,
-        &writer,
-        message_id.as_deref(),
-        request_node_did,
-        request.requester_did.as_deref(),
-        &canonical_store.transcript_messages,
-        &canonical_store.output_segments,
-        &[],
-        &[],
-        &[],
+        super::LiveReadScope {
+            request_doc_id,
+            session_id,
+            node_did: request_node_did,
+            requester_did: request.requester_did.as_deref(),
+        },
+        super::LiveStream {
+            source: &source,
+            writer: &writer,
+            message_id: message_id.as_deref(),
+        },
+        super::LiveEvidence {
+            headers: &canonical_store.transcript_messages,
+            segments: &canonical_store.output_segments,
+            denied_headers: &[],
+            denied_segments: &[],
+            dependency_denials: &[],
+        },
         OwnerLiveness {
             current_request: gents_protocol::output::live::observed_request_execution_owner(
                 request,

@@ -136,29 +136,6 @@ impl DbCredentialBearer {
         refresh_kind: OAuthRefreshKind,
         product: OAuthProduct,
     ) -> Self {
-        Self::with_cache(
-            node,
-            node_did,
-            provider,
-            credential_id,
-            is_owner,
-            None,
-            refresh_kind,
-            product,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_cache(
-        node: Arc<EmbeddedNode>,
-        node_did: impl Into<String>,
-        provider: impl Into<String>,
-        credential_id: impl Into<String>,
-        is_owner: bool,
-        cache_seed: Option<OAuthCredential>,
-        refresh_kind: OAuthRefreshKind,
-        product: OAuthProduct,
-    ) -> Self {
         Self {
             node,
             node_did: node_did.into(),
@@ -168,7 +145,7 @@ impl DbCredentialBearer {
                 .timeout(REFRESH_REQUEST_TIMEOUT)
                 .build()
                 .expect("reqwest client with a timeout builds like Client::new()"),
-            cache: Mutex::new(cache_seed),
+            cache: Mutex::new(None),
             refresh_lock: Mutex::new(None),
             is_owner,
             force_refresh: AtomicBool::new(false),
@@ -177,6 +154,12 @@ impl DbCredentialBearer {
             #[cfg(test)]
             token_url: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_cache_seed(mut self, seed: OAuthCredential) -> Self {
+        self.cache = Mutex::new(Some(seed));
+        self
     }
 
     /// Refreshes against `url` instead of the provider's token endpoint.

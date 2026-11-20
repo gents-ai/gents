@@ -669,25 +669,33 @@ async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself()
         let addr = listener.local_addr().unwrap();
         let graphql = format!("http://{addr}/api/v0/graphql");
         let app = runtime_contract_router(
-            graphql.clone(),
-            GraphqlEndpoint::anonymous(graphql.clone()),
-            "client-wire".into(),
-            owner.clone(),
-            "readwrite".into(),
-            Ok(None),
-            Vec::new(),
-            Some(plugin_home.path().display().to_string()),
-            None,
-            None,
-            None,
-            None,
-            crate::http::enrollment::empty_issuer_handle(),
-            crate::http::enrollment::empty_decision_service_handle(),
-            activation_runtime,
-            activation_observation,
-            Default::default(),
-            Default::default(),
-            document_acp,
+            RouterIdentity {
+                graphql: graphql.clone(),
+                p2p_graphql: GraphqlEndpoint::anonymous(graphql.clone()),
+                node_name: "client-wire".into(),
+                node_did: owner.clone(),
+                node_identity: None,
+                document_acp,
+            },
+            ToolSurface {
+                tool_ceiling: "readwrite".into(),
+                tool_root: Ok(None),
+                cli_tools: Vec::new(),
+                home: Some(plugin_home.path().display().to_string()),
+                store_dir: None,
+                mcp: None,
+            },
+            EnrollmentHandles {
+                offer_issuer: crate::http::enrollment::empty_issuer_handle(),
+                decisions: crate::http::enrollment::empty_decision_service_handle(),
+                p2p_admission: None,
+            },
+            RuntimeActivation {
+                runtime: activation_runtime,
+                observation: activation_observation,
+                replicated_schema: Default::default(),
+                serve_lifecycle: Default::default(),
+            },
             None,
         )
         .contract

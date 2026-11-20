@@ -126,32 +126,71 @@ pub fn empty_activation_state() -> (
     (Arc::new(OnceCell::new()), receiver)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a separate shared handle owned by the router state"
-)]
+pub struct RouterIdentity {
+    pub graphql: String,
+    pub p2p_graphql: GraphqlEndpoint,
+    pub node_name: String,
+    pub node_did: String,
+    pub node_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
+    pub document_acp: gents_store::local::document_acp::DocumentAcp,
+}
+
+pub struct ToolSurface {
+    pub tool_ceiling: String,
+    pub tool_root: Result<Option<String>, String>,
+    pub cli_tools: Vec<String>,
+    pub home: Option<String>,
+    pub store_dir: Option<std::path::PathBuf>,
+    pub mcp: Option<crate::http::mcp_server::McpServiceOptions>,
+}
+
+pub struct EnrollmentHandles {
+    pub offer_issuer: EnrollmentOfferIssuerHandle,
+    pub decisions: EnrollmentDecisionServiceHandle,
+    pub p2p_admission: Option<P2pAdmissionState>,
+}
+
+pub struct RuntimeActivation {
+    pub runtime: Arc<OnceCell<gents::Gents>>,
+    pub observation: watch::Receiver<RuntimeActivationObservation>,
+    pub replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
+    pub serve_lifecycle: ServeLifecycleHandle,
+}
+
 pub fn runtime_contract_router(
-    graphql: String,
-    p2p_graphql: GraphqlEndpoint,
-    node_name: String,
-    node_did: String,
-    tool_ceiling: String,
-    tool_root: Result<Option<String>, String>,
-    cli_tools: Vec<String>,
-    home: Option<String>,
-    store_dir: Option<std::path::PathBuf>,
-    mcp: Option<crate::http::mcp_server::McpServiceOptions>,
+    identity: RouterIdentity,
+    tools: ToolSurface,
+    enrollment: EnrollmentHandles,
+    activation: RuntimeActivation,
     backend_health: Option<gents_inference::backends::health::BackendHealthMap>,
-    p2p_admission: Option<P2pAdmissionState>,
-    enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
-    enrollment_decisions: EnrollmentDecisionServiceHandle,
-    activation_runtime: Arc<OnceCell<gents::Gents>>,
-    activation_observation: watch::Receiver<RuntimeActivationObservation>,
-    replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
-    serve_lifecycle: ServeLifecycleHandle,
-    document_acp: gents_store::local::document_acp::DocumentAcp,
-    node_identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
 ) -> RuntimeRouters {
+    let RouterIdentity {
+        graphql,
+        p2p_graphql,
+        node_name,
+        node_did,
+        node_identity,
+        document_acp,
+    } = identity;
+    let ToolSurface {
+        tool_ceiling,
+        tool_root,
+        cli_tools,
+        home,
+        store_dir,
+        mcp,
+    } = tools;
+    let EnrollmentHandles {
+        offer_issuer: enrollment_offer_issuer,
+        decisions: enrollment_decisions,
+        p2p_admission,
+    } = enrollment;
+    let RuntimeActivation {
+        runtime: activation_runtime,
+        observation: activation_observation,
+        replicated_schema,
+        serve_lifecycle,
+    } = activation;
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {

@@ -635,7 +635,9 @@ async fn a_window_brings_results_delivered_after_its_cut_but_not_as_rows() {
 
 #[tokio::test]
 async fn running_tool_pages_read_only_their_open_output_source() {
-    use crate::client_projection::canonical_output::project_canonical_live;
+    use crate::client_projection::canonical_output::{
+        project_canonical_live, LiveEvidence, LiveReadScope, LiveStream,
+    };
     use gents_protocol::output::{
         live::{LiveView, OwnerLiveness},
         OutputSource, OutputWriter,
@@ -701,19 +703,24 @@ async fn running_tool_pages_read_only_their_open_output_source() {
         tool_call_doc_id: tool.into(),
     };
     let view = project_canonical_live(
-        "request",
-        "live-page",
-        "request",
-        &source,
-        &writer,
-        None,
-        "node",
-        Some("reader"),
-        &[],
-        &page.canonical_dependencies.output_segments,
-        &[],
-        &[],
-        &[],
+        LiveReadScope {
+            request_doc_id: "request",
+            session_id: "live-page",
+            node_did: "node",
+            requester_did: Some("reader"),
+        },
+        LiveStream {
+            source: &source,
+            writer: &writer,
+            message_id: None,
+        },
+        LiveEvidence {
+            headers: &[],
+            segments: &page.canonical_dependencies.output_segments,
+            denied_headers: &[],
+            denied_segments: &[],
+            dependency_denials: &[],
+        },
         OwnerLiveness {
             current_request: None,
             live_tools: vec![tool],

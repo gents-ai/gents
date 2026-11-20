@@ -364,11 +364,11 @@ def contains(haystack, needle):
 FUNCTIONS = {"contains": contains, "fromJSON": json.loads, "always": lambda: True}
 
 
-def keep_condition():
-    text = WORKFLOW.read_text()
+def keep_condition(workflow=WORKFLOW):
+    text = workflow.read_text()
     match = re.search(r"^  GENTS_CI_KEEP_TARGET_TREE: >-\n((?:    .*\n)+)", text, re.MULTILINE)
     if match is None:
-        raise AssertionError("ci.yml must set GENTS_CI_KEEP_TARGET_TREE at workflow level")
+        raise AssertionError(f"{workflow.name} must set GENTS_CI_KEEP_TARGET_TREE at workflow level")
     folded = " ".join(line.strip() for line in match.group(1).splitlines())
     inner = re.fullmatch(r"\$\{\{(.*)\}\}", folded)
     if inner is None:
@@ -586,9 +586,14 @@ class KeptTreeTrustTests(unittest.TestCase):
     def test_only_the_workflow_condition_selects_a_kept_tree(self):
         script = (Path(__file__).with_name("setup-rust-build-cache.sh")).read_text()
         self.assertIn('"${GENTS_CI_KEEP_TARGET_TREE:-}" == "true"', script)
-        workflow = WORKFLOW.read_text()
-        self.assertEqual(workflow.count("GENTS_CI_KEEP_TARGET_TREE"), 1,
-                         "no job or step may override the workflow-level condition")
+        for path in sorted(WORKFLOW.parent.glob("*.yml")):
+            text = path.read_text()
+            if "GENTS_CI_KEEP_TARGET_TREE" not in text:
+                continue
+            with self.subTest(workflow=path.name):
+                self.assertEqual(text.count("GENTS_CI_KEEP_TARGET_TREE"), 1,
+                                 "no job or step may override the workflow-level condition")
+                self.assertEqual(keep_condition(path), keep_condition())
 
 
 if __name__ == "__main__":

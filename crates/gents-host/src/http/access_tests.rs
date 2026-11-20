@@ -91,36 +91,44 @@ struct Fixture {
 fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
     let (runtime, observation) = crate::http::router::empty_activation_state();
     crate::http::runtime_contract_router(
-        format!("{endpoint}/api/v0/graphql"),
-        gents_store::config_client::GraphqlEndpoint::as_principal(
-            format!("{endpoint}/api/v0/graphql"),
-            owner.did(),
-        )
-        .with_client_signing_capability(
-            gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-                owner.private_key_bytes(),
+        crate::http::router::RouterIdentity {
+            graphql: format!("{endpoint}/api/v0/graphql"),
+            p2p_graphql: gents_store::config_client::GraphqlEndpoint::as_principal(
+                format!("{endpoint}/api/v0/graphql"),
+                owner.did(),
+            )
+            .with_client_signing_capability(
+                gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+                    owner.private_key_bytes(),
+                )
+                .unwrap(),
             )
             .unwrap(),
-        )
-        .unwrap(),
-        "test-runtime".into(),
-        owner.did().into(),
-        "readwrite".into(),
-        Ok(Some("/private/operator/workspace".into())),
-        Vec::new(),
-        Some("/private/operator/home".into()),
+            node_name: "test-runtime".into(),
+            node_did: owner.did().into(),
+            node_identity: Some(std::sync::Arc::new(owner.clone())),
+            document_acp: Default::default(),
+        },
+        crate::http::router::ToolSurface {
+            tool_ceiling: "readwrite".into(),
+            tool_root: Ok(Some("/private/operator/workspace".into())),
+            cli_tools: Vec::new(),
+            home: Some("/private/operator/home".into()),
+            store_dir: None,
+            mcp: None,
+        },
+        crate::http::router::EnrollmentHandles {
+            offer_issuer: crate::http::enrollment::empty_issuer_handle(),
+            decisions: crate::http::enrollment::empty_decision_service_handle(),
+            p2p_admission: None,
+        },
+        crate::http::router::RuntimeActivation {
+            runtime,
+            observation,
+            replicated_schema: Default::default(),
+            serve_lifecycle: Default::default(),
+        },
         None,
-        None,
-        None,
-        None,
-        crate::http::enrollment::empty_issuer_handle(),
-        crate::http::enrollment::empty_decision_service_handle(),
-        runtime,
-        observation,
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Some(std::sync::Arc::new(owner.clone())),
     )
     .contract
     .merge(gents_store::config_client::OwnerStagedRoute::new().router())

@@ -1,6 +1,6 @@
 use super::*;
 use gents_observe::client_projection::canonical_output::{
-    project_canonical_live, CanonicalMessageProjection,
+    project_canonical_live, CanonicalMessageProjection, LiveEvidence, LiveReadScope, LiveStream,
 };
 
 #[cfg(test)]
@@ -292,19 +292,24 @@ fn canonical_live_tool_output(
         .and_then(|row| row.lifecycle_state)
         .is_some_and(RequestLifecycleState::is_terminal);
     let view = project_canonical_live(
-        request_doc_id,
-        session_id,
-        request_doc_id,
-        &source,
-        &writer,
-        None,
-        node_did,
-        tool.requester_did.as_deref(),
-        &headers,
-        output_segments,
-        denied_headers,
-        denied_segments,
-        dependency_denials,
+        LiveReadScope {
+            request_doc_id,
+            session_id,
+            node_did,
+            requester_did: tool.requester_did.as_deref(),
+        },
+        LiveStream {
+            source: &source,
+            writer: &writer,
+            message_id: None,
+        },
+        LiveEvidence {
+            headers: &headers,
+            segments: output_segments,
+            denied_headers,
+            denied_segments,
+            dependency_denials,
+        },
         OwnerLiveness {
             current_request: None,
             live_tools: if tool.lifecycle_state.as_deref() == Some("running") {

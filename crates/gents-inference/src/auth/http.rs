@@ -312,16 +312,16 @@ pub(crate) async fn bootstrap_oauth_client_typed(
     let credential_id = credential.credential_id.clone();
     let provider = provider.to_string();
     let bearer = shared_bearer(&node, &credential_id, || {
-        DbCredentialBearer::with_cache(
+        DbCredentialBearer::new(
             node.clone(),
             node_did,
             provider,
             credential_id.clone(),
             true,
-            Some(credential.clone()),
             refresh_kind,
             product,
         )
+        .with_cache_seed(credential.clone())
     });
     bearer.adopt_document(&credential).await;
     Ok((bearer, credential))

@@ -9,7 +9,9 @@ use super::gate::mutation_write_gate;
 use super::native::NativeOperationTracker;
 #[cfg(test)]
 use super::rollback::RollbackDropCleanupPause;
-use super::rollback::{begin_embedded_owned, begin_http_owned, RollbackOnDrop};
+use super::rollback::{
+    begin_embedded_owned, begin_http_owned, EmbeddedBegin, EmbeddedOwnerHandles, RollbackOnDrop,
+};
 use super::{ConfigClientError, GraphqlEndpoint, Result};
 use crate::config_client::write_telemetry::WriteOperation;
 use crate::config_client::AgentPublicationObserver;
@@ -300,13 +302,17 @@ impl<'a> ConfigApplyTxn<'a> {
             | EmbeddedTransactionPurpose::ReadOnly => Arc::new(NativeOperationTracker::default()),
         };
         let (rollback_on_drop, handle) = begin_embedded_owned(
-            Arc::clone(node),
-            native_gate,
-            read_only,
-            operation,
-            write_guard,
-            Arc::clone(&native_operations),
-            cancellation_rollback_scheduled,
+            EmbeddedOwnerHandles {
+                node: Arc::clone(node),
+                native_gate,
+                native_operations: Arc::clone(&native_operations),
+                cancellation_rollback_scheduled,
+            },
+            EmbeddedBegin {
+                read_only,
+                operation,
+                write_guard,
+            },
             |_| std::future::ready(()),
         )
         .await?;

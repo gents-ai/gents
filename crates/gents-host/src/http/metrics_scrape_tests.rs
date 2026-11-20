@@ -187,25 +187,35 @@ async fn wrong_or_duplicated_bearer_is_refused() {
 fn runtime_state(graphql: &str, node_did: &str) -> crate::http::router::RuntimeHttpState {
     let (runtime, observation) = crate::http::router::empty_activation_state();
     crate::http::runtime_contract_router(
-        format!("{graphql}/api/v0/graphql"),
-        gents_store::config_client::GraphqlEndpoint::anonymous(format!("{graphql}/api/v0/graphql")),
-        "scrape-test".into(),
-        node_did.into(),
-        "readwrite".into(),
-        Ok(None),
-        Vec::new(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        crate::http::enrollment::empty_issuer_handle(),
-        crate::http::enrollment::empty_decision_service_handle(),
-        runtime,
-        observation,
-        Default::default(),
-        Default::default(),
-        Default::default(),
+        crate::http::router::RouterIdentity {
+            graphql: format!("{graphql}/api/v0/graphql"),
+            p2p_graphql: gents_store::config_client::GraphqlEndpoint::anonymous(format!(
+                "{graphql}/api/v0/graphql"
+            )),
+            node_name: "scrape-test".into(),
+            node_did: node_did.into(),
+            node_identity: None,
+            document_acp: Default::default(),
+        },
+        crate::http::router::ToolSurface {
+            tool_ceiling: "readwrite".into(),
+            tool_root: Ok(None),
+            cli_tools: Vec::new(),
+            home: None,
+            store_dir: None,
+            mcp: None,
+        },
+        crate::http::router::EnrollmentHandles {
+            offer_issuer: crate::http::enrollment::empty_issuer_handle(),
+            decisions: crate::http::enrollment::empty_decision_service_handle(),
+            p2p_admission: None,
+        },
+        crate::http::router::RuntimeActivation {
+            runtime,
+            observation,
+            replicated_schema: Default::default(),
+            serve_lifecycle: Default::default(),
+        },
         None,
     )
     .scrape_state
