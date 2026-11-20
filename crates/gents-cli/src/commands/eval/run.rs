@@ -84,9 +84,11 @@ pub(super) async fn resume(
         out,
         runner::resume(
             &ctx.access,
-            &ctx.owner,
-            &args.run_id,
-            &ctx.runs_dir(),
+            runner::RunLocation {
+                owner: &ctx.owner,
+                run_id: &args.run_id,
+                runs_dir: &ctx.runs_dir(),
+            },
             deps.executor,
             deps.registry,
             deps.cancel.clone(),

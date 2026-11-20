@@ -313,33 +313,41 @@ mod tests {
         let (activation_runtime, activation_observation) =
             crate::http::router::empty_activation_state();
         let router = crate::http::runtime_contract_router(
-            format!("http://{addr}/api/v0/graphql"),
-            gents_store::config_client::GraphqlEndpoint::as_principal(
-                format!("http://{addr}/api/v0/graphql"),
-                owner.did(),
-            )
-            .with_client_signing_capability(
-                gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-                    owner.private_key_bytes(),
+            crate::http::router::RouterIdentity {
+                graphql: format!("http://{addr}/api/v0/graphql"),
+                p2p_graphql: gents_store::config_client::GraphqlEndpoint::as_principal(
+                    format!("http://{addr}/api/v0/graphql"),
+                    owner.did(),
+                )
+                .with_client_signing_capability(
+                    gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+                        owner.private_key_bytes(),
+                    )?,
                 )?,
-            )?,
-            "identity-test".into(),
-            owner.did().into(),
-            "readwrite".into(),
-            Ok(None),
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            crate::http::enrollment::empty_issuer_handle(),
-            crate::http::enrollment::empty_decision_service_handle(),
-            activation_runtime,
-            activation_observation,
-            Default::default(),
-            Default::default(),
-            Default::default(),
+                node_name: "identity-test".into(),
+                node_did: owner.did().into(),
+                node_identity: None,
+                document_acp: Default::default(),
+            },
+            crate::http::router::ToolSurface {
+                tool_ceiling: "readwrite".into(),
+                tool_root: Ok(None),
+                cli_tools: Vec::new(),
+                home: None,
+                store_dir: None,
+                mcp: None,
+            },
+            crate::http::router::EnrollmentHandles {
+                offer_issuer: crate::http::enrollment::empty_issuer_handle(),
+                decisions: crate::http::enrollment::empty_decision_service_handle(),
+                p2p_admission: None,
+            },
+            crate::http::router::RuntimeActivation {
+                runtime: activation_runtime,
+                observation: activation_observation,
+                replicated_schema: Default::default(),
+                serve_lifecycle: Default::default(),
+            },
             None,
         )
         .contract
