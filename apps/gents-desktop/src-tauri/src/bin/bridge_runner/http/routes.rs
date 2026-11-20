@@ -28,7 +28,7 @@ use gents_desktop_bridge::commands::{
 };
 use gents_desktop_bridge::interrupt::interrupt_request;
 use gents_desktop_bridge::provenance::session_provenance_request;
-use gents_desktop_bridge::snapshot::{build_session_live_delta, LiveDeltaBase};
+use gents_desktop_bridge::snapshot::build_session_live_delta;
 use gents_desktop_bridge::tauri_commands::inference_setup::{
     discover_inference_models_for_core, inference_backend_recommendation,
     inference_model_recommendation, InferenceBackendRecommendationRequest,
@@ -45,10 +45,10 @@ use gents_desktop_bridge::types::{
     DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
     DesktopSessionProvenanceRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
     InferenceProfileSaveRequest, NodeConfigSaveRequest, RuntimeAccessConnectRequest,
-    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest,
-    SessionRowsWindow, TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest,
-    ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
-    TriggerSaveRequest,
+    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionLiveDeltaRequest,
+    SessionRenameRequest, SessionRowsWindow, TaskRunRequest, TaskSaveRequest,
+    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
+    TriggerDeleteRequest, TriggerSaveRequest,
 };
 use gents_server::packs;
 
@@ -70,20 +70,6 @@ struct SessionRowsRequest {
     session_id: String,
     window: SessionRowsWindow,
     limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SessionLiveDeltaRequest {
-    #[serde(default)]
-    node_did: Option<String>,
-    session_id: String,
-    request_id: String,
-    base_live_cursor: String,
-    base_content_byte_len: usize,
-    base_content_hash: String,
-    base_reasoning_byte_len: usize,
-    base_reasoning_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -441,13 +427,7 @@ pub(super) async fn handle_request(
                 &request.session_id,
                 request.node_did.as_deref(),
                 &request.request_id,
-                LiveDeltaBase {
-                    cursor: &request.base_live_cursor,
-                    content_byte_len: request.base_content_byte_len,
-                    content_hash: &request.base_content_hash,
-                    reasoning_byte_len: request.base_reasoning_byte_len,
-                    reasoning_hash: &request.base_reasoning_hash,
-                },
+                request.base(),
             )
             .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&delta)?))

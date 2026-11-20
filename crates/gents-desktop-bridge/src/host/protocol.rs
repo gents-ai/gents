@@ -479,14 +479,17 @@ pub struct SessionLiveDeltaArgs {
     pub base_reasoning_hash: String,
 }
 
-impl SessionLiveDeltaArgs {
-    pub fn base(&self) -> crate::snapshot::LiveDeltaBase<'_> {
-        crate::snapshot::LiveDeltaBase {
-            cursor: &self.base_live_cursor,
-            content_byte_len: self.base_content_byte_len,
-            content_hash: &self.base_content_hash,
-            reasoning_byte_len: self.base_reasoning_byte_len,
-            reasoning_hash: &self.base_reasoning_hash,
+impl From<SessionLiveDeltaArgs> for crate::types::SessionLiveDeltaRequest {
+    fn from(args: SessionLiveDeltaArgs) -> Self {
+        Self {
+            session_id: args.session_id,
+            node_did: Some(args.node_did),
+            request_id: args.request_id,
+            base_live_cursor: args.base_live_cursor,
+            base_content_byte_len: args.base_content_byte_len,
+            base_content_hash: args.base_content_hash,
+            base_reasoning_byte_len: args.base_reasoning_byte_len,
+            base_reasoning_hash: args.base_reasoning_hash,
         }
     }
 }

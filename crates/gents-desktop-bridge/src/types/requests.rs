@@ -689,6 +689,32 @@ pub struct SessionHistoryPage {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLiveDeltaRequest {
+    pub session_id: String,
+    #[ts(optional = nullable)]
+    pub node_did: Option<String>,
+    pub request_id: String,
+    pub base_live_cursor: String,
+    pub base_content_byte_len: usize,
+    pub base_content_hash: String,
+    pub base_reasoning_byte_len: usize,
+    pub base_reasoning_hash: String,
+}
+
+impl SessionLiveDeltaRequest {
+    pub fn base(&self) -> crate::snapshot::LiveDeltaBase<'_> {
+        crate::snapshot::LiveDeltaBase {
+            cursor: &self.base_live_cursor,
+            content_byte_len: self.base_content_byte_len,
+            content_hash: &self.base_content_hash,
+            reasoning_byte_len: self.base_reasoning_byte_len,
+            reasoning_hash: &self.base_reasoning_hash,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionContextDetailsRequest {
     pub node_did: String,

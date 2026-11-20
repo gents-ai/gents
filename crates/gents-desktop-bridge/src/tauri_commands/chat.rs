@@ -62,11 +62,11 @@ pub async fn desktop_goal_submission_acknowledge(
         .await
         .map_err(BridgeError::classify_transport_error)
 }
-use crate::snapshot::{build_session_live_delta, LiveDeltaBase};
+use crate::snapshot::build_session_live_delta;
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    ChatSendRequest, ChatSendResult, DesktopSessionSnapshot, SessionLiveDeltaView,
-    SessionRenameRequest, SessionRowsView, SessionRowsWindow,
+    ChatSendRequest, ChatSendResult, DesktopSessionSnapshot, SessionLiveDeltaRequest,
+    SessionLiveDeltaView, SessionRenameRequest, SessionRowsView, SessionRowsWindow,
 };
 
 #[tauri::command]
@@ -142,38 +142,24 @@ pub async fn desktop_session_reload(
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn desktop_session_live_delta(
-    session_id: String,
-    node_did: Option<String>,
-    request_id: String,
-    base_live_cursor: String,
-    base_content_byte_len: usize,
-    base_content_hash: String,
-    base_reasoning_byte_len: usize,
-    base_reasoning_hash: String,
+    request: SessionLiveDeltaRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<SessionLiveDeltaView>, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
-    let node_did = Some(crate::commands::session::resolve_session_node(
-        &session_id,
-        node_did,
-    )?);
+    let node_did = crate::commands::session::resolve_session_node(
+        &request.session_id,
+        request.node_did.clone(),
+    )?;
     Ok(Some(
         build_session_live_delta(
             core.as_ref(),
-            &session_id,
-            node_did.as_deref(),
-            &request_id,
-            LiveDeltaBase {
-                cursor: &base_live_cursor,
-                content_byte_len: base_content_byte_len,
-                content_hash: &base_content_hash,
-                reasoning_byte_len: base_reasoning_byte_len,
-                reasoning_hash: &base_reasoning_hash,
-            },
+            &request.session_id,
+            Some(&node_did),
+            &request.request_id,
+            request.base(),
         )
         .await
         .map_err(BridgeError::classify_transport_error)?,
