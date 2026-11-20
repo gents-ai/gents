@@ -558,8 +558,9 @@ jobs:
         run: .github/scripts/host-runtime-service.sh verify
 
   # With GATE_PORTABLE_SHARDS set, the portable groups' crates compile once
-  # here into a nextest archive; `shard` runs slices of it and compiles nothing.
-  # With one slice it runs here, as one partition per portable host group.
+  # here. With one slice it runs here, as the role's hash partitions, straight
+  # from the build; with more they go into a nextest archive and `shard` runs
+  # slices of it, compiling nothing.
   build:
     name: build (${{ matrix.archive }}${{ matrix.partition && format(' {0}/{1}', matrix.partition, matrix.partitions) || '' }})
     needs: [plan, repository-guard]
@@ -599,7 +600,7 @@ jobs:
       - name: Install cargo-nextest
         run: .github/scripts/setup-nextest.sh
 
-      - name: Build the ${{ matrix.archive }} test archive
+      - name: Build the ${{ matrix.archive }} tests
         run: make gate-run JOB="build:${{ matrix.archive }}${{ matrix.partition && format(':{0}', matrix.partition) || '' }}"
 
       - name: Upload the ${{ matrix.archive }} test archive
