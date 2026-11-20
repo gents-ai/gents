@@ -319,26 +319,44 @@ pub async fn wire_pack_plugins(
     agents: &[String],
     signers: WireSigners,
 ) -> Result<Vec<Value>> {
-    wire_pack_plugins_consenting(access, owner, home, pack, agents, false, false, signers).await
+    wire_pack_plugins_consenting(
+        access,
+        owner,
+        home,
+        pack,
+        agents,
+        WireConsent {
+            dynamic: false,
+            tool_calls: false,
+        },
+        signers,
+    )
+    .await
 }
 
-/// [`wire_pack_plugins`], with the node owner's consent to dynamic scripts
-/// for this pack's job blocks when `dynamic_consent` is set, and to its
-/// plugins calling each agent's own tools when `tool_calls_consent` is.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each consent is a separate flag the node owner approves"
-)]
+/// What the node owner approved for a pack's plugins when its install was
+/// approved: dynamic scripts in their job blocks, and calls to each agent's
+/// own tools ([`WireRequest`]'s `dynamic_consent` and `tool_calls_consent`).
+#[derive(Clone, Copy)]
+pub struct WireConsent {
+    pub dynamic: bool,
+    pub tool_calls: bool,
+}
+
+/// [`wire_pack_plugins`], with the node owner's `consent`.
 pub async fn wire_pack_plugins_consenting(
     access: &ConfigAccess,
     owner: &str,
     home: &Path,
     pack: &ResolvedPack,
     agents: &[String],
-    dynamic_consent: bool,
-    tool_calls_consent: bool,
+    consent: WireConsent,
     signers: WireSigners,
 ) -> Result<Vec<Value>> {
+    let WireConsent {
+        dynamic: dynamic_consent,
+        tool_calls: tool_calls_consent,
+    } = consent;
     let namespace = &pack.manifest().metadata.namespace;
     let mut wired = Vec::new();
     for agent in agents {

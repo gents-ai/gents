@@ -9,7 +9,7 @@ use crate::background::job::admit::Refusal;
 use crate::background::job::driver::tests::{pinned_job_row, settle_row, start_running};
 use crate::background::job::driver::{load_lifecycle, settle_plugin_job, Settlement};
 use crate::background::job::input::tests::{
-    agent_did, live_settings, new_job, node_did, request_as, Job,
+    agent_did, live_settings, new_job, node_did, request_as, ChildRequest, Job,
 };
 use crate::background::job::records::{read_pin, read_progress, write_pin_in_txn};
 use crate::background::status::ProcessControlScope;
@@ -58,15 +58,17 @@ fn await_user() -> Settlement {
 async fn child(job: &Job, row: &str, request_id: &str, slot: &str, attempt: u32, title: &str) {
     request_as(
         &job.access,
-        row,
-        request_id,
-        &job_session_id(row, slot, attempt),
-        &job_spawn_key(row, slot, attempt),
-        "agent-a",
-        "processing",
-        Some(title),
-        "2026-01-01T00:00:00Z",
-        None,
+        &ChildRequest {
+            chain: row,
+            request_id,
+            session_id: &job_session_id(row, slot, attempt),
+            retry_key: &job_spawn_key(row, slot, attempt),
+            agent_did: "agent-a",
+            state: "processing",
+            title: Some(title),
+            created_at: "2026-01-01T00:00:00Z",
+            terminalized_at: None,
+        },
     )
     .await;
 }

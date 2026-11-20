@@ -488,20 +488,24 @@ impl NodePacks<'_> {
             crate::operations::pack::install_value(PackActor::Agent, &change.variables, name)
         };
         let mut prepared = super::prepare_document_pack_archive_with_provisioner(
-            self.access,
-            self.node_did,
+            &crate::pack::InstallTarget {
+                access: self.access,
+                owner: self.node_did,
+                plugin_home: self.home,
+            },
             distribution.archive(),
-            &change.inference_slots,
-            &dependencies
-                .iter()
-                .map(Distribution::archive)
-                .collect::<Vec<_>>(),
+            &crate::pack::PackGraphInputs {
+                dependencies: &dependencies
+                    .iter()
+                    .map(Distribution::archive)
+                    .collect::<Vec<_>>(),
+                requested: &change.inference_slots,
+                environment: &environment,
+                overrides: &crate::operations::pack::dependency_overrides(&change.variables),
+            },
             InstalledVia::SelfConfig,
             self.grants_authority,
-            self.home,
-            &environment,
             provisioner,
-            &crate::operations::pack::dependency_overrides(&change.variables),
         )
         .await?;
         for source in std::iter::once(distribution).chain(dependencies) {
@@ -548,19 +552,23 @@ impl NodePacks<'_> {
         profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
     ) -> Result<(InstallReport, Value)> {
         let receipt = super::install_prepared_document_pack(
-            self.access,
-            self.node_did,
+            &crate::pack::InstallTarget {
+                access: self.access,
+                owner: self.node_did,
+                plugin_home: self.home,
+            },
             distribution.archive(),
             &dependencies
                 .iter()
                 .map(Distribution::archive)
                 .collect::<Vec<_>>(),
             prepared,
-            self.home,
             self.grants_authority,
             InstalledVia::SelfConfig,
-            edited,
-            profile_policy,
+            crate::pack::DocumentGraphPolicy {
+                drift: edited,
+                profiles: profile_policy,
+            },
         )
         .await?;
         let effective = self
@@ -678,8 +686,10 @@ impl NodePacks<'_> {
             home,
             distribution.archive(),
             self.grants_authority,
-            Some(self.node_did),
-            bindings,
+            crate::pack::plugin_lifecycle::PluginSlotBindings {
+                owner: Some(self.node_did),
+                bindings,
+            },
             super::installer_provenance(InstalledVia::SelfConfig, self.grants_authority),
             distribution.source.clone(),
             move |identity, changes| async move {
