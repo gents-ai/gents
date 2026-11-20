@@ -253,6 +253,25 @@ describe("a pack's page before it's installed", () => {
     expect(installs(installPack)).toEqual([]);
   });
 
+  it("leaves Install for a pack whose reading failed in a way that may pass", async () => {
+    const linked: PackReviewRequest = { package: "acme/docs", source: "link" };
+    let reads = 0;
+    const installPack = bridge(() => {
+      reads += 1;
+      if (reads === 1) throw new Error("the registry is unreachable");
+      return preview();
+    });
+    show(installPack, { name: "packs", review: packPreviewKey(linked) });
+    const adds = await wouldAdd();
+    expect(await within(adds).findByText("Couldn't read this pack.")).toBeVisible();
+    const page = screen.getByTestId("pack-page");
+    const install = within(page).getByRole("button", { name: "Install" });
+    expect(install).toBeEnabled();
+    await userEvent.setup().click(install);
+    await screen.findByTestId("pack-install-review");
+    await waitFor(() => expect(previews(installPack)).toHaveLength(2));
+  });
+
   it("previews a file by a key, not its path", async () => {
     const file: PackReviewRequest = { package: "/Users/me/docs.pack", source: "file" };
     const installPack = bridge(() => preview({ source: "local" }));

@@ -101,6 +101,7 @@ beforeEach(() => {
   resetInstalledPacks();
   resetDefaultPacks();
   vi.mocked(toast.error).mockClear();
+  vi.mocked(toast.success).mockClear();
 });
 afterEach(() => {
   resetPreferences();

@@ -651,7 +651,7 @@ describe("the Packs page", () => {
           versions: [{ version: "1.0.0" }, { version: "1.1.0" }],
         }),
       },
-      deployments: [{ ...node, nodeDid: "did:key:remote", source: "peer" }],
+      deployments: [{ ...node, nodeDid: "did:key:remote", local: false }],
     });
     renderIn(app, <PacksScreen item="acme/docs" />);
     const versions = await screen.findByRole("region", { name: "Versions" });
