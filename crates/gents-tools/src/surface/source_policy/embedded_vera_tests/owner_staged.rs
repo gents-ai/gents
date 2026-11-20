@@ -5,12 +5,14 @@ use crate::test_support::vera_test_home::{describe, seen, Household, PROVIDERS};
 
 /// What the User's owner-staged grant leaves on configuration a
 /// runtime-created Agent owns: the grant's outcome, whether the User's next
-/// command nonce is fenced, whether the grantee then writes the cursor, and
-/// what the owner still owes the provider.
+/// command nonce is fenced, whether using that nonce again is refused, whether
+/// the grantee then writes the cursor, and what the owner still owes the
+/// provider.
 #[derive(Debug, PartialEq, Eq)]
 struct Granted {
     grant: Result<(), String>,
     nonce: Result<(), String>,
+    replay_refused: bool,
     worker_writes_cursor: bool,
     owed: Vec<String>,
 }
@@ -64,6 +66,16 @@ async fn grant(provider: DocumentAcp) -> anyhow::Result<Granted> {
     )
     .await
     .map_err(|error| seen(&error));
+    let replay_refused = matches!(
+        gents_store::config_client::consume_signed_command_nonce(
+            &household.node,
+            household.user_did.as_str(),
+            "owner-staged-nonce",
+            chrono::Utc::now(),
+        )
+        .await,
+        Err(gents_store::config_client::SignedCommandNonceError::Consumed)
+    );
     let owed = household
         .owed_until(&engineer_did, |owed| {
             owed.iter()
@@ -85,6 +97,7 @@ async fn grant(provider: DocumentAcp) -> anyhow::Result<Granted> {
     Ok(Granted {
         grant,
         nonce,
+        replay_refused,
         worker_writes_cursor,
         owed,
     })
@@ -103,6 +116,7 @@ async fn a_users_owner_staged_grant_takes_effect() -> anyhow::Result<()> {
             Granted {
                 grant: Ok(()),
                 nonce: Ok(()),
+                replay_refused: true,
                 worker_writes_cursor: true,
                 owed: Vec::new(),
             },
