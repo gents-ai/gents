@@ -305,9 +305,9 @@ describe("SessionScreen canonical composer admission", () => {
     expect(composerText(screen.getByLabelText("Message"))).toBe("");
   });
 
-  it("preserves a canonical blocker for a non-empty local draft", () => {
+  it("preserves a canonical refusal for a non-empty local draft", () => {
     const { app, sendChatMessage } = screenApp({
-      nodeOverrides: { runtimeConnection: "connecting" },
+      nodeOverrides: { runtimeConnection: "refused" },
     });
     renderScreen(app);
     const status = app.view.getState().shellProjection.nonEmptyContentSendStatus;

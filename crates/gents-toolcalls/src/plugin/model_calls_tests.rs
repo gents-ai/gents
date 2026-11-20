@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::plugin::executor::PluginExecutor;
-use crate::plugin::rounds::{drive, HostCalls, Round, MAX_ROUNDS};
+use crate::plugin::rounds::{drive, HostCalls, Round};
 use futures::future::BoxFuture;
 use gents_documents::InferenceProfile;
 use gents_pack::plugin::model_binding::{
@@ -215,7 +215,7 @@ async fn an_unbound_slot_adds_no_model_calls_key_and_runs_as_before() {
         .call(
             &record,
             input.clone(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -236,7 +236,7 @@ async fn a_bound_slot_answers_the_plugins_requests_and_echoes_its_state() {
         .call(
             &record,
             json!({"n": 1, "state": "stale", "model_results": "forged"}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -277,7 +277,7 @@ async fn the_backend_concurrency_cap_is_honoured() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -295,7 +295,7 @@ async fn a_server_error_becomes_an_error_result_without_the_endpoint() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -315,7 +315,7 @@ async fn a_request_that_times_out_becomes_an_error_result() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -334,7 +334,7 @@ async fn the_key_is_sent_as_a_bearer_and_never_reaches_the_plugin() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -374,7 +374,7 @@ async fn a_plugin_that_never_stops_asking_is_cut_at_the_round_cap() {
         .call(
             &budget_record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -384,7 +384,10 @@ async fn a_plugin_that_never_stops_asking_is_cut_at_the_round_cap() {
         "{}",
         call.outcome.diagnostics
     );
-    assert_eq!(fake.requests(), MAX_ROUNDS as usize);
+    assert_eq!(
+        fake.requests(),
+        gents_pack::plugin::DEFAULT_MAX_ROUNDS as usize
+    );
 }
 
 #[tokio::test]
@@ -394,7 +397,7 @@ async fn a_bound_slot_with_no_resolver_fails_loudly() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap_err();
@@ -517,10 +520,6 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
 
 #[tokio::test]
 async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request() -> Result<()> {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
     let dir = tempfile::tempdir()?;
     let key_dir = dir.path().to_owned();
     let (owner, runtime) = tokio::task::spawn_blocking(move || -> Result<_> {
@@ -549,7 +548,7 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
     );
     let ctx = defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&ctx, &case.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
     for actor in [agent.did(), sibling.did(), runtime.did()] {
         for permission in [
@@ -640,10 +639,8 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
         profile_id: "profile".into(),
     };
     let sibling_did = identity::Did::new(sibling.did())?;
-    assert!(!case.configuration_plugin_backend_cases.is_empty());
-    for item in &case.configuration_plugin_backend_cases {
-        let revoked = item["revoked"].as_str().unwrap();
-        let target = match revoked {
+    for item in gents_lean_vocab::families::household_plugin_backend_use::cases() {
+        let target = match item.input.revoked.as_str() {
             "profile" => Some(("InferenceProfile", &profile_doc)),
             "backend" => Some(("InferenceBackendMetadata", &backend_doc)),
             "" => None,
@@ -654,23 +651,19 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
                 .delete_actor_relationship(collection, doc, "reader", &agent_did)
                 .await?;
         }
-        let actor = match item["actor"].as_str() {
+        let actor = match item.input.actor.as_deref() {
             Some("agent") => Some(&agent_did),
             Some("sibling") => Some(&sibling_did),
             None => None,
             _ => anyhow::bail!("unknown modeled actor"),
         };
-        assert_eq!(
-            models.resolve(&binding, actor).await.is_ok(),
-            item["expected"].as_bool().unwrap(),
-            "modeled {}",
-            item["name"]
-        );
+        let resolved = models.resolve(&binding, actor).await.is_ok();
         if let Some((collection, doc)) = target {
             access
                 .add_actor_relationship(collection, doc, "reader", &agent_did)
                 .await?;
         }
+        item.check(resolved);
     }
     let endpoint = models.resolve(&binding, Some(&agent_did)).await?;
     let mut session = Session::new(endpoint)?;
@@ -800,15 +793,21 @@ fn binding_slots_survives_a_reinstall_and_unbinding_clears_it() {
         store::read_bytes(home.path(), record.digest.strip_prefix("sha256:").unwrap()).unwrap();
     gents_pack::plugin::install::install_from_pack(
         home.path(),
-        "team",
-        "team/pack",
-        "2.0.0",
-        "sha256:p2",
-        &read().declaration,
-        &artifact,
-        None,
-        Default::default(),
-        Default::default(),
+        &gents_pack::plugin::install::OwningPack {
+            namespace: "team",
+            coordinate: "team/pack",
+            version: "2.0.0",
+            digest: "sha256:p2",
+            gents_version: None,
+        },
+        gents_pack::plugin::install::ShippedPlugin {
+            declaration: &read().declaration,
+            artifact: &artifact,
+            instructions: None,
+            data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
+            data_collection_schemas: Default::default(),
+        },
         false,
     )
     .unwrap();
@@ -852,7 +851,7 @@ async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
         &tool
             .call(
                 "{}".to_owned(),
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap(),
@@ -919,7 +918,7 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
     .with_agent_data(node.clone(), root.did(), Some(selected.did()))?;
     tool.call(
         "{}".to_owned(),
-        &gents_loop::tool::ToolCallEnvelope::ambient(),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -929,7 +928,7 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
             &record,
             json!({}),
             caller,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await?;
     assert_eq!(
@@ -983,7 +982,7 @@ async fn model_time_running_out_leaves_the_plugin_a_final_round_to_finish() {
         executor.call(
             &record,
             json!({"n": 1}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         ),
     )
     .await
@@ -1006,7 +1005,7 @@ async fn a_plugin_that_asks_again_in_its_final_round_is_a_timeout() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1022,7 +1021,7 @@ async fn a_stale_binding_runs_the_plugin_without_a_model_and_says_so() {
         .call(
             &record,
             input.clone(),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1158,7 +1157,7 @@ async fn a_round_over_the_request_limit_is_bad_output_and_sends_nothing() {
         .call(
             &record,
             json!({}),
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1177,7 +1176,7 @@ async fn caller_state_and_model_results_are_stripped_and_null_input_is_an_object
         .call(
             &record,
             forged,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();
@@ -1195,7 +1194,7 @@ async fn caller_state_and_model_results_are_stripped_and_null_input_is_an_object
         .call(
             &record,
             Value::Null,
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();

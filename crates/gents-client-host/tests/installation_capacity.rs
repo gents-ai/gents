@@ -4,9 +4,11 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
 use gents_desktop_bridge::host::{local, protocol, ClientHost};
-use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
+use gents_store::client_journal::paths::DesktopPaths;
 use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
@@ -19,9 +21,15 @@ async fn a_full_listener_reports_a_retryable_initialization_failure_without_reti
     let directory = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(directory.path().join("busy history"));
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
-            .await
-            .unwrap(),
+        ClientRuntime::start_with_paths_and_options(
+            paths.clone(),
+            ClientRuntimeOptions {
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap(),
     );
     let client_did = core.node_identity().did().to_owned();
     let listener = local::LocalListener::bind(&paths).await.unwrap();

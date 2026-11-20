@@ -1,5 +1,5 @@
+use crate::client_runtime::ClientRuntime;
 use anyhow::{Context, Result};
-use gents_desktop_core::client::ClientCore;
 use gents_documents::patch::{SelfConfigTarget, ALL_SELF_CONFIG_TARGETS};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
@@ -19,7 +19,10 @@ pub(super) fn target(collection: &str) -> Result<SelfConfigTarget> {
         .context("This collection is not editable in Runtime Settings.")
 }
 
-pub(super) async fn catalog(core: &ClientCore, node_did: &str) -> Result<Vec<ConfigEditorEntry>> {
+pub(super) async fn catalog(
+    core: &ClientRuntime,
+    node_did: &str,
+) -> Result<Vec<ConfigEditorEntry>> {
     let access = core
         .operator_graphql(node_did)
         .map(ConfigAccess::Graphql)

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
 use futures::future::BoxFuture;
+use gents_protocol::delegation_audience::{resend, CredentialRefusal, HeldAudienceChange};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 use super::fault_injection::retry_backoff_reached_for_test;
@@ -231,6 +232,55 @@ fn rerun_honoured(
         )
 }
 
+/// Where in a transaction a request was refused for its credential
+/// (`Identity.HeldAudience.UnitStage`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+enum UnitStage {
+    BeforeCommit,
+    Commit,
+}
+
+/// Lean `Identity.HeldAudience.resendUnit`.
+fn resend_unit(
+    resent: bool,
+    refusal: CredentialRefusal,
+    record: &HeldAudienceChange,
+    stage: UnitStage,
+    mode: TransactionMode,
+    dispatched: bool,
+) -> bool {
+    resend(resent, refusal, record)
+        && stage == UnitStage::BeforeCommit
+        && rerun_honoured(mode, true, false, dispatched)
+}
+
+async fn refused_unit_runs_again(
+    txn: &ConfigApplyTxn<'_>,
+    error: Option<&ConfigClientError>,
+    stage: UnitStage,
+    mode: TransactionMode,
+    resent: bool,
+) -> std::result::Result<bool, gents_protocol::home_attestation::HomeStatusRefusal> {
+    let (Some(endpoint), Some(answer)) = (
+        txn.http_endpoint(),
+        error.and_then(ConfigClientError::credential_answer),
+    ) else {
+        return Ok(false);
+    };
+    let Some((refusal, record)) = endpoint.reread_after_refusal(answer).await else {
+        return Ok(false);
+    };
+    Ok(resend_unit(
+        resent,
+        refusal,
+        &record?,
+        stage,
+        mode,
+        txn.client_signed_write_dispatched.load(Ordering::Acquire),
+    ))
+}
+
 pub(super) fn transact_owned<'a, T, E, F, B>(
     operation: &'static str,
     backend: WriteBackend,
@@ -270,6 +320,7 @@ where
         let mut max_attempts = mode.max_attempts();
         let mut attempt = 0;
         let mut rerun_notes: Vec<RerunNote> = Vec::new();
+        let mut resent_unit = false;
         // `Identity.OwnerStaged.applyOverHttp`: `None` while planning, then
         // the revocations sent before the WRITE attempts.
         let mut owner_staged_plan: Option<Vec<gents_protocol::owner_staged::OwnerStagedChange>> =
@@ -486,6 +537,14 @@ where
                                 });
                                 return Err(E::from(txn.unconfirmed_relationships(error)));
                             }
+                            let _ = refused_unit_runs_again(
+                                &txn,
+                                Some(&error),
+                                UnitStage::Commit,
+                                mode,
+                                resent_unit,
+                            )
+                            .await;
                             let confirmed_abort =
                                 definitely_not_committed || discarded_before_commit;
                             let failure = AttemptFailure::of_access(&error);
@@ -538,6 +597,34 @@ where
                             drop(txn);
                             continue;
                         }
+                    }
+                    let runs_again = refused_unit_runs_again(
+                        &txn,
+                        error.config_client_error(),
+                        UnitStage::BeforeCommit,
+                        mode,
+                        resent_unit,
+                    )
+                    .await;
+                    let (runs_again, error) = match runs_again {
+                        Ok(runs_again) => (runs_again, error),
+                        Err(refusal) => (
+                            false,
+                            E::from(ConfigClientError::HomeStatusUnauthenticated(refusal)),
+                        ),
+                    };
+                    if runs_again {
+                        telemetry.record(AttemptReport {
+                            outcome: WriteOutcome::Retrying,
+                            conflict_source: ConflictSource::None,
+                            backoff: None,
+                            affected_documents: Some(0),
+                            rollback,
+                        });
+                        resent_unit = true;
+                        max_attempts += 1;
+                        drop(txn);
+                        continue;
                     }
                     Err(TransactionAttemptFailure {
                         stage: AttemptStage::Callback,
@@ -642,10 +729,14 @@ pub(super) fn expect_committed<T>(outcome: TransactionOutcome<T>) -> T {
 mod conformance {
     use gents_lean_vocab::families;
 
+    use gents_protocol::delegation_audience::{
+        CredentialRefusal, DelegationAudience, HeldAudienceChange,
+    };
+
     use super::{
         client_may_repeat, client_signed_write_may_retry, failure_disposition, rerun_honoured,
-        AttemptFailure, AttemptStage, FailureDisposition, IdempotentTransactionRetry,
-        TransactionMode,
+        resend_unit, AttemptFailure, AttemptStage, FailureDisposition, IdempotentTransactionRetry,
+        TransactionMode, UnitStage,
     };
 
     #[derive(Debug, Clone, Copy, serde::Deserialize)]
@@ -706,6 +797,59 @@ mod conformance {
         families::transaction_replay_mode_max_attempts::replay::<Mode>(|i| {
             u64::from(i.mode.production().max_attempts())
         });
+    }
+
+    #[derive(Debug, Clone, Copy, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Refusal {
+        DelegationRequired,
+        DelegationRefused,
+        OutsideWindow,
+        Other,
+    }
+
+    #[derive(Debug, Clone, Copy, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Change {
+        Unchanged,
+        Learned,
+        Changed,
+        Reclocked,
+        Forgotten,
+    }
+
+    #[test]
+    fn a_transaction_refused_for_its_credential_runs_again_as_the_lean_model_says() {
+        let audience = DelegationAudience {
+            worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
+            deployment: 1,
+            genesis_id: None,
+        };
+        families::identity_held_audience_resend_unit::replay::<Change, Mode, Refusal, UnitStage>(
+            |i| {
+                let refusal = match i.refusal {
+                    Refusal::DelegationRequired => CredentialRefusal::DelegationRequired,
+                    Refusal::DelegationRefused => CredentialRefusal::DelegationRefused,
+                    Refusal::OutsideWindow => CredentialRefusal::OutsideWindow,
+                    Refusal::Other => CredentialRefusal::Other,
+                };
+                let record = match i.record {
+                    Change::Unchanged => HeldAudienceChange::Unchanged,
+                    Change::Learned => HeldAudienceChange::Learned(audience.clone()),
+                    Change::Changed => HeldAudienceChange::Changed(audience.clone()),
+                    Change::Reclocked => HeldAudienceChange::Reclocked,
+                    Change::Forgotten => HeldAudienceChange::Forgotten,
+                };
+                resend_unit(
+                    i.resent,
+                    refusal,
+                    &record,
+                    i.stage,
+                    i.mode.production(),
+                    i.dispatched,
+                )
+            },
+        );
     }
 
     #[test]

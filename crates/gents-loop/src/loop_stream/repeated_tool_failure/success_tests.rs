@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn successful_streaks_follow_the_executable_lean_owner() {
     for case in gents_lean_vocab::families::repeated_tool_success_contracts_streak::cases() {
-        let mut guard = RepeatedToolProgress::default();
+        let mut guard = RepeatedToolProgress::new(DEFAULT_REPEATED_TOOL_FAILURE_LIMIT);
         let mut counts = Vec::new();
         for (index, event) in case.input.events.iter().enumerate() {
             if guard.success_stop_reason().is_some() {

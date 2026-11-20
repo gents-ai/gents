@@ -105,7 +105,7 @@ async fn probe_account(
     let mut request = reqwest::Client::new()
         .get(&models_url)
         .bearer_auth(&credential.access_token);
-    for (name, value) in gents_inference::clients::xai_grok::build_xai_grok_oauth_headers()? {
+    for (name, value) in gents_inference::clients::xai_grok::build_xai_grok_oauth_headers(None)? {
         if let Some(name) = name {
             request = request.header(name, value);
         }
@@ -141,7 +141,7 @@ async fn probe_account(
         if status.as_u16() == 426 {
             bail!(
                 "models request failed with HTTP {status}: {body}\n{}",
-                gents_inference::clients::xai_grok::grok_client_version_gate_guidance()
+                gents_inference::clients::xai_grok::grok_client_version_gate_guidance(None)
             );
         }
         bail!("models request failed with HTTP {status}: {body}");

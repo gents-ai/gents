@@ -260,13 +260,16 @@ impl ArtifactGrant {
             seal_hash: seal_hash.to_owned(),
             identities,
         }));
-        grant.validate_for_launch().await?;
+        grant.validate_for_launch(None).await?;
         Ok(grant)
     }
 
     /// Revalidates this incarnation immediately before shared command preparation;
     /// existing request cancellation remains responsible for process termination.
-    pub async fn validate_for_launch(&self) -> Result<()> {
+    pub async fn validate_for_launch(
+        &self,
+        recorder: Option<&crate::exec::ownership::ProcessRecorder>,
+    ) -> Result<()> {
         let owner = &self.0;
         for (path, expected) in &owner.identities {
             if &checked_directory(path)? != expected {
@@ -280,7 +283,8 @@ impl ArtifactGrant {
         // take hundreds of milliseconds. Keep the generation/expiry observation
         // as close to launch as possible. Fresh hashing deliberately avoids a
         // cache whose invalidation would become another source-integrity premise.
-        if super::adapter::working_tree_hash(&owner.source_root).await? != owner.seal_hash {
+        if super::adapter::working_tree_hash(&owner.source_root, recorder).await? != owner.seal_hash
+        {
             bail!("artifact source no longer matches its seal");
         }
         let query = {

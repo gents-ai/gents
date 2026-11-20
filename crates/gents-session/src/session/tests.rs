@@ -155,20 +155,22 @@ async fn compaction_entries_track_files_cumulatively() {
         .generation;
         compaction_entries::save_compaction_entry_with_access(
             &access,
-            agent.did(),
-            "session-1",
-            node_did,
-            Some(user.did()),
-            &requests[index].0,
-            &requests[index].1,
+            compaction_entries::NewExactSessionCompaction {
+                agent_did: agent.did(),
+                session_id: "session-1",
+                node_did,
+                requester_did: Some(user.did()),
+                request_id: &requests[index].0,
+                request_doc_id: &requests[index].1,
+                files_read: &read,
+                files_modified: &modified,
+                compacted_through_sequence: cursor,
+                original_tokens: original,
+                compacted_tokens: compacted,
+                expected_generation: &generation,
+            },
             summary,
-            &read,
-            &modified,
             count,
-            cursor,
-            original,
-            compacted,
-            &generation,
         )
         .await
         .unwrap();
@@ -272,37 +274,41 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     let right_files = ["/tmp/right.rs".to_string()];
     let left = compaction_entries::save_compaction_entry_with_access(
         &access,
-        agent.did(),
-        "session-race",
-        node_did,
-        Some(user.did()),
-        &requests[0].0,
-        &requests[0].1,
+        compaction_entries::NewExactSessionCompaction {
+            agent_did: agent.did(),
+            session_id: "session-race",
+            node_did,
+            requester_did: Some(user.did()),
+            request_id: &requests[0].0,
+            request_doc_id: &requests[0].1,
+            files_read: &left_files,
+            files_modified: &[],
+            compacted_through_sequence: 20,
+            original_tokens: 100,
+            compacted_tokens: 20,
+            expected_generation: &generation,
+        },
         "left summary",
-        &left_files,
-        &[],
         2,
-        20,
-        100,
-        20,
-        &generation,
     );
     let right = compaction_entries::save_compaction_entry_with_access(
         &access,
-        agent.did(),
-        "session-race",
-        node_did,
-        Some(user.did()),
-        &requests[1].0,
-        &requests[1].1,
+        compaction_entries::NewExactSessionCompaction {
+            agent_did: agent.did(),
+            session_id: "session-race",
+            node_did,
+            requester_did: Some(user.did()),
+            request_id: &requests[1].0,
+            request_doc_id: &requests[1].1,
+            files_read: &[],
+            files_modified: &right_files,
+            compacted_through_sequence: 30,
+            original_tokens: 200,
+            compacted_tokens: 40,
+            expected_generation: &generation,
+        },
         "right summary",
-        &[],
-        &right_files,
         3,
-        30,
-        200,
-        40,
-        &generation,
     );
     let (left, right) = tokio::join!(left, right);
     assert_ne!(
@@ -359,20 +365,22 @@ async fn exact_compaction_redelivery_is_idempotent() {
     let save = || {
         compaction_entries::save_compaction_entry_with_access(
             &access,
-            agent.did(),
-            "session-redelivery",
-            node_did,
-            Some(user.did()),
-            &requests[0].0,
-            &requests[0].1,
+            compaction_entries::NewExactSessionCompaction {
+                agent_did: agent.did(),
+                session_id: "session-redelivery",
+                node_did,
+                requester_did: Some(user.did()),
+                request_id: &requests[0].0,
+                request_doc_id: &requests[0].1,
+                files_read: &files,
+                files_modified: &[],
+                compacted_through_sequence: 20,
+                original_tokens: 100,
+                compacted_tokens: 20,
+                expected_generation: &generation,
+            },
             "same summary",
-            &files,
-            &[],
             2,
-            20,
-            100,
-            20,
-            &generation,
         )
     };
     let first = save().await.unwrap();
@@ -390,20 +398,22 @@ async fn exact_compaction_redelivery_is_idempotent() {
     .generation;
     compaction_entries::save_compaction_entry_with_access(
         &access,
-        agent.did(),
-        "session-redelivery",
-        node_did,
-        Some(user.did()),
-        &requests[1].0,
-        &requests[1].1,
+        compaction_entries::NewExactSessionCompaction {
+            agent_did: agent.did(),
+            session_id: "session-redelivery",
+            node_did,
+            requester_did: Some(user.did()),
+            request_id: &requests[1].0,
+            request_doc_id: &requests[1].1,
+            files_read: &[],
+            files_modified: &[],
+            compacted_through_sequence: 30,
+            original_tokens: 80,
+            compacted_tokens: 10,
+            expected_generation: &next_generation,
+        },
         "later summary",
-        &[],
-        &[],
         1,
-        30,
-        80,
-        10,
-        &next_generation,
     )
     .await
     .unwrap();
@@ -663,13 +673,15 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
                 Box::pin(async move {
                     ensure_session_in_txn(
                         txn,
-                        "session-1",
-                        node_did,
-                        agent_did,
-                        Some(requester_did),
-                        None,
-                        None,
-                        "2026-09-22T00:00:00Z",
+                        crate::session::NewAgentSession {
+                            session_id: "session-1",
+                            node_did,
+                            agent_did,
+                            requester_did: Some(requester_did),
+                            title: None,
+                            provenance: None,
+                            created_at: "2026-09-22T00:00:00Z",
+                        },
                     )
                     .await
                 })
@@ -1171,20 +1183,22 @@ async fn fork_rolls_back_at_every_mutation_position() {
         .unwrap();
         compaction_entries::save_compaction_entry_with_access(
             &agent_access,
-            &binding.agent_did,
-            SOURCE,
-            node_did,
-            Some(user.did()),
-            &request_id,
-            doc,
+            compaction_entries::NewExactSessionCompaction {
+                agent_did: &binding.agent_did,
+                session_id: SOURCE,
+                node_did,
+                requester_did: Some(user.did()),
+                request_id: &request_id,
+                request_doc_id: doc,
+                files_read: &files,
+                files_modified: &[],
+                compacted_through_sequence: cursor,
+                original_tokens: 100,
+                compacted_tokens: 10,
+                expected_generation: &state.generation,
+            },
             summary,
-            &files,
-            &[],
             count,
-            cursor,
-            100,
-            10,
-            &state.generation,
         )
         .await
         .unwrap();
@@ -1394,20 +1408,22 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     .unwrap();
     compaction_entries::save_compaction_entry_with_access(
         &access,
-        agent.did(),
-        SESSION,
-        node_did,
-        Some(user.did()),
-        "compaction-rollback-request-0",
-        &docs[0],
+        compaction_entries::NewExactSessionCompaction {
+            agent_did: agent.did(),
+            session_id: SESSION,
+            node_did,
+            requester_did: Some(user.did()),
+            request_id: "compaction-rollback-request-0",
+            request_doc_id: &docs[0],
+            files_read: &["/tmp/a.rs".to_string()],
+            files_modified: &[],
+            compacted_through_sequence: 10,
+            original_tokens: 100,
+            compacted_tokens: 20,
+            expected_generation: &state.generation,
+        },
         "first summary",
-        &["/tmp/a.rs".to_string()],
-        &[],
         2,
-        10,
-        100,
-        20,
-        &state.generation,
     )
     .await
     .unwrap();
@@ -1432,20 +1448,22 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
         || {
             compaction_entries::save_compaction_entry_with_access(
                 &access,
-                agent.did(),
-                SESSION,
-                node_did,
-                Some(user.did()),
-                "compaction-rollback-request-1",
-                &docs[1],
+                compaction_entries::NewExactSessionCompaction {
+                    agent_did: agent.did(),
+                    session_id: SESSION,
+                    node_did,
+                    requester_did: Some(user.did()),
+                    request_id: "compaction-rollback-request-1",
+                    request_doc_id: &docs[1],
+                    files_read: &files,
+                    files_modified: &[],
+                    compacted_through_sequence: 20,
+                    original_tokens: 200,
+                    compacted_tokens: 30,
+                    expected_generation: &before.generation,
+                },
                 "second summary",
-                &files,
-                &[],
                 3,
-                20,
-                200,
-                30,
-                &before.generation,
             )
         },
         chain,
@@ -1747,20 +1765,22 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
         .unwrap();
         compaction_entries::save_compaction_entry_with_access(
             &agent_access,
-            &binding.agent_did,
-            session,
-            db.node_identity.did(),
-            Some(user.did()),
-            &request_id,
-            doc,
+            compaction_entries::NewExactSessionCompaction {
+                agent_did: &binding.agent_did,
+                session_id: session,
+                node_did: db.node_identity.did(),
+                requester_did: Some(user.did()),
+                request_id: &request_id,
+                request_doc_id: doc,
+                files_read: &[],
+                files_modified: &[],
+                compacted_through_sequence: 1,
+                original_tokens: 100,
+                compacted_tokens: 10,
+                expected_generation: &state.generation,
+            },
             summary,
-            &[],
-            &[],
             1,
-            1,
-            100,
-            10,
-            &state.generation,
         )
         .await
         .unwrap();
@@ -2141,13 +2161,15 @@ async fn unsigned_starter_cannot_populate_the_index() {
                 Box::pin(async move {
                     ensure_session_in_txn(
                         txn,
-                        &session.session_id,
-                        &session.node_did,
-                        &session.agent_did,
-                        session.requester_did.as_deref(),
-                        session.title.clone(),
-                        provenance,
-                        &session.created_at,
+                        crate::session::NewAgentSession {
+                            session_id: &session.session_id,
+                            node_did: &session.node_did,
+                            agent_did: &session.agent_did,
+                            requester_did: session.requester_did.as_deref(),
+                            title: session.title.clone(),
+                            provenance,
+                            created_at: &session.created_at,
+                        },
                     )
                     .await
                 })

@@ -15,7 +15,7 @@ where
 }
 
 fn configured_context_window(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
     profile: Option<&gents_documents::InferenceProfile>,
 ) -> Result<usize, String> {
     let Some(profile) = profile else {
@@ -55,8 +55,8 @@ fn configured_context_window(
     reason = "projection inputs come from separate stores and request options"
 )]
 pub(super) fn build_session_context_view(
-    store: &gents_desktop_core::client::ClientStore,
-    context_store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
+    context_store: &gents_observe::client_projection::store::ClientStore,
     node_did: Option<&str>,
     agent_did: Option<&str>,
     session_id: &str,
@@ -306,7 +306,7 @@ pub fn attach_last_request_context(
 #[cfg(test)]
 mod order_profile_tests {
     use super::*;
-    use gents_desktop_core::client::ClientStoreRows;
+    use gents_observe::client_projection::store::ClientStoreRows;
     use gents_protocol::message::{AssistantContent, Reasoning, ReasoningContent};
 
     #[test]

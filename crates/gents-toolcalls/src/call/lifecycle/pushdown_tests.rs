@@ -19,9 +19,11 @@ async fn managed_agent_signs_transcript_and_plugin_effect_blocks() {
         &binding.agent_did,
         runtime.clone(),
         "hello",
-        60,
-        ExecutionOrigin::Interactive,
-        "lease-test",
+        gents_session::request::lifecycle::ExecutionBinding {
+            deadline_duration_secs: 60,
+            execution_origin: ExecutionOrigin::Interactive,
+            backend_id: "lease-test".into(),
+        },
         TriggerLineage::default(),
         Some(agent.clone()),
     )

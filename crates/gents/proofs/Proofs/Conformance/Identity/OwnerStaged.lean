@@ -1,5 +1,14 @@
 import Proofs.Store.Identity.OwnerStaged
 import Proofs.Conformance.Family
+import Proofs.Conformance.DocumentAcpChoice
+
+namespace Identity.OwnerStaged
+
+deriving instance Lean.ToJson for Route
+
+attribute [conformance_function] configurationGrantRoute
+
+end Identity.OwnerStaged
 
 namespace Conformance.OwnerStaged
 
@@ -42,6 +51,12 @@ private def selectionGrant (requester callback : String) : Outcome :=
   decision runtimeAgent "runtime" agentsOf requester selectionAuthority
     ⟨"agents", "target", "workspace_selected_by", .entitySet "configuration" callback "reader"⟩ true
 
+private def readerDirect (requester : String) : Bool :=
+  triggerReadable (apply runtimeTrigger (.grantAs requester (triggerReader "sibling"))) "sibling"
+
+private def readerGrant (requester agent : String) : Outcome :=
+  decision runtimeTrigger "runtime" agentsOf requester readerAuthority (triggerReader agent) true
+
 private def ownerCase (owner : String) (proof : Bool) : RelationOutput :=
   let result := ownerRowOutcome owner proof
   { direct := false
@@ -78,6 +93,12 @@ def relation (i : RelationInput) : RelationOutput :=
         outcome := (selectionGrant r "callback").name }
   | "workspace_unbound_callback" =>
       { direct := false, staged := false, outcome := (selectionGrant r "unbound").name }
+  | "configuration_reader" =>
+      { direct := readerDirect r
+        staged := triggerReadable (triggerReadBy r "sibling") "sibling"
+        outcome := (readerGrant r "sibling").name }
+  | "configuration_outsider_reader" =>
+      { direct := false, staged := false, outcome := (readerGrant r "outsider").name }
   | _ => { direct := false, staged := false, outcome := Outcome.denied.name }
 
 /-- Each operation's target admission, per requester. -/
@@ -89,7 +110,9 @@ def targets : Family RelationInput RelationOutput where
     (["user", "outsider"].map fun requester => { path := "declared_placement_readers", requester }) ++
     [{ path := "placement_undeclared_reader", requester := "user" }] ++
     (["user", "outsider"].map fun requester => { path := "workspace_selection", requester }) ++
-    [{ path := "workspace_unbound_callback", requester := "user" }]
+    [{ path := "workspace_unbound_callback", requester := "user" }] ++
+    (["user", "outsider"].map fun requester => { path := "configuration_reader", requester }) ++
+    [{ path := "configuration_outsider_reader", requester := "user" }]
   model := relation
 
 /-- The registered owner the runtime would stage as, per Agent row. A

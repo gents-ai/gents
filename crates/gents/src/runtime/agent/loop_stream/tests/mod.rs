@@ -10,6 +10,9 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use gents_inference::llm::message::AssistantContent;
+use gents_loop::test_support::scripted_provider::{
+    DispatchGate, Observed, Reply, ScriptedProvider,
+};
 use gents_loop::tool::ToolDyn;
 use rig::completion::CompletionRequest;
 

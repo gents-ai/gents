@@ -24,14 +24,14 @@ pub struct BackendAuthenticationRequest {
 pub struct BackendAuthenticationSaveRequest {
     pub node_did: String,
     pub backend_id: String,
-    pub revision: gents_desktop_core::client::ConfigEditorRevision,
+    pub revision: gents::client_operations::ConfigEditorRevision,
     pub auth: gents_documents::BackendAuth,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendAuthenticationView {
-    pub revision: gents_desktop_core::client::ConfigEditorRevision,
+    pub revision: gents::client_operations::ConfigEditorRevision,
     pub backend_id: String,
     pub auth_kind: String,
     pub environment_variable: Option<String>,
@@ -42,7 +42,7 @@ pub struct BackendAuthenticationView {
 
 impl BackendAuthenticationView {
     pub(crate) fn from_backend(
-        revision: gents_desktop_core::client::ConfigEditorRevision,
+        revision: gents::client_operations::ConfigEditorRevision,
         backend: &gents_documents::InferenceBackend,
     ) -> Self {
         use gents_documents::BackendAuth;
@@ -82,7 +82,7 @@ mod authentication_tests {
                 "auth":{"kind":"api_key","key":"private-authentication-fixture"}
             }))
             .unwrap();
-        let revision = gents_desktop_core::client::ConfigEditorRevision {
+        let revision = gents::client_operations::ConfigEditorRevision {
             document_id: "physical".into(),
             composite_cid: "version".into(),
         };
@@ -107,7 +107,7 @@ mod authentication_tests {
             "auth":{"kind":"credential", "id":"private-reference-fixture", "version":"private-version-fixture"}
         }))
         .unwrap();
-        let revision = gents_desktop_core::client::ConfigEditorRevision {
+        let revision = gents::client_operations::ConfigEditorRevision {
             document_id: "physical".into(),
             composite_cid: "revision".into(),
         };

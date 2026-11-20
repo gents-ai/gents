@@ -1,0 +1,4 @@
+---- MODULE MCStoreHandoffHolderOutlivesAck ----
+EXTENDS StoreHandoff
+
+====

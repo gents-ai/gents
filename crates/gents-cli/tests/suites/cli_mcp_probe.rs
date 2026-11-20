@@ -414,7 +414,7 @@ struct McpFixture {
     desktop_home: std::path::PathBuf,
     _store_claim: gents_store::local::home::StoreLock,
     _runtime: gents_store::identity::KeyIdentity,
-    _client: gents_desktop_core::client::PrincipalIdentity,
+    _client: gents_store::client_journal::principal_identity::PrincipalIdentity,
 }
 
 impl McpFixture {
@@ -446,21 +446,33 @@ impl McpFixture {
         .await??;
         let node_did = node_did_from_init(&init)?;
         let runtime = identity_from_init(&init)?;
-        let client = gents_desktop_core::client::PrincipalIdentity::load_existing(
-            &gents_desktop_core::client::DesktopPaths::from_root(desktop_home.join("cli")),
-        )?;
+        let client =
+            gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(
+                &gents_store::client_journal::paths::DesktopPaths::from_root(
+                    desktop_home.join("cli"),
+                ),
+            )?;
         let data = gents_store::local::home::default_data_dir(&home);
         let claim = gents_store::local::home::lock_store(&home, &data)?;
         let store_key = gents_store::local::store_key::open_home_store_key(&home, &data).await?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+        let routes = gents_store::test_support::local_authentication_route(Arc::new(
+            identity_from_init(&init)?,
+        ));
         let node = Arc::new(
-            gents_store::local::store_key::persistent_builder(&data, &store_key)?
-                .with_node_identity_did(node_did.clone())
-                .with_node_acp_enabled()
-                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
-                .build()
-                .await?,
+            gents_store::local::store_key::persistent_builder(
+                &data,
+                &store_key,
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )?
+            .with_node_identity_did(node_did.clone())
+            .with_node_acp_enabled()
+            .with_http(
+                gents::defra_node::HttpConfig::with_listener(listener)?.with_extra_routes(routes),
+            )
+            .build()
+            .await?,
         );
         let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             client.private_key_bytes(),

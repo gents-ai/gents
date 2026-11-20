@@ -4,7 +4,6 @@ use anyhow::Context;
 use serde_json::json;
 
 use super::{apply_selection_changes, selected_ids, Change};
-use gents_lean_vocab::lean_identity_household_cases;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
@@ -13,43 +12,33 @@ pub(crate) use crate::test_support::desired_state_fixtures::canonical;
 
 #[test]
 fn modeled_tools_reference_sets_include_disabled_agent_targets() {
-    let model = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
-    for case in &model.configuration_tool_reference_cases {
-        let services = case["services"]
-            .as_array()
-            .unwrap()
+    gents_lean_vocab::families::household_tool_selection_references::replay(|case| {
+        let services = case
+            .services
             .iter()
             .map(|id| json!({"mcp_service_id":id}))
             .collect::<Vec<_>>();
         let tools = canonical(
             Collection::Tools,
             "did:key:fixture",
-            json!({"agents":{"enabled":case["agents_enabled"], "target_ids":case["targets"]},
-            "remote":{"services":services}, "datastore":{"datastore_tool_surface_ids":case["surfaces"]}}),
+            json!({"agents":{"enabled":case.agents_enabled, "target_ids":case.targets},
+            "remote":{"services":services}, "datastore":{"datastore_tool_surface_ids":case.surfaces}}),
         );
         let selected = selected_ids(Collection::Tools, "did:key:fixture", Some(&tools)).unwrap();
-        for collection in [
-            Collection::AgentTarget,
-            Collection::ToolServiceRegistry,
-            Collection::DatastoreToolSurface,
-        ] {
-            let expected = case["expected"][collection.graphql_type()]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|id| id.as_str().unwrap().to_owned())
-                .collect::<std::collections::BTreeSet<_>>();
-            assert_eq!(
-                selected.get(&collection).cloned().unwrap_or_default(),
-                expected,
-                "modeled {}",
-                case["name"]
-            );
+        let ids = |collection: Collection| {
+            selected
+                .get(&collection)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        gents_lean_vocab::families::household_tool_selection_references::ToolReferences {
+            agent_target: ids(Collection::AgentTarget),
+            tool_service_registry: ids(Collection::ToolServiceRegistry),
+            datastore_tool_surface: ids(Collection::DatastoreToolSurface),
         }
-    }
+    });
 }
 
 #[tokio::test]
@@ -405,10 +394,6 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
 
 #[tokio::test]
 async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyhow::Result<()> {
-    let model = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
     let dir = tempfile::tempdir()?;
     let owner = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("node"), None)?;
     let selected =
@@ -424,7 +409,7 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
     );
     let ctx = defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&ctx, &model.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
     for actor in [selected.did(), sibling.did()] {
         for permission in [
@@ -551,12 +536,10 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
             })
         })
         .await?;
-    for case in model
-        .configuration_userset_cases
-        .iter()
-        .filter(|case| case["document"] == "retry")
-    {
-        if case["revoked"] == "execution" {
+    let mut execution_removed = false;
+    for case in gents_lean_vocab::families::household_userset_retry_selection::cases() {
+        if case.input.revoked == "execution" && !execution_removed {
+            execution_removed = true;
             let change = vec![Change {
                 collection: Collection::InferenceProfile,
                 node_did: owner.did().into(),
@@ -587,25 +570,21 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
                 })
                 .await?;
         }
-        let actor = if case["actor"] == "sibling" {
-            sibling.did()
-        } else {
-            selected.did()
+        let actor = match case.input.actor.as_str() {
+            "sibling" => sibling.did(),
+            "agent" => selected.did(),
+            other => anyhow::bail!("unmodeled retry actor {other}"),
         };
         let response = ConfigAccess::local_as(node.clone(), identity::Did::new(actor)?)
             .execute("{ InferenceRetryPolicy { _docID } }")
             .await?;
-        let visible = response["data"]["InferenceRetryPolicy"]
-            .as_array()
-            .is_some_and(|rows| {
-                rows.iter()
-                    .any(|row| row["_docID"].as_str() == Some(retry_doc.as_str()))
-            });
-        assert_eq!(
-            visible,
-            case["expected"].as_bool().unwrap(),
-            "modeled {}",
-            case["name"]
+        case.check(
+            response["data"]["InferenceRetryPolicy"]
+                .as_array()
+                .is_some_and(|rows| {
+                    rows.iter()
+                        .any(|row| row["_docID"].as_str() == Some(retry_doc.as_str()))
+                }),
         );
     }
     let response = ConfigAccess::local_as(node.clone(), identity::Did::new(selected.did())?)

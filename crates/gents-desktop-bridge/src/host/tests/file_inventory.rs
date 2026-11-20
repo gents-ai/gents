@@ -1,15 +1,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::client_runtime::ClientRuntime;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_inventory::{
     DirectFileInventoryRequest, FileInventoryAdmission, FileInventoryObservation,
     FileInventoryReadAction, FILE_INVENTORY_OPERATOR_PATH,
 };
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::identity::NodeIdentity;
 use identity::Identity;
 use serde_json::{json, Value};
@@ -26,7 +27,7 @@ use super::{protocol, ClientHost};
 type Connection = Framed<DuplexStream, LengthDelimitedCodec>;
 
 async fn attach(
-    core: Arc<ClientCore>,
+    core: Arc<ClientRuntime>,
 ) -> Result<(Connection, tokio::task::JoinHandle<Result<()>>)> {
     let host = Arc::new(ClientHost::new(core));
     let (client, server) = tokio::io::duplex(64 * 1024);
@@ -80,15 +81,25 @@ async fn inventory_requests_go_to_the_runtime_as_the_desktop_client() -> Result<
     let endpoint = format!("{}/api/v0/graphql", server.uri());
     let paths = DesktopPaths::from_root(root.path().join("client"));
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?,
+        ClientRuntime::start_with_paths_and_options(
+            paths,
+            crate::client_test_support::file_journal_options(),
+        )
+        .await?,
     );
-    core.persist_local_standard_peer(
-        "Inventory runtime",
-        "endpoint:bridge-inventory",
-        runtime.did(),
-        &endpoint,
-        root.path().to_str().unwrap(),
+    crate::client_test_support::runtime_metadata(
+        &server,
+        &crate::client_test_support::RuntimeKey::of_file(&root.path().join("runtime.key")),
     )
+    .await;
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: (runtime.did()).to_string(),
+        label: ("Inventory runtime").to_string(),
+        graphql: endpoint.to_string(),
+        local_node_home: Some((root.path().to_str().unwrap()).to_string()),
+        access_request: None,
+        access_state: None,
+    })
     .await?;
     let request = DirectFileInventoryRequest {
         node_did: runtime.did().into(),

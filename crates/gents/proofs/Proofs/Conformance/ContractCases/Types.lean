@@ -313,18 +313,6 @@ structure NativeFilesystemBoundaryCase where
   blockerMs : Nat
   deriving Repr
 
-structure ManagedExecToolBoundaryCase where
-  name : String
-  toolName : String
-  workClass : String
-  boundary : String
-  killScope : String
-  timeoutRequiresKill : Bool
-  cancelRequiresKill : Bool
-  descendantsInTerminationScope : Bool
-  captureDrainBounded : Bool
-  deriving Repr
-
 structure ProcessStopCase where
   name : String
   liveEvidence : String := ""
@@ -387,31 +375,6 @@ structure QueueDeadlineConformanceCase where
   postDeadline : Option Time
   explicitDeadlinePreserved : Bool
   deriving Repr
-
-structure RecoverySweepCase where
-  name : String
-  sweepId : String
-  collection : String
-  rustFunction : String
-  cadence : String
-  implementationStatus : String
-  preState : String
-  terminalState : String
-  measureBefore : Nat
-  measureAfter : Nat
-  deadlineAuditRef : String
-  deadlineExpired : Option Bool := none
-  parentLive : Option Bool := none
-  parentInterrupted : Option Bool := none
-  parentTerminal : Option Bool := none
-  taskHookObservation : Option String := none
-  executionRegistered : Option Bool := none
-  processOutcome : Option String := none
-  ownerTaskDeleted : Option Bool := none
-  ownerSessionStopped : Option Bool := none
-  recoveryCause : Option String := none
-  notificationReason : Option String := none
-  deriving DecidableEq, Repr
 
 structure RestartDispositionCase where
   name : String
@@ -511,30 +474,6 @@ structure ReadToolOutputCanonicalSourceReconstruction where
   deriving Repr
 
 end R4cWitnesses
-
-structure TranscriptCase where
-  name : String
-  group : String
-  action : String
-  actionCallIds : List Nat
-  actionLogicalResultIds : List Nat
-  actionPayloadHashes : List Nat
-  legal : Bool
-  preMessageCount : Nat
-  postMessageCount : Nat
-  preToolCallCount : Nat
-  postToolCallCount : Nat
-  preInFlightCount : Nat
-  postInFlightCount : Nat
-  assistantSequence : Nat
-  resultSequence : Nat
-  logicalResultId : Nat
-  payloadHash : Nat
-  expectedPairClosed : Bool
-  expectedOrdered : Bool
-  expectedDuplicateReusedSequence : Bool
-  expectedStrongDrain : Bool
-  deriving Repr
 
 def boolString (value : Bool) : String :=
   if value then "true" else "false"

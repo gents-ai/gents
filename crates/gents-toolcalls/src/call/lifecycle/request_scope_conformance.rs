@@ -1,7 +1,7 @@
 use super::AwaitMode;
 use crate::call::lifecycle::admission_fixture::{
     claimed_signed_request, complete_child_managed_verified, materialize_session_message,
-    publish_accepted_on_claimed_request,
+    publish_accepted_on_claimed_request, AcceptedFixtureCall,
 };
 use std::sync::Arc;
 
@@ -89,17 +89,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         let mut agent_signer = None;
         for turn in 0..2 {
             let tool_id = format!("queue-deadline-coalesce-{}-{turn}", uuid::Uuid::new_v4());
-            let mut row = publish_accepted_on_claimed_request(
-                node.clone(),
-                &mut parent,
-                node_did,
-                turn,
-                gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
-                &tool_id,
-                serde_json::json!({"agent": "general", "prompt": format!("prompt for {tool_id}")}),
-                AwaitMode::Background,
-                false,
-            )
+            let mut row = publish_accepted_on_claimed_request(node.clone(), &mut parent, node_did, AcceptedFixtureCall { turn, tool_name: gents_protocol::tool_names::AGENT_NEW_TOOL_NAME, tool_call_id: &tool_id, arguments: serde_json::json!({"agent": "general", "prompt": format!("prompt for {tool_id}")}), await_mode: AwaitMode::Background, start_running: false })
             .await
             .unwrap();
             agent_signer = row.access().unwrap().managed_agent_signer();

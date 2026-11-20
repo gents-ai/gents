@@ -34,8 +34,8 @@ pub(super) async fn receipt(
 }
 
 /// Fixtures sharing a node slow down as it accumulates their documents, so
-/// each shard's cases run on a small pool of nodes, a few at a time.
-const CASES_PER_NODE: usize = 32;
+/// the cases run on a small pool of nodes, a few at a time.
+const CASES_PER_NODE: usize = 8;
 const NODES_AT_ONCE: usize = 4;
 
 /// The family replays as one test per shard, so each test stays far inside
@@ -147,7 +147,9 @@ async fn drive_signed_command(node: &FixtureNode, modeled_case: &ControlCase) {
             ::identity::Did::new(fixture.identity.did()).unwrap(),
         );
         for permission in [
+            gents_store::config_client::NodePermission::CollectionGet,
             gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::CollectionGet,
             gents_store::config_client::NodePermission::DocumentUpdate,
             gents_store::config_client::NodePermission::DacRelationAdd,
         ] {
@@ -267,9 +269,15 @@ async fn drive_signed_command(node: &FixtureNode, modeled_case: &ControlCase) {
     let doc_id = persist_command(&access, &command).await;
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
     assert_eq!(
-        process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-            .await
-            .unwrap(),
+        process_command(
+            &fixture.node,
+            &identity,
+            &doc_id,
+            fixture.agent.as_ref(),
+            None
+        )
+        .await
+        .unwrap(),
         None,
         "{}",
         case.name
@@ -312,9 +320,15 @@ async fn drive_signed_command(node: &FixtureNode, modeled_case: &ControlCase) {
     };
     modeled_case.check(observed);
     let first_receipt = serde_json::to_value(receipt).unwrap();
-    process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-        .await
-        .unwrap();
+    process_command(
+        &fixture.node,
+        &identity,
+        &doc_id,
+        fixture.agent.as_ref(),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         serde_json::to_value(self::receipt(&access, &doc_id).await.unwrap()).unwrap(),
         first_receipt,
@@ -430,9 +444,15 @@ async fn generated_resume_continuation_is_read_through_the_session() {
         .unwrap();
     let doc_id = persist_command(&access, &command).await;
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
-    process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-        .await
-        .unwrap();
+    process_command(
+        &fixture.node,
+        &identity,
+        &doc_id,
+        fixture.agent.as_ref(),
+        None,
+    )
+    .await
+    .unwrap();
     let GoalControlOutcome::Applied {
         request_id: Some(continuation),
         ..

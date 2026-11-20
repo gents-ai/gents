@@ -77,10 +77,7 @@ fn platform_process_memory() -> ProcessMemory {
 }
 
 /// Reads the `kB` fields of Linux `/proc/<pid>/status`.
-#[cfg_attr(
-    not(any(target_os = "linux", test)),
-    expect(dead_code, reason = "only Linux exposes /proc/self/status")
-)]
+#[cfg(any(target_os = "linux", test))]
 fn parse_proc_status(status: &str) -> ProcessMemory {
     let mut memory = ProcessMemory::default();
     for line in status.lines() {

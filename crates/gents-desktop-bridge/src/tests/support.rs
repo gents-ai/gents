@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use crate::client_runtime::ClientRuntime;
 use gents_protocol::job::JobProgress;
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::graphql::escape_graphql_string;
 use tempfile::TempDir;
 
@@ -26,20 +27,23 @@ pub fn node_builder() -> gents::defra_node::NodeBuilder {
     gents::defra_node::Node::builder().with_node_identity_did(identity.did())
 }
 
-pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {
+pub async fn boot_core() -> (Arc<ClientRuntime>, TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let paths = DesktopPaths::from_root(tempdir.path());
-    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
-        .await
-        .expect("core starts");
+    let core = ClientRuntime::start_with_paths_and_options(
+        paths,
+        crate::client_test_support::file_journal_options(),
+    )
+    .await
+    .expect("core starts");
     (Arc::new(core), tempdir)
 }
 
 /// A desktop client whose own key is the User of a served runtime it routes
 /// to, with a published chat Agent: the shape a desktop reaches its runtime in.
 pub struct ServedDesktop {
-    pub core: Arc<ClientCore>,
-    pub runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    pub core: Arc<ClientRuntime>,
+    pub runtime: gents::client_test_support::ServedRuntimeHome,
     pub agent: gents_protocol::agent_identity::AgentIdentityBinding,
     _directory: TempDir,
 }
@@ -47,14 +51,14 @@ pub struct ServedDesktop {
 pub async fn served_desktop() -> ServedDesktop {
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(directory.path()),
-            ClientCoreOptions::local_simulated_route(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap(),
     );
-    let (runtime, agent) = served_runtime_for(&core, ServedRoute::CoHosted).await;
+    let (runtime, agent) = served_runtime_for(&core).await;
     ServedDesktop {
         core,
         runtime,
@@ -63,52 +67,21 @@ pub async fn served_desktop() -> ServedDesktop {
     }
 }
 
-/// How a served runtime is routed from the desktop.
-#[derive(Clone, Copy)]
-pub enum ServedRoute {
-    /// The co-hosted standard peer route `ServedRuntimeHome::connect` adds.
-    CoHosted,
-    /// A managed enrollment route.
-    Enrollment,
-    /// A further standard peer listening on this port.
-    Peer(u16),
-}
-
 /// A served runtime whose User is `core`'s key, with a published chat Agent,
 /// routed from `core` by `route`.
 pub async fn served_runtime_for(
-    core: &Arc<ClientCore>,
-    route: ServedRoute,
+    core: &Arc<ClientRuntime>,
 ) -> (
-    gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    gents::client_test_support::ServedRuntimeHome,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
-        Arc::new(core.node_identity().clone()),
-    )
+    let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(Arc::new(
+        core.node_identity().clone(),
+    ))
     .await;
     runtime.publish_node(serde_json::json!({})).await;
     let agent = runtime.publish_chat_agent().await;
-    let home = runtime.home_path().display().to_string();
-    match route {
-        ServedRoute::CoHosted => runtime.connect(core).await,
-        ServedRoute::Enrollment => core
-            .add_managed_enrollment_peer_for_test(runtime.node_did(), runtime.graphql(), &home, 1)
-            .await
-            .unwrap(),
-        ServedRoute::Peer(port) => core
-            .add_local_standard_peer_route_for_test(
-                "Served peer",
-                &format!(
-                    "127.0.0.1:{port}/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb"
-                ),
-                runtime.node_did(),
-                runtime.graphql(),
-                &home,
-            )
-            .await
-            .unwrap(),
-    }
+    crate::client_test_support::connect_runtime(&runtime, core).await;
     (runtime, agent)
 }
 
@@ -116,20 +89,20 @@ pub async fn served_runtime_for(
 /// through a managed enrollment route, the second as a standard peer.
 pub async fn served_desktop_pair() -> (
     ServedDesktop,
-    gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    gents::client_test_support::ServedRuntimeHome,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(directory.path()),
-            ClientCoreOptions::local_simulated_route(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap(),
     );
-    let (runtime, agent) = served_runtime_for(&core, ServedRoute::Enrollment).await;
-    let (second, second_agent) = served_runtime_for(&core, ServedRoute::Peer(56002)).await;
+    let (runtime, agent) = served_runtime_for(&core).await;
+    let (second, second_agent) = served_runtime_for(&core).await;
     (
         ServedDesktop {
             core,
@@ -160,29 +133,31 @@ pub const SCRIPTED_MODEL: &str = "scripted-model";
 /// scripted provider, with a lead Agent that may start and message a worker
 /// Agent. Requests, sessions and their tool calls are the runtime's own.
 pub struct RunningDesktop {
-    pub core: Arc<ClientCore>,
-    pub runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    pub core: Arc<ClientRuntime>,
+    pub runtime: gents::client_test_support::ServedRuntimeHome,
     pub lead: gents_protocol::agent_identity::AgentIdentityBinding,
-    pub provider: super::streaming_backend::MockStreamingBackend,
+    pub provider: gents::support::streaming_backend::MockStreamingBackend,
     running: Option<gents::runtime::embedded::RunningRuntime>,
     _directory: TempDir,
 }
 
 impl RunningDesktop {
-    pub async fn start(plans: Vec<super::streaming_backend::StreamPlan>) -> Self {
-        let provider =
-            super::streaming_backend::MockStreamingBackend::start_with_plans(SCRIPTED_MODEL, plans)
-                .unwrap();
+    pub async fn start(plans: Vec<gents::support::streaming_backend::StreamPlan>) -> Self {
+        let provider = gents::support::streaming_backend::MockStreamingBackend::start_with_plans(
+            SCRIPTED_MODEL,
+            plans,
+        )
+        .unwrap();
         let directory = tempfile::tempdir().unwrap();
         let core = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(directory.path()),
-                ClientCoreOptions::local_simulated_route(),
+                crate::client_test_support::file_journal_options(),
             )
             .await
             .unwrap(),
         );
-        let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+        let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(
             Arc::new(core.node_identity().clone()),
         )
         .await;
@@ -202,7 +177,7 @@ impl RunningDesktop {
                 )],
             )
             .await;
-        runtime.connect(&core).await;
+        crate::client_test_support::connect_runtime(&runtime, &core).await;
         let running = runtime.boot().await;
         Self {
             core,
@@ -344,7 +319,9 @@ impl ProvenanceFixture {
 }
 
 pub async fn provenance_fixture() -> ProvenanceFixture {
-    use super::streaming_backend::{StreamChunk, StreamPlan, StreamResponse, StreamScript};
+    use gents::support::streaming_backend::{
+        StreamChunk, StreamPlan, StreamResponse, StreamScript,
+    };
 
     let held = |marker: &'static str| {
         StreamPlan::current_authored_user(
@@ -454,8 +431,8 @@ pub async fn provenance_fixture() -> ProvenanceFixture {
 /// Submits `request_id` in `session_id` as `core`'s User through the client
 /// admission owner, reserving the session first. Returns its document.
 pub async fn submit_request(
-    core: &ClientCore,
-    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    core: &ClientRuntime,
+    runtime: &gents::client_test_support::ServedRuntimeHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: &str,
     request_id: &str,
@@ -467,8 +444,8 @@ pub async fn submit_request(
 
 /// [`submit_request`], returning the owner's refusal.
 pub async fn try_submit_request(
-    core: &ClientCore,
-    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    core: &ClientRuntime,
+    runtime: &gents::client_test_support::ServedRuntimeHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: &str,
     request_id: &str,
@@ -492,7 +469,7 @@ pub async fn try_submit_request(
 pub async fn submit_signed(
     access: &gents_store::config_client::ConfigAccess,
     signer: &dyn gents_store::identity::NodeIdentity,
-    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    runtime: &gents::client_test_support::ServedRuntimeHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: &str,
     request_id: &str,
@@ -537,7 +514,7 @@ pub async fn submit_signed(
 /// Ends the pending request `doc_id` failed with `reason`, as its working
 /// Agent rejects its admission through the request lifecycle owner.
 pub async fn reject_admission(
-    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    runtime: &gents::client_test_support::ServedRuntimeHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     doc_id: &str,
     reason: &str,
@@ -564,100 +541,8 @@ pub async fn reject_admission(
     lifecycle.reject_admission(reason).await.unwrap();
 }
 
-/// The DID of [`fixture_signer`]`(7)`; the sessions it starts carry
-/// receipts that key signed.
 pub const OPERATOR: &str = "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z";
 
-/// A fixed test key, so fixture rows can name its DID as a constant.
-pub fn fixture_signer(seed: u8) -> gents_store::identity::KeyIdentity {
-    use std::io::Write as _;
-    // A named temporary file is created private to its owner, as a key must be.
-    let mut key = tempfile::NamedTempFile::new().unwrap();
-    key.write_all(&crypto::ed25519_key_from_seed(&[seed; 32]).unwrap())
-        .unwrap();
-    gents_store::identity::KeyIdentity::load_existing(key.path(), None).unwrap()
-}
-
-/// Write `session` as creation writes a started session: the immutable
-/// starter index at create, then the receipt `signer` signs for the created
-/// physical document, binding `source`, `parent` and `opening`.
-pub async fn create_started_session(
-    core: &Arc<ClientCore>,
-    signer: &gents_store::identity::KeyIdentity,
-    mut session: gents_protocol::session::AgentSession,
-    source: &gents_protocol::session::SessionReference,
-    parent: &str,
-    opening: &str,
-) {
-    use gents_protocol::session::{
-        SessionCreationCause, SessionCreationReceipt, SessionCreationStarter,
-    };
-    use gents_store::identity::NodeIdentity as _;
-    assert_eq!(
-        session.requester_did.as_deref(),
-        Some(signer.did()),
-        "the creating Agent signs its receipt"
-    );
-    let mut provenance = session.provenance.take().unwrap_or_default();
-    provenance.parent_request_doc_id = Some(parent.into());
-    provenance.opening_request_doc_id = Some(opening.into());
-    provenance.started_by = Some(source.clone());
-    let mut input = serde_json::to_value(&gents_protocol::session::AgentSession {
-        provenance: Some(provenance.clone()),
-        ..session.clone()
-    })
-    .unwrap();
-    input["started_by_node_did"] = source.node_did.clone().into();
-    input["started_by_session_id"] = source.session_id.clone().into();
-    let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
-    let doc_id = created_doc_id(
-        core,
-        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
-        "AgentSession",
-    )
-    .await;
-    let mut receipt = SessionCreationReceipt {
-        node_did: session.node_did.clone(),
-        session_id: session.session_id.clone(),
-        session_doc_id: doc_id,
-        requester_did: session.requester_did.clone(),
-        agent_did: session.agent_did.clone(),
-        opening_request_doc_id: opening.into(),
-        cause: SessionCreationCause::AgentNew,
-        cause_binding: "fixture-call".into(),
-        starter: Some(SessionCreationStarter {
-            source: source.clone(),
-            parent_request_doc_id: parent.into(),
-        }),
-        signature: Vec::new(),
-    };
-    receipt.signature = signer.sign(&receipt.signing_payload()).await.unwrap();
-    provenance.creation_receipt = Some(receipt);
-    write_provenance(core, &session.node_did, &session.session_id, &provenance).await;
-}
-
-pub async fn write_provenance(
-    core: &Arc<ClientCore>,
-    node_did: &str,
-    session_id: &str,
-    provenance: &gents_protocol::session::SessionProvenance,
-) {
-    let input = gents_protocol::graphql::graphql_input_literal(
-        &serde_json::json!({ "provenance": provenance }),
-    )
-    .unwrap();
-    let response = core
-        .node()
-        .execute(&format!(
-            r#"mutation {{ update_AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, input: {input}) {{ _docID }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(session_id),
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-}
-
-/// A fixture session on `node_did` with no provenance.
 pub fn fixture_session(node_did: &str, session_id: &str) -> gents_protocol::session::AgentSession {
     gents_protocol::session::AgentSession {
         session_id: session_id.into(),
@@ -723,7 +608,7 @@ impl gents_store::config_client::ConfigRead for CountingRead {
 }
 
 pub async fn refresh_request_and_assert_fresh_projection(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -748,227 +633,6 @@ pub async fn refresh_request_and_assert_fresh_projection(
     );
 }
 
-async fn created_doc_id(core: &Arc<ClientCore>, mutation: &str, collection: &str) -> String {
-    let response = core.node().execute(mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed {collection}: {:?}",
-        response.errors
-    );
-    gents_store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
-        .expect("created document")
-        .and_then(|document| document["_docID"].as_str())
-        .expect("created document id")
-        .to_owned()
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn create_request(
-    core: &Arc<ClientCore>,
-    request_id: &str,
-    node_did: &str,
-    session_id: &str,
-    lifecycle_state: &str,
-    created_at: &str,
-    cause: Option<(&str, &str, &str)>,
-) -> String {
-    let caused = cause
-        .map(|(doc, call, call_doc)| {
-            format!(
-                r#"request_hop: 1, caused_by_parent_request_id: "req_parent", caused_by_parent_request_doc_id: "{doc}", caused_by_parent_tool_call_id: "{call}", caused_by_parent_tool_call_doc_id: "{call_doc}","#
-            )
-        })
-        .unwrap_or_default();
-    created_doc_id(
-        core,
-        &format!(
-            r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "{node_did}", requester_did: "{OPERATOR}", agent_did: "worker", session_id: "{session_id}", {caused} content: "work", lifecycle_state: "{lifecycle_state}", backend_id: "", created_at: "{created_at}", retry_count: 0 }}) {{ _docID }} }}"#
-        ),
-        "AgentRequest",
-    )
-    .await
-}
-
-pub async fn create_session(
-    core: &Arc<ClientCore>,
-    node_did: &str,
-    session_id: &str,
-    started_by: Option<&str>,
-) {
-    let session = gents_protocol::session::AgentSession {
-        session_id: session_id.into(),
-        node_did: node_did.into(),
-        requester_did: Some(OPERATOR.into()),
-        agent_did: "worker".into(),
-        created_at: "2026-05-20T00:00:00Z".into(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: started_by.map(|doc_id| gents_protocol::session::SessionProvenance {
-            parent_request_doc_id: Some(doc_id.into()),
-            ..Default::default()
-        }),
-        observation: None,
-    };
-    let input = gents_protocol::graphql::graphql_input_literal(
-        &serde_json::to_value(&session).expect("session json"),
-    )
-    .expect("session input");
-    created_doc_id(
-        core,
-        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
-        "AgentSession",
-    )
-    .await;
-}
-
-pub async fn seed_job_row_for_node(
-    core: &Arc<ClientCore>,
-    node_did: &str,
-    session_id: &str,
-    tool_call_id: &str,
-    lifecycle_state: &str,
-    progress: &JobProgress,
-    coded_output: Option<(&str, &str)>,
-) -> String {
-    use gents_protocol::job::{JobCeiling, JobOrigin, JobPin};
-    use gents_protocol::output::rows::{
-        output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-    };
-    use gents_protocol::output::{
-        OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
-        StreamDeclaration, StreamPayload,
-    };
-    use gents_store::config_client::ConfigAccess;
-
-    let access = ConfigAccess::local(core.node_arc());
-    let request_doc_id = create_request(
-        core,
-        &format!("req-{tool_call_id}"),
-        node_did,
-        session_id,
-        "completed",
-        "2026-05-20T00:00:00Z",
-        None,
-    )
-    .await;
-    let mut pin = JobPin {
-        script_id: "fixture-script".into(),
-        source_digest: "sha256:source".into(),
-        origin: JobOrigin::Installed,
-        engine_digest: "sha256:engine".into(),
-        plugin_ref: "fixture/workflow".into(),
-        agent_budget: 4,
-        handle: tool_call_id.into(),
-        cwd: "/fixture/cwd".into(),
-        adopted_at: 1_780_000_000_000,
-        args_digest: "sha256:args".into(),
-        chain_root_doc_id: String::new(),
-        resume_of: None,
-        replayed_from: None,
-        ceiling_at_pin: JobCeiling {
-            targets: vec!["general".into()],
-            max_live: 2,
-            max_spawns: 8,
-            max_messages_per_slot: 4,
-            result_bytes: 65_536,
-            max_wall_secs: 600,
-        },
-    };
-    let completed_at = if lifecycle_state == "running" {
-        String::new()
-    } else {
-        r#"completed_at: "2026-05-20T00:05:00Z","#.to_owned()
-    };
-    let mutation = format!(
-        r#"mutation($job_pin: JSON, $job_progress: JSON) {{ create_AgentToolCall(input: {{
-            tool_call_key: "{key}", request_id: "req-{call}", request_doc_id: "{request_doc_id}",
-            session_id: "{session}", node_did: "{node}", requester_did: "{OPERATOR}",
-            tool_name: "workflow", tool_call_id: "{call}", message_sequence: 1,
-            await_mode: "background", status: "{lifecycle}", lifecycle_state: "{lifecycle}",
-            started_at: "2026-05-20T00:00:00Z", {completed_at}
-            job_pin: $job_pin, job_progress: $job_progress
-        }}) {{ _docID }} }}"#,
-        node = escape_graphql_string(node_did),
-        key = escape_graphql_string(&format!("{session_id}:{tool_call_id}")),
-        request_doc_id = escape_graphql_string(&request_doc_id),
-        session = escape_graphql_string(session_id),
-        call = escape_graphql_string(tool_call_id),
-        lifecycle = escape_graphql_string(lifecycle_state),
-    );
-    let variables = serde_json::json!({ "job_pin": pin, "job_progress": progress });
-    let response = access
-        .transact_write("test.fixture.job_row", |txn| {
-            let (mutation, variables) = (mutation.clone(), variables.clone());
-            Box::pin(async move { txn.execute_with_variables(&mutation, &variables).await })
-        })
-        .await
-        .expect("seed job row");
-    let row_doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentToolCall")
-        .expect("job row doc id");
-    pin.chain_root_doc_id = row_doc_id.clone();
-    let update = format!(
-        r#"mutation($job_pin: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ job_pin: $job_pin }}) {{ _docID }} }}"#,
-        escape_graphql_string(&row_doc_id)
-    );
-    let variables = serde_json::json!({ "job_pin": pin });
-    access
-        .transact_write("test.fixture.job_pin", |txn| {
-            let (update, variables) = (update.clone(), variables.clone());
-            Box::pin(async move { txn.execute_with_variables(&update, &variables).await })
-        })
-        .await
-        .expect("pin the job chain root");
-
-    if let Some((code, message)) = coded_output {
-        let payload = serde_json::json!({ "code": code, "message": message }).to_string();
-        let segment = OutputSegment {
-            node_did: node_did.into(),
-            requester_did: Some(OPERATOR.into()),
-            session_id: session_id.into(),
-            request_doc_id,
-            source: OutputSource::ToolCall {
-                tool_call_doc_id: row_doc_id.clone(),
-            },
-            writer: OutputWriter::ToolExecution {
-                tool_call_doc_id: row_doc_id.clone(),
-            },
-            ordinal: Some(0),
-            runs: vec![SegmentRun {
-                stream: 0,
-                bytes: payload.len() as u32,
-                declaration: Some(StreamDeclaration {
-                    block_index: 0,
-                    part_index: 0,
-                    payload: StreamPayload::ToolOutput,
-                }),
-            }],
-            payload: payload.clone(),
-            close: Some(SourceClose::Closed {
-                outcome: OutputOutcome::Complete,
-                segments: 1,
-                stream_bytes: vec![payload.len() as u64],
-            }),
-            created_at: "2026-05-20T00:05:00Z".into(),
-        };
-        let variables = output_segment_create_variables(&segment).expect("segment variables");
-        access
-            .transact_write("test.fixture.job_output", |txn| {
-                let variables = variables.clone();
-                Box::pin(async move {
-                    txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables)
-                        .await
-                })
-            })
-            .await
-            .expect("seed job output");
-    }
-    row_doc_id
-}
-
 /// A front for a served runtime that answers `GET /status` as a ready
 /// `gents serve` daemon of `node_did` does and forwards every other request
 /// to the runtime's authenticated DefraDB HTTP: an embedded test runtime has
@@ -988,6 +652,7 @@ impl ServingStatusProxy {
             .unwrap()[0];
         let status = serde_json::json!({
             "node_did": node_did,
+            "client_authentication": {"kind":"local"},
             gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD: "ready",
             "request_input_contract_version":
                 gents_protocol::request_input::REQUEST_INPUT_CONTRACT_VERSION,

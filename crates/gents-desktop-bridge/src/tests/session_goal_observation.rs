@@ -54,7 +54,8 @@ async fn session_snapshot_goal_is_only_the_verified_observation() {
                     }
                     Ok(None) => last = "no snapshot".into(),
                     Err(error)
-                        if error.code == crate::error::BridgeErrorCode::ProjectionPending =>
+                        if error.code
+                            == gents_store::client_error::BridgeErrorCode::ProjectionPending =>
                     {
                         last = error.to_string()
                     }

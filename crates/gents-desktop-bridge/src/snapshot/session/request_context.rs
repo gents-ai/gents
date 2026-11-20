@@ -2,7 +2,7 @@ use super::*;
 
 /// Read one immutable call after checking its physical request against the selected session.
 pub async fn load_session_context_details(
-    core: &ClientCore,
+    core: &ClientRuntime,
     access: &ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
@@ -413,13 +413,13 @@ mod tests {
 
     #[tokio::test]
     async fn context_details_reject_foreign_physical_requests_before_reading_capture() {
-        use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+        use gents_store::client_journal::paths::DesktopPaths;
         use gents_store::test_support::wire_database::WireDatabase;
         let directory = tempfile::tempdir().unwrap();
         let core = std::sync::Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(directory.path()),
-                ClientCoreOptions::local_only(),
+                crate::client_test_support::file_journal_options(),
             )
             .await
             .unwrap(),

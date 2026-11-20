@@ -236,6 +236,7 @@ def networkProtocolResource : String → Option String
   | "PeerPairingDesired" => some "pairing_observations"
   | "EnrollmentOperatorNonce" => some "operations"
   | "NetworkEnrollmentGrant" => some "operations"
+  | "ClientRuntimeAccessRequest" => some "operations"
   | "NetworkAdminPin" => some "operations"
   | "EnrollmentRenewalPolicy" => some "operations"
   | "OAuthCredential" => some "secret_configuration"
@@ -340,16 +341,23 @@ theorem local_registry_writer_is_bound_to_creator_and_node :
      localRegistryWriter "user" "runtime" "user" false] =
       [some "user", some "runtime", none, none] := by decide
 
-/-- Native node-administrator publication is local to the receiving store. Its
-actor is the configured Node, and native NAC bypass plus relation-add authority,
-the bound schema and a verified registered document must all hold in the same
-transaction. These grants are specific to the document and do not grant access
-on application records or follow merely from peer admission. The local marker
-is an ACP relationship, not a replicated document field. -/
-def replicaGrant (state : State) (resource id runtime node user : String)
+/-- Publication requires native node authority and document authority for the
+actor that caused the projection. Registration or peer admission grants neither. -/
+def replicaGrant (state : State) (actor resource id runtime node user : String)
     (authorized registered committed nodeExists publicRegistry : Bool) : State :=
   let marker : Relation := ⟨resource, id, "local_publication", .actor runtime⟩
-  if !(authorized && registered && committed) || state.relations.contains marker then state
+  let reader : Relation := ⟨resource, id, "reader", .actor runtime⟩
+  let publicReader : Relation := ⟨resource, id, "reader", .wildcard⟩
+  let parent : Relation := ⟨resource, id, "parent", .object "nodes" node⟩
+  let manager : Relation := ⟨resource, id, "reader_manager", .actor user⟩
+  let pending : Relation := ⟨resource, id, "pending_parent", .actor runtime⟩
+  let managesAll := mayManage state actor marker && mayManage state actor reader &&
+    mayManage state actor pending &&
+    (!(publicRegistry && resource == "discovery") || mayManage state actor publicReader) &&
+    (if nodeExists then mayManage state actor parent && mayManage state actor manager
+     else true)
+  if !(authorized && registered && committed && managesAll) ||
+      state.relations.contains marker then state
   else
     let marked := apply state (.grant marker)
     let reader := apply marked (.grant ⟨resource, id, "reader", .actor runtime⟩)
@@ -364,12 +372,15 @@ def replicaGrant (state : State) (resource id runtime node user : String)
 the same native transaction. Once consumed, reconciliation cannot restore a
 relation that was later revoked. The attachment names the physical Node document;
 a replacement Node requires an explicit administrator reattachment. -/
-def replicaLinkPending (state : State) (resource id runtime node user : String)
+def replicaLinkPending (state : State) (actor resource id runtime node user : String)
     (authorized nodeExists committed : Bool) : State :=
   let marker : Relation := ⟨resource, id, "local_publication", .actor runtime⟩
   let pending : Relation := ⟨resource, id, "pending_parent", .actor runtime⟩
   if authorized && nodeExists && committed && state.relations.contains marker &&
-      state.relations.contains pending then
+      state.relations.contains pending &&
+      mayManage state actor ⟨resource, id, "parent", .object "nodes" node⟩ &&
+      mayManage state actor ⟨resource, id, "reader_manager", .actor user⟩ &&
+      mayManage state actor pending then
     let linked := apply state (.grant ⟨resource, id, "parent", .object "nodes" node⟩)
     let managed := apply linked (.grant ⟨resource, id, "reader_manager", .actor user⟩)
     apply managed (.revoke pending)
@@ -380,41 +391,84 @@ def privateReplicaFixture : State :=
       ⟨"enrollment_records", "remote", "foreign"⟩,
       ⟨"children", "application", "foreign"⟩], relations := [], enrolled := [] }
 
-theorem native_local_replica_grant_is_narrow :
-    let state := replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+def localReplicaFixture : State :=
+  { objects := [⟨"nodes", "local-node", "user"⟩,
+      ⟨"enrollment_records", "remote", "runtime"⟩], relations := [], enrolled := [] }
+
+/-- The receiving runtime does not own a foreign record and cannot grant itself
+its reader relation through document ACP without an explicit manager grant. -/
+theorem foreign_replica_requires_document_authority :
+    mayManage privateReplicaFixture "runtime"
+      ⟨"enrollment_records", "remote", "reader", .actor "runtime"⟩ = false := by
+  native_decide
+
+/-- An owner can delegate reader management without delegating the separate
+authority to attach a Node parent. The grant must come from that owner. -/
+theorem foreign_owner_delegates_only_reader_management :
+    let delegated := apply privateReplicaFixture (.grantAs "foreign"
+      ⟨"enrollment_records", "remote", "reader_manager", .actor "runtime"⟩)
+    (mayManage delegated "runtime"
+        ⟨"enrollment_records", "remote", "reader", .actor "user"⟩,
+     mayManage delegated "runtime"
+        ⟨"enrollment_records", "remote", "parent", .object "nodes" "local-node"⟩) =
+      (true, false) := by native_decide
+
+theorem reader_manager_cannot_publish_foreign_replica :
+    let delegated := apply privateReplicaFixture (.grantAs "foreign"
+      ⟨"enrollment_records", "remote", "reader_manager", .actor "runtime"⟩)
+    let result := replicaGrant delegated "runtime" "enrollment_records" "remote" "runtime"
+      "local-node" "user" true true true true false
+    result.relations.contains
+      ⟨"enrollment_records", "remote", "local_publication", .actor "runtime"⟩ = false := by
+  native_decide
+
+theorem foreign_owner_can_publish_to_the_receiving_runtime :
+    let result := replicaGrant privateReplicaFixture "foreign" "enrollment_records" "remote"
+      "runtime" "local-node" "user" true true true true false
+    (allowed 5 result "runtime" "enrollment_records" "remote" "read",
+     allowed 5 result "user" "enrollment_records" "remote" "read") = (true, true) := by
+  native_decide
+
+theorem local_network_owner_can_publish_without_bypass :
+    let state : State := { objects := [⟨"nodes", "local-node", "user"⟩,
+      ⟨"enrollment_records", "network", "runtime"⟩], relations := [], enrolled := [] }
+    let reader : Relation := ⟨"enrollment_records", "network", "reader", .actor "runtime"⟩
+    let parent : Relation := ⟨"enrollment_records", "network", "parent", .object "nodes" "local-node"⟩
+    (mayManage state "runtime" reader, mayManage state "runtime" parent,
+     mayManage state "foreign" reader, mayManage state "foreign" parent) =
+      (true, true, false, false) := by native_decide
+
+theorem foreign_replica_is_not_published_without_owner_authority :
+    let state := replicaGrant privateReplicaFixture "runtime" "enrollment_records" "remote" "runtime"
       "local-node" "user" true true true true false
     (allowed 5 state "runtime" "enrollment_records" "remote" "read",
      allowed 5 state "user" "enrollment_records" "remote" "read",
      allowed 5 state "user" "enrollment_records" "remote" "update",
      allowed 5 state "agent" "enrollment_records" "remote" "read",
      allowed 5 state "runtime" "children" "application" "read") =
-      (true, true, false, false, false) := by native_decide
+      (false, false, false, false, false) := by native_decide
 
 theorem replica_parent_repair_does_not_restore_revocation :
-    let pending := replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+    let pending := replicaGrant localReplicaFixture "runtime" "enrollment_records" "remote" "runtime"
       "local-node" "user" true true true false false
-    let linked := replicaLinkPending pending "enrollment_records" "remote" "runtime"
+    let linked := replicaLinkPending pending "runtime" "enrollment_records" "remote" "runtime"
       "local-node" "user" true true true
     let revoked := apply linked (.revoke ⟨"enrollment_records", "remote", "parent",
       .object "nodes" "local-node"⟩)
-    allowed 5 (replicaLinkPending revoked "enrollment_records" "remote" "runtime"
+    allowed 5 (replicaLinkPending revoked "runtime" "enrollment_records" "remote" "runtime"
       "local-node" "user" true true true) "user" "enrollment_records" "remote" "read" = false := by
   native_decide
 
-/-- A thin client may administer its own native store with its held peer DID
-without having a Node configuration document. On receipt of a verified foreign
-transport record, native NAC grants that exact client a local reader relation;
-the foreign creator remains the owner and the parent remains pending. This is
-local store authority, not peer enrollment or access to application records. -/
+/-- A received foreign record does not grant the receiving client access. -/
 def clientTransportFixture : State :=
   { objects := [⟨"enrollment_records", "decision", "server"⟩,
       ⟨"children", "application", "server"⟩], relations := [], enrolled := [] }
 
 def clientTransportPublished : State :=
-  replicaGrant clientTransportFixture "enrollment_records" "decision" "client"
+  replicaGrant clientTransportFixture "client" "enrollment_records" "decision" "client"
     "client-node" "user" true true true false false
 
-theorem client_receives_only_its_local_transport_reader :
+theorem client_cannot_publish_foreign_transport_without_authority :
     (allowed 5 clientTransportPublished "server" "enrollment_records" "decision" "update",
      allowed 5 clientTransportPublished "client" "enrollment_records" "decision" "read",
      allowed 5 clientTransportPublished "client" "enrollment_records" "decision" "update",
@@ -422,17 +476,17 @@ theorem client_receives_only_its_local_transport_reader :
      allowed 5 clientTransportPublished "agent" "enrollment_records" "decision" "read",
      allowed 5 clientTransportPublished "outsider" "enrollment_records" "decision" "read",
      allowed 5 clientTransportPublished "client" "children" "application" "read") =
-      (true, true, false, false, false, false, false) := by native_decide
+      (true, false, false, false, false, false, false) := by native_decide
 
 theorem client_without_native_authority_cannot_publish :
-    replicaGrant clientTransportFixture "enrollment_records" "decision" "client"
+    replicaGrant clientTransportFixture "client" "enrollment_records" "decision" "client"
       "client-node" "user" false true true false false = clientTransportFixture := by
   simp [replicaGrant]
 
 theorem native_replica_requires_authority_and_registration :
-    (replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+    (replicaGrant privateReplicaFixture "runtime" "enrollment_records" "remote" "runtime"
       "local-node" "user" false true true true false,
-     replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
+     replicaGrant privateReplicaFixture "runtime" "enrollment_records" "remote" "runtime"
       "local-node" "user" true false true true false) =
       (privateReplicaFixture, privateReplicaFixture) := by simp [replicaGrant]
 
@@ -473,7 +527,7 @@ def localRegistryWriterRevoked : State :=
     ⟨"discovery", "self", "writer", .actor "user"⟩)
 
 theorem local_registry_writer_revocation_is_not_republished :
-    let after := replicaGrant localRegistryWriterRevoked "discovery" "self" "runtime"
+    let after := replicaGrant localRegistryWriterRevoked "runtime" "discovery" "self" "runtime"
       "local-node" "user" true true true true true
     (allowed 5 localRegistryWriterFixture "user" "discovery" "self" "update",
      allowed 5 after "user" "discovery" "self" "update") = (true, false) := by native_decide
@@ -614,6 +668,24 @@ def receiverHasGrant (senderGranted relationshipDelivered : Bool) : Bool :=
 
 theorem sender_grant_without_relationship_delivery_is_not_receiver_grant :
     receiverHasGrant true false = false := by decide
+
+/-- What the receiver reads of a delivered document. A receiver that hosts the
+receiving node is its node key and reads past document ACP
+(`Household.readObserved`), so it reads the document whether or not the
+relationship was delivered; the relationship still decides every other reader
+on that node. Transport publication names the hosting node key as the reader,
+so in production the relationship no longer gates that reader's read: it
+remains the record of the grant and what a non-hosting reader would need. -/
+def receiverReads (hostsNode senderGranted relationshipDelivered : Bool) : Bool :=
+  Household.readObserved hostsNode (receiverHasGrant senderGranted relationshipDelivered)
+
+theorem hosting_receiver_reads_without_delivered_grant (senderGranted delivered : Bool) :
+    receiverReads true senderGranted delivered = true := by
+  simp [receiverReads, Household.readObserved]
+
+theorem other_receiver_reads_only_a_delivered_grant (senderGranted delivered : Bool) :
+    receiverReads false senderGranted delivered = receiverHasGrant senderGranted delivered := by
+  simp [receiverReads, Household.readObserved]
 
 /-- The marker is publication progress for one exact pairing document and
 one exact Agent, not an authorization decision. The native relation is the

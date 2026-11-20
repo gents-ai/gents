@@ -137,6 +137,8 @@ where
                 let dict = value.as_dictionary_mut().context("service dictionary")?;
                 // Preserve all installed properties, including bundle association,
                 // log paths and managed environment, rather than re-rendering defaults.
+                // The system-log flag is installer-owned, so a definition written
+                // before it existed gains it here as a fresh install renders it.
                 let args = dict
                     .get_mut("ProgramArguments")
                     .and_then(plist::Value::as_array_mut)
@@ -148,14 +150,15 @@ where
                         .context("executable UTF-8")?
                         .to_owned(),
                 );
+                if args.len() == 4 {
+                    args.push(plist::Value::String(SYSTEM_LOG_FLAG.to_owned()));
+                }
                 if replacement.is_some() {
                     let env = dict
                         .get_mut("EnvironmentVariables")
                         .and_then(plist::Value::as_dictionary_mut)
                         .context("service environment")?;
-                    env.retain(|key, _| {
-                        matches!(key.as_str(), "PATH" | "GENTS_SYSTEM_LOG" | "HOME")
-                    });
+                    env.retain(|key, _| matches!(key.as_str(), "PATH" | "HOME"));
                 }
                 let mut out = Vec::new();
                 value.to_writer_xml(&mut out)?;
@@ -171,11 +174,17 @@ where
                         .context("executable UTF-8")?,
                     true,
                 )?;
+                let flag = format!(" {}", systemd_arg(SYSTEM_LOG_FLAG)?);
                 definition = definition
                     .lines()
                     .map(|line| {
                         if line.starts_with("ExecStart=") {
-                            line.replacen(&old, &new, 1)
+                            let line = line.replacen(&old, &new, 1);
+                            if line.ends_with(&flag) {
+                                line
+                            } else {
+                                line + &flag
+                            }
                         } else {
                             line.to_owned()
                         }
@@ -424,7 +433,7 @@ mod tests {
                 .unwrap();
             let text = String::from_utf8(result).unwrap();
             assert!(!text.contains("FLEET_HOST"));
-            assert!(text.contains("GENTS_SYSTEM_LOG"));
+            assert!(text.contains(SYSTEM_LOG_FLAG));
             if platform == NativeServicePlatform::Macos {
                 let plist = plist::Value::from_reader_xml(text.as_bytes()).unwrap();
                 assert_eq!(
@@ -440,6 +449,46 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn an_update_gives_a_definition_without_the_system_log_flag_the_installed_argv() {
+        for (platform, flag) in [
+            (
+                NativeServicePlatform::Macos,
+                format!("<string>{SYSTEM_LOG_FLAG}</string>"),
+            ),
+            (
+                NativeServicePlatform::Linux,
+                format!(" \"{SYSTEM_LOG_FLAG}\""),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let old = config(dir.path());
+            let current = render(platform, &old).unwrap();
+            assert_eq!(current.matches(&flag).count(), 1, "{current}");
+            let earlier = current.replace(&flag, "");
+            let mut next = old;
+            next.executable = dir.path().join("next binary");
+            let fresh = render(platform, &next).unwrap();
+            let manager =
+                NativeServiceManager::with_runner(next.clone(), platform, Runner::default());
+            for before in [&earlier, &current] {
+                let result = manager.update_definition(before.as_bytes(), None).unwrap();
+                let text = String::from_utf8(result).unwrap();
+                assert_eq!(text.matches(&flag).count(), 1, "{text}");
+                match platform {
+                    NativeServicePlatform::Macos => assert_eq!(
+                        launchd_arguments(&text).unwrap(),
+                        launchd_arguments(&fresh).unwrap()
+                    ),
+                    NativeServicePlatform::Linux => assert_eq!(text, fresh),
+                }
+                fs::write(next.definition_path(platform), &text).unwrap();
+                assert!(manager.definition_log_current().unwrap(), "{platform:?}");
+                assert!(!manager.refresh_definition_file().unwrap(), "{platform:?}");
+            }
+        }
+    }
+
     #[test]
     fn updater_is_a_separate_supervisor_job_with_fixed_argv() {
         for platform in [NativeServicePlatform::Macos, NativeServicePlatform::Linux] {

@@ -26,23 +26,29 @@ pub(super) const MUTATION_WRITE_GATE_CAPACITY: usize = 64;
 
 pub(super) struct StoreClaim {
     pub(super) node: Arc<EmbeddedNode>,
-    lock: crate::local::home::StoreLock,
+    /// Taken by [`LocalConfigAccess::release_store`] once the node's shutdown
+    /// returned, so the release does not wait for every other owner of the
+    /// node's write gate; otherwise it goes with the claim's last owner.
+    lock: StdMutex<Option<crate::local::home::StoreLock>>,
 }
 
 /// Embedded access plus a node-scoped store claim held across Gents-owned native operations.
 #[derive(Clone)]
 pub struct LocalConfigAccess {
-    pub(super) node: Arc<EmbeddedNode>,
+    pub(crate) node: Arc<EmbeddedNode>,
     pub(super) gate: Arc<MutationWriteGate>,
     pub(super) identity: Option<identity::Did>,
     pub(super) agent_signer: Option<crate::identity::ManagedAgentSigner>,
     pub(super) client_signed_writes: bool,
     /// The client-signed endpoint served by this same node; writes that
     /// require client signing travel through it as the endpoint's principal.
-    pub(super) client_endpoint: Option<crate::config_client::GraphqlEndpoint>,
+    pub(crate) client_endpoint: Option<crate::config_client::GraphqlEndpoint>,
     /// The runtime key's derivation proof, held only by an access its host
     /// built with that key; staging as an Agent requires it.
     pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,
+    pub(super) client_authorization:
+        Option<crate::config_client::client_authentication::ClientAuthorization>,
+    pub(super) presented_delegation: Option<crate::config_client::user_write::PresentedDelegation>,
 }
 
 impl LocalConfigAccess {
@@ -56,6 +62,8 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            client_authorization: None,
+            presented_delegation: None,
         }
     }
 
@@ -66,6 +74,20 @@ impl LocalConfigAccess {
         }
         self.agent_proof = Some(proof);
         true
+    }
+
+    pub(crate) fn with_presented_delegation(
+        mut self,
+        presented: crate::config_client::user_write::PresentedDelegation,
+    ) -> Self {
+        self.presented_delegation = Some(presented);
+        self
+    }
+
+    pub(crate) fn presented_delegation(
+        &self,
+    ) -> Option<crate::config_client::user_write::PresentedDelegation> {
+        self.presented_delegation.clone()
     }
 
     pub(crate) fn with_identity(mut self, identity: identity::Did) -> Self {
@@ -79,6 +101,24 @@ impl LocalConfigAccess {
         }
         self.agent_signer = Some(signer);
         self
+    }
+
+    pub(crate) fn attach_client_authorization(
+        &mut self,
+        authorization: crate::config_client::client_authentication::ClientAuthorization,
+    ) -> Result<()> {
+        if self.identity.as_ref() != Some(authorization.actor()) && self.agent_signer.is_none() {
+            return Err(ConfigClientError::TransactionActorMismatch);
+        }
+        self.client_authorization = Some(authorization);
+        Ok(())
+    }
+
+    pub(crate) fn request_context(&self) -> defra_core::RequestContext {
+        crate::config_client::client_authentication::ClientAuthorization::request_context(
+            self.client_authorization.as_ref(),
+            self.identity.clone(),
+        )
     }
 
     pub(crate) fn require_client_signed_writes(&mut self) {
@@ -113,14 +153,18 @@ impl LocalConfigAccess {
         self.agent_signer.clone()
     }
 
-    /// The node's own identity acts unsigned; any other local actor acts
-    /// only under its validated managed signer.
+    /// Native actor operations preserve the verified User delegation or the
+    /// Node/Agent's own signer. This does not authorize a document write.
     pub(crate) fn require_actor_signer(&self) -> Result<()> {
-        require_mutation_signer(
-            &self.node,
-            self.identity.as_ref(),
-            self.agent_signer.as_ref(),
-        )
+        if self
+            .client_authorization
+            .as_ref()
+            .is_some_and(|caller| self.identity.as_ref() == Some(caller.actor()))
+        {
+            return Ok(());
+        }
+
+        self.require_mutation_signer()
     }
 
     pub(crate) fn require_mutation_signer(&self) -> Result<()> {
@@ -148,6 +192,8 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            client_authorization: None,
+            presented_delegation: None,
         })
     }
 
@@ -157,15 +203,38 @@ impl LocalConfigAccess {
 
     /// Declares the store claim releasing (see
     /// [`crate::local::home::StoreLock::declare_releasing`]) and returns the
-    /// notice of its release. The claim is released when the last owner of
-    /// this node's write gate drops it, which may be a native operation that
-    /// outlives the caller's own access. `None` for an access without a claim.
+    /// notice of its release. The claim is released by [`Self::release_store`]
+    /// or when the last owner of this node's write gate drops it, and in
+    /// either case only once the node's storage engine has let go of the data
+    /// directory (Lean `StoreHandoff.mayRelease`). `None` for an access
+    /// without a claim, or one whose claim was already released.
     pub fn begin_store_release(&self) -> Option<crate::local::home::StoreRelease> {
         let claim = self.gate.store_claim()?;
-        if let Err(error) = claim.lock.declare_releasing() {
+        let lock = claim
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let lock = lock.as_ref()?;
+        if let Err(error) = lock.declare_releasing() {
             tracing::warn!(%error, "declaring the store release failed; an opener meanwhile is refused");
         }
-        Some(claim.lock.release_notice())
+        Some(lock.release_notice())
+    }
+
+    /// Releases the store claim once the node's shutdown has returned,
+    /// whoever else still owns the node's write gate (`tla/StoreHandoff.tla`
+    /// `ReleaseByShutdownOwner`). The store lock itself goes once the last
+    /// handle of the node drops its storage engine.
+    pub fn release_store(&self) {
+        let Some(claim) = self.gate.store_claim() else {
+            return;
+        };
+        let lock = claim
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        drop(lock);
     }
 
     pub(crate) async fn run_owned<T, E, F, Fut>(&self, operation: F) -> Result<T, E>
@@ -346,7 +415,10 @@ impl MutationWriteGate {
         if claim.is_some() {
             return Err(ConfigClientError::StoreClaimHeld);
         }
-        *claim = Some(Arc::new(StoreClaim { node, lock }));
+        *claim = Some(Arc::new(StoreClaim {
+            node,
+            lock: StdMutex::new(Some(lock)),
+        }));
         Ok(())
     }
 

@@ -73,14 +73,10 @@ impl Harness {
                 ),
             ])
             .await;
-        // Tools and AgentContext are source-projected: created by the evaluator
-        // they are not updatable by the owner, which the pack install below
-        // needs. The Node owner creates them, as it does for every other
-        // source-projected fixture document.
-        let owner_access = launching.owner_access().unwrap();
+        let owner_access = &launching.access;
         launching
             .install_as(
-                &owner_access,
+                owner_access,
                 vec![
                     tools(launching.owner()),
                     context(launching.owner(), BASELINE_PROMPT),
@@ -118,7 +114,7 @@ impl Harness {
             gents_pack::pack::PackIdentity::new(&authored.manifest, authored.digest, Vec::new());
         identity.agent_bindings = agent_bindings;
         gents_pack::pack::install_pack_documents(
-            &owner_access,
+            owner_access,
             launching.owner(),
             &identity,
             &config,
@@ -167,18 +163,7 @@ impl Harness {
         // EvalDefinition rows are created by the evaluator in `Launching`, and
         // the owner holds no update grant on rows another actor created, so
         // redefinitions are written through the evaluator's access.
-        // Agent and other source-projected documents are refused for the
-        // evaluator's client access, so the Node owner writes them.
-        let (definitions, others): (Vec<_>, Vec<_>) = documents
-            .into_iter()
-            .partition(|(collection, _)| *collection == Collection::EvalDefinition);
-        if !definitions.is_empty() {
-            self.launching.install(definitions).await;
-        }
-        if !others.is_empty() {
-            let owner_access = self.launching.owner_access().unwrap();
-            self.launching.install_as(&owner_access, others).await;
-        }
+        self.launching.install(documents).await;
     }
 
     pub(crate) async fn grant_node_permissions(

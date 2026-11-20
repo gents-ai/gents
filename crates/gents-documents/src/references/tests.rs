@@ -3,10 +3,6 @@ use serde_json::json;
 
 #[test]
 fn modeled_affected_validation_preserves_visible_dependencies() {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration contract");
     let document = |key: &str| match key {
         "agent" => (
             Collection::Agent,
@@ -60,19 +56,17 @@ fn modeled_affected_validation_preserves_visible_dependencies() {
         ),
         _ => panic!("unknown modeled document {key}"),
     };
-    for modeled in &case.configuration_affected_cases {
-        let documents = modeled["documents"]
-            .as_array()
-            .unwrap()
+    gents_lean_vocab::families::household_configuration_affected::replay(|modeled| {
+        let documents = modeled
+            .documents
             .iter()
-            .map(|key| document(key.as_str().unwrap()))
+            .map(|key| document(key))
             .collect::<Vec<_>>();
-        let changed = modeled["changed"]
-            .as_array()
-            .unwrap()
+        let changed = modeled
+            .changed
             .iter()
             .map(|key| {
-                let (collection, value) = document(key.as_str().unwrap());
+                let (collection, value) = document(key);
                 (
                     collection,
                     value[collection.unique_field()]
@@ -83,14 +77,8 @@ fn modeled_affected_validation_preserves_visible_dependencies() {
             })
             .collect();
         let snapshot = ConfigReferences::from_documents("owner", documents).unwrap();
-        let actual = snapshot.validate_affected(&changed);
-        assert_eq!(
-            actual.is_ok(),
-            modeled["expected"].as_bool().unwrap(),
-            "{}: {actual:?}",
-            modeled["name"]
-        );
-    }
+        snapshot.validate_affected(&changed).is_ok()
+    });
 }
 
 #[test]

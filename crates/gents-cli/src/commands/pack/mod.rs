@@ -49,6 +49,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Check(args) => check::check(args).await,
         PackCommand::Install(args) => install(args).await.map_err(PackChangeError::into_anyhow),
         PackCommand::Wire(args) => wire::wire(args).await,
+        PackCommand::Approve(args) => wire::approve(args).await,
         PackCommand::Starter(args) => crate::commands::init::default_packs::starter(args).await,
         PackCommand::Remove(args) => remove::remove(args)
             .await

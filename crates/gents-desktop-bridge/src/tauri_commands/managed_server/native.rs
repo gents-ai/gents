@@ -1,9 +1,10 @@
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::tauri_commands::service_executable::{
     ensure_installable_location, resolve_service_executable,
 };
 use gents_service::args::ServiceAction;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use tauri::{AppHandle, Runtime};
 
 pub(super) fn ensure_launchable_here<R>(

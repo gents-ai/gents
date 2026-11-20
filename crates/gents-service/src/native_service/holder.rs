@@ -146,8 +146,13 @@ pub(super) fn systemd_record(show: &str) -> Option<ServiceRecord> {
         let exec = field("ExecStart");
         let argv = exec.split_once("argv[]=")?.1;
         let argv = argv.split_once(" ;").map_or(argv, |(argv, _)| argv);
-        argv.split_once(" --home ")
-            .map(|(_, home)| PathBuf::from(home.trim()))
+        argv.split_once(" --home ").map(|(_, home)| {
+            let home = home.trim();
+            PathBuf::from(
+                home.strip_suffix(&format!(" {SYSTEM_LOG_FLAG}"))
+                    .unwrap_or(home),
+            )
+        })
     };
     Some(ServiceRecord {
         definition,

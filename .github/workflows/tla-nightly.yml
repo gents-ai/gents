@@ -25,4 +25,4 @@ jobs:
           persist-credentials: false
 
       - name: Model-check every TLA+ configuration
-        run: python3 crates/gents/proofs/tla/scripts/tla_check.py run --all --jobs 3 --heap 4g
+        run: python3 crates/gents/proofs/tla/scripts/tla_check.py run --all --fresh --jobs 3 --heap 4g

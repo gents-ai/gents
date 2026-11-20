@@ -36,6 +36,68 @@ async fn http_send_bytes(request: reqwest::RequestBuilder) -> Result<(reqwest::U
     Ok((url, body.to_vec()))
 }
 
+/// [`http_get_json`] for the request `build` makes on `endpoint`, sent again
+/// once when its credential is refused and the home's status recovers it.
+pub async fn endpoint_get_json<T, F>(
+    endpoint: &gents_store::config_client::GraphqlEndpoint,
+    build: F,
+) -> Result<T>
+where
+    T: DeserializeOwned,
+    F: Fn(
+        &gents_store::config_client::GraphqlEndpoint,
+    ) -> Result<reqwest::RequestBuilder, gents_store::config_client::ConfigClientError>,
+{
+    let (url, body) = endpoint_send_bytes(endpoint, build).await?;
+    serde_json::from_slice(&body).with_context(|| format!("decoding JSON response from {url}"))
+}
+
+/// [`http_send`] for the request `build` makes on `endpoint`, as
+/// [`endpoint_get_json`] sends it.
+pub async fn endpoint_send<F>(
+    endpoint: &gents_store::config_client::GraphqlEndpoint,
+    build: F,
+) -> Result<()>
+where
+    F: Fn(
+        &gents_store::config_client::GraphqlEndpoint,
+    ) -> Result<reqwest::RequestBuilder, gents_store::config_client::ConfigClientError>,
+{
+    endpoint_send_bytes(endpoint, build).await.map(|_| ())
+}
+
+async fn endpoint_send_bytes<F>(
+    endpoint: &gents_store::config_client::GraphqlEndpoint,
+    build: F,
+) -> Result<(reqwest::Url, Vec<u8>)>
+where
+    F: Fn(
+        &gents_store::config_client::GraphqlEndpoint,
+    ) -> Result<reqwest::RequestBuilder, gents_store::config_client::ConfigClientError>,
+{
+    let response = endpoint
+        .send_resolving(build)
+        .await?
+        .with_context(|| format!("sending a request to {endpoint}"))?;
+    successful_body(response).await
+}
+
+async fn successful_body(response: reqwest::Response) -> Result<(reqwest::Url, Vec<u8>)> {
+    let url = response.url().clone();
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .with_context(|| format!("reading the response body from {url}"))?;
+    if !status.is_success() {
+        anyhow::bail!(
+            "{url} failed with {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    Ok((url, body.to_vec()))
+}
+
 pub fn normalize_optional_string(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)

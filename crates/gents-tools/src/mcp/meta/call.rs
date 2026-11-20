@@ -82,7 +82,11 @@ impl Tool for CallToolTool {
         }
     }
 
-    fn admit(&self, args: &Self::Args) -> Result<(), Self::Error> {
+    fn admit(
+        &self,
+        args: &Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), Self::Error> {
         match self
             .ctx
             .blocked_service_error(&args.service_id, &args.tool_name)
@@ -95,9 +99,9 @@ impl Tool for CallToolTool {
     async fn call(
         &self,
         args: Self::Args,
-        _context: &gents_loop::tool::ToolCallEnvelope,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<Self::Output, Self::Error> {
-        Tool::admit(self, &args)?;
+        Tool::admit(self, &args, context)?;
 
         let arguments =
             match normalize_arguments(&args.service_id, &args.tool_name, &args.arguments) {
@@ -509,7 +513,7 @@ mod tests {
                     tool_name: "query_metrics".to_string(),
                     arguments: json!("not an object"),
                 },
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .expect_err("disallowed service should return a typed failure");

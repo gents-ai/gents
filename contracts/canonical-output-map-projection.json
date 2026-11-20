@@ -169,15 +169,15 @@
       "native_owner_paths": [
         "crates/gents-session/src/request/streaming.rs",
         "crates/gents/src/runtime/agent/stream_processor.rs",
-        "crates/gents-desktop-core/src/client/observe.rs",
-        "crates/gents-desktop-core/src/client/observe/projection_store.rs",
-        "crates/gents-desktop-core/src/client/query/session_transcript.rs"
+        "crates/gents-observe/src/client_projection/observe.rs",
+        "crates/gents-observe/src/client_projection/observe/projection_store.rs",
+        "crates/gents-observe/src/client_projection/query/session_transcript.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/runtime/agent/loop_stream/tests/streaming.rs",
-        "crates/gents-desktop-core/src/client/observe/tests.rs",
-        "crates/gents-desktop-core/src/client/query/tests/projection_and_patches.rs",
-        "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
+        "crates/gents-observe/src/client_projection/observe/tests.rs",
+        "crates/gents-observe/src/client_projection/query/tests/projection_and_patches.rs",
+        "crates/gents-observe/src/client_projection/query/tests/transcript_pagination.rs",
         "crates/gents/tests/conformance/streaming_compaction.rs"
       ],
       "native_status": "pending",
@@ -213,12 +213,12 @@
       "native_owner_paths": [
         "crates/gents-session/src/session/fork.rs",
         "crates/gents-observe/src/file_inventory/selection.rs",
-        "crates/gents-desktop-core/src/client/query/session_transcript.rs"
+        "crates/gents-observe/src/client_projection/query/session_transcript.rs"
       ],
       "consumer_paths": [
         "crates/gents-observe/src/file_inventory/closure.rs",
         "crates/gents-session/src/session/tests.rs",
-        "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
+        "crates/gents-observe/src/client_projection/query/tests/transcript_pagination.rs",
         "crates/gents/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs"
       ],
       "native_status": "pending",
@@ -259,7 +259,6 @@
       ],
       "consumer_paths": [
         "crates/gents-toolcalls/src/call/lifecycle/admission_fixture.rs",
-        "crates/gents/tests/conformance/background.rs",
         "crates/gents-toolcalls/src/background/status.rs"
       ],
       "native_status": "pending",
@@ -335,16 +334,16 @@
       "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents-protocol/src/client_protocol.rs",
-        "crates/gents-desktop-core/src/client/store/turns.rs",
-        "crates/gents-desktop-core/src/client/store/indexing.rs",
-        "crates/gents-desktop-core/src/client/observe/projection_store.rs",
-        "crates/gents-desktop-core/src/client/query/session_transcript.rs"
+        "crates/gents-observe/src/client_projection/store/turns.rs",
+        "crates/gents-observe/src/client_projection/store/indexing.rs",
+        "crates/gents-observe/src/client_projection/observe/projection_store.rs",
+        "crates/gents-observe/src/client_projection/query/session_transcript.rs"
       ],
       "consumer_paths": [
         "crates/gents-protocol/src/client_protocol/tests.rs",
-        "crates/gents-desktop-core/src/client/store/tests/observer_projection.rs",
-        "crates/gents-desktop-core/src/client/query/tests/projection_and_patches.rs",
-        "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
+        "crates/gents-observe/src/client_projection/store/tests/observer_projection.rs",
+        "crates/gents-observe/src/client_projection/query/tests/projection_and_patches.rs",
+        "crates/gents-observe/src/client_projection/query/tests/transcript_pagination.rs",
         "crates/gents/tests/conformance/streaming_compaction.rs"
       ],
       "native_status": "pending",

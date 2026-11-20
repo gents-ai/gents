@@ -64,9 +64,8 @@ pub use policy::{
 };
 pub use profiles::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
 pub use registry::{
-    heartbeat_is_fresh, registry_upsert_mutation, resolve_network_id, run_registry_heartbeat,
-    RegistryEntry, UpsertKind, DEFAULT_NETWORK_ID, NETWORK_ID_ENV, REGISTRY_HEARTBEAT_INTERVAL,
-    REGISTRY_STALE_AFTER,
+    heartbeat_is_fresh, registry_upsert_mutation, run_registry_heartbeat, RegistryEntry,
+    UpsertKind, DEFAULT_NETWORK_ID, REGISTRY_STALE_AFTER,
 };
 pub use templates::{
     builtin_templates, combine_filters, decode_pairing_filters, equality_filter, filter_conditions,

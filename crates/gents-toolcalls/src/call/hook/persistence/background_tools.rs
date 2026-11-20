@@ -54,13 +54,15 @@ impl DefraSessionHook {
             self.ensure_assistant_turn_sequence().await?;
         let mut parent_lifecycle = self
             .adopt_accepted_tool_dispatch(
-                internal_call_id,
-                tool_call_id.as_deref(),
-                &request_id,
-                &session_id,
-                SPAWN_PROCESS_TOOL_NAME,
-                args,
-                deadline_at,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id,
+                    provider_call_id: tool_call_id.as_deref(),
+                    request_id: &request_id,
+                    session_id: &session_id,
+                    tool_name: SPAWN_PROCESS_TOOL_NAME,
+                    args,
+                    deadline_at,
+                },
                 AwaitMode::Foreground,
             )
             .await?;
@@ -119,7 +121,7 @@ impl DefraSessionHook {
 
         let target_tool_name = target_name.to_string();
         let target_args = serde_json::to_string(&parsed.args)?;
-        if let Err(error) = target_tool.admit(&target_args) {
+        if let Err(error) = target_tool.admit(&target_args, context) {
             let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
                 class,
                 denial,
@@ -190,12 +192,16 @@ impl DefraSessionHook {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
                 match BackgroundSlotRefusal::in_failure(&error) {
-                    Some(BackgroundSlotRefusal::CapacityExceeded(admitted)) => {
+                    Some(BackgroundSlotRefusal::CapacityExceeded { admitted, limit }) => {
                         return complete_spawn_process_failure(
                             self,
                             &mut parent_lifecycle,
                             FailureClass::ServiceUnavailable,
-                            background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, *admitted),
+                            background_budget_exceeded_payload(
+                                SPAWN_PROCESS_TOOL_NAME,
+                                *admitted,
+                                *limit,
+                            ),
                             None,
                         )
                         .await;
@@ -271,39 +277,6 @@ impl DefraSessionHook {
         let live_output_writer = live_outputs
             .canonical_writer_for(lifecycle.tool_output_binding()?)
             .await;
-        let runtime_context = gents_tools::runtime_context::current_tool_runtime_context();
-        let workspace = gents_tools::runtime_context::ToolWorkspaceScope {
-            runtime_home: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.runtime_home.clone()),
-            workspace_cwd: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.workspace_cwd.clone()),
-            workspace_root: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.workspace_root.clone()),
-            workspace_authority: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.workspace_authority),
-            workspace_artifact: runtime_context
-                .as_ref()
-                .and_then(|runtime| runtime.workspace_artifact.clone()),
-        };
-        let correlation = runtime_context
-            .as_ref()
-            .and_then(|runtime| runtime.correlation.clone());
-        let requester_did = runtime_context
-            .as_ref()
-            .and_then(|runtime| runtime.requester_did.clone());
-        let request_node_did = runtime_context
-            .as_ref()
-            .and_then(|runtime| runtime.node_did.clone());
-        let request_agent_did = runtime_context
-            .as_ref()
-            .and_then(|runtime| runtime.agent_did.clone());
-        let source_fields = runtime_context
-            .map(|runtime| runtime.source_fields)
-            .unwrap_or_default();
         let executions = self.background_executions.clone();
         let process_tool = gents_tools::native::is_bash_tool_name(target_name);
         let process_recorder =
@@ -317,74 +290,69 @@ impl DefraSessionHook {
                 live_output: live_output_writer.clone(),
                 session_id: execution_session_id.clone(),
             },
-            process_recorder.clone(),
+            process_recorder,
             dispatcher.clone(),
             process_tool,
         );
-        tokio::spawn(gents_tools::plugin::approval::carry_interactive(
-            async move {
-                let execution = AssertUnwindSafe(gents_session::exec::ownership::scope_process_recorder(
-                process_recorder,
-                async {
-                        gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-                            Some(gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(requester_did, request_node_did, request_agent_did, Some(execution_request_id.clone()))),
-                            Some(background_deadline_at),
-                            cancellation_token.clone(),
-                            workspace,
-                            Some(live_output_writer),
-                            Some(execution_session_id.clone()),
-                            correlation,
-                            source_fields,
-                            true,
-                            async {
-                                if process_tool {
-                                    gents_tools::runtime_context::debug_assert_ambient(&envelope);
-                                    gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
-                                        target_tool.as_ref(), target_args, &envelope, |outcome| {
-                                            if let Some(outcome) = outcome.filter(|outcome| gents_session::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
-                                                executions.set_stop_receipt(&execution_call_id, &execution_tool_doc_id, crate::call::hook::RetainedStopReceipt::from_outcome(outcome));
-                                            }
-                                            executions.live_process_evidence(&execution_call_id, &execution_tool_doc_id)
-                                                != gents_session::exec::ownership::LiveProcessEvidence::NeverSpawned
-                                        },
-                                    ).await
-                                } else {
-                                    gents_loop::tool_effects::scope(dispatcher, async {
-                                        gents_tools::runtime_context::debug_assert_ambient(&envelope);
-                                        gents_loop::tool_call_lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args, &envelope).await
-                                    }).await
-                                }
-                            },
-                        )
-                        .await
-                    },
-            ))
+        tokio::spawn(async move {
+            let execution = AssertUnwindSafe(async {
+                if process_tool {
+                    gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
+                        target_tool.as_ref(),
+                        target_args,
+                        &envelope,
+                        |outcome| {
+                            if let Some(outcome) = outcome.filter(|outcome| {
+                                gents_session::exec::ownership::native_terminal_needs_confirmation(
+                                    Some(outcome),
+                                )
+                            }) {
+                                executions.set_stop_receipt(
+                                    &execution_call_id,
+                                    &execution_tool_doc_id,
+                                    crate::call::hook::RetainedStopReceipt::from_outcome(outcome),
+                                );
+                            }
+                            executions
+                                .live_process_evidence(&execution_call_id, &execution_tool_doc_id)
+                                != gents_session::exec::ownership::LiveProcessEvidence::NeverSpawned
+                        },
+                    )
+                    .await
+                } else {
+                    gents_loop::tool_call_lifecycle::runtime::call_tool_managed(
+                        target_tool.as_ref(),
+                        target_args,
+                        &envelope,
+                    )
+                    .await
+                }
+            })
             .catch_unwind()
             .await;
 
-                // Cancellation, lifetime expiry and a guest failure all drop the
-                // in-flight child call, so its row is settled here, before the
-                // background owner publishes its own terminal.
-                if let Some(children) = stopped_children {
-                    let panicked = gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled;
-                    let stop = execution.as_ref().unwrap_or(&panicked);
-                    if let Err(error) = children.settle_stopped(stop).await {
-                        tracing::warn!(%error, tool_call_id = %lifecycle.tool_call_id(),
+            // Cancellation, lifetime expiry and a guest failure all drop the
+            // in-flight child call, so its row is settled here, before the
+            // background owner publishes its own terminal.
+            if let Some(children) = stopped_children {
+                let panicked = gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled;
+                let stop = execution.as_ref().unwrap_or(&panicked);
+                if let Err(error) = children.settle_stopped(stop).await {
+                    tracing::warn!(%error, tool_call_id = %lifecycle.tool_call_id(),
                         "background invocation left an unsettled child");
-                    }
                 }
+            }
 
-                finish_background_execution(
-                    lifecycle,
-                    node,
-                    live_outputs,
-                    executions,
-                    execution_reservation,
-                    execution,
-                )
-                .await;
-            },
-        ));
+            finish_background_execution(
+                lifecycle,
+                node,
+                live_outputs,
+                executions,
+                execution_reservation,
+                execution,
+            )
+            .await;
+        });
 
         Ok(self.skip_tool_result(SPAWN_PROCESS_TOOL_NAME, receipt))
     }

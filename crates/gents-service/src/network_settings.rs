@@ -8,7 +8,7 @@ use crate::args::{P2pDiscoveryArg, P2pRelayModeArg, ServiceNetworkArgs};
 use crate::native_service::{CommandRunner, NativeServiceManager};
 
 /// Listen settings `gents runtime server` applies for each flag it is not given. The
-/// native service definition stays `gents runtime server --home <HOME>`, so the
+/// native service definition stays `gents server --home <HOME> --system-log`, so the
 /// desktop's own installs and updates of that definition keep these.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -370,7 +370,7 @@ mod tests {
             install_on(NativeServicePlatform::Macos, TAILNET);
         let arguments = |config: &NativeServiceConfig| {
             format!(
-                "<key>ProgramArguments</key><array>\n    <string>{}</string><string>server</string><string>--home</string><string>{}</string>\n  </array>",
+                "<key>ProgramArguments</key><array>\n    <string>{}</string><string>server</string><string>--home</string><string>{}</string><string>--system-log</string>\n  </array>",
                 config.executable.display(),
                 config.home.display()
             )
@@ -393,7 +393,7 @@ mod tests {
             install_on(NativeServicePlatform::Linux, TAILNET);
         let exec_start = |config: &NativeServiceConfig| {
             format!(
-                "ExecStart=\"/usr/bin/env\" -- \"GENTS_SYSTEM_LOG=1\" \"{}\" \"server\" \"--home\" \"{}\"\n",
+                "ExecStart=\"/usr/bin/env\" -- \"{}\" \"server\" \"--home\" \"{}\" \"--system-log\"\n",
                 config.executable.display(),
                 config.home.display()
             )

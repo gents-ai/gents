@@ -277,8 +277,7 @@ async fn stage_claimed_continuation(
         behavior,
         &goal.goal_id,
         content,
-        sequence,
-        wrapup,
+        gents_protocol::request_input::GoalContinuationInput { sequence, wrapup },
         &created_at,
         session_hop,
     )?;

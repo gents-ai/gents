@@ -45,24 +45,16 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_refus
     assert!(refused_edit.contains("is unavailable"), "{refused_edit}");
     assert_eq!(before, access.execute(&query).await.unwrap());
     fixture.grant_user_native_admin().await;
-    let modeled = &gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model")
-        .dangling_selection_repair_cases;
-    assert_eq!(modeled.len(), 5);
-    assert!(
-        modeled.iter().all(|case| case["applied"] == false),
-        "every available read is ACP-filtered, so no modeled repair applies"
-    );
     let agent_access = fixture.agent_access();
-    // NAC-enabled cases run first; disabling NAC is the last observation.
-    let mut ordered = modeled.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|case| !case["nac_enabled"].as_bool().unwrap());
     let mut nac_disabled = false;
-    for case in ordered {
-        assert_eq!(case["complete_inventory"], false, "{case}");
-        if !case["nac_enabled"].as_bool().unwrap() && !nac_disabled {
+    for case in gents_lean_vocab::families::household_dangling_selection_repair::cases() {
+        let modeled = &case.input;
+        assert!(!modeled.complete_inventory, "{modeled:?}");
+        assert!(
+            !(modeled.nac_enabled && nac_disabled),
+            "disabling NAC is the fixture's last change: {modeled:?}"
+        );
+        if !modeled.nac_enabled && !nac_disabled {
             assert_eq!(
                 ok(&tools, json!({"argv":["validate"]})).await["valid"],
                 false
@@ -70,39 +62,37 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_refus
             fixture.disable_native_nac().await;
             nac_disabled = true;
         }
-        let (actor_access, actor) = match case["actor"].as_str().unwrap() {
+        let (actor_access, actor) = match modeled.actor.as_str() {
             "user" => (access, fixture.user_access().actor_did().unwrap()),
             "agent" => (&agent_access, fixture.agent_did().to_owned()),
             other => panic!("unmodeled repair actor {other}"),
         };
-        let repair = case["repair"].as_bool().unwrap();
+        let repair = modeled.repair;
+        let observed_refusal = std::sync::Mutex::new(None);
         let applied = actor_access
             .transact_write("test.saved_audit.repair", |txn| {
                 let context_id = &context_id;
                 let tools_id = &tools_id;
                 let actor = &actor;
                 let node_did = fixture.node_did();
+                let observed_refusal = &observed_refusal;
                 Box::pin(async move {
                     let authority = txn.destructive_authority().await?;
                     assert_eq!(
                         (authority.nac_enabled, authority.admin),
-                        (
-                            case["nac_enabled"].as_bool().unwrap(),
-                            case["admin"].as_bool().unwrap()
-                        ),
+                        (modeled.nac_enabled, modeled.admin),
                         "{actor}"
                     );
                     assert_eq!(
                         authority.native_admin(),
-                        case["nac_enabled"].as_bool().unwrap() && case["admin"].as_bool().unwrap(),
+                        modeled.nac_enabled && modeled.admin,
                         "with NAC disabled no actor is the native admin: {actor}"
                     );
                     if repair {
-                        assert_eq!(
-                            authority.decide().err().map(|refusal| refusal.name()),
-                            case["refusal"].as_str(),
-                            "{actor}"
-                        );
+                        *observed_refusal.lock().unwrap() = authority
+                            .decide()
+                            .err()
+                            .map(|refusal| refusal.name().to_owned());
                     }
                     let (_, mut context) = gents_documents::read_desired_state_record_in_txn(
                         txn,
@@ -138,12 +128,15 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_refus
                 })
             })
             .await;
-        assert_eq!(
-            applied.is_ok(),
-            case["applied"].as_bool().unwrap(),
-            "{case}: {applied:?}"
-        );
-        let error = applied.expect_err("modeled repairs are refused");
+        let refusal_observed = observed_refusal.into_inner().unwrap();
+        let outcome = gents_lean_vocab::families::household_dangling_selection_repair::DanglingRepairOutcome {
+            refusal: refusal_observed.clone(),
+            applied: applied.is_ok(),
+        };
+        let Err(error) = applied else {
+            case.check(outcome);
+            continue;
+        };
         let refusal = error.chain().find_map(|cause| {
             match cause.downcast_ref::<gents_store::config_client::ConfigClientError>() {
                 Some(
@@ -155,18 +148,23 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_refus
                 _ => None,
             }
         });
-        if case["nac_enabled"].as_bool().unwrap() {
-            assert_eq!(refusal, case["refusal"].as_str(), "{case}: {error:#}");
+        if modeled.nac_enabled {
+            assert_eq!(
+                refusal.map(str::to_owned),
+                refusal_observed,
+                "{modeled:?}: {error:#}"
+            );
             assert!(format!("{error:#}").contains("is unavailable"), "{error:#}");
         } else {
             // While NAC is disabled native refuses the document's source
             // projection before publication reaches the selection repair.
             assert!(
                 format!("{error:#}").contains("source projection requires an authorized actor"),
-                "{case}: {error:#}"
+                "{modeled:?}: {error:#}"
             );
         }
-        assert_eq!(before, access.execute(&query).await.unwrap(), "{case}");
+        assert_eq!(before, access.execute(&query).await.unwrap(), "{modeled:?}");
+        case.check(outcome);
     }
     assert!(nac_disabled, "the NAC-disabled case ran");
 }

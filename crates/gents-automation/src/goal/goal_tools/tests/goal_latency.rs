@@ -93,7 +93,7 @@ impl GoalLatencySession {
                 None,
                 "goal-create",
                 create,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await,
             ToolCallHookAction::Skip { .. }
@@ -284,7 +284,7 @@ impl GoalLatencySession {
             None,
             &id,
             "{}",
-            &gents_loop::tool::ToolCallEnvelope::ambient(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         ))
         .await;
         let reason = match action {

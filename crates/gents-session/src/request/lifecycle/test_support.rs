@@ -340,9 +340,11 @@ pub async fn claimed_owner_caused_by(
         &agent.agent_did,
         identity.clone(),
         "hello",
-        60,
-        ExecutionOrigin::Interactive,
-        "lease-test",
+        crate::request::lifecycle::ExecutionBinding {
+            deadline_duration_secs: 60,
+            execution_origin: ExecutionOrigin::Interactive,
+            backend_id: "lease-test".into(),
+        },
         lineage,
         Some(agent_identity),
     )

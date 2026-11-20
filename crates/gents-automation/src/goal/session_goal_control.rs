@@ -8,6 +8,7 @@ use gents_protocol::goal_control::{
 };
 
 use gents_protocol::session_command_row::CommandRow;
+use gents_store::config_client::client_authentication::{client_graph_ready, ClientAuthorization};
 use gents_store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use gents_store::identity::NodeIdentity;
 
@@ -83,8 +84,17 @@ pub async fn process_command(
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,
     agent_identity: &dyn NodeIdentity,
+    authorization: Option<ClientAuthorization>,
 ) -> Result<Option<DateTime<Utc>>> {
-    process_command_with_clock(node, identity, doc_id, agent_identity, Utc::now).await
+    process_command_with_clock(
+        node,
+        identity,
+        doc_id,
+        agent_identity,
+        authorization,
+        Utc::now,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -104,7 +114,15 @@ pub async fn process_command_at(
     };
     let agent_identity =
         gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding)?;
-    process_command_with_clock(node, identity, doc_id, agent_identity.as_ref(), move || now).await
+    process_command_with_clock(
+        node,
+        identity,
+        doc_id,
+        agent_identity.as_ref(),
+        None,
+        move || now,
+    )
+    .await
 }
 
 async fn process_command_with_clock(
@@ -112,6 +130,7 @@ async fn process_command_with_clock(
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,
     agent_identity: &dyn NodeIdentity,
+    authorization: Option<ClientAuthorization>,
     clock: impl Fn() -> DateTime<Utc> + Send + Sync,
 ) -> Result<Option<DateTime<Utc>>> {
     use gents_protocol::document_query::{
@@ -119,10 +138,16 @@ async fn process_command_with_clock(
     };
     let actor = ::identity::Did::new(agent_identity.did())?;
     let access = ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent_identity)?;
+    let credential = authorization.clone();
+    let access = match authorization {
+        Some(authorization) => access.with_client_authorization(authorization)?,
+        None => access,
+    };
     let (deferred, pending_receipt) = access.transact_idempotent(IdempotentTransactionRetry::Standard,
         "goal.apply_signed_control", |txn| {
         let clock = &clock;
         let actor = &actor;
+        let credential = &credential;
         Box::pin(async move {
             let control = Query::select(
                 Selection::doc_id()
@@ -183,6 +208,10 @@ async fn process_command_with_clock(
             }
             if let Some(reason) = intrinsic_rejection(identity.as_ref(), &command).await? {
                 tracing::debug!(command_doc_id = doc_id, reason, "goal command provenance is unavailable");
+                return Ok((None, None));
+            }
+            let requester = ::identity::Did::new(&command.requester_did)?;
+            if command.native_evidence.is_some() && !client_graph_ready(node, credential.as_ref(), &requester) {
                 return Ok((None, None));
             }
             let now = clock();

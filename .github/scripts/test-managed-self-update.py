@@ -201,7 +201,7 @@ def main():
         return json.loads((home / "service-updates" / operation / "receipt.json").read_text())
 
     def notice():
-        items = json.loads(cli("automation", "mailbox", "list", "--home", home, "--all").stdout)
+        items = json.loads(cli("automation", "mailbox", "list", "--home", home, "--graphql", f"{endpoint}/api/v0/graphql", "--all").stdout)
         matches = [item for item in items if item.get("source_kind") == "runtime" and item.get("source_id") == f"service-update:{operation}"]
         assert len(matches) <= 1, matches
         if not matches:
@@ -327,7 +327,7 @@ def main():
         assert final["node_did"] == init["node_did"]
         status = json.loads(cli("runtime", "service", "update-status", "--home", home, operation).stdout)
         assert status["phase"] == "healthy" and status["session_id"] == receipt["session_id"]
-        stored = json.loads(cli("utils", "debug", "request", "show", "--home", home, "--output", "json", request["request_id"]).stdout)
+        stored = json.loads(cli("utils", "debug", "request", "show", "--home", home, "--graphql", f"{endpoint}/api/v0/graphql", "--output", "json", request["request_id"]).stdout)
         assert stored["request"]["lifecycle_state"] == "completed", stored
         assert stored["request"]["session_id"] == receipt["session_id"], stored
         item = eventually(notice)
@@ -344,7 +344,7 @@ def main():
         assert (directory / "health-resume-deadline.json").is_file()
         eventually(ready)
         eventually(lambda: service_pid(helper=True) is None, 20)
-        cli("automation", "mailbox", "dismiss", "--home", home, item["_docID"])
+        cli("automation", "mailbox", "dismiss", "--home", home, "--graphql", f"{endpoint}/api/v0/graphql", item["_docID"])
         (directory / "notice-published.json").unlink(missing_ok=True)
         cli("runtime", "service", "restart", "--home", home)
         eventually(ready)
@@ -376,6 +376,10 @@ def main():
             helper_log = home / "service-updates" / operation / "helper.log"
             if helper_log.exists():
                 print(helper_log.read_text()[-12000:], file=sys.stderr)
+            if system == "macos":
+                runtime_log = Path.home() / "Library/Logs/gents/runtime-errors.log"
+                if runtime_log.exists():
+                    print(runtime_log.read_text()[-12000:], file=sys.stderr)
             if system == "linux":
                 for unit in (metadata["systemd_unit"], f"{helper_label}.service"):
                     print(run(["journalctl", "--user", "-u", unit, "-n", "60", "--no-pager"], check=False).stdout, file=sys.stderr)

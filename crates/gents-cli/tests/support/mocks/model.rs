@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value;
 
-use super::fake_llm::{ChatAction, FakeLlm};
+use gents::support::fake_llm::{ChatAction, FakeLlm};
 
 pub struct MockModelEndpoint {
     inner: FakeLlm,

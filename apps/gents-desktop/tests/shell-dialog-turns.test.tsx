@@ -124,10 +124,10 @@ import { AppProvider } from "../src/ui/app/AppContext";
 
 const healthy: SyncHealthView = {
   state: "healthy",
-  lastError: null,
+
   runtimeCount: 1,
   connectedRuntimeCount: 1,
-  activationErrorCount: 0,
+
   cause: null,
   nextAction: null,
 };

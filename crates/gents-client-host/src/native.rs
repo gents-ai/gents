@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
 use gents_desktop_bridge::host::{local, ClientHost};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_store::client_journal::paths::DesktopPaths;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
@@ -63,15 +64,13 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
         ))
     });
     let options = match &provider {
-        Some(provider) => ClientCoreOptions {
+        Some(provider) => ClientRuntimeOptions {
             store_key_provider: Some(provider.clone()),
-            operator_identity_interaction:
-                gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
             ..Default::default()
         },
-        None => ClientCoreOptions::default(),
+        None => ClientRuntimeOptions::default(),
     };
-    let core = match ClientCore::start_with_paths_and_options(paths, options).await {
+    let core = match ClientRuntime::start_with_paths_and_options(paths, options).await {
         Ok(core) => Arc::new(core),
         Err(error) => {
             tracing::error!(error = %format!("{error:#}"), "native client startup failed");
@@ -102,15 +101,13 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
             interrupt.cancel();
         }
     });
-    let host = Arc::new(ClientHost::for_installation(core.clone(), build));
+    let host = Arc::new(ClientHost::for_installation(core, build));
     let result = listener.serve_until_idle(host.clone(), stop).await;
     signal.abort();
     let _ = signal.await;
-    // The core's shutdown returns once its store lock is released, and only a
-    // closed installation answers the retirement that stopped it (Lean
-    // `ClientInstallation` `close`, then `acknowledge`).
-    let closed = core.shutdown().await;
-    host.acknowledge_retirement(&closed).await;
+    // Only an installation whose store is released answers the retirement
+    // that stopped it (Lean `ClientInstallation` `close`, then `acknowledge`).
+    let closed = host.close_and_acknowledge_retirement().await;
     result.and(closed)
 }
 
@@ -169,8 +166,8 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
                 let message = "The application serving this history does not support automatic updates. Close the application serving this history, or close all its clients and allow up to three minutes for its shared process to stop, then reconnect. Your history is unchanged.";
                 if let Some(bootstrap) = &mut bootstrap {
                     crate::editor_store::send(bootstrap, &crate::editor_store::Message::Error {
-                        error: gents_desktop_bridge::BridgeError::new(
-                            gents_desktop_bridge::BridgeErrorCode::Unsupported, message),
+                        error: gents_store::client_error::BridgeError::new(
+                            gents_store::client_error::BridgeErrorCode::Unsupported, message),
                     }).await?;
                     bootstrap_finished = true;
                 }
@@ -246,8 +243,8 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
             if !bootstrap_finished {
                 if let Some(bootstrap) = &mut bootstrap {
                     let _ = crate::editor_store::send(bootstrap, &crate::editor_store::Message::Error {
-                        error: gents_desktop_bridge::BridgeError::new(
-                            gents_desktop_bridge::BridgeErrorCode::ClientStartFailed,
+                        error: gents_store::client_error::BridgeError::new(
+                            gents_store::client_error::BridgeErrorCode::ClientStartFailed,
                             "The shared history process could not be initialized. Reconnect. If this repeats, close the application serving this history, wait up to three minutes, then reconnect. Your chats are unchanged.",
                         ),
                     }).await;

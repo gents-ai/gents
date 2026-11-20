@@ -172,9 +172,9 @@ pub async fn verify(
         gents::SIGNED_REQUEST_FIELDS,
         gents_protocol::goal::GOAL_FIELDS
     );
-    let paths = gents_desktop_core::client::DesktopPaths::from_root(root.join("client"));
+    let paths = gents_store::client_journal::paths::DesktopPaths::from_root(root.join("client"));
     let signer = tokio::task::spawn_blocking(move || {
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
+        gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(&paths)
     })
     .await??;
     ensure!(signer.did() == author);
@@ -250,12 +250,7 @@ pub async fn verify(
     }
     let resumed_request = resumed_request.context("resumed Goal request receipt")?;
     ensure!(
-        gents::support::live_inference::wait_for_request_terminal(
-            &access,
-            &resumed_request,
-            Duration::from_secs(30),
-        )
-        .await
+        gents::support::live_inference::wait_for_request_terminal(&access, &resumed_request,).await
             == "completed"
     );
     let value = access.execute(&query).await?;

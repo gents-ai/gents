@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use gents_desktop_core::client::{ClientCore, DesktopPaths};
+use crate::client_runtime::ClientRuntime;
+use gents_store::client_journal::paths::DesktopPaths;
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::watch;
@@ -18,7 +19,7 @@ pub use crate::config::ResolvedBridgePolicy;
 pub enum ClientStartProgress {
     Pending,
     Ready,
-    Failed(crate::error::BridgeError),
+    Failed(gents_store::client_error::BridgeError),
 }
 
 pub struct DesktopAppState {
@@ -61,7 +62,7 @@ pub struct ProviderLoginWait {
 }
 
 pub struct DesktopBridge {
-    pub core: Option<Arc<ClientCore>>,
+    pub core: Option<Arc<ClientRuntime>>,
     #[cfg(any(unix, windows))]
     pub(crate) client_host: Option<crate::host::ClientHostService>,
     /// Only native destruction retires a window selection; late IPC cannot
@@ -81,7 +82,8 @@ pub struct DesktopBridge {
 }
 
 impl DesktopBridge {
-    pub(crate) fn install_core(&mut self, core: Arc<ClientCore>) {
+    pub(crate) fn install_core(&mut self, core: Arc<ClientRuntime>) {
+        core.start_authored_delivery();
         self.core = Some(core);
     }
 
@@ -236,13 +238,13 @@ impl DesktopAppState {
 #[path = "state/window_selection_tests.rs"]
 mod window_selection_tests;
 
-pub fn spawn_client_update_task<R>(app: AppHandle<R>, core: Arc<ClientCore>) -> JoinHandle<()>
+pub fn spawn_client_update_task<R>(app: AppHandle<R>, core: Arc<ClientRuntime>) -> JoinHandle<()>
 where
     R: Runtime,
 {
     spawn(async move {
         let mut store_updates = core.store_updates();
-        let mut sync_updates = core.sync_state_updates();
+        let mut sync_updates = core.runtime_connection_updates();
 
         loop {
             tokio::select! {
@@ -264,7 +266,7 @@ where
     })
 }
 
-pub fn current_core(state: &DesktopAppState) -> Option<Arc<ClientCore>> {
+pub fn current_core(state: &DesktopAppState) -> Option<Arc<ClientRuntime>> {
     state
         .bridge
         .lock()
@@ -292,7 +294,7 @@ pub fn resolve_policy(
         BootstrapPolicy::PairedRemoteOnly => None,
         BootstrapPolicy::LocalRuntimeAllowed { node_home } => Some(match node_home {
             NodeHomePolicy::Default => {
-                gents_desktop_core::local_runtime::default_node_home().map_err(|e| e.to_string())?
+                gents::client_runtime::default_node_home().map_err(|e| e.to_string())?
             }
             NodeHomePolicy::Fixed(path) => path.clone(),
         }),
@@ -312,10 +314,10 @@ pub fn resolve_policy(
 
 pub fn require_node_home(
     state: &State<'_, DesktopAppState>,
-) -> Result<PathBuf, crate::error::BridgeError> {
+) -> Result<PathBuf, gents_store::client_error::BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {
-        crate::error::BridgeError::new(
-            crate::error::BridgeErrorCode::Unsupported,
+        gents_store::client_error::BridgeError::new(
+            gents_store::client_error::BridgeErrorCode::Unsupported,
             "local node home is not available under PairedRemoteOnly bootstrap policy",
         )
     })

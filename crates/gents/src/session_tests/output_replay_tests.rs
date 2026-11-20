@@ -41,10 +41,12 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         SESSION_ID,
         &fixture.node_did,
         Some(&fixture.requester_did),
-        None,
-        None,
-        Some(&fixture.request_doc_id),
-        Some(ProviderInputProfile::ClaudeMessages),
+        gents_session::session::output::sequenced::SequencedMessageFilter {
+            through_sequence: None,
+            after_sequence: None,
+            exclude_request_doc_id: Some(&fixture.request_doc_id),
+            replay_profile: Some(ProviderInputProfile::ClaudeMessages),
+        },
     )
     .await
     .unwrap();

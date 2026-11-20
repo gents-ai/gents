@@ -1,11 +1,11 @@
+use crate::client_runtime::ClientRuntime;
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::client::ClientCore;
 use gents_protocol::operations::request::{MessageSendBody, MessageSendRoute};
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
 
 pub async fn session_file_inventory(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: String,
     session_id: String,
     action: gents_protocol::file_inventory::FileInventoryReadAction,
@@ -15,7 +15,7 @@ pub async fn session_file_inventory(
 }
 
 pub async fn tool_file_changes(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: String,
     session_id: String,
     request_id: String,
@@ -33,7 +33,7 @@ pub async fn tool_file_changes(
 }
 
 pub async fn inventory_file_change(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: String,
     session_id: String,
     reference: gents_protocol::file_inventory::FileInventoryImageReference,
@@ -44,7 +44,7 @@ pub async fn inventory_file_change(
 }
 
 pub async fn request_output(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: String,
     session_id: String,
     request_id: String,
@@ -77,7 +77,7 @@ fn request_output_state(
 }
 
 pub async fn send_chat_message(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: ChatSendRequest,
 ) -> Result<ChatSendResult> {
     let node_did = request.node_did.trim().to_string();
@@ -137,12 +137,26 @@ pub async fn send_chat_message(
             mailbox_item_id: request.caused_by_source_doc_id,
         })
     };
-    let submitted = core.send_message_with(route, message).await?;
-    Ok(submitted.into())
+    match core.send_message_with(route, message).await {
+        Ok(submitted) => Ok(submitted.into()),
+        Err(error) => {
+            if let Some(saved) = crate::client_runtime::SavedForDelivery::in_error(error.as_ref()) {
+                Ok(ChatSendResult {
+                    publication: crate::types::ChatPublication::Retained,
+                    node_did: saved.node_did.clone(),
+                    session_id: saved.session_id.clone(),
+                    request_id: saved.submission_id.clone(),
+                    agent_did: saved.agent_did.clone(),
+                })
+            } else {
+                Err(error)
+            }
+        }
+    }
 }
 
 pub async fn retry_request(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request_id: &str,
     node_did: &str,
 ) -> Result<ChatSendResult> {
@@ -162,7 +176,7 @@ pub(super) fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
 }
 
 pub async fn fork_session_before_message(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: crate::types::SessionForkBeforeRequest,
 ) -> Result<crate::types::SessionForkResult> {
     let outcome = core
@@ -203,7 +217,7 @@ mod edit_fork_tests {
 }
 
 pub async fn set_session_archived(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: crate::types::SessionArchiveRequest,
 ) -> Result<gents_protocol::session::SessionArchiveReceipt> {
     let revision: u64 = request
@@ -223,7 +237,7 @@ pub async fn set_session_archived(
     .await
 }
 
-pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {
+pub async fn rename_session(core: &ClientRuntime, request: SessionRenameRequest) -> Result<()> {
     let node_did = request.node_did.trim().to_string();
     if node_did.is_empty() {
         bail!("node_did is required");
@@ -233,7 +247,7 @@ pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) ->
 }
 
 pub async fn edit_pending_queue(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: super::super::types::PendingQueueEditRequest,
 ) -> Result<super::super::types::PendingQueueEditResult> {
     let result = core
@@ -264,7 +278,7 @@ pub async fn edit_pending_queue(
 }
 
 pub async fn steer_pending_message(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: super::super::types::PendingMessageSteerRequest,
 ) -> Result<super::super::types::PendingQueueEditResult> {
     let result = core

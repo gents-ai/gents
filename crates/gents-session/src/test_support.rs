@@ -466,13 +466,15 @@ pub async fn stage_agent_owned_session_in_txn(
         .ok_or_else(|| anyhow::anyhow!("session fixture requires its Agent"))?;
     let created = crate::session::ensure_session_in_txn(
         txn,
-        session_id,
-        node_did,
-        agent_did,
-        requester_did,
-        None,
-        None,
-        created_at,
+        crate::session::NewAgentSession {
+            session_id,
+            node_did,
+            agent_did,
+            requester_did,
+            title: None,
+            provenance: None,
+            created_at,
+        },
     )
     .await?;
     let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
@@ -598,10 +600,11 @@ pub async fn sequenced_history_on(
         session_id,
         node_did,
         requester,
-        None,
-        after,
-        excluded_request,
-        None,
+        output::sequenced::SequencedMessageFilter {
+            after_sequence: after,
+            exclude_request_doc_id: excluded_request,
+            ..Default::default()
+        },
     )
     .await
 }
