@@ -22,9 +22,9 @@ async fn owned_hook_observes_retry_and_clears_after_execution() {
     let scope = test_scope(context, Arc::new(|_| Box::pin(async { Ok(()) })));
     let mut settings = owned_config(0);
     settings.retry_policy.transport_backoff = vec![Duration::from_secs(1)];
-    let model = ScriptedModel::new_calls(vec![
-        ScriptedCall::FailStream(transient_provider_error("reset")),
-        ScriptedCall::Turn(vec![
+    let model = scripted(vec![
+        Reply::Fail(transient_provider_error("reset")),
+        Reply::turn(vec![
             RawStreamingChoice::Message("recovered".into()),
             RawStreamingChoice::FinalResponse(()),
         ]),
