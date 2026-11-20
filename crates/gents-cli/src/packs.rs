@@ -69,8 +69,6 @@ pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
     capture_report(command::account::info(PackInfoArgs { package, registry })).await
 }
 
-/// One pack install: `package` from `registry`, its `inference_slots` bound as
-/// given, and how `edited` documents are treated.
 #[derive(Debug, Default)]
 pub struct PackInstall {
     pub package: String,
@@ -83,7 +81,7 @@ pub struct PackInstall {
     pub root_agents: Option<Vec<String>>,
 }
 
-/// Installs `change.package`, or with `change.preview` reports what the install would
+/// Installs `package`, or with `preview` reports what the install would
 /// write. With `expect_digest`, a pack whose content digest differs (the one
 /// a preview reported, or a link named) is refused before any write. With
 /// `root_agents`, the `PACK=AGENT` rows a preview listed, an approved install

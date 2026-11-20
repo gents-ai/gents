@@ -94,8 +94,6 @@ fn run_job(cwd: &Path, args: &[&str]) -> Result<(Option<i32>, String, String)> {
     ))
 }
 
-/// Seeds one plugin job row and returns its doc id. `lifecycle` and `state`
-/// are the row's persisted values (`job_state` reads both).
 pub(crate) struct JobSeed<'a> {
     pub(crate) request_doc_id: &'a str,
     pub(crate) session: &'a str,
