@@ -15,5 +15,5 @@ pub use manage::{
     upsert_trigger_on, ConfigEditorDocument, ConfigEditorRevision,
 };
 
-pub use chat::prepare_request_submission;
+pub use chat::{prepare_request_submission, RequestSubmission};
 pub use manage::{apply_config_components_with_publication_on, upsert_agent_with_publication_on};

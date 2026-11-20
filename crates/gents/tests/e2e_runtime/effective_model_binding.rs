@@ -83,8 +83,6 @@ async fn a_claimed_request_records_the_settings_its_dispatch_bound() {
         session_id,
         prompt,
         vec![StreamChunk::text("bound")],
-        Vec::new(),
-        None,
     )
     .await
     .unwrap();

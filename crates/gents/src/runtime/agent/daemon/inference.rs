@@ -6,19 +6,28 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use tracing::Instrument;
 
+use super::request::prepare::{PreparedRequestInput, RequestInputs};
 #[cfg(test)]
 use super::ShutdownDrainFailure;
 use super::{AgentDaemon, HandleRequestOutcome};
-use crate::runtime::agent::loop_stream::{LoopReplayInput, TaggedMessage};
+use crate::runtime::agent::loop_stream::TaggedMessage;
 use gents_inference::llm::message::Message;
 use gents_inference::resolved::MaxTurnsProvenance;
 use gents_loop::error::LoopFailureCause;
-use gents_loop::provider_call::admission::{self, AdmissionCallContext, CallKind};
+use gents_loop::provider_call::admission::{self, CallKind};
 use gents_protocol::row::AgentRequest;
 
 mod drive;
 mod prepare;
 type RequestDeadline = Option<DateTime<Utc>>;
+
+pub(super) struct RequestSignals<'a> {
+    pub(super) shutdown: &'a mut tokio::sync::watch::Receiver<bool>,
+    pub(super) interrupt_rx: &'a mut tokio::sync::watch::Receiver<
+        Option<gents_session::request::interrupt::InterruptIntent>,
+    >,
+    pub(super) request_token: &'a tokio_util::sync::CancellationToken,
+}
 
 const RETRY_CONTINUATION: &str = "Continue the failed request from the recorded progress. Use recorded tool outcomes; do not repeat completed actions.";
 
@@ -180,32 +189,39 @@ impl<M> AgentDaemon<M>
 where
     M: gents_inference::llm::rig_compat::ProviderModel,
 {
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,
-        request: &gents_protocol::row::AgentRequest,
-        doc_id: &str,
-        history: &[TaggedMessage],
-        wake_notifications: &[TaggedMessage],
-        replay: LoopReplayInput,
         lifecycle: &mut gents_session::request::lifecycle::RequestLifecycle,
         stream_writer: &gents_session::request::streaming::DefraStreamWriter,
-        shutdown: &mut tokio::sync::watch::Receiver<bool>,
-        interrupt_rx: &mut tokio::sync::watch::Receiver<
-            Option<gents_session::request::interrupt::InterruptIntent>,
-        >,
-        request_token: &tokio_util::sync::CancellationToken,
-        aggregate_token_budget: Option<crate::runtime::agent::loop_stream::AggregateTokenBudget>,
-        effective_seed: Option<i64>,
-        mut workspace: gents_tools::runtime_context::ToolWorkspaceScope,
-        request_context_message: Option<gents_inference::llm::message::Message>,
-        resume_from_history: bool,
-        consumed_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
-        folded_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
-        context_calibration: crate::turn::provider_input::budget::ContextCalibration,
-        admission: &AdmissionCallContext,
-        capture: Option<&Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
+        signals: RequestSignals<'_>,
+        inputs: RequestInputs<'_>,
+        prepared: PreparedRequestInput,
     ) -> Result<HandleRequestOutcome> {
+        let RequestSignals {
+            shutdown,
+            interrupt_rx,
+            request_token,
+        } = signals;
+        let RequestInputs {
+            request,
+            aggregate_token_budget,
+            context_calibration,
+            effective_seed,
+            resume_from_history,
+            admission,
+            capture,
+            ..
+        } = inputs;
+        let PreparedRequestInput {
+            mut workspace,
+            request_context_message,
+            built,
+            replay,
+            consumed_prompts,
+            folded_prompts,
+            wake_notifications,
+        } = prepared;
+        let doc_id = lifecycle.request().doc_id.clone();
         workspace.runtime_home = self.approval_home.clone();
         let request_deadline = lifecycle.claimed_deadline_at();
         let trigger_context = gents_session::request::lifecycle::TriggerExecutionContext::parse(
@@ -297,16 +313,16 @@ where
                         request_deadline,
                         inference_observation: &inference_observation,
                         effective_seed,
-                        context_calibration: &context_calibration,
+                        context_calibration,
                         request_context_message: &request_context_message,
                         resume_from_history,
                         consumed_prompts: &consumed_prompts,
                         folded_prompts: &folded_prompts,
-                        history,
-                        wake_notifications,
+                        history: &built.messages,
+                        wake_notifications: &wake_notifications,
                     },
                     replay,
-                    aggregate_token_budget,
+                    aggregate_token_budget.clone(),
                 ));
                 let Some(prepared) =
                     super::request::prepare_unless_interrupted(interrupt_rx, prepared).await
@@ -375,7 +391,7 @@ where
                         drive::StreamDrive {
                             persistence_hook: &persistence_hook,
                             stream_writer,
-                            doc_id,
+                            doc_id: &doc_id,
                             provider_profile,
                             request_token,
                             inference_token: &inference_token,

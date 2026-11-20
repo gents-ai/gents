@@ -260,20 +260,26 @@ async fn create_client_fixture_request(
     Ok(row.try_into()?)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the modeled claim supplies its own identity, generation, and clock"
-)]
+struct ModeledClaim {
+    duration: u64,
+    generation: String,
+    now: DateTime<Utc>,
+    processing: bool,
+}
+
 async fn claim_fixture_request(
     node: Arc<EmbeddedNode>,
     agent: &dyn NodeIdentity,
     request: gents_protocol::row::AgentRequest,
     admission: Option<gents_session::request::admission::ClientClaimAdmission>,
-    duration: u64,
-    generation: String,
-    now: DateTime<Utc>,
-    processing: bool,
+    claim: ModeledClaim,
 ) -> Result<()> {
+    let ModeledClaim {
+        duration,
+        generation,
+        now,
+        processing,
+    } = claim;
     let request_doc_id = request.doc_id.clone();
     let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
@@ -1590,10 +1596,12 @@ impl NativeCanonicalExecutionAdapter {
                     agent.as_ref(),
                     verified,
                     admission,
-                    duration,
-                    generation.to_owned(),
-                    seed_creation_time,
-                    true,
+                    ModeledClaim {
+                        duration,
+                        generation: generation.to_owned(),
+                        now: seed_creation_time,
+                        processing: true,
+                    },
                 )
                 .await?;
                 anyhow::ensure!(
@@ -1681,10 +1689,12 @@ impl NativeCanonicalExecutionAdapter {
                 agent.as_ref(),
                 verified,
                 admission,
-                duration,
-                symbolic_generation(generation),
-                now,
-                seed.lease.request == RequestLifecycleState::Processing,
+                ModeledClaim {
+                    duration,
+                    generation: symbolic_generation(generation),
+                    now,
+                    processing: seed.lease.request == RequestLifecycleState::Processing,
+                },
             )
             .await?;
             let claimed = fixture_query(&access, &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, gents_store::graphql::escape_graphql_string(&request_doc_id), gents_protocol::row::AGENT_REQUEST_FIELDS)).await?;
