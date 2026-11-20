@@ -1038,7 +1038,7 @@ mod grouped_tests {
             let response=node.execute(&format!("mutation{{create_CallbackMember(input:{{batch:\"batch\",value:\"{value}\",hidden:\"not-selected\"}}){{_docID}}}}" )).await;
             assert!(!response.has_errors(), "{:?}", response.errors);
         }
-        let binding:CallbackBindingDoc=serde_json::from_value(json!({"node_did":owner,"binding_id":"binding","agent_did":crate::triggers::callback::test_agent_did(),"event_source_id":"source","callback_id":"callback","input_fields":["value"]})).unwrap();
+        let binding:CallbackBindingDoc=serde_json::from_value(json!({"node_did":owner,"binding_id":"binding","agent_did":gents_store::test_support::fixture_agent_did(gents_store::test_support::FIXTURE_AGENT_NONCE),"event_source_id":"source","callback_id":"callback","input_fields":["value"]})).unwrap();
         let source:gents_documents::EventSource=serde_json::from_value(json!({"node_did":owner,"event_source_id":"source","source_collection":"CallbackMember","correlation_field":"batch","group":{"expected_count":2}})).unwrap();
         crate::triggers::callback::seed_test_configuration(
             &node,

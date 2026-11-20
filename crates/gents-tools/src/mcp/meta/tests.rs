@@ -184,7 +184,10 @@ async fn service_enablement_at_use_matches_model() {
             current.configuration = gents_inference::resolved::ResolvedConfiguration::Documents(
                 gents_inference::resolved::SelectedConfiguration::new(
                     node.clone(),
-                    identity::Did::new(crate::test_support::test_agent_did()).unwrap(),
+                    identity::Did::new(gents_store::test_support::fixture_agent_did(
+                        gents_store::test_support::FIXTURE_AGENT_NONCE,
+                    ))
+                    .unwrap(),
                     vec![],
                 ),
             );

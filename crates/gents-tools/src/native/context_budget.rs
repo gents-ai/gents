@@ -577,27 +577,22 @@ mod tests {
     use std::sync::Arc;
 
     use gents_loop::tool::Tool;
+    use gents_store::test_support::{
+        fixture_agent_access, fixture_agent_did, fixture_root, FIXTURE_AGENT_NONCE,
+    };
 
     use super::*;
 
     fn agent_context_did() -> String {
-        crate::test_support::test_agent_did()
+        fixture_agent_did(FIXTURE_AGENT_NONCE)
     }
 
-    fn agent_codex_identity() -> Arc<dyn gents_store::identity::NodeIdentity> {
-        let root = crate::test_support::test_root_identity();
-        let binding = gents_protocol::agent_identity::AgentIdentityBinding {
-            creation_nonce: "d".repeat(64),
-            agent_did: gents_store::identity::derive_agent_identity(&root, &"d".repeat(64))
-                .unwrap()
-                .did()
-                .to_owned(),
-        };
-        gents_store::identity::resolve_agent_identity(&root, &binding).unwrap()
+    fn agent_codex_nonce() -> String {
+        "d".repeat(64)
     }
 
     fn agent_codex_did() -> String {
-        agent_codex_identity().did().to_owned()
+        fixture_agent_did(&agent_codex_nonce())
     }
 
     /// Each Agent signs the rows it owns; the tool reads as that Agent.
@@ -606,16 +601,10 @@ mod tests {
         agent_did: &str,
     ) -> gents_store::config_client::ConfigAccess {
         if agent_did == agent_context_did() {
-            return crate::test_support::test_agent_access(node);
+            return fixture_agent_access(node, FIXTURE_AGENT_NONCE);
         }
         assert_eq!(agent_did, agent_codex_did());
-        let agent = agent_codex_identity();
-        gents_store::config_client::ConfigAccess::local_managed_agent(
-            node.clone(),
-            identity::Did::new(agent.did()).unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap()
+        fixture_agent_access(node, &agent_codex_nonce())
     }
 
     async fn seed_as(node: &Arc<EmbeddedNode>, agent_did: &str, mutation: &str) {
@@ -636,7 +625,7 @@ mod tests {
 
     async fn seeded_node() -> Arc<EmbeddedNode> {
         // The runtime holds the root its fixture Agents derive from.
-        let root = crate::test_support::test_root_identity();
+        let root = fixture_root();
         let node = Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(gents_store::identity::NodeIdentity::did(&root))

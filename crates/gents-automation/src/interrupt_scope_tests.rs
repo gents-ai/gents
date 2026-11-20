@@ -1,6 +1,9 @@
 use defra_node::Node as EmbeddedNode;
 use gents_session::request::interrupt::*;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::{
+    fixture_agent, fixture_agent_access, fixture_agent_did, fixture_root, FIXTURE_AGENT_NONCE,
+};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -13,20 +16,15 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         )
         .await;
         let node = db.node.clone();
-        let root_did = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+        let root_did = gents_store::test_support::PIN_FIXED_DID;
         crate::triggers::callback::seed_test_agent(&node, root_did).await;
-        let agent = crate::triggers::callback::test_agent_identity();
+        let agent = fixture_agent(FIXTURE_AGENT_NONCE);
         let signer = agent.managed_agent_signer().unwrap();
         let signer = Some(&signer);
         let session = input.session_id.to_string();
         use gents_store::identity::NodeIdentity as _;
-        let root = crate::triggers::callback::test_root_identity();
-        let derived_did = |nonce: char| {
-            gents_store::identity::derive_agent_identity(&root, &nonce.to_string().repeat(64))
-                .unwrap()
-                .did()
-                .to_owned()
-        };
+        let root = fixture_root();
+        let derived_did = |nonce: char| fixture_agent_did(&nonce.to_string().repeat(64));
         let owner_did = root.did().to_owned();
         let foreign_owner_did = derived_did('d');
         let requester_did = derived_did('e');
@@ -43,14 +41,11 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
             session: &str,
             source: Option<&str>,
         ) -> String {
-            let agent = crate::triggers::callback::test_agent_did();
+            let agent = fixture_agent_did(FIXTURE_AGENT_NONCE);
             let input=source.map(|source|json!({"queue":{"source":source,"policy":if source=="background_completion" {"coalesce"} else {"append"},"key":if source=="background_completion" {Some(format!("background_completion:{session}"))}else{None}}}));
             let value = json!({"request_id":id,"purpose":"normal","node_did":owner,"requester_did":requester,"session_id":session,
             "agent_did":agent,"lifecycle_state":"pending","execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
-            let root = ::identity::Did::new(
-                gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
-            )
-            .unwrap();
+            let root = ::identity::Did::new(gents_store::test_support::PIN_FIXED_DID).unwrap();
             gents_store::config_client::ConfigAccess::transact_local_write(
             node, Some(root), "test.interrupt.scope_fixture", |txn| { let (value, agent) = (value.clone(), agent.clone()); Box::pin(async move {
                 let response = txn.execute_with_variables(
@@ -65,7 +60,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         }
         async fn row(node: &Arc<EmbeddedNode>, doc: &str) -> Value {
             let doc = escape_graphql_string(doc);
-            let response = crate::triggers::callback::test_agent_access(node)
+            let response = fixture_agent_access(node, FIXTURE_AGENT_NONCE)
             .execute(&format!("{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{lifecycle_state interrupt_requested_at}}}}"))
             .await
             .unwrap();
@@ -205,9 +200,9 @@ async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
         crate::triggers::callback::test_node_builder("logical-interrupt-latches-only-as-the-si")
             .await;
     let node = db.node.clone();
-    let root_did = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+    let root_did = gents_store::test_support::PIN_FIXED_DID;
     crate::triggers::callback::seed_test_agent(&node, root_did).await;
-    let agent = crate::triggers::callback::test_agent_identity();
+    let agent = fixture_agent(FIXTURE_AGENT_NONCE);
     let value = json!({"request_id":"logical-latch","purpose":"normal","node_did":root_did,
         "session_id":"logical-latch-session","agent_did":agent.did(),"lifecycle_state":"pending",
         "execution_origin":"interactive","created_at":"2026-09-01T00:00:00Z"});
@@ -233,7 +228,7 @@ async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
     .unwrap();
     let latched = || async {
         let doc = escape_graphql_string(&doc);
-        crate::triggers::callback::test_agent_access(&node)
+        fixture_agent_access(&node, FIXTURE_AGENT_NONCE)
             .execute(&format!(
                 "{{AgentRequest(filter:{{_docID:{{_eq:\"{doc}\"}}}}){{interrupt_requested_at}}}}"
             ))
@@ -243,7 +238,7 @@ async fn logical_interrupt_latches_only_as_the_signed_working_agent() {
     };
     // A key without a managed Agent signer, even one derived by this runtime,
     // is refused before any read or write.
-    let root = crate::triggers::callback::test_root_identity();
+    let root = fixture_root();
     let unmanaged = gents_store::identity::derive_agent_identity(&root, &"f".repeat(64)).unwrap();
     let refused = interrupt_request(&node, unmanaged.as_ref(), "logical-latch").await;
     assert!(matches!(

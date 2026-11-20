@@ -84,6 +84,43 @@ pub fn pin_fixed_signing_identity(dir: &std::path::Path) -> crate::identity::Key
     identity
 }
 
+pub fn fixture_root() -> crate::identity::KeyIdentity {
+    let home = tempfile::tempdir().unwrap();
+    pin_fixed_signing_identity(home.path())
+}
+
+pub const FIXTURE_AGENT_NONCE: &str =
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+pub fn fixture_agent(creation_nonce: &str) -> std::sync::Arc<dyn crate::identity::NodeIdentity> {
+    let root = fixture_root();
+    let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+        agent_did: crate::identity::derive_agent_identity(&root, creation_nonce)
+            .unwrap()
+            .did()
+            .to_owned(),
+        creation_nonce: creation_nonce.to_owned(),
+    };
+    crate::identity::resolve_agent_identity(&root, &binding).unwrap()
+}
+
+pub fn fixture_agent_did(creation_nonce: &str) -> String {
+    fixture_agent(creation_nonce).did().to_owned()
+}
+
+pub fn fixture_agent_access(
+    node: &std::sync::Arc<defra_node::Node>,
+    creation_nonce: &str,
+) -> crate::config_client::ConfigAccess {
+    let agent = fixture_agent(creation_nonce);
+    crate::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap()
+}
+
 pub fn test_identity(name: &str) -> crate::identity::KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
     crate::identity::KeyIdentity::load_or_create(path, None).unwrap()

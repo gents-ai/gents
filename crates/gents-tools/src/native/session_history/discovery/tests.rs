@@ -1,7 +1,7 @@
 use super::*;
 use gents_loop::tool::Tool;
-use gents_session::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use std::sync::Arc;
 
 async fn seed(
