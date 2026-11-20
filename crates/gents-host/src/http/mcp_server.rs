@@ -132,11 +132,8 @@ impl DefraQueryMcp {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for DefraQueryMcp {
     fn get_info(&self) -> ServerInfo {
-        #[allow(clippy::field_reassign_with_default)]
-        let mut info = ServerInfo::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.instructions = Some(String::from("Document access through query, and through write when explicitly exposed; call argv:[help] for commands. Every call requires caller-signed DefraDB bearer authorization and acts as that caller."));
-        info
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("Document access through query, and through write when explicitly exposed; call argv:[help] for commands. Every call requires caller-signed DefraDB bearer authorization and acts as that caller.")
     }
 }
 

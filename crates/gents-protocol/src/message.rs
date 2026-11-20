@@ -389,28 +389,27 @@ impl DocumentSourceKind {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
-#[allow(clippy::upper_case_acronyms)]
 pub enum ImageMediaType {
-    JPEG,
-    PNG,
-    GIF,
-    WEBP,
-    HEIC,
-    HEIF,
-    SVG,
+    Jpeg,
+    Png,
+    Gif,
+    Webp,
+    Heic,
+    Heif,
+    Svg,
 }
 
 impl ImageMediaType {
     /// Mirrors rig's `MimeType::from_mime_type` for images.
     pub fn from_mime_type(mime_type: &str) -> Option<Self> {
         match mime_type {
-            "image/jpeg" => Some(Self::JPEG),
-            "image/png" => Some(Self::PNG),
-            "image/gif" => Some(Self::GIF),
-            "image/webp" => Some(Self::WEBP),
-            "image/heic" => Some(Self::HEIC),
-            "image/heif" => Some(Self::HEIF),
-            "image/svg+xml" => Some(Self::SVG),
+            "image/jpeg" => Some(Self::Jpeg),
+            "image/png" => Some(Self::Png),
+            "image/gif" => Some(Self::Gif),
+            "image/webp" => Some(Self::Webp),
+            "image/heic" => Some(Self::Heic),
+            "image/heif" => Some(Self::Heif),
+            "image/svg+xml" => Some(Self::Svg),
             _ => None,
         }
     }
@@ -418,44 +417,41 @@ impl ImageMediaType {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
-#[allow(clippy::upper_case_acronyms)]
 pub enum DocumentMediaType {
-    PDF,
-    TXT,
-    RTF,
-    HTML,
-    CSS,
-    MARKDOWN,
-    CSV,
-    XML,
+    Pdf,
+    Txt,
+    Rtf,
+    Html,
+    Css,
+    Markdown,
+    Csv,
+    Xml,
     Javascript,
     Python,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
-#[allow(clippy::upper_case_acronyms)]
 pub enum AudioMediaType {
-    WAV,
-    MP3,
-    AIFF,
-    AAC,
-    OGG,
-    FLAC,
-    M4A,
-    PCM16,
-    PCM24,
+    Wav,
+    Mp3,
+    Aiff,
+    Aac,
+    Ogg,
+    Flac,
+    M4a,
+    Pcm16,
+    Pcm24,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
-#[allow(clippy::upper_case_acronyms)]
 pub enum VideoMediaType {
-    AVI,
-    MP4,
-    MPEG,
-    MOV,
-    WEBM,
+    Avi,
+    Mp4,
+    Mpeg,
+    Mov,
+    Webm,
 }
 
 #[derive(Default, Clone, Debug, Deserialize, Serialize, PartialEq)]

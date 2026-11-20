@@ -396,14 +396,15 @@ impl ClaudeHttpClient {
     /// The target this request actually connects to: the URL's target, or the test route's
     /// host and port when one is set.
     fn effective_target(&self, outgoing: &Outgoing) -> Target {
-        #[cfg_attr(not(test), allow(unused_mut))]
-        let mut target = outgoing.target.clone();
         #[cfg(test)]
         if let Some((host, port)) = &self.route {
-            target.host.clone_from(host);
-            target.port = *port;
+            return Target {
+                host: host.clone(),
+                port: *port,
+                tls: outgoing.target.tls,
+            };
         }
-        target
+        outgoing.target.clone()
     }
 
     /// Sends the request, resending it plain once when the API rejects the gzip body, and

@@ -316,7 +316,7 @@ fn tool_result_images_on_the_wire(images: &[String]) -> Vec<Value> {
                 id,
                 vec![ToolResultContent::Image(Image {
                     data: crate::llm::message::DocumentSourceKind::Base64(data.clone()),
-                    media_type: Some(crate::llm::message::ImageMediaType::PNG),
+                    media_type: Some(crate::llm::message::ImageMediaType::Png),
                     detail: None,
                     additional_params: None,
                 })],

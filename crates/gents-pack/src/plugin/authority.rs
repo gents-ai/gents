@@ -39,8 +39,10 @@ pub fn describe_manifold(manifold: &Manifold) -> Option<String> {
         NetAccess::None => {}
         NetAccess::OutboundHttp(None) => parts.push("HTTP to any host".to_owned()),
         NetAccess::OutboundHttp(Some(hosts)) => parts.push(format!("HTTP to {}", hosts.join(", "))),
-        #[allow(unreachable_patterns)]
-        _ => parts.push("network access".to_owned()),
+        NetAccess::OutboundFull(None) => parts.push("network access to any host".to_owned()),
+        NetAccess::OutboundFull(Some(hosts)) => {
+            parts.push(format!("network access to {}", hosts.join(", ")))
+        }
     }
     match &manifold.env {
         EnvAccess::None => {}
