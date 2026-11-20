@@ -112,12 +112,13 @@ cause with a connection error. Compaction failures that exhaust both guided
 decoding and the strict non-guided JSON fallback are classified separately as
 `compaction_provider_error` in `gents-outcome.json`.
 
-The adapter installs an explicit `gents-fs-runner` shim on every trial and
-verifies it during setup. The shim exists for images that need the glibc
-compatibility loader: there, Linux reports the loader rather than the wrapped
-Gents executable as `/proc/self/exe`, so Gents cannot discover its embedded
-filesystem runner by basename. Installing it unconditionally keeps setup
-identical across image types.
+The adapter installs an explicit `gents-fs-runner` shim on every trial,
+verifies it during setup, and starts the server with `--fs-runner` naming it.
+The shim exists for images that need the glibc compatibility loader: there,
+Linux reports the loader rather than the wrapped Gents executable as
+`/proc/self/exe`, so the server cannot start its own embedded filesystem
+runner. Installing it unconditionally keeps setup identical across image
+types.
 
 Harbor isolates agent-phase network access. Keep `--allow-agent-host` aligned
 with the inference host or the task container will not be able to reach the

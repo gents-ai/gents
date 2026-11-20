@@ -388,6 +388,7 @@ fi
 : "${GENTS_INFERENCE_URL:?GENTS_INFERENCE_URL is required}"
 : "${GENTS_MODEL:?GENTS_MODEL is required}"
 : "${GENTS_TOOL_ROOT:=/app}"
+: "${GENTS_FS_RUNNER:=}"
 : "${GENTS_API_KEY:=no-key}"
 : "${GENTS_TEMPERATURE:=1.0}"
 : "${GENTS_TOP_P:=0.95}"
@@ -510,6 +511,11 @@ esac
   >"${init_log}"
 
 start_server() {
+  if [ -n "${GENTS_FS_RUNNER}" ]; then
+    set -- --fs-runner "${GENTS_FS_RUNNER}"
+  else
+    set --
+  fi
   "${GENTS_BINARY}" server \
     --home "${GENTS_HOME}" \
     --http-addr 127.0.0.1 \
@@ -518,6 +524,7 @@ start_server() {
     --tool-root "${GENTS_TOOL_ROOT}" \
     --command-timeout-secs "${GENTS_COMMAND_TIMEOUT_SECS}" \
     --command-timeout-max-secs "${GENTS_COMMAND_TIMEOUT_MAX_SECS}" \
+    "$@" \
     >>"${server_log}" 2>&1 &
   server_pid=$!
 }

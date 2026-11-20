@@ -55,6 +55,10 @@ impl gents_host::serve::ServeClient for ReadyReport {
         gents_host::http::version::version_response()
     }
 
+    fn host_executable(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     async fn bound_root_agents(
         &self,
         root: &Path,

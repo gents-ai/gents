@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
@@ -12,12 +12,17 @@ const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 // The runner truncates its own results; an oversized response fails to decode.
 const _: () =
     assert!(gents_fs_runner::MAX_RESPONSE_BYTES + 64 * 1024 < MAX_NATIVE_RUNNER_OUTPUT_BYTES);
-const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
-static SELF_RUNNER_ENABLED: AtomicBool = AtomicBool::new(false);
 
-pub fn enable_self_runner() {
-    SELF_RUNNER_ENABLED.store(true, Ordering::Relaxed);
+/// The executables native tools start, named where the process starts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeExecutables {
+    /// This process's executable, which serves the hidden
+    /// `__native-fs-runner` and `__plugin-build` commands.
+    pub host: Option<PathBuf>,
+    /// A standalone `gents-fs-runner` that serves the filesystem tools in
+    /// place of `host`.
+    pub fs_runner: Option<PathBuf>,
 }
 
 fn effective_deadline(
@@ -61,6 +66,7 @@ fn fs_runner_timed_out_error(
 pub(crate) struct NativeFsRunner {
     root: PathBuf,
     base: PathBuf,
+    executables: Arc<NativeExecutables>,
     #[cfg(test)]
     blocker: Option<std::sync::Arc<gents_fs_runner::TraversalBlocker>>,
 }
@@ -70,6 +76,7 @@ impl NativeFsRunner {
         Self {
             root: context.root(),
             base: context.base(),
+            executables: context.native_executables(),
             #[cfg(test)]
             blocker: context.runner_blocker(),
         }
@@ -105,8 +112,11 @@ impl NativeFsRunner {
         request: NativeFsRunnerRequest,
         tool_name: &'static str,
     ) -> Result<String, ToolError> {
-        let runner =
-            resolve_runner_command(&self.effective_root(call), &self.effective_base(call))?;
+        let runner = resolve_runner_command(
+            &self.executables,
+            &self.effective_root(call),
+            &self.effective_base(call),
+        )?;
         #[cfg(test)]
         let runner = self.with_blocker_args(runner);
         self.run_resolved(call, request, tool_name, runner).await
@@ -241,19 +251,21 @@ struct RunnerCommand {
     cwd: PathBuf,
 }
 
-fn resolve_runner_command(root: &Path, base: &Path) -> Result<RunnerCommand, ToolError> {
-    if let Ok(path) = std::env::var(RUNNER_ENV) {
-        if !path.trim().is_empty() {
-            return Ok(RunnerCommand {
-                argv: runner_argv(path, root, base),
-                cwd: base.to_path_buf(),
-            });
-        }
+fn resolve_runner_command(
+    executables: &NativeExecutables,
+    root: &Path,
+    base: &Path,
+) -> Result<RunnerCommand, ToolError> {
+    if let Some(runner) = &executables.fs_runner {
+        return Ok(RunnerCommand {
+            argv: runner_argv(runner.to_string_lossy().into_owned(), root, base),
+            cwd: base.to_path_buf(),
+        });
     }
 
-    if let Some(candidate) = self_runner_binary() {
+    if let Some(host) = &executables.host {
         return Ok(RunnerCommand {
-            argv: self_runner_argv(candidate.to_string_lossy().into_owned(), root, base),
+            argv: self_runner_argv(host.to_string_lossy().into_owned(), root, base),
             cwd: base.to_path_buf(),
         });
     }
@@ -266,7 +278,7 @@ fn resolve_runner_command(root: &Path, base: &Path) -> Result<RunnerCommand, Too
     }
 
     Err(anyhow!(
-        "native filesystem runner binary not found; set {RUNNER_ENV}, install gents-fs-runner next to the gents binary, or run a gents binary with the built-in native filesystem runner"
+        "native filesystem runner binary not found; serve with --fs-runner, install gents-fs-runner next to the gents binary, or run a gents binary with the built-in native filesystem runner"
     )
     .into())
 }
@@ -332,16 +344,6 @@ fn adjacent_runner_binary() -> Option<PathBuf> {
     dirs.into_iter()
         .map(|dir| dir.join(exe_name))
         .find(|candidate| candidate.is_file())
-}
-
-pub(super) fn self_runner_binary() -> Option<PathBuf> {
-    let current = std::env::current_exe().ok()?;
-    let stem = current.file_stem()?.to_str()?;
-    if stem == "gents" || SELF_RUNNER_ENABLED.load(Ordering::Relaxed) {
-        Some(current)
-    } else {
-        None
-    }
 }
 
 fn handle_exited(
