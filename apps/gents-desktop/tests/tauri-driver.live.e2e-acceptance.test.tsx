@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { waitFor } from "@testing-library/react";
 import { expect, it } from "vitest";
 
@@ -11,7 +12,6 @@ import {
   expectCompletedSession,
   logTurn,
 } from "./tauri-driver-live/helpers";
-import { isTerminalTurnState } from "./live-bridge-runner/observations";
 
 const E2E_NOTE_RELATIVE = "workspace/e2e-acceptance-note.md";
 const FIXTURE_DEFAULT_AGENT_DISPLAY_NAME = "Live Repo Audit Default";
