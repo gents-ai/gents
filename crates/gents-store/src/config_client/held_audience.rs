@@ -210,7 +210,7 @@ impl GraphqlEndpoint {
     fn read_status(&self) -> StatusRead {
         // A task of its own keeps a caller's future `Sync`, as a tool's
         // definition future must be, whatever future the read returns.
-        let read = match self.delegation_audience.0.resolver.clone() {
+        let mut read = match self.delegation_audience.0.resolver.clone() {
             Some((node, resolver)) => tokio::spawn(async move {
                 let nonce = home_status::fresh_nonce();
                 let status = resolver.resolve(&nonce).await?;
@@ -227,11 +227,13 @@ impl GraphqlEndpoint {
             }
         };
         Box::pin(async move {
-            tokio::time::timeout(STATUS_READ_LIMIT, read)
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .flatten()
+            match tokio::time::timeout(STATUS_READ_LIMIT, &mut read).await {
+                Ok(answered) => answered.ok().flatten(),
+                Err(_) => {
+                    read.abort();
+                    None
+                }
+            }
         })
     }
 
@@ -253,10 +255,10 @@ impl GraphqlEndpoint {
     }
 
     async fn keep_status(&self, home: &AuthenticatedHome) -> HeldAudienceChange {
-        if self.delegation_audience.0.resolver.is_none() {
-            self.keep_runtime_authentication(home).await;
+        match self.delegation_audience.0.resolver {
+            Some(_) => self.delegation_audience.observe(home),
+            None => self.keep_runtime_status(home).await,
         }
-        self.delegation_audience.observe(home)
     }
 
     fn presented_credential(&self) -> PresentedCredential {

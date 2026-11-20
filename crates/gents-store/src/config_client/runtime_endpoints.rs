@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use gents_protocol::client_authentication::ClientAuthentication;
+use gents_protocol::delegation_audience::HeldAudienceChange;
 use gents_protocol::home_attestation::{HomeNonce, HomeStatusRefusal, HOME_NONCE_QUERY};
 use rapidhash::RapidHashMap;
 
@@ -107,15 +108,17 @@ impl GraphqlEndpoint {
             .fetch_runtime_status(node)
             .await?
             .map_err(ConfigClientError::HomeStatusUnauthenticated)?;
-        self.keep_runtime_authentication(&home).await;
-        self.delegation_audience.observe(&home);
+        self.keep_runtime_status(&home).await;
         Ok(home.authentication().clone())
     }
 
-    pub(super) async fn keep_runtime_authentication(&self, home: &AuthenticatedHome) {
+    /// Keep what a runtime's own status reports: its client authentication,
+    /// then its audience and clock; the caller holds the status lock.
+    pub(super) async fn keep_runtime_status(&self, home: &AuthenticatedHome) -> HeldAudienceChange {
         if let EndpointAuthentication::Runtime { current, .. } = &*self.client_authentication {
             *current.lock().await = Some(home.authentication().clone());
         }
+        self.delegation_audience.observe(home)
     }
 
     /// Read a runtime endpoint's home's status, keeping nothing.
