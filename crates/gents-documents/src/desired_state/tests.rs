@@ -104,8 +104,12 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
                 .await?;
         }
     }
-    node.add_collection_as(&context, gents_protocol::schemas::EVENT_SOURCE_CURSOR)
-        .await?;
+    node.add_collection_as(
+        &context,
+        &gents_protocol::schemas::HomePolicyIds::shared()
+            .render(gents_protocol::schemas::EVENT_SOURCE_CURSOR),
+    )
+    .await?;
     node.add_collection_as(&context, "type CallbackTestEvent { label: String }")
         .await?;
     let created = owner
@@ -1643,7 +1647,11 @@ async fn schema_obligation_publication_matches_lean() -> Result<()> {
         let shape = serde_json::to_string(&input.schema)?;
         if !probes.contains_key(&shape) {
             let name = format!("ObligationProbe{}", probes.len());
-            node.add_collection(&sdl(&name, &input.schema)).await?;
+            node.add_collection(
+                &gents_protocol::schemas::HomePolicyIds::shared()
+                    .render(&sdl(&name, &input.schema)),
+            )
+            .await?;
             probes.insert(shape.clone(), name);
         }
         let probe = probes[&shape].as_str();
@@ -1976,8 +1984,11 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
     let ctx = defra_core::RequestContext::default().with_identity(Some(user.clone()));
     node.add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
-    node.add_collection_as(&ctx, gents_protocol::schemas::NODE)
-        .await?;
+    node.add_collection_as(
+        &ctx,
+        &gents_protocol::schemas::HomePolicyIds::shared().render(gents_protocol::schemas::NODE),
+    )
+    .await?;
     let response = user_access
         .write(
             "test.configuration.node_binding",
@@ -2197,7 +2208,8 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                         .check_doc_access(
                             &defra_node::AcpIdentity::Authenticated(actor.did().parse()?),
                             defra_node::DocumentPermission::Update,
-                            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                            gents_protocol::schemas::HomePolicyIds::shared()
+                                .id(gents_protocol::schemas::BuiltInPolicy::Household),
                             "configuration",
                             &doc,
                         )

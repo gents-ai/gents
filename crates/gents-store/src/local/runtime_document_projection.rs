@@ -106,6 +106,50 @@ impl RuntimeDocumentProjector {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum GenesisReadAccessError {
+    #[error("{collection} is bound to policy {bound}, not this home's Household policy")]
+    PolicyMismatch { collection: String, bound: String },
+}
+
+/// What a node receiving a genesis of `collection` may read of it, from the
+/// receiving collection's own `policy` binding and `resource` (Lean
+/// `Identity.GenesisReadAccess.receiverAccess`).
+pub fn receiver_genesis_access(
+    ids: &gents_protocol::schemas::HomePolicyIds,
+    collection: &str,
+    policy: &str,
+    resource: &str,
+) -> std::result::Result<Option<db::GenesisReadAccess>, GenesisReadAccessError> {
+    let Some(access) = household_genesis_access(collection, resource) else {
+        return Ok(None);
+    };
+    if policy != ids.id(gents_protocol::schemas::BuiltInPolicy::Household) {
+        return Err(GenesisReadAccessError::PolicyMismatch {
+            collection: collection.to_owned(),
+            bound: policy.to_owned(),
+        });
+    }
+    Ok(Some(access))
+}
+
+fn household_genesis_access(collection: &str, resource: &str) -> Option<db::GenesisReadAccess> {
+    if collection == gents_protocol::schemas::PEER_REGISTRY_NAME && resource == "discovery" {
+        return Some(db::GenesisReadAccess::Public);
+    }
+    (resource == "enrollment_records"
+        && matches!(
+            collection,
+            "NetworkEnrollmentRequest"
+                | "NetworkEnrollmentDecision"
+                | "NetworkAuthorizationRevision"
+                | "NetworkEnrollmentRouteReceipt"
+                | "EnrollmentRenewalIntent"
+                | "EnrollmentRenewalOffer"
+        ))
+    .then_some(db::GenesisReadAccess::AddressedBy("initial_reader_did"))
+}
+
 #[async_trait::async_trait]
 impl db::DocumentMutationProjector for RuntimeDocumentProjector {
     fn genesis_read_access(
@@ -114,23 +158,19 @@ impl db::DocumentMutationProjector for RuntimeDocumentProjector {
         policy: &str,
         resource: &str,
     ) -> Option<db::GenesisReadAccess> {
-        if policy != gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID {
-            return None;
-        }
-        if collection == gents_protocol::schemas::PEER_REGISTRY_NAME && resource == "discovery" {
-            return Some(db::GenesisReadAccess::Public);
-        }
-        (resource == "enrollment_records"
-            && matches!(
-                collection,
-                "NetworkEnrollmentRequest"
-                    | "NetworkEnrollmentDecision"
-                    | "NetworkAuthorizationRevision"
-                    | "NetworkEnrollmentRouteReceipt"
-                    | "EnrollmentRenewalIntent"
-                    | "EnrollmentRenewalOffer"
-            ))
-        .then_some(db::GenesisReadAccess::AddressedBy("initial_reader_did"))
+        receiver_genesis_access(
+            gents_protocol::schemas::HomePolicyIds::shared(),
+            collection,
+            policy,
+            resource,
+        )
+        .unwrap_or_else(|error| {
+            tracing::error!(
+                error = %gents_protocol::error_chain::ErrorChain(&error),
+                "a replicated genesis is left unread"
+            );
+            None
+        })
     }
 
     fn projection_rules(&self) -> &[acp::projection::Rule] {
@@ -167,3 +207,7 @@ impl db::DocumentMutationProjector for RuntimeDocumentProjector {
         self.project_runtime(ctx, collection, doc_id).await
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_document_projection_tests.rs"]
+mod tests;

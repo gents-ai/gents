@@ -6,9 +6,13 @@ use gents_protocol::schemas;
 #[tokio::test]
 async fn preflight_accepts_the_same_legacy_lineage_without_mutating_it() {
     let node = fresh_node().await;
-    let previous = schemas::TASK.replace("    outcome_readers: JSON\n", "");
+    let previous = gents_protocol::schemas::HomePolicyIds::shared()
+        .render(schemas::TASK)
+        .replace("    outcome_readers: JSON\n", "");
     assert_ne!(previous, schemas::TASK);
-    node.add_collection(&previous).await.unwrap();
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&previous))
+        .await
+        .unwrap();
     let before = node.get_all_collection_versions().await.unwrap();
     check_migration_compatibility(&before).unwrap();
     assert_eq!(
@@ -24,10 +28,10 @@ async fn preflight_accepts_the_same_legacy_lineage_without_mutating_it() {
 async fn preflight_and_startup_refuse_the_same_unknown_lineage() {
     let node = fresh_node().await;
     // Bound to its identity policy, so its lineage is the only refusal reason.
-    node.add_collection(&format!(
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
         r#"type InferenceProfile @policy(id: "{}", resource: "configuration") {{ alien: String }}"#,
-        schemas::AGENT_OWNERSHIP_POLICY_ID
-    ))
+        schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::Household)
+    )))
     .await
     .unwrap();
     let before = node.get_all_collection_versions().await.unwrap();
@@ -50,7 +54,7 @@ async fn preflight_and_startup_refuse_the_same_unknown_lineage() {
 async fn startup_refuses_existing_unbound_provider_collections_before_changes() {
     let directive = format!(
         " @policy(id: \"{}\", resource: \"children\")",
-        schemas::AGENT_OWNERSHIP_POLICY_ID
+        schemas::BuiltInPolicy::Household.placeholder()
     );
     for (name, schema) in [
         (schemas::RENDERED_REQUEST_NAME, schemas::RENDERED_REQUEST),
@@ -71,9 +75,12 @@ async fn startup_refuses_existing_unbound_provider_collections_before_changes() 
             schema.contains(&directive),
             "{name} must be bound in the catalog"
         );
-        node.add_collection(&schema.replacen(&directive, "", 1))
-            .await
-            .unwrap();
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(&schema.replacen(&directive, "", 1)),
+        )
+        .await
+        .unwrap();
         let before = node.get_all_collection_versions().await.unwrap();
         assert!(matches!(
             ensure_migrations(node.as_ref()).await,
@@ -101,7 +108,7 @@ async fn branchable_identity_collections_have_private_local_fallback_objects() {
         let acp = node.document_acp();
         assert!(acp
             .is_doc_registered(
-                schemas::AGENT_OWNERSHIP_POLICY_ID,
+                schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::Household),
                 resource,
                 &collection.collection_id
             )
@@ -109,7 +116,7 @@ async fn branchable_identity_collections_have_private_local_fallback_objects() {
             .unwrap());
         assert_eq!(
             acp.get_doc_owner(
-                schemas::AGENT_OWNERSHIP_POLICY_ID,
+                schemas::HomePolicyIds::shared().id(schemas::BuiltInPolicy::Household),
                 resource,
                 &collection.collection_id
             )
@@ -162,13 +169,16 @@ async fn startup_refuses_unbound_transport_collections_before_mutation() {
     ] {
         let directive = format!(
             " @policy(id: \"{}\", resource: \"{resource}\")",
-            schemas::AGENT_OWNERSHIP_POLICY_ID
+            schemas::BuiltInPolicy::Household.placeholder()
         );
         assert!(schema.contains(&directive));
         let node = fresh_node().await;
-        node.add_collection(&schema.replacen(&directive, "", 1))
-            .await
-            .unwrap();
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(&schema.replacen(&directive, "", 1)),
+        )
+        .await
+        .unwrap();
         let before = node.get_all_collection_versions().await.unwrap();
         assert!(
             matches!(ensure_migrations(node.as_ref()).await, Err(Error::IncompatibleIdentityPolicy { collection }) if collection == name)

@@ -1298,15 +1298,20 @@ mod invoke_session_isolation_tests {
                 0,
             )
             .await?;
-        let policy_id = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+        let policy_id = gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Household);
         node.add_collection_as(
             &root_context,
-            &gents_protocol::schemas::AGENT.replace(policy_id, &policy),
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::AGENT)
+                .replace(policy_id, &policy),
         )
         .await?;
         node.add_collection_as(
             &root_context,
-            &gents_protocol::schemas::AGENT_SESSION.replace(policy_id, &policy),
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::AGENT_SESSION)
+                .replace(policy_id, &policy),
         )
         .await?;
         let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);

@@ -28,7 +28,7 @@ async fn register_replicated_event_schema(node: &std::sync::Arc<EmbeddedNode>) {
         }
     "#;
     gents_store::config_client::ConfigAccess::local(node.clone())
-        .add_collection(sdl)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(sdl))
         .await
         .expect("add_collection for ReplicatedEvent");
 }

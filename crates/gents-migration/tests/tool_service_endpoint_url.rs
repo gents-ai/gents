@@ -12,7 +12,9 @@ async fn endpoint_url_extends_a_registry_created_before_it() {
         .collect::<Vec<_>>()
         .join("\n");
     let node = common::fresh_node().await;
-    node.add_collection(&previous).await.unwrap();
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&previous))
+        .await
+        .unwrap();
     let before = node.get_collection("ToolServiceRegistry").unwrap().unwrap();
     let created = node
         .execute(
@@ -52,7 +54,10 @@ async fn endpoint_url_extends_a_registry_created_before_it() {
 async fn a_fresh_store_registers_the_current_registry_baseline() {
     let fresh = common::fresh_node().await;
     fresh
-        .add_collection(schemas::TOOL_SERVICE_REGISTRY)
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(schemas::TOOL_SERVICE_REGISTRY),
+        )
         .await
         .unwrap();
     let version = fresh

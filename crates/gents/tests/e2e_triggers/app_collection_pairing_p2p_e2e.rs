@@ -137,7 +137,7 @@ async fn signed_invitation_delivers_request_without_http() {
 
 async fn add_collection(node: &Arc<EmbeddedNode>, sdl: &str) {
     ConfigAccess::local(node.clone())
-        .add_collection(sdl)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(sdl))
         .await
         .unwrap_or_else(|error| panic!("add_collection {sdl}: {error}"));
 }
@@ -161,7 +161,8 @@ async fn register_guarded_change_schema(node: &Arc<EmbeddedNode>) {
         node,
         &format!(
             r#"type GuardedChange @policy(id: "{}", resource: "configuration") {{ text: String }}"#,
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household)
         ),
     )
     .await;

@@ -1,6 +1,7 @@
 import Proofs.Conformance.ClientDelegation
 import Proofs.Conformance.BackendPreflight
 import Proofs.Conformance.Identity.SessionChild
+import Proofs.Conformance.Identity.GenesisReadAccess
 import Proofs.Conformance.RemoteDelivery
 import Proofs.Conformance.StagedPermissionObjects
 import Proofs.Conformance.SessionStopAdmission

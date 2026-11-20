@@ -58,7 +58,8 @@ pub async fn served_config(mut config: Value) -> Served {
     let policy = node.add_dac_policy_with_counter_as(&as_runtime, mailbox, 0);
     assert_eq!(
         policy.await.unwrap(),
-        gents_protocol::schemas::MAILBOX_POLICY_ID
+        gents_protocol::schemas::HomePolicyIds::shared()
+            .id(gents_protocol::schemas::BuiltInPolicy::Mailbox)
     );
     gents_store::schema::ensure_runtime_schemas(&node)
         .await

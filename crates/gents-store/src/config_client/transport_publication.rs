@@ -6,7 +6,7 @@ use storage::corekv::{Error, Result};
 use storage::namespace::Namespace;
 
 use gents_protocol::schemas::{
-    identity_policy_resource, is_replicated_protocol_collection, AGENT_OWNERSHIP_POLICY_ID,
+    identity_policy_resource, is_replicated_protocol_collection, BuiltInPolicy, HomePolicyIds,
     NODE_NAME, PEER_REGISTRY_NAME,
 };
 
@@ -41,7 +41,7 @@ async fn local_node(
         .as_ref()
         .ok_or_else(|| failure("local Node has no policy"))?;
     if collection.schema().is_branchable
-        || policy.id != AGENT_OWNERSHIP_POLICY_ID
+        || policy.id != HomePolicyIds::shared().id(BuiltInPolicy::Household)
         || policy.resource_name != "nodes"
     {
         return Err(failure("local Node policy is incompatible"));
@@ -67,7 +67,11 @@ async fn local_node(
         .ok_or_else(|| failure("local Node has no document ID"))?
         .to_string();
     let owner = context
-        .projected_owner(AGENT_OWNERSHIP_POLICY_ID, "nodes", &doc)
+        .projected_owner(
+            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            "nodes",
+            &doc,
+        )
         .await?
         .ok_or_else(|| failure("local Node has no registered owner"))?;
     Ok(Some((doc, owner)))
@@ -114,7 +118,8 @@ pub async fn project_transport_document(
     let schema = collection.schema();
     if !schema.is_branchable
         || !schema.policy.as_ref().is_some_and(|policy| {
-            policy.id == AGENT_OWNERSHIP_POLICY_ID && policy.resource_name == resource
+            policy.id == HomePolicyIds::shared().id(BuiltInPolicy::Household)
+                && policy.resource_name == resource
         })
     {
         return Err(failure(
@@ -130,7 +135,11 @@ pub async fn project_transport_document(
         return Ok(false);
     };
     let owner = context
-        .projected_owner(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
+        .projected_owner(
+            HomePolicyIds::shared().id(BuiltInPolicy::Household),
+            resource,
+            doc_id,
+        )
         .await?
         .ok_or_else(|| failure("transport document has no verified native owner"))?;
     let actor = Did::new(view.projection_actor().unwrap_or(runtime.as_str())).map_err(failure)?;
@@ -146,7 +155,7 @@ pub async fn project_transport_document(
     let actor = Subject::entity(runtime.clone());
     let marked = context
         .projected_actor_relationship(
-            AGENT_OWNERSHIP_POLICY_ID,
+            HomePolicyIds::shared().id(BuiltInPolicy::Household),
             resource,
             doc_id,
             "local_publication",
@@ -156,7 +165,11 @@ pub async fn project_transport_document(
     if !marked {
         if !provider.supports_transactions()
             && !context
-                .registration_pending(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
+                .registration_pending(
+                    HomePolicyIds::shared().id(BuiltInPolicy::Household),
+                    resource,
+                    doc_id,
+                )
                 .await?
         {
             return Ok(false);
@@ -172,7 +185,7 @@ pub async fn project_transport_document(
     }
     let pending = context
         .projected_actor_relationship(
-            AGENT_OWNERSHIP_POLICY_ID,
+            HomePolicyIds::shared().id(BuiltInPolicy::Household),
             resource,
             doc_id,
             "pending_parent",
@@ -192,7 +205,11 @@ pub async fn project_transport_document(
         && document.get("node_did").and_then(|value| value.as_str()) == Some(runtime.as_str())
     {
         let creator = context
-            .projected_owner(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
+            .projected_owner(
+                HomePolicyIds::shared().id(BuiltInPolicy::Household),
+                resource,
+                doc_id,
+            )
             .await?
             .ok_or_else(|| failure("registry document has no native owner"))?;
         let writer = if creator == *runtime {

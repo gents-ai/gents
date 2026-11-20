@@ -419,7 +419,10 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .unwrap();
     for scratch in ["AgentScratch", "AgentScratchKept"] {
         owner
-            .add_collection(&format!("type {scratch} {{ name: String }}"))
+            .add_collection(
+                &gents_protocol::schemas::HomePolicyIds::shared()
+                    .render(&format!("type {scratch} {{ name: String }}")),
+            )
             .await
             .unwrap();
         owner

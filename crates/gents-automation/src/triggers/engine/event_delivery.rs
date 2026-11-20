@@ -746,7 +746,10 @@ mod tests {
         .await
         .unwrap();
         owner_access
-            .add_collection(gents_protocol::schemas::AGENT)
+            .add_collection(
+                &gents_protocol::schemas::HomePolicyIds::shared()
+                    .render(gents_protocol::schemas::AGENT),
+            )
             .await
             .unwrap();
         for (owner, identity, nonce) in [
@@ -765,9 +768,12 @@ mod tests {
                 .await
                 .unwrap();
         }
-        node.add_collection(gents_protocol::schemas::EVENT_GROUP_STATE)
-            .await
-            .unwrap();
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(gents_protocol::schemas::EVENT_GROUP_STATE),
+        )
+        .await
+        .unwrap();
         node.add_collection("type GroupMember { batch:String expected:Int value:String }")
             .await
             .unwrap();

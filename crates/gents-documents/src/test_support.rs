@@ -250,7 +250,10 @@ pub mod desired_state_fixtures {
                         );
                     }
                 }
-                node.add_collection(&schema).await?;
+                node.add_collection(
+                    &gents_protocol::schemas::HomePolicyIds::shared().render(&schema),
+                )
+                .await?;
             }
         }
         Ok(())

@@ -672,10 +672,10 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         )
         .await
         .unwrap();
-    node.add_collection(&format!(
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
         gents_store::graphql::escape_graphql_string(&policy)
-    ))
+    )))
     .await
     .unwrap();
     for (agent, label) in [(&alice_agent, "Alice-only"), (&bob_agent, "Bob-only")] {

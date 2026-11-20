@@ -5,7 +5,7 @@ use std::process::Command;
 
 use anyhow::{bail, ensure, Context, Result};
 use gents_protocol::schemas::{
-    AGENT_OWNERSHIP_POLICY_ID, IDENTITY_POLICY_BINDINGS, MAILBOX_ITEM_NAME, MAILBOX_POLICY_ID,
+    BuiltInPolicy, HomePolicyIds, IDENTITY_POLICY_BINDINGS, MAILBOX_ITEM_NAME,
     MAILBOX_POLICY_RESOURCE,
 };
 
@@ -124,7 +124,10 @@ fn main() -> Result<()> {
     let previous_policy =
         acp::policy_yaml::parse_policy_yaml(&previous_yaml).map_err(anyhow::Error::msg)?;
     let previous_id = acp::policy_yaml::generate_policy_id(&previous_policy, 0);
-    let old_ids = [AGENT_OWNERSHIP_POLICY_ID, previous_id.as_str()];
+    let shared = HomePolicyIds::shared();
+    let household = BuiltInPolicy::Household.placeholder();
+    let mailbox = BuiltInPolicy::Mailbox.placeholder();
+    let old_ids = [shared.id(BuiltInPolicy::Household), previous_id.as_str()];
     let mailbox_yaml = run_lean(&proofs, "GenerateMailboxPolicy.lean")?;
     let mailbox_parsed =
         acp::policy_yaml::parse_policy_yaml(&mailbox_yaml).map_err(anyhow::Error::msg)?;
@@ -148,7 +151,10 @@ fn main() -> Result<()> {
     let previous_mailbox =
         acp::policy_yaml::parse_policy_yaml(&previous_mailbox_yaml).map_err(anyhow::Error::msg)?;
     let previous_mailbox_id = acp::policy_yaml::generate_policy_id(&previous_mailbox, 0);
-    let mailbox_old_ids = [MAILBOX_POLICY_ID, previous_mailbox_id.as_str()];
+    let mailbox_old_ids = [
+        shared.id(BuiltInPolicy::Mailbox),
+        previous_mailbox_id.as_str(),
+    ];
     let resource_names: BTreeSet<_> = parsed
         .resources
         .iter()
@@ -187,17 +193,20 @@ fn main() -> Result<()> {
         if let Some((name, resource)) = matches.first() {
             ensure!(
                 !mailbox_old_ids.iter().any(|id| source.contains(id))
-                    && !source.contains(&mailbox_id),
+                    && !source.contains(&mailbox_id)
+                    && !source.contains(mailbox),
                 "mailbox binding appears on Household collection {}",
                 path.display()
             );
             ensure!(found.insert(**name), "duplicate collection {name}");
-            let updated = bind(&source, name, resource, &id, &old_ids)
+            let updated = bind(&source, name, resource, household, &old_ids)
                 .with_context(|| path.display().to_string())?;
             changes.push((path, source, updated));
         } else if type_position(&source, MAILBOX_ITEM_NAME).is_some() {
             ensure!(
-                !old_ids.iter().any(|id| source.contains(id)) && !source.contains(&id),
+                !old_ids.iter().any(|id| source.contains(id))
+                    && !source.contains(&id)
+                    && !source.contains(household),
                 "Household binding appears on mailbox collection {}",
                 path.display()
             );
@@ -207,20 +216,23 @@ fn main() -> Result<()> {
                 &source,
                 MAILBOX_ITEM_NAME,
                 MAILBOX_POLICY_RESOURCE,
-                &mailbox_id,
+                mailbox,
                 &mailbox_old_ids,
             )
             .with_context(|| path.display().to_string())?;
             changes.push((path, source, updated));
         } else {
             ensure!(
-                !old_ids.iter().any(|id| source.contains(id)) && !source.contains(&id),
+                !old_ids.iter().any(|id| source.contains(id))
+                    && !source.contains(&id)
+                    && !source.contains(household),
                 "unlisted Household binding in {}",
                 path.display()
             );
             ensure!(
                 !mailbox_old_ids.iter().any(|id| source.contains(id))
-                    && !source.contains(&mailbox_id),
+                    && !source.contains(&mailbox_id)
+                    && !source.contains(mailbox),
                 "unlisted mailbox binding in {}",
                 path.display()
             );
@@ -233,24 +245,20 @@ fn main() -> Result<()> {
             "catalog collection {name} has no schema"
         );
     }
-    let id_path = root.join("crates/gents-schemas/src/lib.rs");
+    let id_path = root.join("crates/gents-schemas/src/policy_ids.rs");
     let id_source = fs::read_to_string(&id_path)?;
-    let old = format!(
-        "pub const AGENT_OWNERSHIP_POLICY_ID: &str =\n    \"{AGENT_OWNERSHIP_POLICY_ID}\";"
-    );
-    let replacement = format!("pub const AGENT_OWNERSHIP_POLICY_ID: &str =\n    \"{id}\";");
-    ensure!(
-        id_source.matches(&old).count() == 1,
-        "Household policy ID constant is missing or duplicated"
-    );
-    let mut id_updated = id_source.replacen(&old, &replacement, 1);
-    let old_mailbox = format!("pub const MAILBOX_POLICY_ID: &str =\n    \"{MAILBOX_POLICY_ID}\";");
-    let new_mailbox = format!("pub const MAILBOX_POLICY_ID: &str =\n    \"{mailbox_id}\";");
-    ensure!(
-        id_updated.matches(&old_mailbox).count() == 1,
-        "mailbox policy ID constant is missing or duplicated"
-    );
-    id_updated = id_updated.replacen(&old_mailbox, &new_mailbox, 1);
+    let mut id_updated = id_source.clone();
+    for (policy, new) in [
+        (BuiltInPolicy::Household, &id),
+        (BuiltInPolicy::Mailbox, &mailbox_id),
+    ] {
+        let old = format!("\"{}\"", shared.id(policy));
+        ensure!(
+            id_updated.matches(&old).count() == 1,
+            "{policy:?} policy ID is missing or duplicated in its owner"
+        );
+        id_updated = id_updated.replacen(&old, &format!("\"{new}\""), 1);
+    }
     changes.push((id_path, id_source, id_updated));
     changes.push((yaml_path, previous_yaml, yaml));
     changes.push((mailbox_yaml_path, previous_mailbox_yaml, mailbox_yaml));

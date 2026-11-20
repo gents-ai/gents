@@ -305,7 +305,7 @@ User; every reader of `Node.default_agent_did` (runtime default resolution,
 agent catalog and list, desktop, CLI, desired-state apply and publication
 validation, node readiness) repointed to it; a migration moving each existing
 Node's value into a new selection document; and the policy ID change
-(`AGENT_OWNERSHIP_POLICY_ID`, the generated
+(the Household policy ID, the generated
 `agent_ownership_policy.yaml`) with its registration upgrade. -/
 def initDefaultSelection (s : State) (node initUser : String) : State :=
   { s with

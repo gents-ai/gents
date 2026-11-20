@@ -1,4 +1,4 @@
-type AgentRequest @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "delivered_requests") {
+type AgentRequest @policy(id: "$household", resource: "delivered_requests") {
     request_id: String @index @immutable
     purpose: String @index @immutable
     node_did: String @index @immutable

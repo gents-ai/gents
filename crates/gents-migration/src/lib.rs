@@ -16,7 +16,6 @@ pub use engine::{
 pub use error::{Error, Result};
 pub use expectation::CollectionExpectation;
 pub use lens::{lens_config, predict_transform_id};
-pub use node_policies::{NodePolicy, NODE_POLICIES};
 pub use registry::{
     fixture_lens_wasm, BaselineCollection, BaselineCollectionOwned, DynamicRegistry, LensSpec,
     LensSpecOwned, MigrationStep, MigrationStepOwned, OrdinaryIndex, OrdinaryIndexField, Registry,

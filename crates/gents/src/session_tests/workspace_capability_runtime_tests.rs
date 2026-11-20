@@ -62,7 +62,10 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         ),
     ] {
         let schema = if schema.contains("@policy(") {
-            schema.replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy)
+            schema.replace(
+                gents_protocol::schemas::BuiltInPolicy::Household.placeholder(),
+                &policy,
+            )
         } else {
             schema.replacen(
                 &format!("type {name}"),
@@ -70,7 +73,11 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
                 1,
             )
         };
-        node.add_collection_as(&ctx, &schema).await?;
+        node.add_collection_as(
+            &ctx,
+            &gents_protocol::schemas::HomePolicyIds::shared().render(&schema),
+        )
+        .await?;
     }
     let admin =
         gents_store::config_client::ConfigAccess::local_as(node.clone(), user.did().parse()?);

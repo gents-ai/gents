@@ -95,7 +95,10 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
     let configure = &case["stages"][0];
     let schema_params = &configure["checks"][0]["params"];
     access
-        .add_collection(schema_params["sdl"].as_str().unwrap())
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared()
+                .render(schema_params["sdl"].as_str().unwrap()),
+        )
         .await
         .unwrap();
     let mut schema_evidence =

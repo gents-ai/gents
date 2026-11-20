@@ -175,7 +175,9 @@ async fn vera_runtime() -> anyhow::Result<VeraRuntime> {
         gents_protocol::schemas::CLIENT_RUNTIME_ACCESS_REQUEST,
         gents_protocol::schemas::PEER_REGISTRY,
     ] {
-        runtime_access.add_collection(schema).await?;
+        runtime_access
+            .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(schema))
+            .await?;
     }
     crate::identity::GrantSet::OperatorUser
         .grant(&runtime_access, &owner.did().parse()?)
@@ -384,7 +386,8 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
             .check_named_permission(
                 &candidate.did().parse()?,
                 "administrator",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &node_doc,
             )
@@ -435,7 +438,8 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
             .check_named_permission(
                 &candidate.did().parse()?,
                 "administrator",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &node_doc,
             )
@@ -456,7 +460,8 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
             .check_named_permission(
                 &candidate.did().parse()?,
                 "administrator",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &node_doc,
             )
@@ -519,7 +524,8 @@ async fn a_failed_approval_leaves_no_access_and_a_retry_approves() -> anyhow::Re
             .check_named_permission(
                 &member,
                 "administrator",
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                gents_protocol::schemas::HomePolicyIds::shared()
+                    .id(gents_protocol::schemas::BuiltInPolicy::Household),
                 "nodes",
                 &fixture.node_doc,
             )

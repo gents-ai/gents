@@ -40,19 +40,23 @@ pub async fn fresh_node() -> Arc<EmbeddedNode> {
     for (policy, expected) in [
         (
             gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
-            gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::ToolFileChange),
         ),
         (
             gents_protocol::schemas::CLIENT_JOURNAL_POLICY,
-            gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID,
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::ClientJournal),
         ),
         (
             gents_protocol::schemas::MAILBOX_POLICY,
-            gents_protocol::schemas::MAILBOX_POLICY_ID,
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::Mailbox),
         ),
         (
             gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+            gents_protocol::schemas::HomePolicyIds::shared()
+                .id(gents_protocol::schemas::BuiltInPolicy::Household),
         ),
     ] {
         let actual = node

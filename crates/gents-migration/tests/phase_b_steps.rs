@@ -25,7 +25,7 @@ const ADD_LABEL_PATCH: &str = r#"[
 ]"#;
 
 async fn discover_inactive_patch_pin(node: &EmbeddedNode) -> (String, String) {
-    node.add_collection(FIXTURE_SDL)
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(FIXTURE_SDL))
         .await
         .expect("add FixtureDoc");
     let v0 = node
@@ -132,7 +132,7 @@ async fn materialization_rescans_versioned_collections_only() {
     let discover = fresh_node().await;
     let (fixture_v0, fixture_v1) = discover_inactive_patch_pin(discover.as_ref()).await;
     discover
-        .add_collection(UNRELATED_SDL)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(UNRELATED_SDL))
         .await
         .expect("add unrelated collection");
     let unrelated_v0 = discover
@@ -295,7 +295,9 @@ async fn crash_resume_after_inactive_patch_before_activate() {
     discover.shutdown().await.expect("shut down test node");
 
     let node = fresh_node().await;
-    node.add_collection(FIXTURE_SDL).await.expect("schema");
+    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(FIXTURE_SDL))
+        .await
+        .expect("schema");
     let patched = common::patch_collection(&node, "FixtureDoc", ADD_LABEL_PATCH).await;
     assert_eq!(patched.version_id, v1);
     assert!(!patched.is_active);
@@ -350,7 +352,7 @@ async fn canonical_catalog_pins_for_authoring() {
         )
         .collect::<Vec<_>>();
     for (name, sdl) in &catalog {
-        node.add_collection(sdl)
+        node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(sdl))
             .await
             .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
     }

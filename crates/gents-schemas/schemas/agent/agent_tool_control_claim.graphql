@@ -1,4 +1,4 @@
-type AgentToolControlClaim @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "children") {
+type AgentToolControlClaim @policy(id: "$household", resource: "children") {
     intent_doc_id: String @index @immutable
     intent_json: String @immutable
     agent_did: String @index @immutable

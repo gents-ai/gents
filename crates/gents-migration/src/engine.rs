@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use defra_core::RequestContext;
 use defra_node::{CollectionVersion, Node as EmbeddedNode};
+use gents_protocol::schemas::{BuiltInPolicy, HomePolicyIds};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -39,11 +40,12 @@ pub async fn ensure_migrations(node: &EmbeddedNode) -> Result<MigrationReport> {
 /// declared. Callers decide from it whether this build can take the store.
 pub async fn validate_existing_schema(node: &EmbeddedNode) -> Result<()> {
     let registry = &*DEFAULT_REGISTRY;
+    let ids = HomePolicyIds::shared();
     validate_runtime_locality(node)?;
-    validate_identity_bindings(node, registry)?;
-    validate_legacy_backend_bindings(node, registry).await?;
-    validate_client_journal_binding(node, registry)?;
-    validate_mailbox_binding(node, registry)
+    validate_identity_bindings(node, registry, ids)?;
+    validate_legacy_backend_bindings(node, registry, ids).await?;
+    validate_client_journal_binding(node, registry, ids)?;
+    validate_mailbox_binding(node, registry, ids)
 }
 
 /// DefraDB omits branchability from schema CIDs and rejects changes to it.
@@ -90,20 +92,21 @@ pub async fn ensure_migrations_with_registry(
     let mut report = MigrationReport::default();
 
     let started = Instant::now();
-    validate_identity_bindings(node, registry)?;
-    validate_legacy_backend_bindings(node, registry).await?;
-    validate_client_journal_binding(node, registry)?;
-    validate_mailbox_binding(node, registry)?;
+    let ids = HomePolicyIds::shared();
+    validate_identity_bindings(node, registry, ids)?;
+    validate_legacy_backend_bindings(node, registry, ids).await?;
+    validate_client_journal_binding(node, registry, ids)?;
+    validate_mailbox_binding(node, registry, ids)?;
     reject_unknown_lineage(node, registry).await?;
-    let file_image_owner = validate_file_image_bindings(node, registry)?;
-    crate::node_policies::register(node, registry).await?;
-    register_baseline(node, registry, &mut report).await?;
-    register_branchable_identity_collection_owners(node, registry).await?;
+    let file_image_owner = validate_file_image_bindings(node, registry, ids)?;
+    crate::node_policies::register(node, registry, ids).await?;
+    register_baseline(node, registry, ids, &mut report).await?;
+    register_branchable_identity_collection_owners(node, registry, ids).await?;
     if let Some(owner) = file_image_owner {
-        register_file_image_owner(node, owner, registry).await?;
+        register_file_image_owner(node, owner, registry, ids).await?;
     }
     let baseline_ready = Instant::now();
-    apply_steps(node, registry, &mut report).await?;
+    apply_steps(node, registry, ids, &mut report).await?;
     let steps_ready = Instant::now();
     verify_managed_lineages(node, registry, &mut report).await?;
     let lineages_ready = Instant::now();
@@ -154,8 +157,9 @@ pub async fn ensure_migrations_with_registry(
 async fn validate_legacy_backend_bindings(
     node: &EmbeddedNode,
     registry: &Registry<'_>,
+    ids: &HomePolicyIds,
 ) -> Result<()> {
-    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, INFERENCE_BACKEND_NAME};
+    use gents_protocol::schemas::INFERENCE_BACKEND_NAME;
     if !registry
         .managed_names()
         .any(|name| name == INFERENCE_BACKEND_NAME)
@@ -173,7 +177,7 @@ async fn validate_legacy_backend_bindings(
         if active.is_none()
             || version.is_branchable
             || !version.policy.as_ref().is_some_and(|policy| {
-                policy.id == AGENT_OWNERSHIP_POLICY_ID
+                policy.id == ids.id(BuiltInPolicy::Household)
                     && policy.resource_name == "secret_configuration"
             })
         {
@@ -185,8 +189,11 @@ async fn validate_legacy_backend_bindings(
     Ok(())
 }
 
-fn validate_identity_bindings(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
-    use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+fn validate_identity_bindings(
+    node: &EmbeddedNode,
+    registry: &Registry<'_>,
+    ids: &HomePolicyIds,
+) -> Result<()> {
     let bindings = gents_protocol::schemas::IDENTITY_POLICY_BINDINGS;
     if !registry
         .managed_names()
@@ -202,7 +209,8 @@ fn validate_identity_bindings(node: &EmbeddedNode, registry: &Registry<'_>) -> R
             if collection.is_branchable
                 != gents_protocol::schemas::is_replicated_protocol_collection(name)
                 || !collection.policy.as_ref().is_some_and(|policy| {
-                    policy.id == AGENT_OWNERSHIP_POLICY_ID && policy.resource_name == resource
+                    policy.id == ids.id(BuiltInPolicy::Household)
+                        && policy.resource_name == resource
                 })
             {
                 return Err(Error::IncompatibleIdentityPolicy {
@@ -220,8 +228,10 @@ fn validate_identity_bindings(node: &EmbeddedNode, registry: &Registry<'_>) -> R
 async fn register_branchable_identity_collection_owners(
     node: &EmbeddedNode,
     registry: &Registry<'_>,
+    ids: &HomePolicyIds,
 ) -> Result<()> {
-    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, IDENTITY_POLICY_BINDINGS};
+    use gents_protocol::schemas::IDENTITY_POLICY_BINDINGS;
+    let household = ids.id(BuiltInPolicy::Household);
     let owned: Vec<_> = IDENTITY_POLICY_BINDINGS
         .iter()
         .filter(|(name, _)| {
@@ -242,20 +252,12 @@ async fn register_branchable_identity_collection_owners(
                 collection: (*name).to_owned(),
             })?;
         if acp
-            .is_doc_registered(
-                AGENT_OWNERSHIP_POLICY_ID,
-                resource,
-                &collection.collection_id,
-            )
+            .is_doc_registered(household, resource, &collection.collection_id)
             .await
             .map_err(|error| Error::from(defra_node::Error::from(error)))?
         {
             let owner = acp
-                .get_doc_owner(
-                    AGENT_OWNERSHIP_POLICY_ID,
-                    resource,
-                    &collection.collection_id,
-                )
+                .get_doc_owner(household, resource, &collection.collection_id)
                 .await
                 .map_err(|error| Error::from(defra_node::Error::from(error)))?;
             if owner.as_ref() != Some(&runtime) {
@@ -264,14 +266,9 @@ async fn register_branchable_identity_collection_owners(
                 });
             }
         } else {
-            acp.register_object(
-                &runtime,
-                AGENT_OWNERSHIP_POLICY_ID,
-                resource,
-                &collection.collection_id,
-            )
-            .await
-            .map_err(|error| Error::from(defra_node::Error::from(error)))?;
+            acp.register_object(&runtime, household, resource, &collection.collection_id)
+                .await
+                .map_err(|error| Error::from(defra_node::Error::from(error)))?;
         }
     }
     Ok(())
@@ -297,13 +294,17 @@ pub(crate) fn manages_mailbox(registry: &Registry<'_>) -> bool {
         .any(|name| name == gents_protocol::schemas::MAILBOX_ITEM_NAME)
 }
 
-fn validate_mailbox_binding(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
-    use gents_protocol::schemas::{MAILBOX_ITEM_NAME, MAILBOX_POLICY_ID, MAILBOX_POLICY_RESOURCE};
+fn validate_mailbox_binding(
+    node: &EmbeddedNode,
+    registry: &Registry<'_>,
+    ids: &HomePolicyIds,
+) -> Result<()> {
+    use gents_protocol::schemas::{MAILBOX_ITEM_NAME, MAILBOX_POLICY_RESOURCE};
     if manages_mailbox(registry) {
         if let Some(collection) = node.get_collection(MAILBOX_ITEM_NAME)? {
             if collection.is_branchable
                 || !collection.policy.as_ref().is_some_and(|policy| {
-                    policy.id == MAILBOX_POLICY_ID
+                    policy.id == ids.id(BuiltInPolicy::Mailbox)
                         && policy.resource_name == MAILBOX_POLICY_RESOURCE
                 })
             {
@@ -316,15 +317,17 @@ fn validate_mailbox_binding(node: &EmbeddedNode, registry: &Registry<'_>) -> Res
     Ok(())
 }
 
-fn validate_client_journal_binding(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
-    use gents_protocol::schemas::{
-        CLIENT_JOURNAL_POLICY_ID, CLIENT_JOURNAL_POLICY_RESOURCE, PENDING_CHAT_SUBMISSION_NAME,
-    };
+fn validate_client_journal_binding(
+    node: &EmbeddedNode,
+    registry: &Registry<'_>,
+    ids: &HomePolicyIds,
+) -> Result<()> {
+    use gents_protocol::schemas::{CLIENT_JOURNAL_POLICY_RESOURCE, PENDING_CHAT_SUBMISSION_NAME};
     if manages_client_journal(registry) {
         if let Some(collection) = node.get_collection(PENDING_CHAT_SUBMISSION_NAME)? {
             if collection.is_branchable
                 || !collection.policy.as_ref().is_some_and(|policy| {
-                    policy.id == CLIENT_JOURNAL_POLICY_ID
+                    policy.id == ids.id(BuiltInPolicy::ClientJournal)
                         && policy.resource_name == CLIENT_JOURNAL_POLICY_RESOURCE
                 })
             {
@@ -360,13 +363,14 @@ pub(crate) fn manages_file_images(registry: &Registry<'_>) -> bool {
 fn validate_file_image_bindings<'n>(
     node: &'n EmbeddedNode,
     registry: &Registry<'_>,
+    ids: &HomePolicyIds,
 ) -> Result<Option<&'n str>> {
     if !manages_file_images(registry) {
         return Ok(None);
     }
     for (name, branchable) in FILE_COLLECTION_POLICIES {
         if let Some(collection) = node.get_collection(name)? {
-            validate_file_image_policy(&collection, *branchable)?;
+            validate_file_image_policy(&collection, *branchable, ids)?;
         }
     }
     Ok(Some(
@@ -376,10 +380,14 @@ fn validate_file_image_bindings<'n>(
 
 /// Policy bindings are outside the pinned schema version; lineage validation
 /// alone cannot establish the retained images' document permissions.
-fn validate_file_image_policy(collection: &CollectionVersion, branchable: bool) -> Result<()> {
+fn validate_file_image_policy(
+    collection: &CollectionVersion,
+    branchable: bool,
+    ids: &HomePolicyIds,
+) -> Result<()> {
     if collection.is_branchable != branchable
         || !collection.policy.as_ref().is_some_and(|policy| {
-            policy.id == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID
+            policy.id == ids.id(BuiltInPolicy::ToolFileChange)
                 && policy.resource_name == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
         })
     {
@@ -394,6 +402,7 @@ async fn register_file_image_owner(
     node: &EmbeddedNode,
     owner: &str,
     registry: &Registry<'_>,
+    ids: &HomePolicyIds,
 ) -> Result<()> {
     let owner = owner
         .parse::<identity::Did>()
@@ -407,9 +416,9 @@ async fn register_file_image_owner(
             .ok_or_else(|| Error::CollectionMissing {
                 collection: (*name).into(),
             })?;
-        validate_file_image_policy(&collection, *branchable)?;
+        validate_file_image_policy(&collection, *branchable, ids)?;
         let acp = node.document_acp();
-        let policy = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID;
+        let policy = ids.id(BuiltInPolicy::ToolFileChange);
         let resource = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE;
         if acp
             .is_doc_registered(policy, resource, &collection.collection_id)
@@ -465,6 +474,7 @@ pub async fn ensure_migrations_dynamic(
 async fn register_baseline(
     node: &EmbeddedNode,
     registry: &Registry<'_>,
+    ids: &HomePolicyIds,
     report: &mut MigrationReport,
 ) -> Result<()> {
     let mut missing = Vec::new();
@@ -480,11 +490,13 @@ async fn register_baseline(
         return Ok(());
     }
 
-    let batch = missing
-        .iter()
-        .map(|entry| entry.sdl)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let batch = ids.render(
+        &missing
+            .iter()
+            .map(|entry| entry.sdl)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
     node.add_collection(&batch)
         .await
         .map_err(|source| Error::BaselineRegister {
@@ -522,6 +534,7 @@ async fn reconcile_ordinary_indexes(node: &EmbeddedNode, registry: &Registry<'_>
 async fn apply_steps(
     node: &EmbeddedNode,
     registry: &Registry<'_>,
+    ids: &HomePolicyIds,
     report: &mut MigrationReport,
 ) -> Result<()> {
     for step in registry.steps {
@@ -532,8 +545,15 @@ async fn apply_steps(
                 expected_version,
                 expected_state,
             } => {
-                apply_add_collection(node, id, sdl, *expected_version, expected_state, report)
-                    .await?;
+                apply_add_collection(
+                    node,
+                    id,
+                    &ids.render(sdl),
+                    *expected_version,
+                    expected_state,
+                    report,
+                )
+                .await?;
             }
             MigrationStep::PatchVersioned {
                 id,

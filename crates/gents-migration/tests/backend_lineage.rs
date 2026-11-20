@@ -24,7 +24,11 @@ async fn a_pre_identity_backend_lineage_is_refused_without_conversion() {
         &["claude_platform", "catalog_freshness"][..],
     ] {
         let node = common::fresh_node().await;
-        node.add_collection(&without(fields)).await.unwrap();
+        node.add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared().render(&without(fields)),
+        )
+        .await
+        .unwrap();
         let before = node.get_all_collection_versions().await.unwrap();
         let created = node
             .execute(
@@ -87,7 +91,9 @@ async fn a_fresh_store_registers_the_current_backend_sdl_on_the_canonical_lineag
 
     let direct = common::fresh_node().await;
     direct
-        .add_collection(schemas::INFERENCE_BACKEND)
+        .add_collection(
+            &gents_protocol::schemas::HomePolicyIds::shared().render(schemas::INFERENCE_BACKEND),
+        )
         .await
         .unwrap();
     let direct_version = direct

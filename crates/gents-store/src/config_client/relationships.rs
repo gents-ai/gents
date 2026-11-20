@@ -453,7 +453,7 @@ mod tests {
             .await
             .unwrap();
         let access = ConfigAccess::local_as(node.clone(), owner.clone());
-        access.add_collection(&format!("type Parent @policy(id: \"{policy}\", resource: \"parents\") {{ name: String }}\ntype Child @policy(id: \"{policy}\", resource: \"children\") {{ name: String }}")).await.unwrap();
+        access.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&format!("type Parent @policy(id: \"{policy}\", resource: \"parents\") {{ name: String }}\ntype Child @policy(id: \"{policy}\", resource: \"children\") {{ name: String }}"))).await.unwrap();
         let created = access.write("test.relationships.create", "mutation { add_Parent(input: {name: \"parent\"}) { _docID } add_Child(input: {name: \"child\"}) { _docID } }").await.unwrap();
         let parent = created["data"]["add_Parent"][0]["_docID"].as_str().unwrap();
         let child = created["data"]["add_Child"][0]["_docID"].as_str().unwrap();

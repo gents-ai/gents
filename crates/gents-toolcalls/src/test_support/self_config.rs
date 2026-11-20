@@ -567,7 +567,7 @@ impl SelfConfigFixture {
             self.db.node.clone(),
             identity::Did::new(self.db.node_identity.did()).unwrap(),
         )
-        .add_collection(sdl)
+        .add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(sdl))
         .await
         .unwrap();
     }

@@ -1,4 +1,4 @@
-type DatastoreToolSurface @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "configuration") @index(fields: ["node_did", "surface_id"], unique: true) {
+type DatastoreToolSurface @policy(id: "$household", resource: "configuration") @index(fields: ["node_did", "surface_id"], unique: true) {
     surface_id: String @index
     node_did: String @index
     display_name: String
