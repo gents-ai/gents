@@ -1573,19 +1573,8 @@ async fn a_deleted_home_stops_its_server_without_writing_into_the_new_one() -> R
             mock_endpoint.endpoint(),
         ],
     )?;
+    // The ready report follows the server's last startup write into the home.
     let (mut serve, _) = spawn_server_with_ready_json(temp.path(), allocate_port()?, &[], &[])?;
-    // `service-updates` is the server's last startup write into the home.
-    let started_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !home
-        .join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME)
-        .is_dir()
-    {
-        anyhow::ensure!(
-            tokio::time::Instant::now() < started_deadline,
-            "the server never created its service-updates directory"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
     // The server writes into the home until it notices, so a removal can
     // race a new file; repeat it as a user repeats `rm -rf`.
     let removal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
