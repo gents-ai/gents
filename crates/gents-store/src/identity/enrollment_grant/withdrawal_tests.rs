@@ -51,8 +51,8 @@ fn vera(
             created: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
             policies: vec![EmbeddedVeraPolicy {
                 definition: gents_protocol::schemas::AGENT_OWNERSHIP_POLICY.into(),
-                counter: 0,
-                owner: runtime.did().into(),
+                nonce: defra_node::PolicyNonce::default(),
+                creator: runtime.did().into(),
             }],
         },
         listen: "127.0.0.1:0".parse()?,
