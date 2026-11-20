@@ -792,9 +792,11 @@ mod tests {
         #[derive(Debug, Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Args {
-            #[allow(dead_code)]
             argv: Vec<String>,
         }
+
+        let parsed = parse_tool_args::<Args>(r#"{"argv":["ls"]}"#).expect("schema must accept");
+        assert_eq!(parsed.argv, ["ls"]);
 
         for (raw, expected) in [
             (
@@ -822,13 +824,15 @@ mod tests {
 
     #[derive(Debug, Deserialize)]
     struct SingleField {
-        #[allow(dead_code)]
         note: String,
     }
 
     #[test]
     fn parse_tool_args_truncation_in_last_field_is_not_run() {
         let raw = r#"{"note":"a long note that got cut o"#;
+        let closed = parse_tool_args::<SingleField>(&format!("{raw}\"}}"))
+            .expect("the payload type-checks once closed");
+        assert_eq!(closed.note, "a long note that got cut o");
         let error = parse_tool_args::<SingleField>(raw)
             .expect_err("a truncated-but-would-type-check payload must NOT run");
         assert!(matches!(

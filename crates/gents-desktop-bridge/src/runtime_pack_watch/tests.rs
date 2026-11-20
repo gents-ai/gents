@@ -7,6 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::*;
+use crate::tauri_commands::ux_plugins::UxDataCallResult;
 
 const TIMING: WatchTiming = WatchTiming {
     connect: Duration::from_secs(5),
@@ -267,14 +268,6 @@ async fn answer(mut socket: TcpStream, reply: Option<Reply>) {
     let _ = socket.shutdown().await;
 }
 
-/// The page's snapshot shape (the bridge's `UxDataCallResult`).
-#[derive(Debug, Deserialize)]
-struct Row {
-    #[allow(dead_code)]
-    kind: String,
-    output: serde_json::Value,
-}
-
 fn request() -> serde_json::Value {
     serde_json::json!({"ux": "ns/pack/page", "nodeDid": "did:key:node"})
 }
@@ -340,7 +333,7 @@ async fn watch(
         next.map_err(|error| error())
     };
     let seen = Mutex::new(Vec::new());
-    let deliver = |delivery: WatchDelivery<Row>| {
+    let deliver = |delivery: WatchDelivery<UxDataCallResult>| {
         if !open {
             return false;
         }

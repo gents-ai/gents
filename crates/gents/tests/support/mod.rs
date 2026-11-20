@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -16,6 +14,7 @@ pub mod agent_transcript;
 pub mod builder_runtime;
 pub mod canonical_reads;
 pub mod commit_race_proxy;
+pub mod fake_llm;
 
 pub mod fixtures;
 pub mod http_mock;
@@ -24,6 +23,7 @@ pub mod interrupt;
 pub mod live_inference;
 pub mod mock_endpoint;
 pub mod mock_subscription;
+pub mod ports;
 
 pub mod signed_mailbox;
 pub mod snapshots;
