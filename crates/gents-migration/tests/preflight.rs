@@ -6,13 +6,10 @@ use gents_protocol::schemas;
 #[tokio::test]
 async fn preflight_accepts_the_same_legacy_lineage_without_mutating_it() {
     let node = fresh_node().await;
-    let previous = gents_protocol::schemas::HomePolicyIds::shared()
-        .render(schemas::TASK)
-        .replace("    outcome_readers: JSON\n", "");
-    assert_ne!(previous, schemas::TASK);
-    node.add_collection(&gents_protocol::schemas::HomePolicyIds::shared().render(&previous))
-        .await
-        .unwrap();
+    let current = schemas::HomePolicyIds::shared().render(schemas::TASK);
+    let previous = current.replace("    outcome_readers: JSON\n", "");
+    assert_ne!(previous, current);
+    node.add_collection(&previous).await.unwrap();
     let before = node.get_all_collection_versions().await.unwrap();
     check_migration_compatibility(&before).unwrap();
     assert_eq!(
