@@ -19,12 +19,12 @@ use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
-use crate::support::live_inference::STALL_CEILING;
 #[cfg(feature = "live-e2e")]
 use crate::support::live_inference::{live_target, InferenceTarget};
 use crate::support::snapshots::SnapshotReader;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
 use crate::support::{interrupt::BootedAgent, test_db, TestDb};
+use gents_store::test_support::STALL_CEILING;
 
 #[cfg(feature = "live-e2e")]
 const WORK_UNIT: &str = "change-unit:cycle-accepted";
@@ -822,15 +822,19 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAg
         ),
     ]);
     let prepared = prepare_document_pack_archive(
-        access,
-        owner,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner,
+            plugin_home: None,
+        },
         &archive,
-        &inference,
-        &[],
+        &gents_pack::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &inference,
+            environment: &environment,
+            overrides: &Default::default(),
+        },
         InstalledVia::Operator,
-        None,
-        &environment,
-        &Default::default(),
     )
     .await
     .expect("prepare the change-unit pack as the User");
@@ -849,16 +853,20 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAg
         );
     }
     install_prepared_document_pack(
-        access,
-        owner,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner,
+            plugin_home: None,
+        },
         &archive,
         &[],
         &prepared,
-        None,
         false,
         InstalledVia::Operator,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        gents_pack::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
     .expect("canonical pack installer accepts the unit pack");

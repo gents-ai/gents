@@ -26,23 +26,19 @@ pub async fn save_agent_config(core: &ClientRuntime, request: AgentSaveRequest) 
         .await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn save_skill_config(core: &ClientRuntime, request: SkillSaveRequest) -> Result<()> {
     core.save_skill(&request.document).await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_skill_config(core: &ClientRuntime, request: SkillDeleteRequest) -> Result<()> {
     core.delete_skill(&request.skill_id, &request.node_did)
         .await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_task_config(core: &ClientRuntime, request: TaskDeleteRequest) -> Result<()> {
     core.delete_task(&request.task_id, &request.node_did).await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_schedule_config(
     core: &ClientRuntime,
     request: ScheduleDeleteRequest,
@@ -51,7 +47,6 @@ pub async fn delete_schedule_config(
         .await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_trigger_config(
     core: &ClientRuntime,
     request: TriggerDeleteRequest,
@@ -60,7 +55,6 @@ pub async fn delete_trigger_config(
         .await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_backend_config(
     core: &ClientRuntime,
     request: BackendDeleteRequest,
@@ -69,7 +63,6 @@ pub async fn delete_backend_config(
         .await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_inference_profile_config(
     core: &ClientRuntime,
     request: InferenceProfileDeleteRequest,
@@ -78,13 +71,11 @@ pub async fn delete_inference_profile_config(
         .await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_tools_config(core: &ClientRuntime, request: ToolsDeleteRequest) -> Result<()> {
     core.delete_tools(&request.tools_id, &request.node_did)
         .await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_tool_service_config(
     core: &ClientRuntime,
     request: ToolServiceDeleteRequest,
@@ -93,13 +84,11 @@ pub async fn delete_tool_service_config(
         .await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_agent_config(core: &ClientRuntime, request: AgentDeleteRequest) -> Result<()> {
     core.delete_agent(&request.agent_did, &request.node_did)
         .await
 }
 
-#[cfg_attr(test, allow(dead_code))]
 pub async fn delete_context_config(
     core: &ClientRuntime,
     request: ContextDeleteRequest,

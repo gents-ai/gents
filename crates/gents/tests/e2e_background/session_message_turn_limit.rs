@@ -18,10 +18,10 @@ use serde_json::json;
 use crate::support::accepted_turn::AcceptedTurnRuntime;
 use crate::support::fixtures::{agent_target, test_identity};
 use crate::support::interrupt::BootedAgent;
-use crate::support::live_inference::STALL_CEILING;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
 };
+use gents_store::test_support::STALL_CEILING;
 
 use crate::support::{test_db, TestDb};
 

@@ -64,28 +64,36 @@ async fn install_in(
     let runtime = db.node_identity.clone();
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
     let prepared = prepare_document_pack_archive_with_runtime(
-        &local,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access: &local,
+            owner: runtime.did(),
+            plugin_home,
+        },
         archive,
-        bindings,
-        &[],
-        plugin_home,
-        &|name| variables.get(name).cloned(),
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: bindings,
+            environment: &|name| variables.get(name).cloned(),
+            overrides: &Default::default(),
+        },
         runtime.as_ref(),
-        &Default::default(),
     )
     .await?;
     install_prepared_document_pack(
-        access,
-        runtime.did(),
+        &crate::pack::InstallTarget {
+            access,
+            owner: runtime.did(),
+            plugin_home,
+        },
         archive,
         &[],
         &prepared,
-        plugin_home,
         false,
         InstalledVia::Operator,
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
+        crate::pack::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
     )
     .await
 }
@@ -368,15 +376,19 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
         identity::Did::new(origin_user.did()).unwrap(),
     );
     let unbound = prepare_document_pack_archive_with_runtime(
-        &local,
-        origin.node_identity.did(),
+        &crate::pack::InstallTarget {
+            access: &local,
+            owner: origin.node_identity.did(),
+            plugin_home: None,
+        },
         &archive,
-        &origin_binding,
-        &[],
-        None,
-        &|_| None,
+        &crate::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &origin_binding,
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
         origin.node_identity.as_ref(),
-        &Default::default(),
     )
     .await
     .unwrap();

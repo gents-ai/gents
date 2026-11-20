@@ -19,8 +19,10 @@ async fn asset_install_keeps_portable_source_across_reinstall() {
             home.path(),
             &archive,
             false,
-            None,
-            &BTreeMap::new(),
+            crate::pack::plugin_lifecycle::PluginSlotBindings {
+                owner: None,
+                bindings: &BTreeMap::new(),
+            },
             crate::pack::InstalledVia::Operator,
             source,
             |_, _| async { Ok(()) },

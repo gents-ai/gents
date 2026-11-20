@@ -1,6 +1,6 @@
 use anyhow::Result;
 use gents_inference::rendered_request::CaptureReadError;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::access::{rows_value, ReadAccess};
 use super::replay_candidates::SelectedReplayCandidate;
@@ -123,44 +123,22 @@ pub(super) async fn preload_replay_capture_blocks(
 /// Verify the one capture row the pass's batched read returned under
 /// `capture_key`. Zero rows (no capture) and multiple rows (an ambiguous key)
 /// both leave the turn without evidence, never an error.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn replay_capture_from_row(
     access: ReadAccess<'_, '_>,
     capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,
-    capture_key: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    session_id: &str,
-    request_id: &str,
-    request_doc_id: &str,
-    request_commits: &BTreeSet<String>,
-    coordinate: CanonicalProviderCoordinate,
+    candidate: &SelectedReplayCandidate,
     cache: &mut gents_inference::rendered_request::CaptureReadCache,
 ) -> Result<Option<CanonicalReplayCapture>> {
-    let Some([capture]) = capture_rows.get(capture_key).map(Vec::as_slice) else {
+    let Some([capture]) = capture_rows.get(&candidate.capture_key).map(Vec::as_slice) else {
         return Ok(None);
     };
     // An unverifiable capture makes only this turn non-replayable; it must not
     // fail every later request in the session.
-    match verify_replay_capture(
-        access,
-        capture,
-        capture_key,
-        node_did,
-        requester_did,
-        session_id,
-        request_id,
-        request_doc_id,
-        request_commits,
-        coordinate,
-        cache,
-    )
-    .await
-    {
+    match verify_replay_capture(access, capture, candidate, cache).await {
         Ok(verified) => Ok(verified),
         Err(CaptureReadError::Store(error)) => Err(error.into()),
         Err(CaptureReadError::Unverified(error)) => {
-            warn_unverifiable_replay_capture(capture_key, &error);
+            warn_unverifiable_replay_capture(&candidate.capture_key, &error);
             Ok(None)
         }
     }
@@ -199,25 +177,29 @@ fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
 /// provenance manifest; later versions decode through the versioned container.
 const REPLAY_CAPTURE_VERSIONS: &[u32] = &[2, 3, 4];
 
-#[allow(clippy::too_many_arguments)]
 async fn verify_replay_capture(
     access: ReadAccess<'_, '_>,
     capture: &serde_json::Value,
-    capture_key: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    session_id: &str,
-    request_id: &str,
-    request_doc_id: &str,
-    request_commits: &BTreeSet<String>,
-    coordinate: CanonicalProviderCoordinate,
+    candidate: &SelectedReplayCandidate,
     cache: &mut gents_inference::rendered_request::CaptureReadCache,
 ) -> std::result::Result<Option<CanonicalReplayCapture>, CaptureReadError> {
+    let SelectedReplayCandidate {
+        capture_key,
+        node_did,
+        requester_did,
+        session_id,
+        request_id,
+        request_doc_id,
+        request_commits,
+        coordinate,
+        ..
+    } = candidate;
+    let requester_did = requester_did.as_deref();
     let CanonicalProviderCoordinate {
         scope: capture_scope,
         turn_index,
         attempt,
-    } = coordinate;
+    } = *coordinate;
     let capture_scope_label = capture_scope.to_string();
     // Rows are immutable, so every container version ever written stays in the
     // store; replay accepts the ones whose request body decodes through the

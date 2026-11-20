@@ -221,9 +221,11 @@ where
         &agent.agent_did,
         agent.node_identity().clone(),
         prompt,
-        agent.deadline_duration.as_secs(),
-        ExecutionOrigin::Interactive,
-        agent.backend_id.as_deref().unwrap_or_default(),
+        gents_session::request::lifecycle::ExecutionBinding {
+            deadline_duration_secs: agent.deadline_duration.as_secs(),
+            execution_origin: ExecutionOrigin::Interactive,
+            backend_id: agent.backend_id.as_deref().unwrap_or_default().into(),
+        },
         TriggerLineage::default(),
         Some(agent.agent_identity.clone()),
     )

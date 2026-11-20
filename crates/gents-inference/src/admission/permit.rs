@@ -191,7 +191,7 @@ impl StreamGuardLifecycle for AdmissionPermit {
 /// the permit's `Drop` has counted its own cleanup: fields drop in order.
 struct Finalizing {
     permit: AdmissionPermit,
-    _in_flight: gents_store::drop_cleanup::CleanupInFlight,
+    _in_flight: Option<gents_store::drop_cleanup::CleanupInFlight>,
 }
 
 impl Finalizing {

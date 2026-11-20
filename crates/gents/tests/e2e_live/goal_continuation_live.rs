@@ -7,10 +7,11 @@ use crate::support::agent_requests::canonical_now;
 use crate::support::builder_runtime::submit_request;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, rows_when, wait_for_assistant_answer,
-    wait_for_request_terminal, STALL_CEILING,
+    wait_for_request_terminal,
 };
 use crate::support::snapshots::SnapshotReader;
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 #[derive(Debug, Deserialize)]
 struct GoalChildRow {

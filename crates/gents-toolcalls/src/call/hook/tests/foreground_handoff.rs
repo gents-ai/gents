@@ -209,13 +209,15 @@ async fn foreground_handoff_after_parent_completion(
     for id in &filler_ids {
         let mut admitted = hook
             .adopt_accepted_tool_dispatch(
-                id,
-                None,
-                "handoff-parent",
-                &session,
-                "held_background_tool",
-                "{}",
-                deadline,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id: id,
+                    provider_call_id: None,
+                    request_id: "handoff-parent",
+                    session_id: &session,
+                    tool_name: "held_background_tool",
+                    args: "{}",
+                    deadline_at: deadline,
+                },
                 gents_protocol::tool_call::AwaitMode::Background,
             )
             .await
@@ -225,13 +227,15 @@ async fn foreground_handoff_after_parent_completion(
     }
     let mut overflow = hook
         .adopt_accepted_tool_dispatch(
-            &overflow_id,
-            None,
-            "handoff-parent",
-            &session,
-            "held_background_tool",
-            "{}",
-            deadline,
+            &crate::call::hook::ToolDispatch {
+                internal_call_id: &overflow_id,
+                provider_call_id: None,
+                request_id: "handoff-parent",
+                session_id: &session,
+                tool_name: "held_background_tool",
+                args: "{}",
+                deadline_at: deadline,
+            },
             gents_protocol::tool_call::AwaitMode::Background,
         )
         .await
@@ -556,13 +560,15 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
     for id in &ids {
         starts.push(
             hook.adopt_accepted_tool_dispatch(
-                id,
-                None,
-                "concurrent-parent",
-                &session,
-                "held_background_tool",
-                "{}",
-                deadline,
+                &crate::call::hook::ToolDispatch {
+                    internal_call_id: id,
+                    provider_call_id: None,
+                    request_id: "concurrent-parent",
+                    session_id: &session,
+                    tool_name: "held_background_tool",
+                    args: "{}",
+                    deadline_at: deadline,
+                },
                 gents_protocol::tool_call::AwaitMode::Background,
             )
             .await

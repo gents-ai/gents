@@ -380,11 +380,9 @@ pub struct DesktopOperationsSnapshotRequest {
     #[ts(optional = nullable)]
     pub node_did: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     #[ts(optional = nullable)]
     pub root_request_id: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     #[ts(optional = nullable)]
     pub include_terminal: Option<bool>,
 }

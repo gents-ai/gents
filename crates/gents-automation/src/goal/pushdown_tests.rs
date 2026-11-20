@@ -11,18 +11,19 @@ use gents_protocol::goal_status::GoalStatus;
 #[test]
 fn generated_goal_decision_cases_fence_runtime_controller() {
     gents_lean_vocab::families::contracts_goal_decision::replay(|case| {
-        decide_goal_continuation(
-            case.status,
-            case.terminal,
-            case.session_idle,
-            case.child_exists,
-            case.budget_reached,
-            case.has_activity,
-            case.request_is_wrapup,
-            i64::try_from(case.infrastructure_retries).expect("modeled retries fit i64"),
-            case.wrapup_requested,
-            case.wrapup_completed,
-        )
+        decide_goal_continuation(GoalContinuationFacts {
+            status: case.status,
+            terminal: case.terminal,
+            session_idle: case.session_idle,
+            child_exists: case.child_exists,
+            budget_reached: case.budget_reached,
+            has_activity: case.has_activity,
+            request_is_wrapup: case.request_is_wrapup,
+            infrastructure_retries: i64::try_from(case.infrastructure_retries)
+                .expect("modeled retries fit i64"),
+            wrapup_requested: case.wrapup_requested,
+            wrapup_completed: case.wrapup_completed,
+        })
     });
 }
 

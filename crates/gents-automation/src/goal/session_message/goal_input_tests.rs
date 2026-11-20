@@ -69,13 +69,15 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                     Box::pin(async {
                         gents_session::session::ensure_session_in_txn(
                             txn,
-                            &session_id,
-                            f.identity.did(),
-                            f.agent.did(),
-                            Some(caller_agent.did()),
-                            None,
-                            None,
-                            "2026-01-01T00:00:00Z",
+                            gents_session::session::NewAgentSession {
+                                session_id: &session_id,
+                                node_did: f.identity.did(),
+                                agent_did: f.agent.did(),
+                                requester_did: Some(caller_agent.did()),
+                                title: None,
+                                provenance: None,
+                                created_at: "2026-01-01T00:00:00Z",
+                            },
                         )
                         .await?;
                         Ok::<_, anyhow::Error>(())

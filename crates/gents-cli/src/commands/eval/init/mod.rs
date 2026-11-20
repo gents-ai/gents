@@ -396,28 +396,36 @@ pub(crate) async fn install_pack_slot(
     anyhow::ensure!(manifest.metadata.dependencies.is_empty(),
         "eval author pack dependencies must be installed through `gents config pack install` on the runtime host");
     let prepared = gents_pack::pack::prepare_document_pack_archive(
-        access,
-        owner,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner,
+            plugin_home: None,
+        },
         pack.archive(),
-        &requested,
-        &[],
+        &gents_pack::pack::PackGraphInputs {
+            dependencies: &[],
+            requested: &requested,
+            environment: &|_| None,
+            overrides: &Default::default(),
+        },
         gents_pack::pack::InstalledVia::Operator,
-        None,
-        &|_| None,
-        &Default::default(),
     )
     .await
     .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
     gents_pack::pack::install_prepared_document_graph(
-        access,
-        owner,
+        &gents_pack::pack::InstallTarget {
+            access,
+            owner,
+            plugin_home: None,
+        },
         pack.archive(),
         &prepared,
-        gents_pack::pack::DriftPolicy::Overwrite,
-        None,
+        gents_pack::pack::DocumentGraphPolicy {
+            drift: gents_pack::pack::DriftPolicy::Overwrite,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
         false,
         true,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .map(|(report, _)| report)

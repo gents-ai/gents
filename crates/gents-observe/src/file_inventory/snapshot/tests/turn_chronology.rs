@@ -7,7 +7,9 @@ use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_session::request::lifecycle::{
     ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
-use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+use gents_toolcalls::call::lifecycle::admission_fixture::{
+    publish_accepted_on_claimed_request, AcceptedFixtureCall,
+};
 
 #[tokio::test]
 async fn queued_and_retried_turns_preserve_canonical_file_order_across_restart() {
@@ -186,12 +188,14 @@ async fn check_turn_chronology(retry: bool) -> Option<Vec<u64>> {
         node.clone(),
         &mut successor,
         &fixture.node_did,
-        0,
-        "write_file",
-        "successor-edit",
-        serde_json::json!({"path":"repeated.rs"}),
-        gents_protocol::tool_call::AwaitMode::Foreground,
-        true,
+        AcceptedFixtureCall {
+            turn: 0,
+            tool_name: "write_file",
+            tool_call_id: "successor-edit",
+            arguments: serde_json::json!({"path":"repeated.rs"}),
+            await_mode: gents_protocol::tool_call::AwaitMode::Foreground,
+            start_running: true,
+        },
     )
     .await
     .unwrap();
