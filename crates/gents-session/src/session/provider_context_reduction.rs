@@ -1854,7 +1854,7 @@ mod tests {
             None,
         )
         .unwrap();
-        crate::test_support::grant_operator_user(
+        gents_store::test_support::grant_operator_user(
             &node,
             &gents_store::test_support::held_runtime_identity(&node_did),
             &outsider,

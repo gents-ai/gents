@@ -340,6 +340,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         McpServiceProbeResult,
         DerivedCancelCauseView,
         DesktopSessionSnapshot,
+        SessionLiveDeltaRequest,
         SessionLiveDeltaView,
         SessionRowsView,
         SessionRowsWindow,

@@ -14,7 +14,7 @@ use crate::background::status::ProcessControlScope;
 use crate::plugin::job_calls::job_state;
 use crate::views::jobs::{JobFields, Jobs};
 use gents_protocol::job::keys::job_spawn_key;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_session::session::tool_output_rows::{
     observe_canonical_tool_output_with_access, CanonicalToolOutputObservation,
 };

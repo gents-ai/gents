@@ -283,7 +283,7 @@ def loosely_equal(left, right):
 
 def evaluate(expression, context):
     """Evaluate the subset of GitHub expression syntax the trust condition and
-    the gate's job conditions use: comparisons, &&, ||, contains and fromJSON."""
+    the gate's job conditions use: comparisons, &&, ||, contains, startsWith and fromJSON."""
     tokens = re.findall(r"\(|\)|,|&&|\|\||==|!=|'[^']*'|\.?[A-Za-z_][A-Za-z0-9_.-]*", expression)
     if "".join(tokens) != re.sub(r"\s+", "", expression):
         raise ValueError(f"unsupported expression syntax: {expression}")
@@ -361,7 +361,11 @@ def contains(haystack, needle):
     return str(needle).lower() in str(haystack or "").lower()
 
 
-FUNCTIONS = {"contains": contains, "fromJSON": json.loads, "always": lambda: True}
+def starts_with(text, prefix):
+    return str(text or "").lower().startswith(str(prefix or "").lower())
+
+
+FUNCTIONS = {"contains": contains, "startsWith": starts_with, "fromJSON": json.loads, "always": lambda: True}
 
 
 def keep_condition(workflow=WORKFLOW):
@@ -565,6 +569,12 @@ class KeptTreeTrustTests(unittest.TestCase):
     def test_push_to_main_keeps_the_tree(self):
         self.assertTrue(self.keeps("push"))
 
+    def test_main_merge_queue_keeps_the_tree(self):
+        self.assertTrue(self.keeps("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc"))
+
+    def test_scheduled_run_of_main_keeps_the_tree(self):
+        self.assertTrue(self.keeps("schedule"))
+
     def test_pull_request_from_this_repository_keeps_the_tree(self):
         self.assertTrue(self.keeps("pull_request", "refs/pull/1/merge", self.REPOSITORY))
         self.assertTrue(self.keeps("pull_request", "refs/pull/1/merge", "Gents-AI/Gents"))
@@ -579,7 +589,8 @@ class KeptTreeTrustTests(unittest.TestCase):
     def test_other_events_and_refs_build_in_a_job_tree(self):
         self.assertFalse(self.keeps("push", "refs/heads/feature"))
         self.assertFalse(self.keeps("push", "refs/tags/v1.0.0"))
-        self.assertFalse(self.keeps("merge_group", "refs/heads/gh-readonly-queue/main/pr-1"))
+        self.assertFalse(self.keeps("merge_group", "refs/heads/gh-readonly-queue/release/pr-1"))
+        self.assertFalse(self.keeps("schedule", "refs/heads/feature"))
         self.assertFalse(self.keeps("workflow_dispatch"))
         self.assertFalse(self.keeps("pull_request_target", "refs/heads/main", self.REPOSITORY))
 

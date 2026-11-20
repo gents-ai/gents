@@ -4820,6 +4820,7 @@ async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
     let packs = crate::pack::node_packs::NodePacks {
         access: &access,
         node_did: OWNER,
+        registry_url: crate::pack::registry::DEFAULT_REGISTRY_URL,
         home: Some(home.path()),
         grants_authority: false,
     };

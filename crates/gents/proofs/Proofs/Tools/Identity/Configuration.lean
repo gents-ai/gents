@@ -560,13 +560,18 @@ def clientSignedUpdateSupported (collection : String) : Bool :=
   clientSignedCreateCollection collection
 
 /-- A client signs deletes only for bundled configuration schemas or the
-pack installation, Goal and GoalCreationClaim records. Native delete permission
-remains required; session deletion has a separate product owner. Pack evidence
-(create, update, delete) and pack relationship edits share this list. -/
+pack installation, Goal, GoalCreationClaim and EventSourceCursor records. Native
+delete permission remains required; session deletion has a separate product
+owner. Pack evidence (create, update, delete) and pack relationship edits share
+this list. A pack installing an EventSource seeds its cursor in the same
+User-signed configuration transaction and relates the cursor's `parent` and
+`writer`, so the cursor is listed here; it is a `configuration` resource like
+its EventSource, and document ACP decides its update and delete as for every
+other entry. -/
 def clientSignedDeleteCollection (collection : String) : Bool :=
   (clientSignedCreateCollection collection && collection != "InferenceBackend") ||
     ["PackInstallation", "InferenceBackendMetadata", "InferenceBackendObservation",
-      "BackendCredential", "Goal", "GoalCreationClaim"].contains collection
+      "BackendCredential", "Goal", "GoalCreationClaim", "EventSourceCursor"].contains collection
 
 /-- The operator stop (security review, 2026-11-10): the Node's user owner
 deletes any Agent's application pairing overlay through the signed client path,
@@ -580,6 +585,9 @@ def clientSignedOperatorDelete (collection : String) : Bool :=
 theorem client_delete_includes_goal : clientSignedDeleteCollection "Goal" = true := by decide
 
 theorem client_delete_includes_goal_claim : clientSignedDeleteCollection "GoalCreationClaim" = true := by decide
+
+theorem client_delete_includes_event_source_cursor :
+    clientSignedDeleteCollection "EventSourceCursor" = true := by decide
 
 theorem client_delete_excludes_session : clientSignedDeleteCollection "AgentSession" = false := by decide
 

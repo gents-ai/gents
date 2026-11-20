@@ -1,6 +1,6 @@
 use super::*;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
@@ -129,10 +129,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "first",
-            signer.did(),
-            user.did(),
-            agent.did(),
-            "session",
+            RequestScope::new(signer.did(), user.did(), agent.did(), "session"),
             "Start work",
             "interactive",
             "2026-10-21T00:00:00Z",
@@ -358,10 +355,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
         let mut request = AgentRequestCreate::base(
             RequestPurpose::Normal,
             &fire.request_id,
-            signer.did(),
-            user.did(),
-            agent.did(),
-            task_session,
+            RequestScope::new(signer.did(), user.did(), agent.did(), task_session),
             "Task work",
             "scheduled",
             "2026-10-21T00:00:00Z",

@@ -1046,7 +1046,7 @@ async fn live_eval_target() -> Result<(String, String, Option<String>)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Result<()> {
-    use gents::support::snapshots::SnapshotReader;
+    use gents_store::test_support::snapshot_reader::SnapshotReader;
     use tokio::process::Child;
 
     struct ChildGuard(Option<Child>);

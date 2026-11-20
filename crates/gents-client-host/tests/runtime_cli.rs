@@ -57,6 +57,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         .envs(homes.env())
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&home)
+        .arg("--desktop-home")
+        .arg(homes.desktop_home())
         .args([
             "--node-name",
             "Gents",

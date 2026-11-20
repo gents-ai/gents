@@ -1,7 +1,8 @@
 use std::cmp::Reverse;
 
+use super::transcript::{wrap_lines, Tab};
 use super::work::{in_range, item, label};
-use super::{first_selectable, wrap_lines, App, Tab};
+use super::{first_selectable, App};
 use crate::keys::in_key_set;
 use crate::sample::{note, RowAction, Scope, SidebarRow, Tone, View, DIFF_BACK_ROW};
 use crate::source::{Change, ChangeKind};
@@ -426,7 +427,8 @@ fn change_lines(changes: &[&Change]) -> Vec<(String, Tone)> {
 mod tests {
     use std::sync::mpsc::{channel, Receiver};
 
-    use crate::app::{App, ChatLine, Pane, Tab};
+    use crate::app::transcript::{ChatLine, Tab};
+    use crate::app::{App, Pane};
     use crate::commands::Effect;
     use crate::keys::KeySet::Vim;
     use crate::sample::{RowAction, Scope, Tone, View};

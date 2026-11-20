@@ -78,7 +78,7 @@ async fn an_agent_revokes_the_share_it_granted() {
         .unwrap();
     let sibling_access = db.client_access(&sibling);
     let grantee = key("revoke-follows-grant-grantee");
-    crate::test_support::grant_operator_user(&node, &root, &grantee).await;
+    gents_store::test_support::grant_operator_user(&node, &root, &grantee).await;
     let grantee_did = identity::Did::new(grantee.did()).unwrap();
     let grantee_access = ConfigAccess::local_as(node.clone(), grantee_did.clone());
 

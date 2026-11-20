@@ -5,6 +5,7 @@ use gents_lean_vocab::families::goal_client_start_contracts_starts::{StartInput,
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_admission::RequestPurpose;
+use gents_protocol::request_admission::RequestScope;
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_protocol::session::SessionTitle;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -368,10 +369,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         let mut busy = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "busy",
-            identity.did(),
-            user.did(),
-            &requested_agent,
-            SESSION,
+            RequestScope::new(identity.did(), user.did(), &requested_agent, SESSION),
             "Earlier work",
             "interactive",
             time(2),
@@ -390,13 +388,15 @@ async fn drive_start(case: &StartInput<String>) -> bool {
     let mut initial = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "first",
-        identity.did(),
-        session_before
-            .as_ref()
-            .and_then(|session| session.session.requester_did.as_deref())
-            .unwrap_or(user.did()),
-        &signed_agent,
-        SESSION,
+        RequestScope::new(
+            identity.did(),
+            session_before
+                .as_ref()
+                .and_then(|session| session.session.requester_did.as_deref())
+                .unwrap_or(user.did()),
+            &signed_agent,
+            SESSION,
+        ),
         "Work on this goal",
         "interactive",
         time(case.requested.created_at),

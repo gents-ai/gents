@@ -7,7 +7,7 @@ use gents_store::graphql::escape_graphql_string;
 #[tokio::test]
 async fn parent_recovery_lookup_uses_agent_native_authority() {
     use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
     };
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity;
@@ -24,10 +24,12 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
     let create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "private-recovery",
-        runtime.did(),
-        user.did(),
-        agent.did(),
-        "private-recovery-session",
+        RequestScope::new(
+            runtime.did(),
+            user.did(),
+            agent.did(),
+            "private-recovery-session",
+        ),
         "recover",
         "interactive",
         "2026-09-01T00:00:00Z",

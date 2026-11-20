@@ -2259,15 +2259,19 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        Some("GENTS_TEST_CLI_BACKEND_KEY"),
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: Some("GENTS_TEST_CLI_BACKEND_KEY"),
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 

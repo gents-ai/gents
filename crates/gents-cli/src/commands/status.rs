@@ -301,7 +301,7 @@ async fn liveness_value(
     if let Some(liveness) = runtime_status.and_then(|status| status.get("liveness")) {
         return liveness.clone();
     }
-    match gents_host::http::prometheus::load_metrics_query_data(graphql, node_did).await {
+    match gents_host::http::prometheus::store::load_metrics_query_data(graphql, node_did).await {
         Ok(data) => serde_json::to_value(&data.liveness).unwrap_or(Value::Null),
         Err(_) => Value::Null,
     }
