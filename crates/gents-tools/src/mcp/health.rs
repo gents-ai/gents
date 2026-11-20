@@ -185,7 +185,6 @@ impl ServiceModelInternal {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeEvent {
     ProbeSuccess { stale: bool },
@@ -290,11 +289,22 @@ impl ServiceHealthMap {
         self.set(service_id.into(), health).await;
     }
 
-    async fn retain_services(&self, service_ids: &RapidHashSet<String>) {
-        self.inner
-            .write()
-            .await
-            .retain(|service_id, _| service_ids.contains(service_id));
+    async fn retain_services(
+        &self,
+        service_ids: &RapidHashSet<String>,
+        now: DateTime<Utc>,
+        options: &HealthCheckerOptions,
+    ) {
+        self.inner.write().await.retain(|service_id, entry| {
+            service_ids.contains(service_id)
+                || step_service(
+                    entry.model.clone(),
+                    ProbeEvent::RegistryAbsent,
+                    now,
+                    options,
+                )
+                .is_some()
+        });
     }
 }
 
@@ -657,6 +667,8 @@ async fn run_health_check_cycle_with_cancel(
         if backoff_is_active(&previous_model, now, options) {
             continue;
         }
+        let previous_model = step_service(previous_model, ProbeEvent::BackoffExpiry, now, options)
+            .expect("backoffExpiry must preserve the service model");
 
         let endpoint = match service.endpoint(local_hostname, local_subnet) {
             Ok(endpoint) => endpoint,
@@ -807,7 +819,9 @@ async fn run_health_check_cycle_with_cancel(
     if cancel.is_some_and(CancellationToken::is_cancelled) {
         return Ok(());
     }
-    health_map.retain_services(&online_service_ids).await;
+    health_map
+        .retain_services(&online_service_ids, now, options)
+        .await;
 
     if let Some(persistence) = persistence {
         let snapshot = health_map.snapshot_full(options.failure_threshold_k).await;

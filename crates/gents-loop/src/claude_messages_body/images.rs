@@ -8,10 +8,10 @@ use gents_protocol::message::{
 
 pub(super) fn media_type(image: &Image) -> Option<&'static str> {
     match image.media_type {
-        Some(ImageMediaType::JPEG) => Some("image/jpeg"),
-        Some(ImageMediaType::PNG) => Some("image/png"),
-        Some(ImageMediaType::GIF) => Some("image/gif"),
-        Some(ImageMediaType::WEBP) => Some("image/webp"),
+        Some(ImageMediaType::Jpeg) => Some("image/jpeg"),
+        Some(ImageMediaType::Png) => Some("image/png"),
+        Some(ImageMediaType::Gif) => Some("image/gif"),
+        Some(ImageMediaType::Webp) => Some("image/webp"),
         _ => None,
     }
 }

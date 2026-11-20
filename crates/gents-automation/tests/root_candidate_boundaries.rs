@@ -771,7 +771,7 @@ fn part_segments(part: &ToolResultContent, source: &str, image_bytes: usize) -> 
         ToolResultContent::Text(text) => text_segments(&text.text, source),
         ToolResultContent::Image(image) => {
             let whole = image.media_type
-                == Some(gents_inference::llm::message::ImageMediaType::PNG)
+                == Some(gents_inference::llm::message::ImageMediaType::Png)
                 && matches!(
                     &image.data,
                     gents_inference::llm::message::DocumentSourceKind::Base64(data) if data.len() == image_bytes

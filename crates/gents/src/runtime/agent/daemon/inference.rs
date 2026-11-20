@@ -904,7 +904,7 @@ pub(super) mod tests {
                         data: gents_inference::llm::message::DocumentSourceKind::String(
                             "fn main() {}".into(),
                         ),
-                        media_type: Some(gents_inference::llm::message::DocumentMediaType::TXT),
+                        media_type: Some(gents_inference::llm::message::DocumentMediaType::Txt),
                         additional_params: Some(
                             serde_json::json!({ "captured_context": { "kind": "selection" } }),
                         ),
