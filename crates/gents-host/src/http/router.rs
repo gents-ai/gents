@@ -246,6 +246,10 @@ pub fn runtime_contract_router(
             gents_protocol::owed_settlement::OWED_REMOVALS_PATH,
             post(crate::http::owed_settlement::removals),
         )
+        .route(
+            gents_protocol::owed_settlement::OWED_AWAIT_PATH,
+            post(crate::http::owed_settlement::await_owed),
+        )
         .route("/fleet/slots", get(fleet_slots_handler))
         .route(
             gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,

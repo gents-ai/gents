@@ -204,7 +204,7 @@ pub async fn load_enrollment_grant_receipts(
 ) -> Result<Vec<EnrollmentGrantReceipt>, EnrollmentGrantError> {
     let rendered = receipt_query(member);
     let response = access
-        .read(&rendered)
+        .read_for_decision(&rendered)
         .await
         .map_err(EnrollmentGrantError::Read)?;
     decode_receipts(&response)
