@@ -1,13 +1,14 @@
+use gents_store::config_client::TransactionFailure as _;
 use gents_store::local::document_acp::DocumentAcp;
 
 use crate::test_support::vera_test_home::{seen, Household, PROVIDERS};
 
 /// What quickstart does when the User selects a runtime-created Agent as a
-/// workspace's writer: whether the store refused it as not the owner, the
+/// workspace's writer: whether the store denied it, the
 /// placements stored, and whether the selection took.
 #[derive(Debug, PartialEq, Eq)]
 struct Selected {
-    refused_as_not_the_owner: bool,
+    refused_as_denied: bool,
     placements: usize,
     selected: bool,
 }
@@ -35,8 +36,11 @@ async fn quickstart(provider: DocumentAcp) -> anyhow::Result<(Selected, Result<(
         &selection,
     )
     .await
-    .map(|_| ())
-    .map_err(|error| seen(error.as_ref()));
+    .map(|_| ());
+    let denied = outcome
+        .as_ref()
+        .is_err_and(|error| error.permission_denied());
+    let outcome = outcome.map_err(|error| seen(error.as_ref()));
     household
         .owed_until(&household.user_did, |owed| {
             owed.iter()
@@ -44,9 +48,7 @@ async fn quickstart(provider: DocumentAcp) -> anyhow::Result<(Selected, Result<(
         })
         .await?;
     let selected = Selected {
-        refused_as_not_the_owner: outcome
-            .as_ref()
-            .is_err_and(|error| error.contains("not document owner")),
+        refused_as_denied: denied,
         placements: super::stored(
             &household.node,
             &household.user_did,
@@ -80,7 +82,7 @@ async fn quickstart_selection_of_a_runtime_owned_agent_is_refused_whole() -> any
         assert_eq!(
             selected,
             Selected {
-                refused_as_not_the_owner: true,
+                refused_as_denied: true,
                 placements: 0,
                 selected: false,
             },
