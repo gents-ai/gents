@@ -369,7 +369,7 @@ pub async fn fixture(
 }
 
 use gents_store::config_client::ConfigAccess;
-use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::KeyIdentity;
 
 pub async fn publish_provider_message(
     writer: &crate::request::streaming::DefraStreamWriter,
