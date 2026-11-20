@@ -43,13 +43,15 @@ pub(crate) async fn install_documents_pack(
 ) -> Result<serde_json::Value, PackChangeError> {
     let dependencies = resolve_dependencies(pack, args).await?;
     install_documents_pack_inner(
-        access,
-        owner,
+        &DocumentsInstallNode {
+            access,
+            owner,
+            local: None,
+        },
         pack,
         args,
         explicit,
         dependencies,
-        None,
         false,
     )
     .await
@@ -70,20 +72,15 @@ async fn resolve_dependencies(
         .collect()
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the install inputs each entry point supplies, and whether it asks approval for a root grant"
-)]
 async fn install_documents_pack_inner(
-    access: &gents_store::config_client::ConfigAccess,
-    owner: &str,
+    node: &DocumentsInstallNode<'_>,
     pack: &ResolvedPack,
     args: &PackInstallArgs,
     explicit: bool,
     dependencies: Vec<ResolvedPack>,
-    local: Option<&LocalPackAccess>,
     refuse_unapproved_root: bool,
 ) -> Result<serde_json::Value, PackChangeError> {
+    let DocumentsInstallNode { access, owner, .. } = *node;
     let request = install_request(args);
     if let gents_store::config_client::ConfigAccess::Graphql(endpoint) = access {
         let mut needs_runtime_store = false;
@@ -161,11 +158,7 @@ async fn install_documents_pack_inner(
         }
     }
     install_documents_pack_resolved_inner(
-        &DocumentsInstallNode {
-            access,
-            owner,
-            local,
-        },
+        node,
         pack,
         &request,
         explicit,
@@ -304,13 +297,15 @@ pub(super) async fn install_documents_report(
             })
             .collect();
         let mut output = install_documents_pack_inner(
-            &access,
-            &owner,
+            &DocumentsInstallNode {
+                access: &access,
+                owner: &owner,
+                local: local.as_ref(),
+            },
             pack,
             args,
             args.explicit,
             dependencies,
-            local.as_ref(),
             true,
         )
         .await?;

@@ -2,7 +2,8 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::inference_defaults::{
-    ReasoningEffort, ANTHROPIC_API_ENDPOINT, DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH,
+    ReasoningEffort, ANTHROPIC_API_ENDPOINT, DEFAULT_CONNECT_TIMEOUT_SECS,
+    DEFAULT_DISCOVERY_TIMEOUT_SECS, DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH,
 };
 use gents_loop::backend_provider::BackendProviderKind;
 pub use gents_loop::claude_platform::ClaudePlatform;
@@ -498,6 +499,16 @@ impl InferenceBackend {
 
     pub fn effective_max_queue_depth(&self) -> i64 {
         self.max_queue_depth.unwrap_or(DEFAULT_MAX_QUEUE_DEPTH)
+    }
+
+    pub fn effective_connect_timeout_secs(&self) -> i64 {
+        self.connect_timeout_secs
+            .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS)
+    }
+
+    pub fn effective_discovery_timeout_secs(&self) -> i64 {
+        self.discovery_timeout_secs
+            .unwrap_or(DEFAULT_DISCOVERY_TIMEOUT_SECS)
     }
 
     pub fn validation_violations(&self) -> Vec<String> {

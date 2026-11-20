@@ -16,8 +16,8 @@ use gents_store::identity::NodeIdentity as _;
 use rapidhash::RapidHashMap;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::snapshots::SnapshotReader;
 use crate::support::{self, TestDb};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 
 struct Stop(CancellationToken);

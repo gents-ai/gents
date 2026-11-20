@@ -305,6 +305,7 @@ impl GentsBuilder {
                     gents_store::config_client::ConfigAccess::local(plugin_node),
                 ),
             )),
+            native_executables: Default::default(),
         })
     }
 }

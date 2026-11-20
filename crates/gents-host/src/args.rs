@@ -181,6 +181,12 @@ pub struct ServeArgs {
     pub tool_root: Option<PathBuf>,
     #[arg(
         long,
+        value_name = "PATH",
+        help = "Standalone gents-fs-runner executable for the native filesystem tools. Defaults to this executable's built-in runner"
+    )]
+    pub fs_runner: Option<PathBuf>,
+    #[arg(
+        long,
         value_enum,
         default_value_t = P2pTransportArg::Iroh,
         help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL"

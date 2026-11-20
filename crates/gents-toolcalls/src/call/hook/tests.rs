@@ -363,7 +363,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
     let tool_doc_id = loser.doc_id().unwrap().to_owned();
     let mut winner = reload_tool_call_as_hook(&hook, &tool_doc_id, &session_id).await;
     assert!(winner
-        .cancel_during_run(gents_session::session::tool_call_state::CancelCause::Interrupted)
+        .cancel_during_run(gents_protocol::tool_call::CancelCause::Interrupted)
         .await
         .unwrap());
 
@@ -1054,7 +1054,7 @@ async fn interruption_leaves_background_workers_running() {
 fn generated_interrupt_dispositions_follow_the_lean_model() {
     use crate::call::lifecycle::InterruptDisposition;
     use gents_protocol::tool_call::AwaitMode;
-    use gents_session::session::tool_call_state::ToolCallState;
+    use gents_protocol::tool_call::ToolCallState;
     gents_lean_vocab::families::contracts_interrupt_disposition::replay::<String, String, String>(
         |case| {
             let state = ToolCallState::from_persisted(&case.state).expect("modeled state");
@@ -1214,7 +1214,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
 
     let outer_doc_id = outer_row["_docID"].as_str().expect("outer row document");
     let mut reloaded = reload_tool_call_as_hook(&hook, outer_doc_id, &session_id).await;
-    reloaded.set_state(gents_session::session::tool_call_state::ToolCallState::Running);
+    reloaded.set_state(gents_protocol::tool_call::ToolCallState::Running);
     reloaded.set_started_at(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
     let late_completion = reloaded.complete("late success").await;
     let late_error = late_completion

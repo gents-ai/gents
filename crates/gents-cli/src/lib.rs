@@ -360,7 +360,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(Command::Shell(args)) => return commands::start::shell(args, runtime).await,
         Some(command) => command,
     };
-    gents_tools::native::enable_self_runner();
     if let Command::Utils {
         command: UtilsCommand::Eval { command },
     } = &command
@@ -558,6 +557,20 @@ fn absolutize(path: PathBuf) -> Result<PathBuf> {
         Ok(std::env::current_dir()
             .context("resolving current directory")?
             .join(path))
+    }
+}
+
+pub(crate) fn host_executable() -> Option<PathBuf> {
+    std::env::current_exe().ok()
+}
+
+pub(crate) fn embedded_runtime_options() -> gents::DocumentRuntimeOptions {
+    gents::DocumentRuntimeOptions {
+        native_executables: gents_tools::native::NativeExecutables {
+            host: host_executable(),
+            fs_runner: None,
+        },
+        ..Default::default()
     }
 }
 

@@ -1307,7 +1307,7 @@ async fn project_refused_request_onto_session_in_txn(
 #[cfg(test)]
 mod session_message_tests {
     use super::*;
-    use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+    use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
     #[tokio::test]
     async fn session_message_request_carries_the_cwd() {

@@ -8,9 +8,9 @@ use gents::defra_node::Node as EmbeddedNode;
 use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
 use gents_store::graphql::escape_graphql_string;
 
-use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db;
 use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use gents_store::test_support::STALL_CEILING;
 
 const CONFLICT_DID: &str = "did:test:984-stale-endpoint";

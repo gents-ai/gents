@@ -12,7 +12,7 @@ use tokio::sync::OnceCell;
 use super::metrics::P2P_METRICS_FETCH_BUDGET;
 use super::RuntimeHttpState;
 use crate::http::healthz::render_healthz_payload;
-use crate::http::prometheus::{load_metrics_core_data, with_local_native_executors};
+use crate::http::prometheus::store::{load_metrics_core_data, with_local_native_executors};
 use crate::http::self_view::load_self_view;
 use crate::http::version::version_response;
 

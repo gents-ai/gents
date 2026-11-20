@@ -174,6 +174,7 @@ pub struct DocumentRuntimeOptions {
         Option<Arc<dyn crate::runtime::startup_readiness::StartupBuildFailureObserver>>,
     pub startup_readiness: crate::runtime::startup_readiness::StartupReadinessOptions,
     pub plugin_home: Option<PathBuf>,
+    pub native_executables: gents_tools::native::NativeExecutables,
     #[cfg(test)]
     pub(crate) router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
@@ -240,6 +241,7 @@ pub struct Gents {
         Arc<std::sync::RwLock<Option<gents_p2p::p2p_reconcile::EnrollmentAuthorityHandle>>>,
     operator_tool_root: Option<PathBuf>,
     plugins: Arc<gents_toolcalls::plugin::executor::PluginExecutor>,
+    native_executables: gents_tools::native::NativeExecutables,
 }
 
 pub(crate) fn plugin_executor(
@@ -341,6 +343,7 @@ impl Gents {
             enrollment_authority: Arc::default(),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
             plugins,
+            native_executables: options.native_executables,
         })
     }
 
@@ -471,6 +474,10 @@ impl Gents {
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {
         self.document_runtime_context.as_ref()
+    }
+
+    pub(crate) fn native_executables(&self) -> &gents_tools::native::NativeExecutables {
+        &self.native_executables
     }
 
     pub(crate) fn plugins(&self) -> &Arc<gents_toolcalls::plugin::executor::PluginExecutor> {

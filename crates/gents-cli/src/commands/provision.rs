@@ -26,11 +26,7 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
         &home_dir,
         owner.did(),
         &node_name,
-        args.bootstrap_file_identity,
-        args.bootstrap_macos_keychain,
-        args.bootstrap_macos_secure_enclave,
-        args.keychain_label.as_deref(),
-        args.secure_enclave_label.as_deref(),
+        IdentityBootstrap::from_args(&args)?,
         gents_host::args::store_key_custody(args.store_key_custody),
     )
     .await?;
@@ -113,46 +109,59 @@ fn resolve_provision_node_name(args: &ProvisionArgs) -> String {
         .to_string()
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors the provision command's identity flags"
-)]
+struct IdentityBootstrap<'a> {
+    backend: Option<IdentityBackendArg>,
+    keychain_label: Option<&'a str>,
+    secure_enclave_label: Option<&'a str>,
+}
+
+impl<'a> IdentityBootstrap<'a> {
+    fn from_args(args: &'a ProvisionArgs) -> Result<Self> {
+        let requested = [
+            (args.bootstrap_file_identity, IdentityBackendArg::File),
+            (
+                args.bootstrap_macos_keychain,
+                IdentityBackendArg::MacosKeychain,
+            ),
+            (
+                args.bootstrap_macos_secure_enclave,
+                IdentityBackendArg::MacosSecureEnclave,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(set, backend)| set.then_some(backend))
+        .collect::<Vec<_>>();
+        if requested.len() > 1 {
+            anyhow::bail!("bootstrap identity flags are mutually exclusive");
+        }
+        Ok(Self {
+            backend: requested.first().copied(),
+            keychain_label: args.keychain_label.as_deref(),
+            secure_enclave_label: args.secure_enclave_label.as_deref(),
+        })
+    }
+}
+
 async fn ensure_home_identity(
     home_dir: &Path,
     owner: &str,
     node_name: &str,
-    bootstrap_file_identity: bool,
-    bootstrap_macos_keychain: bool,
-    bootstrap_macos_secure_enclave: bool,
-    keychain_label: Option<&str>,
-    secure_enclave_label: Option<&str>,
+    bootstrap: IdentityBootstrap<'_>,
     store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
 ) -> Result<ProvisionIdentityReport> {
-    let bootstrap_count = [
-        bootstrap_file_identity,
-        bootstrap_macos_keychain,
-        bootstrap_macos_secure_enclave,
-    ]
-    .into_iter()
-    .filter(|value| *value)
-    .count();
-    if bootstrap_count > 1 {
-        anyhow::bail!("bootstrap identity flags are mutually exclusive");
-    }
-
     if let Some(config) = read_init_config(home_dir)? {
         if let Some(report) = existing_identity_report(home_dir, config)? {
             return Ok(report);
         }
     }
 
-    if !bootstrap_file_identity && !bootstrap_macos_keychain && !bootstrap_macos_secure_enclave {
+    let Some(identity_backend) = bootstrap.backend else {
         anyhow::bail!(
             "initialized home identity is required before provisioning {}; run `gents init --identity-only --home {}` for file-key development, or bootstrap the host identity backend first",
             home_dir.display(),
             home_dir.display()
         );
-    }
+    };
 
     let data_dir = gents_service::home_state::default_data_dir(home_dir);
     let store_lock = crate::commands::init::lock_init_store(home_dir, &data_dir, false).await?;
@@ -160,24 +169,17 @@ async fn ensure_home_identity(
         return Ok(report);
     }
 
-    let key_path = if bootstrap_macos_keychain || bootstrap_macos_secure_enclave {
-        None
-    } else {
-        Some(default_key_path(home_dir, node_name))
+    let key_path = match identity_backend {
+        IdentityBackendArg::File => Some(default_key_path(home_dir, node_name)),
+        IdentityBackendArg::MacosKeychain | IdentityBackendArg::MacosSecureEnclave => None,
     };
     let initialized = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
         home: home_dir,
         node_name,
         key_path: key_path.as_deref(),
-        identity_backend: if bootstrap_macos_secure_enclave {
-            IdentityBackendArg::MacosSecureEnclave
-        } else if bootstrap_macos_keychain {
-            IdentityBackendArg::MacosKeychain
-        } else {
-            IdentityBackendArg::File
-        },
-        keychain_label,
-        secure_enclave_label,
+        identity_backend,
+        keychain_label: bootstrap.keychain_label,
+        secure_enclave_label: bootstrap.secure_enclave_label,
         tool_package: ToolPackageArg::Readonly,
         tool_root: None,
         reset: false,
@@ -257,11 +259,11 @@ mod tests {
             &home,
             owner,
             "owner",
-            true,
-            false,
-            false,
-            None,
-            None,
+            IdentityBootstrap {
+                backend: Some(IdentityBackendArg::File),
+                keychain_label: None,
+                secure_enclave_label: None,
+            },
             gents_store::local::store_key::StoreKeyCustodyChoice::File,
         )
         .await
@@ -272,11 +274,11 @@ mod tests {
             &home,
             owner,
             "different-requested-name",
-            false,
-            false,
-            false,
-            None,
-            None,
+            IdentityBootstrap {
+                backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+            },
             gents_store::local::store_key::StoreKeyCustodyChoice::File,
         )
         .await
@@ -298,11 +300,11 @@ mod tests {
             &new_home,
             owner,
             "owner",
-            true,
-            false,
-            false,
-            None,
-            None,
+            IdentityBootstrap {
+                backend: Some(IdentityBackendArg::File),
+                keychain_label: None,
+                secure_enclave_label: None,
+            },
             gents_store::local::store_key::StoreKeyCustodyChoice::File,
         )
         .await

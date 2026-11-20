@@ -42,8 +42,9 @@ async fn persisted_request(
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestScope,
     };
-    let context = defra_core::RequestContext::default()
-        .with_identity(Some(tests::root_identity().did().to_owned()));
+    let context = defra_core::RequestContext::default().with_identity(Some(
+        gents_store::test_support::fixture_root().did().to_owned(),
+    ));
     for permission in [
         acp::nac::NodePermission::DocumentRead,
         acp::nac::NodePermission::DocumentUpdate,
@@ -56,9 +57,9 @@ async fn persisted_request(
         gents_protocol::request_admission::RequestPurpose::Normal,
         id,
         RequestScope::new(
-            tests::root_identity().did(),
+            gents_store::test_support::fixture_root().did(),
             identity.did(),
-            tests::agent_identity().did(),
+            gents_store::test_support::fixture_agent(tests::AGENT_NONCE).did(),
             "session-1",
         ),
         content,
@@ -80,11 +81,11 @@ async fn persisted_request(
         .unwrap();
     let doc_id = doc["_docID"].as_str().unwrap();
     node.add_dac_actor_relationship(
-        tests::root_identity().did(),
+        gents_store::test_support::fixture_root().did(),
         "AgentRequest",
         doc_id,
         "working_agent",
-        tests::agent_identity().did(),
+        gents_store::test_support::fixture_agent(tests::AGENT_NONCE).did(),
     )
     .await
     .unwrap();
@@ -101,7 +102,7 @@ async fn persisted_request(
 }
 
 async fn claim(node: &Arc<EmbeddedNode>, request: &AgentRequest, abort: bool) -> Result<()> {
-    tests::agent_access(node).transact_write("test.mailbox_reply", |txn| Box::pin(async move {
+    gents_store::test_support::fixture_agent_access(node, tests::AGENT_NONCE).transact_write("test.mailbox_reply", |txn| Box::pin(async move {
         let mutation = format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "claimed" }}) {{ _docID }} }}"#,
             escape_graphql_string(&request.doc_id));
         txn.execute_local_response(&mutation).await?;
@@ -128,7 +129,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("reply.key"), None).unwrap();
     let mut context = tests::context(identity.did());
-    context.node_did = tests::root_identity().did().into();
+    context.node_did = gents_store::test_support::fixture_root().did().into();
     let item = tests::stamp_create(
         &node,
         &context,
@@ -155,8 +156,8 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     assert_eq!(
         sweep_open_mailbox_items(
             &node,
-            tests::root_identity().did(),
-            &[tests::agent_identity()],
+            gents_store::test_support::fixture_root().did(),
+            &[gents_store::test_support::fixture_agent(tests::AGENT_NONCE)],
             None
         )
         .await
@@ -238,7 +239,7 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("questions.key"), None).unwrap();
     let mut context = tests::context(identity.did());
-    context.node_did = tests::root_identity().did().into();
+    context.node_did = gents_store::test_support::fixture_root().did().into();
     for optional in [false, true] {
         let payload = json!({
             "version": 2, "prompt": "Any further constraints?", "options": [],
@@ -384,7 +385,9 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
             "handoff-test",
         );
         lifecycle
-            .bind_managed_agent(tests::agent_identity().as_ref())
+            .bind_managed_agent(
+                gents_store::test_support::fixture_agent(tests::AGENT_NONCE).as_ref(),
+            )
             .unwrap();
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
@@ -406,7 +409,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
             .unwrap();
         let receipt = stamp_notification(
             &node,
-            &tests::agent_access(&node),
+            &gents_store::test_support::fixture_agent_access(&node, tests::AGENT_NONCE),
             &context,
             FileMailboxItemArgs {
                 kind: serde_json::from_value(json!(modeled.kind)).unwrap(),
@@ -484,7 +487,9 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
             "handoff-test",
         );
         reply_lifecycle
-            .bind_managed_agent(tests::agent_identity().as_ref())
+            .bind_managed_agent(
+                gents_store::test_support::fixture_agent(tests::AGENT_NONCE).as_ref(),
+            )
             .unwrap();
         let claimed = reply_lifecycle.claim_with_identity().await.unwrap() == ClaimOutcome::Claimed;
         let consumed = tests::load_as_creator(&node, mailbox_doc_id)

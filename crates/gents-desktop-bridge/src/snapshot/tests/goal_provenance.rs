@@ -419,12 +419,14 @@ async fn goal_provenance_cases() -> GoalProvenance {
         ] {
             push_canonical_text_message_for_node(
                 &mut rows,
-                &format!("authored:{doc}:{suffix}"),
-                "session",
-                Some(&doc),
-                sequence,
-                role,
-                "Review the changes",
+                CanonicalText {
+                    doc_id: &format!("authored:{doc}:{suffix}"),
+                    session_id: "session",
+                    request_doc_id: Some(&doc),
+                    sequence,
+                    role,
+                    text: "Review the changes",
+                },
                 identity.did(),
                 Some(if index == 12 { guest.did() } else { user.did() }),
             );

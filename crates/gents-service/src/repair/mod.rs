@@ -103,12 +103,14 @@ async fn prepare(
         &repair_lock_path()?,
         local_service(&choice.home, &current_executable()?)?,
         &ServerConfig::standard(choice.home.clone()),
-        choice,
-        false,
-        program,
-        service_move,
-        operation,
-        asked,
+        &RepairRequest {
+            choice,
+            was_serving: false,
+            program,
+            service_move,
+            operation,
+            asked,
+        },
         progress,
     )
     .await
@@ -118,32 +120,43 @@ async fn restore(choice: &HomeChoice, progress: &mut dyn Progress) -> Result<Rep
         &repair_lock_path()?,
         local_service(&choice.home, &current_executable()?)?,
         &ServerConfig::standard(choice.home.clone()),
-        choice,
-        true,
-        &ServiceProgram::new(current_program),
-        ServiceMove::AfterSetup,
-        RepairOperation::Repoint,
-        UNASKED,
+        &RepairRequest {
+            choice,
+            was_serving: true,
+            program: &ServiceProgram::new(current_program),
+            service_move: ServiceMove::AfterSetup,
+            operation: RepairOperation::Repoint,
+            asked: UNASKED,
+        },
         progress,
     )
     .await
 }
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the lock and status server are injected so tests never touch the user's own"
-)]
+struct RepairRequest<'a> {
+    choice: &'a HomeChoice,
+    was_serving: bool,
+    program: &'a ServiceProgram,
+    service_move: ServiceMove,
+    operation: RepairOperation,
+    asked: Asked,
+}
+
+/// The lock and status server are injected so tests never touch the user's own.
 async fn prepare_with_lock(
     lock: &Path,
     manager: Option<NativeServiceManager>,
     server: &ServerConfig,
-    choice: &HomeChoice,
-    was_serving: bool,
-    program: &ServiceProgram,
-    service_move: ServiceMove,
-    operation: RepairOperation,
-    asked: Asked,
+    request: &RepairRequest<'_>,
     progress: &mut dyn Progress,
 ) -> Result<RepairReceipt> {
+    let RepairRequest {
+        choice,
+        was_serving,
+        program,
+        service_move,
+        operation,
+        asked,
+    } = *request;
     let _lock = hold_lock(lock).await?;
     let (last_exit, running) = match &manager {
         Some(manager) => {
@@ -228,12 +241,14 @@ async fn prepare_with_lock(
     let mut report = settle(
         choice,
         &facts,
-        busy,
-        asked,
-        refusal,
-        manager.as_ref(),
-        serving_home.as_deref(),
         program,
+        Settling {
+            busy,
+            asked,
+            refusal,
+            manager: manager.as_ref(),
+            serving_home: serving_home.as_deref(),
+        },
         progress,
     )
     .await?;
@@ -318,21 +333,28 @@ async fn serving_home(
         .then(|| home.to_path_buf())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the observed facts, the user's answer and the injected manager each decide part of the plan"
-)]
-async fn settle(
-    choice: &HomeChoice,
-    facts: &ServiceFacts,
+struct Settling<'a> {
     busy: bool,
     asked: Asked,
     refusal: Option<IncompatibleStore>,
-    manager: Option<&NativeServiceManager>,
-    serving_home: Option<&Path>,
+    manager: Option<&'a NativeServiceManager>,
+    serving_home: Option<&'a Path>,
+}
+
+async fn settle(
+    choice: &HomeChoice,
+    facts: &ServiceFacts,
     program: &ServiceProgram,
+    settling: Settling<'_>,
     progress: &mut dyn Progress,
 ) -> Result<RepairReceipt> {
+    let Settling {
+        busy,
+        asked,
+        refusal,
+        manager,
+        serving_home,
+    } = settling;
     use gents_protocol::operations::install_repair::RepairPlanBlocker;
     let plan = planning::plan(&observe(choice, facts, busy, asked));
     match plan.blocker {

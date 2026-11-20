@@ -215,6 +215,7 @@ fn tool_config(
         selected_plugins: Vec::new(),
         ceiling_plugins: None,
         registry_url: None,
+        plugin_builder: None,
     }
 }
 

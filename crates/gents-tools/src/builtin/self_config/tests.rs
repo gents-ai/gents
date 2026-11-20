@@ -752,6 +752,7 @@ fn config(categories: &[&str]) -> SelfConfigToolConfig {
         selected_plugins: Vec::new(),
         ceiling_plugins: None,
         registry_url: None,
+        plugin_builder: None,
     }
 }
 

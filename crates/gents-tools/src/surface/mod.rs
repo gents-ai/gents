@@ -174,6 +174,7 @@ pub struct SelfConfigToolConfig {
     /// The pack registry the host serves with (`gents server --registry`);
     /// `None` is the public registry. Never taken from a tool call.
     pub registry_url: Option<String>,
+    pub plugin_builder: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
@@ -377,7 +378,7 @@ impl ToolSurface {
         });
         let mut tools = self
             .host_tools
-            .build_native_tools_with_writethrough(writethrough)?;
+            .build_native_tools_with_writethrough(writethrough, &runtime.native_executables)?;
         if self.self_config.enabled {
             tools.push(Box::new(
                 gents_inference::usage_observation::ProviderLimitsTool {
@@ -389,24 +390,24 @@ impl ToolSurface {
         }
         if self.include_meta_tools {
             tools.extend(
-                build_meta_tools(
-                    runtime.node.clone(),
-                    runtime.mcp_pool.clone(),
-                    runtime.health_map.clone(),
-                    runtime.local_hostname.clone(),
-                    runtime.local_subnet.clone(),
-                    runtime.node_did.clone(),
-                    identity::Did::new(
+                build_meta_tools(crate::mcp::meta::MetaToolContext {
+                    node: runtime.node.clone(),
+                    mcp_pool: runtime.mcp_pool.clone(),
+                    health: runtime.health_map.clone(),
+                    local_hostname: runtime.local_hostname.clone(),
+                    local_subnet: runtime.local_subnet.clone(),
+                    node_did: runtime.node_did.clone(),
+                    actor: identity::Did::new(
                         runtime
                             .agent_identity
                             .as_ref()
                             .context("MCP tools require the selected agent identity")?
                             .did(),
                     )?,
-                    self.allowed_mcp_service_ids.clone(),
-                    self.remote_tools.clone().unwrap_or_default(),
-                    runtime.configuration.clone(),
-                )
+                    allowed_mcp_service_ids: self.allowed_mcp_service_ids.clone(),
+                    remote_tools: self.remote_tools.clone().unwrap_or_default(),
+                    configuration: runtime.configuration.clone(),
+                })
                 .await?,
             );
         }
@@ -520,10 +521,10 @@ impl ToolSurface {
             );
         }
         if let Some(lsp) = &self.lsp {
-            tools.push(Box::new(crate::native::lsp::LspTool::new(
-                lsp.clone(),
-                runtime.lsp_pool.clone(),
-            )?));
+            tools.push(Box::new(
+                crate::native::lsp::LspTool::new(lsp.clone(), runtime.lsp_pool.clone())?
+                    .with_native_executables(runtime.native_executables.clone()),
+            ));
         }
         if self.include_goal_tools {
             tools.extend(build_goal_tools(self.include_goal_creation));
@@ -551,18 +552,21 @@ impl ToolSurface {
         };
         tools.extend(
             crate::builtin::self_config::build_self_config_tools_with_runtime(
-                runtime.usage_cache.clone(),
-                runtime.node.clone(),
-                runtime.node_did.clone(),
-                runtime.agent_identity.clone(),
-                runtime.identity.clone(),
+                crate::builtin::self_config::SelfConfigRuntime {
+                    usage_cache: runtime.usage_cache.clone(),
+                    node: runtime.node.clone(),
+                    node_did: runtime.node_did.clone(),
+                    identity: runtime.agent_identity.clone(),
+                    runtime_identity: runtime.identity.clone(),
+                    plugins: runtime.plugins.clone(),
+                    tasks: runtime.tasks.clone(),
+                },
                 &SelfConfigToolConfig {
                     selected_plugins: self.plugin_tools.clone(),
                     registry_url: runtime.registry_url.clone(),
+                    plugin_builder: runtime.native_executables.host.clone(),
                     ..self.self_config.clone()
                 },
-                runtime.plugins.clone(),
-                runtime.tasks.clone(),
                 node_binding,
             ),
         );

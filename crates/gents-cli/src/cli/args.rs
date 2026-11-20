@@ -3,7 +3,7 @@ use gents_host::args::ServeArgs;
 use gents_host::args::StoreKeyCustodyArg;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use crate::{
     CONFIG_AFTER_HELP, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP,
@@ -354,27 +354,30 @@ pub(crate) enum DesktopCommand {
     #[command(
         about = "Preview or reset the managed home, desktop state, service and browser caches on this Mac; quit Gents first"
     )]
-    Reset {
-        /// Managed home; defaults to the desktop's reviewed home, then ~/.gents.
-        #[arg(long)]
-        home: Option<PathBuf>,
-        /// Desktop client state; defaults to the platform's app data folder.
-        #[arg(long)]
-        desktop_home: Option<PathBuf>,
-        /// Delete node/client/service data instead of backing it up; browser data is always cleared.
-        #[arg(long)]
-        delete: bool,
-        /// Exact confirmation returned by the preview for the chosen action.
-        #[arg(long)]
-        confirm: Option<String>,
-        #[arg(long, hide = true, requires = "confirm")]
-        wait_for_desktop: bool,
-        #[arg(long, hide = true, requires = "wait_for_desktop")]
-        desktop_pid: Option<u32>,
-        /// Desktop app executable that checks and clears browser data; defaults to the installed Gents app.
-        #[arg(long, requires = "confirm")]
-        desktop_executable: Option<PathBuf>,
-    },
+    Reset(DesktopReset),
+}
+
+#[derive(Args)]
+pub(crate) struct DesktopReset {
+    /// Managed home; defaults to the desktop's reviewed home, then ~/.gents.
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    /// Desktop client state; defaults to the platform's app data folder.
+    #[arg(long)]
+    pub(crate) desktop_home: Option<PathBuf>,
+    /// Delete node/client/service data instead of backing it up; browser data is always cleared.
+    #[arg(long)]
+    pub(crate) delete: bool,
+    /// Exact confirmation returned by the preview for the chosen action.
+    #[arg(long)]
+    pub(crate) confirm: Option<String>,
+    #[arg(long, hide = true, requires = "confirm")]
+    pub(crate) wait_for_desktop: bool,
+    #[arg(long, hide = true, requires = "wait_for_desktop")]
+    pub(crate) desktop_pid: Option<u32>,
+    /// Desktop app executable that checks and clears browser data; defaults to the installed Gents app.
+    #[arg(long, requires = "confirm")]
+    pub(crate) desktop_executable: Option<PathBuf>,
 }
 
 #[cfg(test)]

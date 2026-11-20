@@ -5,7 +5,7 @@ use gents_desktop_core::home_reset::{
 };
 use gents_store::client_journal::paths::DesktopPaths;
 
-use crate::cli::DesktopCommand;
+use crate::cli::{DesktopCommand, DesktopReset};
 use gents_service::native_service::NativeServiceConfig;
 use gents_service::native_service::NativeServiceManager;
 use gents_service::native_service::NativeServicePlatform;
@@ -14,29 +14,14 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
     if !cfg!(target_os = "macos") {
         bail!("Full desktop reset is supported on macOS.");
     }
-    let DesktopCommand::Reset {
-        home,
-        desktop_home,
-        delete,
-        confirm,
-        wait_for_desktop,
-        desktop_pid,
-        desktop_executable,
-    } = command;
-    let mut ready = false;
-    let mut retry = "gents runtime desktop reset".to_owned();
-    let result = reset(
-        home,
-        desktop_home,
-        delete,
-        confirm,
-        wait_for_desktop,
-        desktop_pid,
-        desktop_executable,
-        &mut ready,
-        &mut retry,
-    )
-    .await;
+    let DesktopCommand::Reset(request) = command;
+    let wait_for_desktop = request.wait_for_desktop;
+    let mut progress = ResetProgress {
+        ready: false,
+        retry: "gents runtime desktop reset".to_owned(),
+    };
+    let result = reset(request, &mut progress).await;
+    let ResetProgress { ready, retry } = progress;
     if wait_for_desktop && ready {
         let message = match &result {
             Ok(result) => match &result.backup_path {
@@ -58,18 +43,24 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+struct ResetProgress {
+    ready: bool,
+    retry: String,
+}
+
 async fn reset(
-    home: Option<std::path::PathBuf>,
-    desktop_home: Option<std::path::PathBuf>,
-    delete: bool,
-    confirm: Option<String>,
-    wait_for_desktop: bool,
-    desktop_pid: Option<u32>,
-    desktop_executable: Option<std::path::PathBuf>,
-    ready: &mut bool,
-    retry: &mut String,
+    request: DesktopReset,
+    progress: &mut ResetProgress,
 ) -> Result<ManagedServerResetResult> {
+    let DesktopReset {
+        home,
+        desktop_home,
+        delete,
+        confirm,
+        wait_for_desktop,
+        desktop_pid,
+        desktop_executable,
+    } = request;
     let desktop = select_desktop(
         desktop_home,
         &std::env::current_dir().context("resolving current directory")?,
@@ -80,7 +71,7 @@ async fn reset(
             .unwrap_or_else(|| gents_service::home_state::resolve_home_dir(None)),
     };
     let home = crate::absolutize(home)?;
-    *retry = retry_command(&home, desktop.root())?;
+    progress.retry = retry_command(&home, desktop.root())?;
     let config = NativeServiceConfig::new(home.clone(), std::env::current_exe()?)?;
     let user_home = resolve_user_home(Some(config.user_home.clone()))?;
     let definition = config.definition_path(NativeServicePlatform::current()?);
@@ -99,7 +90,7 @@ async fn reset(
         use std::io::Write;
         std::io::stdout().write_all(b"R")?;
         std::io::stdout().flush()?;
-        *ready = true;
+        progress.ready = true;
     }
     let _process = lock_desktop_process(&desktop, wait_for_desktop)?;
     if let Some(pid) = desktop_pid {
@@ -151,9 +142,13 @@ async fn reset(
     let _client_lock = lock_client_state(&desktop).await?;
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
-    retire_then_clear(&settled, disposition, backup.as_deref(), retry, || {
-        run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT)
-    })
+    retire_then_clear(
+        &settled,
+        disposition,
+        backup.as_deref(),
+        &progress.retry,
+        || run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT),
+    )
 }
 
 fn retire_then_clear(
@@ -495,13 +490,13 @@ mod tests {
             command:
                 crate::cli::RuntimeCommand::Desktop {
                     command:
-                        DesktopCommand::Reset {
+                        DesktopCommand::Reset(DesktopReset {
                             home: retry_home,
                             desktop_home,
                             delete,
                             confirm,
                             ..
-                        },
+                        }),
                 },
         }) = <crate::cli::Cli as clap::Parser>::try_parse_from(argv)
             .unwrap()
@@ -509,24 +504,27 @@ mod tests {
         else {
             panic!("the retry is not a desktop reset: {advertised}");
         };
-        let mut ready = false;
-        let mut next_retry = String::new();
+        let mut next = ResetProgress {
+            ready: false,
+            retry: String::new(),
+        };
         let preview = reset(
-            retry_home,
-            desktop_home,
-            delete,
-            confirm,
-            false,
-            None,
-            None,
-            &mut ready,
-            &mut next_retry,
+            DesktopReset {
+                home: retry_home,
+                desktop_home,
+                delete,
+                confirm,
+                wait_for_desktop: false,
+                desktop_pid: None,
+                desktop_executable: None,
+            },
+            &mut next,
         )
         .await
         .unwrap();
         assert!(!preview.completed);
         assert_eq!(preview.managed_home.as_deref(), home.to_str());
-        assert_eq!(next_retry, retry);
+        assert_eq!(next.retry, retry);
     }
 
     #[test]
@@ -539,7 +537,7 @@ mod tests {
         let Some(crate::cli::Command::Runtime {
             command:
                 crate::cli::RuntimeCommand::Desktop {
-                    command: DesktopCommand::Reset { desktop_home, .. },
+                    command: DesktopCommand::Reset(DesktopReset { desktop_home, .. }),
                 },
         }) = <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(&retry).unwrap())
             .unwrap()

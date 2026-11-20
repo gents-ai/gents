@@ -1154,13 +1154,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if journey.is_editor(scenario::HISTORY) {
         let options = history.context("history options")?;
         let mut evidence = editor_history::populate(
-            &mut client,
-            &mut id,
-            &access,
-            node_did,
-            session,
+            editor_history::EditorRun {
+                client: &mut client,
+                id: &mut id,
+                access: &access,
+                node: node_did,
+                session,
+                author: &client_did,
+            },
             agent_did,
-            &client_did,
             options,
             root,
         )
@@ -1214,12 +1216,14 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
 
         if options.profile {
             let evidence = editor_history::verify_profile(
-                &mut client,
-                &mut id,
-                &access,
-                node_did,
-                session,
-                &client_did,
+                editor_history::EditorRun {
+                    client: &mut client,
+                    id: &mut id,
+                    access: &access,
+                    node: node_did,
+                    session,
+                    author: &client_did,
+                },
                 options,
                 activity_profile,
             )

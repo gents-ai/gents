@@ -315,7 +315,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
         let configured_from = active_generation(&deployment, node).context("the serving runtime reports its active generation")?;
-        configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref(), undo.as_ref(), fault.as_ref(), replacement).await?;
+        configure(&mut client, &mut id, Configure { node, agent: &agent, target: &target, goal, gates: &gates, editor, questions: questions.as_ref(), related_work: related_work.as_ref(), inventory: inventory.as_ref(), undo: undo.as_ref(), fault: fault.as_ref(), replacement }).await?;
         if goal || !gates.is_empty() {
             wait_configuration_active(&mut client, &mut updates, &mut id, node, configured_from).await?;
         }
@@ -554,23 +554,36 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     result.and(released).and(stopped).and(drained)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn configure(
-    client: &mut Attachment,
-    id: &mut u32,
-    node: &str,
-    agent: &str,
-    target: &InferenceTarget,
+struct Configure<'a> {
+    node: &'a str,
+    agent: &'a str,
+    target: &'a InferenceTarget,
     goal: bool,
-    gates: &[live_gate::HeldTool],
-    editor: Option<&str>,
-    questions: Option<&live_questions::Questions>,
-    related_work: Option<&live_related_work::RelatedWork>,
-    inventory: Option<&live_inventory::Inventory>,
-    undo: Option<&live_undo::Undo>,
-    fault: Option<&live_faults::FaultRelay>,
+    gates: &'a [live_gate::HeldTool],
+    editor: Option<&'a str>,
+    questions: Option<&'a live_questions::Questions>,
+    related_work: Option<&'a live_related_work::RelatedWork>,
+    inventory: Option<&'a live_inventory::Inventory>,
+    undo: Option<&'a live_undo::Undo>,
+    fault: Option<&'a live_faults::FaultRelay>,
     replacement: bool,
-) -> Result<()> {
+}
+
+async fn configure(client: &mut Attachment, id: &mut u32, inputs: Configure<'_>) -> Result<()> {
+    let Configure {
+        node,
+        agent,
+        target,
+        goal,
+        gates,
+        editor,
+        questions,
+        related_work,
+        inventory,
+        undo,
+        fault,
+        replacement,
+    } = inputs;
     let setup = client
         .try_call(*id, "client_inference_setup_state", json!({"nodeDid":node}))
         .await?;

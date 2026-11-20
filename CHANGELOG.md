@@ -101,6 +101,10 @@ source consistency checks, not a separate runtime compatibility version.
 - Breaking: `gents init` and the interactive backend setup take the inference
   endpoint only from `--inference-url` (or a preset); `INFERENCE_ENDPOINT` is
   no longer read.
+- Breaking: `gents server --fs-runner PATH` replaces `GENTS_FS_RUNNER` to run
+  the native filesystem tools through a standalone `gents-fs-runner`. Without
+  it the serving executable runs them, and builds plugin source, through its
+  own hidden commands (#1764).
 
 ## 1.0.0-rc2 - 2026-11-10
 

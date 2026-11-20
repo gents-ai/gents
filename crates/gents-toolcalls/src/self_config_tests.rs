@@ -4416,14 +4416,16 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     let mut tool_config = config(&["node", "profile", "backend"]);
     tool_config.agent_did = fixture.agent_did().to_owned();
     let tools = build_self_config_tools_with_runtime(
-        cache,
-        fixture.db.node.clone(),
-        fixture.node_did().to_owned(),
-        Some(fixture.agent.clone()),
-        Some(fixture.db.node_identity.clone()),
+        SelfConfigRuntime {
+            usage_cache: cache,
+            node: fixture.db.node.clone(),
+            node_did: fixture.node_did().to_owned(),
+            identity: Some(fixture.agent.clone()),
+            runtime_identity: Some(fixture.db.node_identity.clone()),
+            plugins: test_plugins(),
+            tasks: Arc::new(gents_tools::task_run::NoTaskRunService),
+        },
         &tool_config,
-        test_plugins(),
-        Arc::new(gents_tools::task_run::NoTaskRunService),
         Some(fixture.node_binding.clone()),
     );
     let config = tools

@@ -123,15 +123,19 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        None,
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 
@@ -163,15 +167,19 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        None,
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 
@@ -533,15 +541,19 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenRouter",
-        Some(raw_api_key),
-        None,
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenRouter",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: Some(raw_api_key),
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 
@@ -839,15 +851,19 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        None,
-        &model_name,
         &tools_id,
-        "ReadOnly",
-        "ReadOnly",
-        "read-only operating mode",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadOnly",
+            bash_mode: "ReadOnly",
+            prompt_snippet: "read-only operating mode",
+        },
     )
     .await?;
 
@@ -1345,15 +1361,19 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         &graphql,
         &node_did,
         &backend_id,
-        mock_endpoint.endpoint(),
-        "OpenAiCompatible",
-        None,
-        None,
-        &model_name,
         &tools_id,
-        "ReadWrite",
-        "Unrestricted",
-        "write-capable local tools",
+        ExpectedBackend {
+            provider_kind: "OpenAiCompatible",
+            endpoint: mock_endpoint.endpoint(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: &model_name,
+        },
+        ExpectedModes {
+            file_tools_mode: "ReadWrite",
+            bash_mode: "Unrestricted",
+            prompt_snippet: "write-capable local tools",
+        },
     )
     .await?;
     let response = graphql_query(

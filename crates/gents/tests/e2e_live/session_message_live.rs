@@ -28,11 +28,8 @@ use crate::support::live_inference::{
     live_target, terminal_assistant_answer, wait_for_assistant_answer, wait_for_request_terminal,
     InferenceTarget, LiveAgentSpec, LiveUser,
 };
-use crate::support::{
-    first_optional_row,
-    snapshots::{fetch_runtime_snapshot, SnapshotChanges, SnapshotReader},
-    test_db, TestDb,
-};
+use crate::support::{first_optional_row, snapshots::fetch_runtime_snapshot, test_db, TestDb};
+use gents_store::test_support::snapshot_reader::{SnapshotChanges, SnapshotReader};
 use gents_store::test_support::STALL_CEILING;
 
 const RESEARCHER_AGENT_NAME: &str = "live-researcher";
@@ -3354,7 +3351,7 @@ struct ToolCallRow {
 async fn timeline_tools(
     node: &LiveUser,
     request_id: &str,
-) -> Vec<gents_observe::observe::run_timeline::TimelineToolCallRow> {
+) -> Vec<gents_observe::observe::run_timeline::rows::TimelineToolCallRow> {
     load_timeline(node, request_id).await.tool_calls
 }
 
@@ -3362,7 +3359,7 @@ async fn timeline_tools(
 async fn load_timeline(
     node: &LiveUser,
     request_id: &str,
-) -> gents_observe::observe::run_timeline::RunTimelineRows {
+) -> gents_observe::observe::run_timeline::rows::RunTimelineRows {
     // A published header can name a closing segment whose parent link the
     // writer has not committed yet; that dependency is incomplete, not denied.
     let deadline = tokio::time::Instant::now() + STALL_CEILING;
@@ -3392,7 +3389,7 @@ async fn load_timeline(
     }
 }
 
-fn tool_row(row: gents_observe::observe::run_timeline::TimelineToolCallRow) -> ToolCallRow {
+fn tool_row(row: gents_observe::observe::run_timeline::rows::TimelineToolCallRow) -> ToolCallRow {
     ToolCallRow {
         doc_id: row
             .doc_id

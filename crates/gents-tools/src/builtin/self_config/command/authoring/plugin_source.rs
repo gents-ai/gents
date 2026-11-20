@@ -142,8 +142,14 @@ impl ConfigCommandTool {
         .context("the plugin source task did not finish")??;
 
         self.execution.enter_mutation();
-        let build = crate::native::run_plugin_build(&self.envelope, &prepared.root, &prepared.dir, true)
-            .await
+        let build = crate::native::run_plugin_build(
+            &self.envelope,
+            &prepared.root,
+            &prepared.dir,
+            true,
+            self.plugin_builder.as_deref(),
+        )
+        .await
             .map_err(|error| {
                 anyhow!(
                     "plugin {coordinate} did not build; nothing was installed. Its source document is saved: fix it with [\"plugin\",\"build\",{id:?}] and set.source, or read it with [\"plugin-source\",\"get\",{id:?}].\n{error:#}"

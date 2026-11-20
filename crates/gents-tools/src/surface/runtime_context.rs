@@ -5,6 +5,7 @@ use defra_node::Node as EmbeddedNode;
 use crate::mcp::health::ServiceHealthMap;
 use crate::mcp::pool::McpPool;
 use crate::native::lsp::LspPool;
+use crate::native::NativeExecutables;
 use crate::plugin_host::{NoPluginHost, PluginHost};
 use crate::task_run::{NoTaskRunService, TaskRunService};
 use gents_store::identity::NodeIdentity;
@@ -25,6 +26,7 @@ pub struct ToolRuntimeContext {
     pub(super) plugins: Arc<dyn PluginHost>,
     pub(super) tasks: Arc<dyn TaskRunService>,
     pub(super) registry_url: Option<String>,
+    pub(super) native_executables: NativeExecutables,
 }
 
 impl ToolRuntimeContext {
@@ -70,6 +72,7 @@ impl ToolRuntimeContext {
             plugins: Arc::new(NoPluginHost),
             tasks: Arc::new(NoTaskRunService),
             registry_url: None,
+            native_executables: NativeExecutables::default(),
         }
     }
 
@@ -93,6 +96,7 @@ impl ToolRuntimeContext {
             plugins: Arc::new(NoPluginHost),
             tasks: Arc::new(NoTaskRunService),
             registry_url: None,
+            native_executables: NativeExecutables::default(),
         }
     }
 
@@ -139,6 +143,11 @@ impl ToolRuntimeContext {
     /// The pack registry the host serves with; `None` is the public registry.
     pub fn with_registry_url(mut self, registry_url: Option<String>) -> Self {
         self.registry_url = registry_url;
+        self
+    }
+
+    pub fn with_native_executables(mut self, executables: NativeExecutables) -> Self {
+        self.native_executables = executables;
         self
     }
 

@@ -12,9 +12,11 @@ use crate::observe::adapter_projection::{
 };
 
 use crate::observe::run_timeline::{
-    build_run_timeline, RunTimelineRows, TimelineInferenceCallRow, TimelineMessageRow,
-    TimelineRenderedRequestRef, TimelineRenderedRequestRow, TimelineRequestRow,
-    TimelineToolCallRow,
+    build::build_run_timeline,
+    rows::{
+        RunTimelineRows, TimelineInferenceCallRow, TimelineMessageRow, TimelineRenderedRequestRef,
+        TimelineRenderedRequestRow, TimelineRequestRow, TimelineToolCallRow,
+    },
 };
 use gents_protocol::message::Message;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -62,7 +64,7 @@ fn message_row(
     }
 }
 
-fn timeline_with_captures() -> crate::observe::run_timeline::RunTimeline {
+fn timeline_with_captures() -> crate::observe::run_timeline::events::RunTimeline {
     let provenance = serde_json::json!({
         "manifest_version": 3,
         "status": "captured_only",
@@ -695,7 +697,7 @@ fn compaction_is_visible_without_fabricating_external_messages() {
             session_id: Some("session-root".to_string()),
             ..Default::default()
         }],
-        compactions: vec![crate::observe::run_timeline::TimelineCompactionRow {
+        compactions: vec![crate::observe::run_timeline::rows::TimelineCompactionRow {
             compaction_key: "session-root:1".to_string(),
             request_id: Some("req-root".to_string()),
             request_doc_id: Some("doc-root".to_string()),
@@ -1357,7 +1359,7 @@ async fn an_agent_new_row_links_the_request_it_caused() {
         Some(message.caused_request_id.as_str())
     );
 
-    let timeline = crate::observe::run_timeline::build_run_timeline(rows);
+    let timeline = crate::observe::run_timeline::build::build_run_timeline(rows);
     let envelope = build_adapter_projection(
         AdapterProjectionKind::AtifTrajectory,
         &timeline,
