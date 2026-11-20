@@ -54,7 +54,11 @@ impl Drop for ReleaseSignerOnDrop {
     }
 }
 
-fn observe(home: &std::path::Path, data: &std::path::Path, node: &EmbeddedNode) -> (bool, bool) {
+fn observe(
+    home: &std::path::Path,
+    data: &std::path::Path,
+    node: &Arc<EmbeddedNode>,
+) -> (bool, bool) {
     let claim_held = crate::local::home::lock_store(home, data).is_err();
     let gate = mutation_write_gate(node);
     let mutation_gate_held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
