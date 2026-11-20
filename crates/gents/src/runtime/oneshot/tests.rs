@@ -215,20 +215,22 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         let result = run_oneshot_owned(
             node.clone(),
             &behavior.agent,
-            &behavior.tools,
-            None,
-            &prompt,
+            OneshotInputs {
+                tool_config: &behavior.tools,
+                provider_family: None,
+                prompt: "exercise explicit renewal during silence",
+                prompt_builder: prompt,
+                output_obligations: &[],
+                tools: Arc::new(Vec::new()),
+                background_tool_registry: BackgroundToolRegistry::default(),
+                lsp_pool: gents_tools::native::lsp::LspPool::new(),
+            },
             PartialThenEmptyProvider {
                 call: Default::default(),
                 observations: observations.clone(),
                 eof: eof.clone(),
             },
-            "exercise explicit renewal during silence",
-            Arc::new(Vec::new()),
             config,
-            &[],
-            BackgroundToolRegistry::default(),
-            gents_tools::native::lsp::LspPool::new(),
         )
         .await;
         returned.cancel();
@@ -523,20 +525,22 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         let result = run_oneshot_owned(
             node.clone(),
             &behavior.agent,
-            &behavior.tools,
-            None,
-            &prompt,
+            OneshotInputs {
+                tool_config: &behavior.tools,
+                provider_family: None,
+                prompt: "finish this request",
+                prompt_builder: prompt,
+                output_obligations: &obligations,
+                tools,
+                background_tool_registry: BackgroundToolRegistry::default(),
+                lsp_pool: runtime.lsp_pool.clone(),
+            },
             OutputObligationProvider {
                 call: Default::default(),
                 calls: calls.clone(),
                 access: agent_access.clone(),
             },
-            "finish this request",
-            tools,
             config,
-            &obligations,
-            BackgroundToolRegistry::default(),
-            runtime.lsp_pool.clone(),
         )
         .await
         .unwrap();
@@ -684,16 +688,18 @@ async fn oneshot_bash_uses_owned_request_context() {
     let result = run_oneshot_owned(
         node.clone(),
         &agent.agent,
-        &agent.tools,
-        None,
-        &prompt,
+        OneshotInputs {
+            tool_config: &agent.tools,
+            provider_family: None,
+            prompt: "inspect the directory",
+            prompt_builder: prompt,
+            output_obligations: &[],
+            tools,
+            background_tool_registry: BackgroundToolRegistry::default(),
+            lsp_pool: runtime.lsp_pool.clone(),
+        },
         OneshotBashProvider(calls.clone(), Default::default()),
-        "inspect the directory",
-        tools,
         config,
-        &[],
-        BackgroundToolRegistry::default(),
-        runtime.lsp_pool.clone(),
     )
     .await
     .unwrap();

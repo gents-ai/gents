@@ -688,14 +688,12 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
     };
 
     let v1 = plugin_manifest("acme", "widget", "echo", "1.0.0");
-    gents_pack::plugin::install::install_pack_plugins_with_bindings(
+    gents_pack::plugin::install::install_pack_plugins_and_publish(
         home.path(),
         &v1,
         "sha256:v1",
         asset_v1,
         false,
-        None,
-        &BTreeMap::new(),
         |_| Ok(()),
     )
     .unwrap();
@@ -713,14 +711,12 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
             .context("unexpected asset")
     };
     let v2 = plugin_manifest("acme", "widget", "echo", "1.1.0");
-    let error = gents_pack::plugin::install::install_pack_plugins_with_bindings(
+    let error = gents_pack::plugin::install::install_pack_plugins_and_publish(
         home.path(),
         &v2,
         "sha256:v2",
         asset_v2,
         false,
-        None,
-        &BTreeMap::new(),
         |_| anyhow::bail!("local publication rejected"),
     )
     .unwrap_err();
@@ -740,14 +736,12 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
             .context("unexpected asset")
     };
     let first_time = plugin_manifest("acme", "brand_new", "brandnew", "1.0.0");
-    let error = gents_pack::plugin::install::install_pack_plugins_with_bindings(
+    let error = gents_pack::plugin::install::install_pack_plugins_and_publish(
         home.path(),
         &first_time,
         "sha256:new",
         asset_new,
         false,
-        None,
-        &BTreeMap::new(),
         |_| anyhow::bail!("local publication rejected"),
     );
     assert!(error.is_err());

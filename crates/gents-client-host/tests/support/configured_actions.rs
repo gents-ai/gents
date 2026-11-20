@@ -1,11 +1,8 @@
-use anyhow::{ensure, Context, Result};
+use anyhow::Result;
 use gents_documents::apply_desired_state_plan;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents_store::graphql::escape_graphql_string;
 use gents_store::{collection::Collection, config_client::ConfigAccess};
-use serde_json::{json, Value};
-
-use super::Attachment;
+use serde_json::json;
 
 pub async fn seed_editor_settings(
     access: &ConfigAccess,
@@ -33,84 +30,4 @@ pub async fn seed_editor_settings(
             })
         })
         .await
-}
-
-pub async fn verify_editor_settings(
-    access: &ConfigAccess,
-    node_did: &str,
-    agent_did: &str,
-) -> Result<()> {
-    let response = access.execute(&format!(r#"{{ Task(filter: {{node_did: {{_eq: "{}"}}, task_id: {{_eq: "editor-settings"}}}}) {{ display_name prompt_template agent_did }} }}"#,
-        escape_graphql_string(node_did))).await?;
-    let rows = response["data"]["Task"]
-        .as_array()
-        .context("saved editor settings")?;
-    ensure!(rows.len() == 1 && rows[0]["display_name"] == "Editor saved settings"
-        && rows[0]["prompt_template"] == "Editor fixture task" && rows[0]["agent_did"] == agent_did,
-        "the editor must save canonical fields while retaining the configured task owner: {response}");
-    Ok(())
-}
-
-async fn call(client: &mut Attachment, id: &mut u32, command: &str, args: Value) -> Value {
-    let result = client.call(*id, command, args).await;
-    *id += 1;
-    result
-}
-
-pub async fn exercise(
-    client: &mut Attachment,
-    id: &mut u32,
-    access: &ConfigAccess,
-    node_did: &str,
-) -> Result<()> {
-    let backends = access
-        .execute(&format!(
-            r#"{{ InferenceBackendMetadata(filter: {{node_did: {{_eq: "{}"}}}}) {{ backend_id }} }}"#,
-            escape_graphql_string(node_did)
-        ))
-        .await?;
-    let backend_id = backends["data"]["InferenceBackendMetadata"]
-        .as_array()
-        .and_then(|rows| rows.first())
-        .and_then(|row| row["backend_id"].as_str())
-        .context("configured inference backend")?
-        .to_owned();
-    let auth_args = json!({"request":{"nodeDid":node_did,"backendId":backend_id}});
-    let original_auth = call(
-        client,
-        id,
-        "client_backend_authentication",
-        auth_args.clone(),
-    )
-    .await;
-    let save_auth = json!({"request":{"nodeDid":node_did,"backendId":backend_id,
-        "revision":original_auth["revision"],"auth":{"kind":"api_key","key":"private-native-authentication-fixture"}}});
-    call(
-        client,
-        id,
-        "client_backend_authentication_save",
-        save_auth.clone(),
-    )
-    .await;
-    let observed_auth = call(client, id, "client_backend_authentication", auth_args).await;
-    // A saved raw key becomes an opaque reference to a runtime-private
-    // BackendCredential; the metadata never holds the key itself.
-    ensure!(
-        observed_auth["authKind"] == "credential"
-            && original_auth["authKind"] != "credential"
-            && observed_auth["revision"] != original_auth["revision"],
-        "the saved key must replace the original authentication with a credential reference: {original_auth} -> {observed_auth}"
-    );
-    ensure!(!observed_auth
-        .to_string()
-        .contains("private-native-authentication-fixture"));
-    let conflict = client
-        .try_call(*id, "client_backend_authentication_save", save_auth)
-        .await;
-    *id += 1;
-    ensure!(
-        conflict.is_err(),
-        "authentication changes must reject stale editor revisions"
-    );
-    Ok(())
 }

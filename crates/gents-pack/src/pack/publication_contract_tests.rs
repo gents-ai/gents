@@ -13,8 +13,10 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 home.path(),
                 &previous,
                 false,
-                None,
-                &BTreeMap::new(),
+                super::plugin_lifecycle::PluginSlotBindings {
+                    owner: None,
+                    bindings: &BTreeMap::new(),
+                },
                 crate::pack::InstalledVia::Operator,
                 super::PackSource::local(std::path::Path::new("fixture.afb")),
                 |_, _| async { Ok(()) },
@@ -26,14 +28,12 @@ async fn generated_local_publication_survives_notification_outcomes() {
         let bindings = BTreeMap::new();
         match case.input.outcome.as_str() {
             "local_failure" => {
-                let result = crate::plugin::install::install_pack_plugins_with_bindings(
+                let result = crate::plugin::install::install_pack_plugins_and_publish(
                     home.path(),
                     next.manifest(),
                     next.digest(),
                     |path| next.asset(path),
                     false,
-                    None,
-                    &bindings,
                     |_| {
                         assert!(crate::plugin::store::try_lock_store(home.path()).is_err());
                         anyhow::bail!("rejected local publication")
@@ -47,8 +47,10 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     home.path(),
                     &next,
                     false,
-                    None,
-                    &bindings,
+                    super::plugin_lifecycle::PluginSlotBindings {
+                        owner: None,
+                        bindings: &bindings,
+                    },
                     crate::pack::InstalledVia::Operator,
                     super::PackSource::local(std::path::Path::new("fixture.afb")),
                     move |_, _| async move {
@@ -65,8 +67,10 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     home.path(),
                     &next,
                     false,
-                    None,
-                    &bindings,
+                    super::plugin_lifecycle::PluginSlotBindings {
+                        owner: None,
+                        bindings: &bindings,
+                    },
                     crate::pack::InstalledVia::Operator,
                     super::PackSource::local(std::path::Path::new("fixture.afb")),
                     move |_, _| async move {
@@ -91,8 +95,10 @@ async fn generated_local_publication_survives_notification_outcomes() {
                         &caller_home,
                         &next,
                         false,
-                        None,
-                        &bindings,
+                        super::plugin_lifecycle::PluginSlotBindings {
+                            owner: None,
+                            bindings: &bindings,
+                        },
                         crate::pack::InstalledVia::Operator,
                         super::PackSource::local(std::path::Path::new("fixture.afb")),
                         move |_, _| async move {
@@ -160,8 +166,10 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
         home.path(),
         &archive,
         false,
-        None,
-        &bindings,
+        super::plugin_lifecycle::PluginSlotBindings {
+            owner: None,
+            bindings: &bindings,
+        },
         crate::pack::InstalledVia::Operator,
         super::PackSource::local(std::path::Path::new("fixture.afb")),
         |_, _| async { Ok(()) },
@@ -227,8 +235,10 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
         home.path(),
         &archive,
         false,
-        None,
-        &bindings,
+        super::plugin_lifecycle::PluginSlotBindings {
+            owner: None,
+            bindings: &bindings,
+        },
         crate::pack::InstalledVia::Operator,
         super::PackSource::local(std::path::Path::new("fixture.afb")),
         |_, _| async { Ok(()) },
@@ -252,8 +262,10 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         home.path(),
         &old,
         false,
-        None,
-        &BTreeMap::new(),
+        super::plugin_lifecycle::PluginSlotBindings {
+            owner: None,
+            bindings: &BTreeMap::new(),
+        },
         crate::pack::InstalledVia::Operator,
         super::PackSource::local(std::path::Path::new("fixture.afb")),
         |_, _| async { Ok(()) },
@@ -304,8 +316,10 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         home.path(),
         &next,
         false,
-        Some(&owner),
-        &BTreeMap::new(),
+        super::plugin_lifecycle::PluginSlotBindings {
+            owner: Some(&owner),
+            bindings: &BTreeMap::new(),
+        },
         crate::pack::InstalledVia::Operator,
         super::PackSource::local(std::path::Path::new("fixture.afb")),
         move |identity, changes| async move {

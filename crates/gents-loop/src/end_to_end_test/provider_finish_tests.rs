@@ -220,15 +220,15 @@ async fn late_token_limit_from_superseded_attempt_does_not_change_retry() {
     .await;
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct ResponsesArgs {
     text: String,
-    #[allow(dead_code)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<ResponsesMode>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 enum ResponsesMode {
     Normal,
 }
@@ -262,7 +262,10 @@ impl Tool for ResponsesTool {
         args: Self::Args,
         _context: &crate::tool::ToolCallEnvelope,
     ) -> Result<String, Self::Error> {
-        self.0.lock().unwrap().push(args.text.clone());
+        self.0
+            .lock()
+            .unwrap()
+            .push(serde_json::to_string(&args).unwrap());
         Ok(args.text.to_uppercase())
     }
 }
@@ -486,7 +489,7 @@ async fn responses_token_limit_does_not_change_valid_calls_or_later_turns() {
     ])
     .await;
     assert!(error.is_none(), "{error:?}");
-    assert_eq!(calls, ["ok"]);
+    assert_eq!(calls, [r#"{"text":"ok"}"#]);
     assert_eq!(outcomes.len(), 2);
     assert!(outcomes[0].contains("OK"));
     let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(

@@ -361,15 +361,21 @@ mod tests {
         declaration.manifold = None;
         gents_pack::plugin::install::install_from_pack(
             home.path(),
-            "team",
-            "team/echo",
-            "1.0.0",
-            "sha256:test-pack-digest",
-            &declaration,
-            &bytes,
-            None,
-            Default::default(),
-            Default::default(),
+            &gents_pack::plugin::install::OwningPack {
+                namespace: "team",
+                coordinate: "team/echo",
+                version: "1.0.0",
+                digest: "sha256:test-pack-digest",
+                gents_version: None,
+            },
+            gents_pack::plugin::install::ShippedPlugin {
+                declaration: &declaration,
+                artifact: &bytes,
+                instructions: None,
+                data_unique_keys: Default::default(),
+                data_collection_fields: Default::default(),
+                data_collection_schemas: Default::default(),
+            },
             false,
         )
         .unwrap();
@@ -394,15 +400,21 @@ mod tests {
         let empty_home = tempfile::tempdir().unwrap();
         assert!(gents_pack::plugin::install::install_from_pack(
             empty_home.path(),
-            "team",
-            "team/echo",
-            "1.0.0",
-            "sha256:test-pack-digest",
-            &invalid.declaration,
-            &bytes,
-            None,
-            Default::default(),
-            Default::default(),
+            &gents_pack::plugin::install::OwningPack {
+                namespace: "team",
+                coordinate: "team/echo",
+                version: "1.0.0",
+                digest: "sha256:test-pack-digest",
+                gents_version: None
+            },
+            gents_pack::plugin::install::ShippedPlugin {
+                declaration: &invalid.declaration,
+                artifact: &bytes,
+                instructions: None,
+                data_unique_keys: Default::default(),
+                data_collection_fields: Default::default(),
+                data_collection_schemas: Default::default()
+            },
             false
         )
         .is_err());
@@ -531,15 +543,21 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let error = gents_pack::plugin::install::install_from_pack(
             home.path(),
-            "team",
-            "team/echo",
-            "1.0.0",
-            "sha256:test-pack-digest",
-            &declaration,
-            &bytes,
-            None,
-            Default::default(),
-            Default::default(),
+            &gents_pack::plugin::install::OwningPack {
+                namespace: "team",
+                coordinate: "team/echo",
+                version: "1.0.0",
+                digest: "sha256:test-pack-digest",
+                gents_version: None,
+            },
+            gents_pack::plugin::install::ShippedPlugin {
+                declaration: &declaration,
+                artifact: &bytes,
+                instructions: None,
+                data_unique_keys: Default::default(),
+                data_collection_fields: Default::default(),
+                data_collection_schemas: Default::default(),
+            },
             false,
         )
         .unwrap_err();
@@ -551,30 +569,42 @@ mod tests {
 
         let record = gents_pack::plugin::install::install_from_pack(
             home.path(),
-            "team",
-            "team/echo",
-            "1.0.0",
-            "sha256:test-pack-digest",
-            &declaration,
-            &bytes,
-            None,
-            Default::default(),
-            Default::default(),
+            &gents_pack::plugin::install::OwningPack {
+                namespace: "team",
+                coordinate: "team/echo",
+                version: "1.0.0",
+                digest: "sha256:test-pack-digest",
+                gents_version: None,
+            },
+            gents_pack::plugin::install::ShippedPlugin {
+                declaration: &declaration,
+                artifact: &bytes,
+                instructions: None,
+                data_unique_keys: Default::default(),
+                data_collection_fields: Default::default(),
+                data_collection_schemas: Default::default(),
+            },
             true,
         )
         .unwrap();
         assert!(record.granted.is_some());
         gents_pack::plugin::install::install_from_pack(
             home.path(),
-            "team",
-            "team/echo",
-            "1.0.1",
-            "sha256:test-pack-digest-2",
-            &declaration,
-            &bytes,
-            None,
-            Default::default(),
-            Default::default(),
+            &gents_pack::plugin::install::OwningPack {
+                namespace: "team",
+                coordinate: "team/echo",
+                version: "1.0.1",
+                digest: "sha256:test-pack-digest-2",
+                gents_version: None,
+            },
+            gents_pack::plugin::install::ShippedPlugin {
+                declaration: &declaration,
+                artifact: &bytes,
+                instructions: None,
+                data_unique_keys: Default::default(),
+                data_collection_fields: Default::default(),
+                data_collection_schemas: Default::default(),
+            },
             false,
         )
         .expect("the recorded grant covers the same request");

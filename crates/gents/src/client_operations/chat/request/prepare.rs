@@ -22,31 +22,38 @@ fn normalize_authored_content<'a>(input: &RequestInput, content: &'a str) -> Res
     Ok(content.trim())
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct RequestSubmission<'a> {
+    pub session_id: &'a str,
+    pub node_did: &'a str,
+    pub requester_did: &'a str,
+    pub agent_did: Option<&'a str>,
+    pub content: &'a str,
+}
+
 pub async fn prepare_request_submission(
     access: &ConfigAccess,
     store: &ClientStore,
-    session_id: &str,
-    node_did: &str,
-    requester_did: &str,
+    submission: RequestSubmission<'_>,
     signer: &dyn gents_store::identity::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
-    content: &str,
-    agent_did: Option<&str>,
     options: SubmitRequestOptions,
-    request_id: Option<&str>,
 ) -> Result<(
     SubmittedRequest,
     gents_protocol::request_admission::AgentRequestCreate,
 )> {
+    let RequestSubmission {
+        session_id,
+        node_did,
+        requester_did,
+        agent_did,
+        content,
+    } = submission;
     let session_id = normalize_required("session_id", session_id)?;
     let node_did = normalize_required("node_did", node_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
     let content = normalize_authored_content(&options.input, content)?.to_owned();
     let (content, options) = prepare_prompt_submission(&content, options)?;
-    let request_id = request_id
-        .map(str::to_owned)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let request_id = Uuid::new_v4().to_string();
     let binding = resolve_agent_binding(store, node_did, agent_did, Some(session_id))?;
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 

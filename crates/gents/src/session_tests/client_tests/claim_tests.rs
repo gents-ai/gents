@@ -317,7 +317,9 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         claim, claim_paused, claim_unavailable, execute_claimed, prepare, read_receipt,
         recover_claim, submit, ClaimPause,
     };
-    use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        publish_accepted_on_claimed_request, AcceptedFixtureCall,
+    };
 
     let grant_cases = gents_lean_vocab::families::native_refinement_grant_scenario::cases();
     let mut publications = Vec::new();
@@ -443,12 +445,14 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         node.clone(),
         &mut lifecycle,
         runtime.did(),
-        0,
-        "bash",
-        "control-call",
-        serde_json::json!({"command":"work"}),
-        AwaitMode::Background,
-        false,
+        AcceptedFixtureCall {
+            turn: 0,
+            tool_name: "bash",
+            tool_call_id: "control-call",
+            arguments: serde_json::json!({"command":"work"}),
+            await_mode: AwaitMode::Background,
+            start_running: false,
+        },
     )
     .await
     .unwrap();

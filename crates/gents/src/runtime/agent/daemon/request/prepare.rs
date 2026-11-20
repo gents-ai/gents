@@ -18,40 +18,39 @@ use gents_session::session;
 use gents_tools::runtime_context::ToolWorkspaceScope;
 
 #[derive(Clone, Copy)]
-pub(super) struct RequestInputs<'a> {
-    pub(super) request: &'a AgentRequest,
-    pub(super) lifecycle: &'a gents_session::request::lifecycle::RequestLifecycle,
-    pub(super) request_commit_cid: &'a String,
-    pub(super) agent_name: &'a str,
-    pub(super) trace_attrs: &'a RequestTraceAttrs,
-    pub(super) aggregate_token_budget: &'a Option<AggregateTokenBudget>,
-    pub(super) context_calibration: &'a ContextCalibration,
-    pub(super) effective_seed: Option<i64>,
-    pub(super) resume_from_history: bool,
-    pub(super) resume_same_request: bool,
+pub(in crate::runtime::agent::daemon) struct RequestInputs<'a> {
+    pub(in crate::runtime::agent::daemon) request: &'a AgentRequest,
+    pub(in crate::runtime::agent::daemon) request_commit_cid: &'a String,
+    pub(in crate::runtime::agent::daemon) agent_name: &'a str,
+    pub(in crate::runtime::agent::daemon) trace_attrs: &'a RequestTraceAttrs,
+    pub(in crate::runtime::agent::daemon) aggregate_token_budget: &'a Option<AggregateTokenBudget>,
+    pub(in crate::runtime::agent::daemon) context_calibration: &'a ContextCalibration,
+    pub(in crate::runtime::agent::daemon) effective_seed: Option<i64>,
+    pub(in crate::runtime::agent::daemon) resume_from_history: bool,
+    pub(in crate::runtime::agent::daemon) resume_same_request: bool,
     /// The request's admission, from which its calls are admitted.
-    pub(super) admission: &'a AdmissionCallContext,
+    pub(in crate::runtime::agent::daemon) admission: &'a AdmissionCallContext,
     /// The request's capture scope, which its provider calls are captured in.
-    pub(super) capture:
+    pub(in crate::runtime::agent::daemon) capture:
         Option<&'a std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
 }
 
-pub(super) struct PreparedRequestInput {
-    pub(super) workspace: ToolWorkspaceScope,
-    pub(super) request_context_message: Option<Message>,
-    pub(super) built: BuiltPrompt,
-    pub(super) replay: LoopReplayInput,
-    pub(super) consumed_prompts: Vec<FoldedPrompt>,
-    pub(super) folded_prompts: Vec<FoldedPrompt>,
-    pub(super) wake_notifications: Vec<TaggedMessage>,
+pub(in crate::runtime::agent::daemon) struct PreparedRequestInput {
+    pub(in crate::runtime::agent::daemon) workspace: ToolWorkspaceScope,
+    pub(in crate::runtime::agent::daemon) request_context_message: Option<Message>,
+    pub(in crate::runtime::agent::daemon) built: BuiltPrompt,
+    pub(in crate::runtime::agent::daemon) replay: LoopReplayInput,
+    pub(in crate::runtime::agent::daemon) consumed_prompts: Vec<FoldedPrompt>,
+    pub(in crate::runtime::agent::daemon) folded_prompts: Vec<FoldedPrompt>,
+    pub(in crate::runtime::agent::daemon) wake_notifications: Vec<TaggedMessage>,
 }
 
 #[derive(Clone, Copy)]
-struct PromptAssembly<'a> {
-    skill_reminders: &'a [Message],
-    request_context_message: &'a Option<Message>,
-    folded_prompts: &'a [FoldedPrompt],
-    wake_notifications: &'a [TaggedMessage],
+pub(super) struct PromptAssembly<'a> {
+    pub(super) skill_reminders: &'a [Message],
+    pub(super) request_context_message: &'a Option<Message>,
+    pub(super) folded_prompts: &'a [FoldedPrompt],
+    pub(super) wake_notifications: &'a [TaggedMessage],
 }
 
 #[derive(Clone, Copy)]
@@ -169,11 +168,11 @@ where
 
     pub(super) async fn prepare_request_input(
         &self,
+        lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
         inputs: RequestInputs<'_>,
     ) -> Result<PreparedRequestInput> {
         let RequestInputs {
             request,
-            lifecycle,
             agent_name,
             trace_attrs,
             resume_from_history,
@@ -260,6 +259,7 @@ where
         };
         let (mut built, replay) = self
             .assemble_prompt(
+                lifecycle,
                 inputs,
                 PromptAssembly {
                     skill_reminders: &skill_reminders,
@@ -304,26 +304,18 @@ where
 
     async fn assemble_prompt(
         &self,
+        lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
         inputs: RequestInputs<'_>,
         assembly: PromptAssembly<'_>,
     ) -> Result<(BuiltPrompt, LoopReplayInput)> {
         let RequestInputs {
             request,
-            lifecycle,
             request_commit_cid,
             agent_name,
-            aggregate_token_budget,
             context_calibration,
-            resume_from_history,
             resume_same_request,
             ..
         } = inputs;
-        let PromptAssembly {
-            skill_reminders,
-            request_context_message,
-            folded_prompts,
-            wake_notifications,
-        } = assembly;
         for assembly_attempt in 0..=1 {
             let background_cutoff = lifecycle.background_completion_input_through_sequence();
             let compaction_access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -422,18 +414,7 @@ where
                 ))
                 .await?;
             let complete_input_tokens = self
-                .estimate_initial_provider_input(
-                    request,
-                    built.preamble.clone(),
-                    &built.messages,
-                    skill_reminders,
-                    request_context_message.as_ref(),
-                    folded_prompts,
-                    aggregate_token_budget.clone(),
-                    &replay,
-                    resume_from_history,
-                    wake_notifications,
-                )
+                .estimate_initial_provider_input(inputs, &built, assembly, &replay)
                 .await?;
             let provider_budget = crate::turn::provider_input::budget::compaction_input_budget(
                 self.agent_config.context_window,
@@ -468,6 +449,7 @@ where
                     reduction_admission.expect("may_reduce is true only for an admitted reduction");
                 let Some(rebuilt) = self
                     .reduce_and_rebuild(
+                        lifecycle,
                         inputs,
                         SessionReduction {
                             replay: &replay,
@@ -496,6 +478,7 @@ where
 
     async fn reduce_and_rebuild(
         &self,
+        lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
         inputs: RequestInputs<'_>,
         reduction: SessionReduction<'_>,
         admission: compaction::ReductionAdmission,
@@ -504,7 +487,6 @@ where
     ) -> Result<Option<BuiltPrompt>> {
         let RequestInputs {
             request,
-            lifecycle,
             agent_name,
             aggregate_token_budget,
             context_calibration,

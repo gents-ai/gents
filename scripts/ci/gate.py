@@ -375,6 +375,14 @@ def host_groups(role, roles=None, fork=None, fallback=None):
     return entry.get("host_groups", []) if route(role, roles, fork, fallback) == entry["labels"] else []
 
 
+def partitions(role, roles=None, fork=None, fallback=None):
+    """How many hash partitions the role's in-build slice runs as: its
+    `partitions` on its own runners, else one."""
+    roles = roles or inventory()["roles"]
+    entry = roles[role]
+    return entry.get("partitions", 1) if route(role, roles, fork, fallback) == entry["labels"] else 1
+
+
 def route(role, roles, fork=None, fallback=None):
     """The labels a role's job runs on, before any host group."""
     fork = os.environ.get("GATE_FORK") == "true" if fork is None else fork
@@ -667,18 +675,17 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             entry = {"archive": ARCHIVE, "run": single, "packages": " ".join(archived),
                      "timeout": 150 if single else 90, "go": go}
             vera = vera_tests(archived)
-            # The slice that runs in the build job splits into one hash
-            # partition per host group: each partition's job builds the
-            # archive from its own host's compiler cache and kept target tree
-            # and runs its tests there. Without host groups the build
-            # takes the role's labels alone and any free portable runner
-            # picks it up. The Vera feature tests run once, in the first job.
-            partitions = min(len(groups), tested_crates) if single else 0
-            if partitions > 1:
-                archives += [{**entry, **placement("portable", host_group=groups[index - 1]),
+            # The slice that runs in the build job splits into the role's
+            # `partitions` hash partitions; each job builds the archive from
+            # its runner's compiler cache and kept target tree and runs its
+            # partition there, on any free portable runner. The Vera feature
+            # tests run once, in the first job.
+            count_partitions = min(partitions("portable"), tested_crates) if single else 0
+            if count_partitions > 1:
+                archives += [{**entry, **placement("portable"),
                               "vera": vera if index == 1 else "",
-                              "partition": index, "partitions": partitions}
-                             for index in range(1, partitions + 1)]
+                              "partition": index, "partitions": count_partitions}
+                             for index in range(1, count_partitions + 1)]
             else:
                 archives.append({**entry, **placement("portable"), "vera": vera})
             # Slices alternate between host groups, so one run's slices split across hosts.
@@ -1073,11 +1080,13 @@ def run_vera_tests(packages):
     os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
     features = ",".join(f"{package}/vera" for package in packages)
     filterset = " | ".join(f"(binary_id(={package}) & test(~{VERA_TESTS[package]}))" for package in packages)
+    # The archive's profile and target tree: in the `test` profile the feature
+    # build recompiled about 1,083 dependencies the archive had just built.
     native_tests(f"{' '.join(packages)} --lib (vera)", packages, ["--lib", "--features", features], filterset,
-                 set(packages))
+                 set(packages), profile=os.environ.get("PROFILE") or ARCHIVE_PROFILE)
 
 
-def native_tests(label, packages, flags, filterset, expected):
+def native_tests(label, packages, flags, filterset, expected, profile=None):
     """One `cargo nextest run`: one build, one parallel pool across its crates and binaries.
 
     Its JUnit report then fails a crate, or a macOS-only target, that ran no
@@ -1088,8 +1097,9 @@ def native_tests(label, packages, flags, filterset, expected):
     features = sorted({feature for package in packages for feature in feature_flags(package)[1:]})
     if features:
         arguments += ["--features", ",".join(features)]
-    if os.environ.get("PROFILE"):
-        arguments += ["--cargo-profile", os.environ["PROFILE"]]
+    profile = profile or os.environ.get("PROFILE")
+    if profile:
+        arguments += ["--cargo-profile", profile]
     # Tests that spawn Cargo for plugin builds must not inherit the job's target directory.
     drop = ()
     if os.environ.get("CARGO_TARGET_DIR"):

@@ -2,7 +2,7 @@ use rapidhash::RapidHashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 
 pub use gents_store::graphql::escape_graphql_string;
@@ -144,16 +144,6 @@ pub fn cli_client_paths(
     gents_store::client_journal::paths::DesktopPaths::from_root(desktop_root.join("cli"))
 }
 
-/// The operator's User DID: the CLI client key a CLI process with this
-/// `HOME` signs with.
-pub fn cli_user_did(cli_home: &Path) -> Result<String> {
-    let paths = cli_client_paths(cli_home, &[]);
-    let identity =
-        gents_store::client_journal::principal_identity::PrincipalIdentity::load_existing(&paths)
-            .with_context(|| format!("loading the CLI User key under {}", paths.root().display()))?;
-    Ok(identity.did().to_owned())
-}
-
 #[cfg(target_os = "macos")]
 fn user_data_local_dir(user_home: &Path, _envs: &[(&str, &str)]) -> std::path::PathBuf {
     user_home.join("Library").join("Application Support")
@@ -276,12 +266,4 @@ pub async fn doc_id_for_tools(graphql: &str, tools_id: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| anyhow!("Tools row missing _docID for {tools_id}"))
-}
-
-pub async fn exec(node: &gents::defra_node::Node, query: &str) -> Result<()> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        bail!("GraphQL mutation failed: {:?}", response.errors);
-    }
-    Ok(())
 }

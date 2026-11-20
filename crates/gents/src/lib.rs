@@ -29,7 +29,6 @@ pub mod runtime;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
-#[allow(dead_code)]
 pub mod test_support;
 pub use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 pub mod turn;
