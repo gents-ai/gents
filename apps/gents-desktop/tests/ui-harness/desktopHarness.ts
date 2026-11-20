@@ -15,7 +15,6 @@ import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
   AllowedFolder,
   DesktopApiAdapter,
-  EndedAccessView,
 } from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientUpdatedHandler,
@@ -27,7 +26,7 @@ import type {
   DesktopOperationsSnapshot,
   DesktopSessionSnapshot,
   DeploymentView,
-  EnrollmentRequestView,
+  ClientAccessRequestView,
   GrokLoginResult,
   InitSummary,
   InferenceBackendView,
@@ -198,6 +197,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     itemKey,
     toolName: "bash",
     toolCallId,
+    toolCallDocId: `doc-${toolCallId}`,
     statusKind: "success",
     awaitMode: "background",
     reconstruction: HARNESS_READY_RECONSTRUCTION,
@@ -238,6 +238,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
           itemKey: "auto-worker",
           toolName: "agent_new",
           toolCallId: "call-auto-worker",
+          toolCallDocId: "doc-call-auto-worker",
           requestId: "request-auto-user",
           statusKind: "success",
           awaitMode: "background",
@@ -282,7 +283,16 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-bg-test", 7, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: "call-auto-test",
+        toolCallDocId: "doc-call-auto-test",
+        toolName: "bash",
+        statusKind: "completed",
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content: completion(
         "call-auto-test",
         "bash",
@@ -292,7 +302,16 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-lint", 8, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: "call-auto-lint",
+        toolCallDocId: "doc-call-auto-lint",
+        toolName: "bash",
+        statusKind: "failed",
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content: completion(
         "call-auto-lint",
         "bash",
@@ -302,7 +321,16 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-worker", 9, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: "call-auto-worker",
+        toolCallDocId: "doc-call-auto-worker",
+        toolName: "agent_new",
+        statusKind: "completed",
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content: completion(
         "call-auto-worker",
         "agent_new",
@@ -312,7 +340,13 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-wake", 10, "2026-06-03T14:10:01Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: false },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: null,
+        reason: null,
+        resultRange: null,
+        notification: false,
+      },
       content:
         "Review the new background completion results and continue the task if needed.",
     },
@@ -325,7 +359,16 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-bg-single", 12, "2026-06-03T14:11:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: "call-auto-other",
+        toolCallDocId: "doc-call-auto-other",
+        toolName: "spawn_process",
+        statusKind: "completed",
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content: completion("call-auto-other", "spawn_process", "completed", "done"),
     },
     harnessAssistantItem({
@@ -340,7 +383,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
       origin: {
         kind: "sessionMessage" as const,
         senderNodeDid: NODE_DID,
-        senderSessionId: null,
+        senderSessionId: "session-worker",
         senderRequestId: "request-worker-note",
       },
       content: `[message agent:ops session:session-worker node:${
@@ -368,13 +411,25 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-alone-wake", 17, "2026-06-03T14:20:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: false },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: null,
+        reason: null,
+        resultRange: null,
+        notification: false,
+      },
       content:
         "Review the new background completion results and continue the task if needed.",
     },
     {
       ...durable("auto-bg-note", 18, "2026-06-03T14:20:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: null,
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content:
         "\nThe preview deploy is ready at https://preview.example.test/parser-fix and will stay up for the next twenty-four hours.\n\nNothing else changed.",
     },
@@ -389,6 +444,8 @@ function automatedInputItems(): RenderedTimelineItem[] {
       ...durable("auto-schedule", 20, "2026-06-04T07:00:00Z"),
       origin: {
         kind: "trigger" as const,
+        displayBody:
+          "Write the nightly report: what changed, what failed, what is next.",
         triggerId: "nightly-report",
         triggerKind: "schedule",
       },
@@ -403,7 +460,12 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-goal", 22, "2026-06-04T07:02:00Z"),
-      origin: { kind: "goalContinuation" as const, goalId: "goal-1", sequence: 2 },
+      origin: {
+        kind: "goalContinuation" as const,
+        retry: null,
+        goalId: "goal-1",
+        sequence: 2,
+      },
       content: "You are running under the durable goal controller. Continue the goal.",
     },
   ];
@@ -755,9 +817,6 @@ function harnessAssistantItem(
   };
 }
 
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
-
 export type DesktopUiHarnessScenario =
   | "default"
   | "active-nodes"
@@ -994,7 +1053,7 @@ export function createDesktopUiHarness(
   if (scenario === "backend-unavailable") {
     deployment = {
       ...deployment,
-      source: "local-standard",
+      local: true,
       nodeReadiness: {
         ...deployment.nodeReadiness,
         agents: deployment.nodeReadiness.agents.map((agent) => ({
@@ -1186,18 +1245,6 @@ export function createDesktopUiHarness(
     };
   }
   let removed = false;
-  let endedAccess: EndedAccessView[] =
-    scenario === "joined-access"
-      ? [
-          {
-            nodeDid: "did:key:harness-harbor",
-            label: "Harbor",
-            reason: "revoked",
-            endedAt: new Date(Date.now() - HOUR_MS).toISOString(),
-            leaseExpiresAt: new Date(Date.now() + 6 * DAY_MS).toISOString(),
-          },
-        ]
-      : [];
   let provisioned = scenario !== "empty-fleet";
   let pairingStatusReads = 0;
   let pairingAuthorized = scenario === "storage-recovery";
@@ -1239,7 +1286,7 @@ export function createDesktopUiHarness(
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "discovery-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth();
-  let enrollmentRequests: EnrollmentRequestView[] = [];
+  let accessRequests: ClientAccessRequestView[] = [];
   let updateEvents = 0;
   let storeVersion = 1;
   let liveSourceEpoch = 1;
@@ -1998,7 +2045,7 @@ export function createDesktopUiHarness(
   function snapshot() {
     const visibleDeployment = {
       ...deployment,
-      dialSucceeded: p2pStatus === "healthy",
+
       runtimeConnection: p2pStatus === "healthy" ? "connected" : "disconnected",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
@@ -2010,15 +2057,12 @@ export function createDesktopUiHarness(
       deployments.push({
         ...visibleDeployment,
         nodeDid: remoteDid,
-        peerId: "peer-harness-remote",
-        source: "enrollment",
+
+        local: false,
         label: "studio-1",
         graphql: null,
         operatorAccess: false,
-        leaseExpiresAt:
-          scenario === "joined-access"
-            ? new Date(Date.now() + 2 * DAY_MS + HOUR_MS).toISOString()
-            : null,
+
         node: {
           ...visibleDeployment.node,
           nodeDid: remoteDid,
@@ -2053,14 +2097,6 @@ export function createDesktopUiHarness(
         mailboxItems: [],
       });
     }
-    const health = {
-      status: p2pStatus,
-      connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
-      consecutiveFailures: p2pStatus === "healthy" ? 0 : 3,
-      lastOkAt: p2pStatus === "healthy" ? STARTED_AT : null,
-      lastError: p2pStatus === "healthy" ? null : "fixture transport unavailable",
-      lastFailureAt: p2pStatus === "healthy" ? null : STARTED_AT,
-    };
     const freshHome = scenario === "empty-fleet" && !provisioned;
     const next: DesktopClientSnapshot = {
       bootstrap: {
@@ -2078,30 +2114,29 @@ export function createDesktopUiHarness(
         nodeHomeExists: !freshHome,
         clientStateExists: true,
         localSetupUnfinished: false,
-        savedPeers: !provisioned
+        savedRuntimes: !provisioned
           ? []
           : [
               {
-                peerId: deployment.peerId,
                 label: deployment.label,
                 nodeDid: deployment.nodeDid,
-                addr: deployment.addr,
+
                 graphql: deployment.graphql,
-                source: deployment.source,
+
                 local: false,
               },
             ],
       },
       client: {
         clientDid: "did:key:desktop-harness",
-        p2pHealth: health,
+
         syncHealth,
-        enrollmentRequests,
+        accessRequests,
         rowCount,
         approxSerializedBytes: rowCount * 512,
         operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
-        endedAccess,
+        unkeptChanges: [],
       },
     };
     return clone(next);
@@ -2300,24 +2335,21 @@ export function createDesktopUiHarness(
       provisioned = true;
       deployment = {
         ...deployment,
-        source: "enrollment",
+        local: false,
         label,
         node: { ...deployment.node, displayName: label },
       };
       const summary: InitSummary = {
         status: "ready",
-        source: "bombadil-harness",
+
         nodeHome: "/tmp/gents-bombadil/agent",
         desktopHome: "/tmp/gents-bombadil/desktop",
-        peerDirectory: "/tmp/gents-bombadil/peers.json",
+        runtimeDirectory: "/tmp/gents-bombadil/peers.json",
         label,
         nodeName: label,
         nodeDid: NODE_DID,
         graphql: "http://127.0.0.1:9181/api/v0/graphql",
-        p2pTransport: "memory",
-        p2pPeerId: "peer-bombadil-local",
-        p2pListenAddress: "/ip4/127.0.0.1/tcp/9292",
-        peerRecordId: "peer-record-bombadil",
+
         nextSteps: [],
       };
       return summary;
@@ -2481,7 +2513,7 @@ export function createDesktopUiHarness(
               repaired: [],
               outcome: "noLocalNode",
               blocker: null,
-              savedPeers: [],
+              savedRuntimes: [],
               localNodeLost: false,
             };
           },
@@ -2523,22 +2555,17 @@ export function createDesktopUiHarness(
     async setSelectedNode() {
       return undefined;
     },
-    async removePeer(peerId) {
-      if (peerId !== deployment.peerId) {
-        throw new Error(`peer ${peerId} not found`);
+    async removeRuntime(nodeDid) {
+      if (nodeDid !== deployment.nodeDid) {
+        throw new Error(`runtime ${nodeDid} not found`);
       }
       removed = true;
       notify("peers");
-      return snapshot();
+      return { ...snapshot(), removed: true };
     },
-    async dismissEndedAccess(nodeDid) {
-      endedAccess = endedAccess.filter((ended) => ended.nodeDid !== nodeDid);
-      notify("peers");
-      return snapshot();
-    },
-    async renamePeer(peerId, label) {
-      if (peerId !== deployment.peerId) {
-        throw new Error(`peer ${peerId} not found`);
+    async renameRuntime(nodeDid, label) {
+      if (nodeDid !== deployment.nodeDid) {
+        throw new Error(`runtime ${nodeDid} not found`);
       }
       deployment = { ...deployment, label };
       notify("peers");
@@ -2580,6 +2607,7 @@ export function createDesktopUiHarness(
         sessionId: "session-intro",
         nodeDid: NODE_DID,
         agentDid: DEFAULT_AGENT_DID,
+        publication: "delivered",
       };
     },
     async fetchRequestTimeline(nodeDid, requestId) {
@@ -2627,19 +2655,20 @@ export function createDesktopUiHarness(
         ],
       };
     },
-    async requestStatusEnrollment() {
-      const request: EnrollmentRequestView = {
+    async listRuntimeAccess() {
+      return [];
+    },
+    async decideRuntimeAccess() {
+      throw new Error("No device access request is selected.");
+    },
+    async requestRuntimeAccess() {
+      const request: ClientAccessRequestView = {
         requestId: "enrollment-request-harness",
-        networkId: "network-harness",
-        adminDid: NODE_DID,
-        serverPeer: "peer-enrollment-pending",
-        serverLabel: "Bombadil UI Agent",
-        ownerNode: NODE_DID,
-        state: "pending_approval",
-        activationError: null,
-        expiresAt: "2026-09-03T15:00:00.000Z",
+        nodeDid: NODE_DID,
+        clientDid: "did:key:client",
+        state: "pending",
       };
-      enrollmentRequests = [request];
+      accessRequests = [request];
       return request;
     },
     async fetchSessionSnapshot(_sessionId, _nodeDid, _requestId, timelinePage) {
@@ -2790,6 +2819,7 @@ export function createDesktopUiHarness(
           requestId: heldRequestId,
           nodeDid: request.nodeDid,
           agentDid: request.agentDid ?? null,
+          publication: "delivered" as const,
         };
       }
       if (request.sessionId && sessions.has(request.sessionId)) {
@@ -2825,6 +2855,7 @@ export function createDesktopUiHarness(
             requestId,
             nodeDid: request.nodeDid,
             agentDid: request.agentDid ?? null,
+            publication: "delivered" as const,
           };
         }
         const response = `Bombadil harness response ${requestSeq}: received "${content.slice(
@@ -2869,6 +2900,7 @@ export function createDesktopUiHarness(
           requestId,
           nodeDid: request.nodeDid,
           agentDid: request.agentDid ?? null,
+          publication: "delivered" as const,
         };
       }
 
@@ -2892,7 +2924,7 @@ export function createDesktopUiHarness(
         agentDid: request.agentDid || DEFAULT_AGENT_DID,
         lifecycleState: "completed",
       };
-      return result;
+      return { ...result, publication: "delivered" as const };
     },
     async renameSession(request) {
       const session = sessions.get(request.sessionId);
@@ -4620,17 +4652,16 @@ function harnessLiveTextPatch(value: string, baseByteLen: number, baseHash: stri
 
 function createDeployment(): DeploymentView {
   return {
-    peerId: "peer-bombadil-local",
     label: "Bombadil UI Agent",
     nodeDid: NODE_DID,
-    addr: "/ip4/127.0.0.1/tcp/9292",
-    source: "bombadil-harness",
+
+    local: true,
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
-    dialSucceeded: true,
+
     runtimeConnection: "connected",
     chatSafe: true,
     chatRefusal: null,
-    leaseExpiresAt: null,
+
     operatorAccess: true,
     nodeReadiness: {
       source: { state: "current" },
@@ -4642,7 +4673,7 @@ function createDeployment(): DeploymentView {
         { state: "ready", agentDid: "ops" },
       ],
     },
-    lastError: null,
+
     node: {
       nodeDid: NODE_DID,
       displayName: "Bombadil UI Agent",
@@ -4939,10 +4970,10 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
 function initialSyncHealth(): SyncHealthView {
   return {
     state: "healthy",
-    lastError: null,
+
     runtimeCount: 1,
     connectedRuntimeCount: 1,
-    activationErrorCount: 0,
+
     cause: null,
     nextAction: null,
   };

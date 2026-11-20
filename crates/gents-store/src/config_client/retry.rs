@@ -78,29 +78,27 @@ impl TransactionFailure for Box<dyn std::error::Error + Send + Sync> {
     }
 }
 
-/// The first access owner in an erased error's chain. Both owners wrap each
-/// other transparently, so each is asked for its access error rather than
-/// found by `source()` alone; a boxed `#[source]` is on the chain as the box,
-/// so the box is asked too. No other owner is asked: a variant of another
-/// owner that holds an access error exposes it as its `#[source]`
-/// (`AccessClassification.Error.exposed`), since a transparent variant would
-/// take it off the chain.
+/// The first access owner in an erased error's chain
+/// (`AccessClassification.Error.erased`).
 pub(super) fn access_error_in<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a ConfigClientError> {
-    gents_protocol::error_chain::find_map_source(error, |cause| {
-        asked::<ConfigClientError>(cause)
-            .or_else(|| asked::<Box<ConfigClientError>>(cause))
-            .or_else(|| asked::<GraphqlResponseError>(cause))
-            .or_else(|| asked::<Box<GraphqlResponseError>>(cause))
-    })
+    gents_protocol::error_chain::find_map_source(error, access_owner)
 }
 
-fn asked<'a, O>(cause: &'a (dyn std::error::Error + 'static)) -> Option<&'a ConfigClientError>
-where
-    O: TransactionFailure + std::error::Error + 'static,
-{
-    cause.downcast_ref::<O>()?.config_client_error()
+/// The access error `cause` carries when it is an access owner, held directly
+/// or through a box. Both owners wrap each other transparently, so each is
+/// asked for its access error rather than found by `source()` alone. No other
+/// owner is asked: a variant of another owner that holds an access error
+/// exposes it as its `#[source]` (`AccessClassification.Chain.exposed`), since
+/// a transparent variant would take it off the chain.
+pub(crate) fn access_owner<'a>(
+    cause: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a ConfigClientError> {
+    use gents_protocol::error_chain::as_owner;
+    as_owner::<ConfigClientError>(cause)
+        .and_then(TransactionFailure::config_client_error)
+        .or_else(|| as_owner::<GraphqlResponseError>(cause)?.config_client_error())
 }
 
 /// The first request to run again in an erased error's chain. It is found by
@@ -120,7 +118,10 @@ pub(super) fn rerun_request_in<'a>(
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {
-    ConfigClientError::TransactionConflict(TransactionConflict { origin })
+    ConfigClientError::TransactionConflict(TransactionConflict {
+        origin,
+        repeatable: true,
+    })
 }
 
 pub(super) fn classified_transaction_conflict<E>(error: &E) -> Option<ConflictSource>
@@ -131,8 +132,9 @@ where
 }
 
 impl ConfigClientError {
-    /// The pinned DefraDB mutation adapter reports an inaccessible or missing
-    /// document with this shared GraphQL message and no structured error code.
+    /// External premise: the pinned DefraDB mutation adapter reports an
+    /// inaccessible or missing document with this shared GraphQL message and
+    /// no structured error code.
     /// Both cases are permanent for this attempted write, not storage failures,
     /// and the adapter does not say which one occurred.
     pub fn is_missing_or_denied_write(&self) -> bool {
@@ -310,6 +312,27 @@ mod tests {
         assert!(ConfigClientError::InjectedReadStorageFailure
             .insecure_key()
             .is_none());
+    }
+
+    #[test]
+    fn a_delegation_refused_for_its_window_inside_a_transaction_is_a_credential_answer() {
+        let refused = || {
+            super::super::graphql::validate_txn_response(serde_json::json!({
+                "errors": [{"message": "opaque", "extensions": {
+                    "code": gents_protocol::delegation_audience::DELEGATION_OUTSIDE_WINDOW_CODE
+                }}]
+            }))
+            .map_err(transaction_storage_failure)
+            .expect_err("refused")
+        };
+        for error in [refused(), access(refused())] {
+            assert!(error.is_storage_failure(), "{error:?}");
+            assert_eq!(
+                error.credential_answer(),
+                Some(gents_protocol::delegation_audience::CredentialAnswer::OutsideWindow),
+                "{error:?}"
+            );
+        }
     }
 
     #[test]

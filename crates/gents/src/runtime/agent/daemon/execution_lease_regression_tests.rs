@@ -5,10 +5,20 @@ const ACTIVE_STREAM_INTERVAL: Duration = Duration::from_millis(300);
 
 #[derive(Clone)]
 struct RecoveringProvider {
+    call: gents_loop::provider_call::ProviderCall,
     available: Arc<AtomicBool>,
     /// The connection fails once the opened stream is first read, as an HTTP
     /// client does, instead of before the attempt is opened.
     fails_on_first_read: bool,
+}
+
+impl gents_loop::provider_call::ForCall for RecoveringProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -32,7 +42,7 @@ impl CompletionModel for RecoveringProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "backend-recovery")
+        gents_inference::test_support::capture_scripted_provider_request(&self.call, &request, "backend-recovery")
             .await?;
         if !self.available.load(Ordering::SeqCst) {
             let error = CompletionError::ProviderError("HTTP status 503: unavailable".into());
@@ -84,7 +94,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(RecoveringProvider {
+        model: Arc::new(RecoveringProvider { call: Default::default(),
             available: available.clone(),
             fails_on_first_read,
         }),
@@ -195,19 +205,33 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
 
 #[derive(Clone)]
 struct NonTerminalProvider {
+    call: gents_loop::provider_call::ProviderCall,
     empty_forever: bool,
     active_chunks: Option<usize>,
     reasoning_prefix: bool,
     stream_calls: Arc<AtomicUsize>,
     empty_deltas: Arc<AtomicUsize>,
+    partial_emitted: Arc<AtomicUsize>,
 }
 
 #[derive(Clone)]
-struct LeaseLossProvider;
+struct LeaseLossProvider {
+    call: gents_loop::provider_call::ProviderCall,
+}
 
 #[derive(Clone)]
 struct BufferedReasoningShutdownProvider {
+    call: gents_loop::provider_call::ProviderCall,
     processed_two: Arc<tokio::sync::Notify>,
+}
+
+impl gents_loop::provider_call::ForCall for BufferedReasoningShutdownProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -217,7 +241,7 @@ impl CompletionModel for BufferedReasoningShutdownProvider {
     type Client = ();
 
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self {
+        Self { call: Default::default(),
             processed_two: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -233,7 +257,7 @@ impl CompletionModel for BufferedReasoningShutdownProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "shutdown-reasoning")
+        gents_inference::test_support::capture_scripted_provider_request(&self.call, &request, "shutdown-reasoning")
             .await?;
         let processed_two = self.processed_two.clone();
         let events: rig::streaming::StreamingResult<()> =
@@ -276,7 +300,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = BufferedReasoningShutdownProvider {
+    let model = BufferedReasoningShutdownProvider { call: Default::default(),
         processed_two: Arc::new(tokio::sync::Notify::new()),
     };
     let prompt = LayeredPromptBuilder::for_agent(
@@ -594,13 +618,21 @@ async fn graceful_shutdown_after_lease_expiry_does_not_claim_lost_output() {
     graceful_shutdown_reasoning_case(false, Some("expired")).await;
 }
 
+impl gents_loop::provider_call::ForCall for LeaseLossProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+        }
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for LeaseLossProvider {
     type Response = ();
     type StreamingResponse = ();
     type Client = ();
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self
+        Self { call: Default::default() }
     }
     async fn completion(
         &self,
@@ -612,7 +644,7 @@ impl CompletionModel for LeaseLossProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "lease-loss").await?;
+        gents_inference::test_support::capture_scripted_provider_request(&self.call, &request, "lease-loss").await?;
         let events = vec![
             Ok(RawStreamingChoice::ToolCall(
                 rig::streaming::RawStreamingToolCall::new(
@@ -654,7 +686,7 @@ impl gents_loop::tool::ToolDyn for LeaseBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> gents_loop::tool::BoxFuture<
+        _context: &'a gents_loop::tool::ToolCallEnvelope) -> gents_loop::tool::BoxFuture<
         'a,
         Result<String, gents_loop::tool::ToolError>,
     > {
@@ -687,7 +719,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(LeaseLossProvider),
+        model: Arc::new(LeaseLossProvider { call: Default::default() }),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool { entered: None })
             as Box<dyn gents_loop::tool::ToolDyn>]),
@@ -748,6 +780,15 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     assert!(row["cancel_cause"].is_null());
 }
 
+impl gents_loop::provider_call::ForCall for NonTerminalProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for NonTerminalProvider {
     type Response = ();
@@ -755,12 +796,13 @@ impl CompletionModel for NonTerminalProvider {
     type Client = ();
 
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self {
+        Self { call: Default::default(),
             empty_forever: false,
             active_chunks: None,
             reasoning_prefix: false,
             stream_calls: Arc::new(AtomicUsize::new(0)),
             empty_deltas: Arc::new(AtomicUsize::new(0)),
+            partial_emitted: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -777,7 +819,7 @@ impl CompletionModel for NonTerminalProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        gents_inference::test_support::capture_scripted_provider_request(&self.call, &request, "scripted").await?;
 
         self.stream_calls.fetch_add(1, Ordering::SeqCst);
         if self.reasoning_prefix {
@@ -800,11 +842,14 @@ impl CompletionModel for NonTerminalProvider {
         let endless = self.empty_forever;
         let active_chunks = self.active_chunks;
         let empty_deltas = self.empty_deltas.clone();
+        let partial_emitted = self.partial_emitted.clone();
         let inner: rig::streaming::StreamingResult<()> =
             Box::pin(stream::unfold(0usize, move |index| {
                 let empty_deltas = empty_deltas.clone();
+                let partial_emitted = partial_emitted.clone();
                 async move {
                     if index == 0 {
+                        partial_emitted.fetch_add(1, Ordering::SeqCst);
                         Some((
                             Ok(RawStreamingChoice::Message(
                                 "durable partial incident text".into(),
@@ -838,17 +883,22 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
     let node = db.node.clone();
     let agent_access = held_daemon_agent_access(&db, &agent_config);
+    // The lease must outlast any one storage step of a saturated host, or the
+    // recovery sweep below legitimately takes over a starved owner (Lean
+    // `expired_recovery_is_atomic_generation_swap`); a claim alone was seen
+    // to take a second. Production leases default to 120 s.
     Arc::get_mut(&mut agent_config)
         .unwrap()
-        .stream_liveness_timeout = Duration::from_secs(1);
+        .stream_liveness_timeout = Duration::from_secs(5);
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = NonTerminalProvider {
+    let model = NonTerminalProvider { call: Default::default(),
         empty_forever,
         active_chunks: None,
         reasoning_prefix: false,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
+        partial_emitted: Arc::new(AtomicUsize::new(0)),
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
@@ -908,6 +958,10 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                 lifecycle_state execution_generation execution_lease_expires_at terminal_output
             }} }}"#
         );
+        // The interrupt must follow the provider's partial text: the request
+        // promises to retain output the loop received, not text a provider
+        // has yet to send (TLA+ `InterruptPartialOutput`).
+        let partial_before = model.partial_emitted.load(Ordering::SeqCst);
         tokio::time::timeout(Duration::from_secs(15), async {
             let process = daemon.process_request(request, shutdown_rx.clone());
             tokio::pin!(process);
@@ -921,7 +975,10 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                         let recovered = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(&node, &node_did, &[agent_config.agent_identity.clone()])
                             .await
                             .unwrap();
-                        if !empty_forever || observed_renewal {
+                        if !empty_forever
+                            || observed_renewal
+                            || model.partial_emitted.load(Ordering::SeqCst) == partial_before
+                        {
                             continue;
                         }
                         let result = held_daemon_query(&agent_access, &query).await;
@@ -1089,7 +1146,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
-        model: Arc::new(LeaseLossProvider),
+        model: Arc::new(LeaseLossProvider { call: Default::default() }),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
             entered: Some(tool_entered.clone()),
@@ -1244,12 +1301,13 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = NonTerminalProvider {
+    let model = NonTerminalProvider { call: Default::default(),
         empty_forever: false,
         active_chunks: Some(ACTIVE_CHUNKS),
         reasoning_prefix: false,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
+        partial_emitted: Arc::new(AtomicUsize::new(0)),
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
@@ -1363,12 +1421,13 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     }
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
-    let model = NonTerminalProvider {
+    let model = NonTerminalProvider { call: Default::default(),
         empty_forever: false,
         active_chunks: None,
         reasoning_prefix: true,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
+        partial_emitted: Arc::new(AtomicUsize::new(0)),
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -10,6 +11,8 @@ use crate::pack::PackManifest;
 pub const DEFAULT_REGISTRY_URL: &str = "https://registry.dev.gents.xyz";
 pub const REGISTRY_ENV_VAR: &str = "GENTS_REGISTRY";
 
+const DOWNLOAD_HEADER_BOUND: Duration = Duration::from_secs(20);
+
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
     #[error(
@@ -20,8 +23,16 @@ pub enum RegistryError {
         #[source]
         source: reqwest::Error,
     },
+    #[error("the registry at {url} returned no download response headers within {bound:?}; check the registry, or choose another with --registry")]
+    DownloadHeadersTimedOut { url: String, bound: Duration },
     #[error("the registry has nothing at {url}")]
     NotFound { url: String },
+}
+
+impl RegistryError {
+    pub fn in_chain(error: &anyhow::Error) -> Option<&Self> {
+        error.chain().find_map(|cause| cause.downcast_ref::<Self>())
+    }
 }
 
 pub fn split_pack_coordinate(name: &str) -> (&str, &str) {
@@ -166,14 +177,7 @@ impl RegistryClient {
     ) -> Result<String> {
         use sha2::{Digest, Sha256};
         let url = self.api_url(&["packs", namespace, name, version, "download"])?;
-        let mut response = {
-            let _turn = DOWNLOAD_TURN.lock().await;
-            self.http
-                .get(url.clone())
-                .send()
-                .await
-                .map_err(|source| self.unreachable(source))?
-        };
+        let mut response = self.download_headers(url.clone(), &DOWNLOAD_TURN).await?;
         let status = response.status();
         anyhow::ensure!(
             status.is_success(),
@@ -203,6 +207,24 @@ impl RegistryClient {
                 .with_context(|| format!("saving {namespace}/{name}@{version}"))?;
         }
         Ok(format!("{:x}", hasher.finalize()))
+    }
+
+    /// The registry settles its per-address rate-limit write before returning
+    /// headers. Bound only that serialized phase: waiting for the turn consumes
+    /// no request budget, and streaming a large body does not hold the turn.
+    async fn download_headers(
+        &self,
+        url: reqwest::Url,
+        turn: &tokio::sync::Mutex<()>,
+    ) -> std::result::Result<reqwest::Response, RegistryError> {
+        let _turn = turn.lock().await;
+        tokio::time::timeout(DOWNLOAD_HEADER_BOUND, self.http.get(url.clone()).send())
+            .await
+            .map_err(|_| RegistryError::DownloadHeadersTimedOut {
+                url: url.to_string(),
+                bound: DOWNLOAD_HEADER_BOUND,
+            })?
+            .map_err(|source| self.unreachable(source))
     }
 
     pub async fn login(&self, username: &str, password: &str) -> Result<String> {
@@ -391,6 +413,45 @@ pub async fn download_verified_pack(
         ),
     )?;
     Ok(bytes)
+}
+
+/// The Gents release a registry version entry says the pack was built for,
+/// its `gents_version` (gents-ai/packs#63); `None` when the entry does not
+/// say.
+pub fn advertised_release(
+    version: &Value,
+) -> Option<Result<crate::pack::core_packs::Release, crate::pack::core_packs::ReleaseParseError>> {
+    version
+        .get("gents_version")
+        .and_then(Value::as_str)
+        .map(crate::pack::core_packs::Release::parse)
+}
+
+/// Why a registry candidate did not open: the archive's own refusal, or the
+/// lookup or download before it.
+#[derive(Debug, thiserror::Error)]
+pub enum CandidateError {
+    #[error(transparent)]
+    Open(#[from] crate::pack::archive::OpenError),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Fetch(#[source] anyhow::Error),
+}
+
+/// Downloads `namespace/name@version` and opens it without storing it, so a
+/// caller can decide on the archive before an install takes it.
+pub async fn open_candidate(
+    client: &RegistryClient,
+    namespace: &str,
+    name: &str,
+    version: &str,
+) -> Result<PackArchive, CandidateError> {
+    let coordinate = resolve_pack_coordinate(client, namespace, name, Some(version))
+        .await
+        .map_err(CandidateError::Fetch)?;
+    let bytes = download_verified_pack(client, &coordinate)
+        .await
+        .map_err(CandidateError::Fetch)?;
+    Ok(PackArchive::from_bytes(&bytes)?)
 }
 
 pub async fn fetch_pack(
@@ -861,3 +922,7 @@ mod tests {
         assert!(message.contains("http://registry.example"), "{message}");
     }
 }
+
+#[cfg(test)]
+#[path = "registry/download_tests.rs"]
+mod download_tests;

@@ -119,14 +119,16 @@ async fn create_work(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) {
     ).await.unwrap();
     crate::session::import_history_observation(
         node,
-        &physical,
-        "archive-session",
-        "runtime",
-        Some("other-requester"),
-        "Original transcript",
-        "archive:original",
-        1,
-        None,
+        crate::session::HistoryObservation {
+            request_id: &physical,
+            session_id: "archive-session",
+            node_did: "runtime",
+            requester_did: Some("other-requester"),
+            text: "Original transcript",
+            message_key_suffix: "archive:original",
+            sequence: 1,
+            tool_call: None,
+        },
     )
     .await;
 }
@@ -608,6 +610,51 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() ->
         set_session_archived_on(&access, runtime.did(), "archive-session", &user, 1, false).await?;
     assert_eq!(receipt.outcome, SessionArchiveOutcome::Applied);
     assert_eq!(read_as(&node, &user).await?.archive_revision, 2);
+    // The working Agent's write of the session landing between a User
+    // operation's read and its commit aborts that commit with DefraDB's own
+    // conflict; archive and close re-read and re-sign (signed-conflict rebuild).
+    let refresh = |tag: &'static str| {
+        let (creator, session_doc) = (&creator, &session_doc);
+        async move {
+            creator
+                .write(
+                    "test.archive.refresh",
+                    &format!(
+                        r#"mutation {{ update_AgentSession(docID: "{}", input: {{tags: ["{tag}"]}}) {{ _docID }} }}"#,
+                        escape_graphql_string(session_doc)
+                    ),
+                )
+                .await
+                .expect("the Agent refreshes the session");
+        }
+    };
+    let (receipt, paused) =
+        gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+            set_session_archived_on(&access, runtime.did(), "archive-session", &user, 2, true),
+            refresh("archive-race"),
+        )
+        .await;
+    assert!(paused, "the archive paused after its signed update");
+    let receipt = receipt?;
+    assert_eq!(receipt.outcome, SessionArchiveOutcome::Applied);
+    assert_eq!(receipt.revision, "3");
+    let (closed, paused) =
+        gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+            crate::session::close_session_with_access(
+                &access,
+                runtime.did(),
+                "archive-session",
+                Some(agent.did()),
+            ),
+            refresh("close-race"),
+        )
+        .await;
+    assert!(paused, "the close paused after its signed update");
+    closed?;
+    let session = read_as(&node, &user).await?;
+    assert!(session.closed_at.is_some());
+    assert_eq!(session.archive_revision, 3);
+    assert_eq!(session.tags, vec!["close-race".to_owned()]);
     assert_eq!(
         owners().await?[0]
             .owner

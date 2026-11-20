@@ -639,18 +639,18 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
     hook.on_completion_call(&user_text_message("list processes"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        &hook,
-        "request-control-result",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request-control-result", &session_id).await;
     accept_hook_tool_call(&hook, "list-call", "list_processes", "{}", None).await;
 
     assert!(matches!(
-        hook.on_tool_call("list_processes", None, "list-call", "{}")
-            .await,
+        hook.on_tool_call(
+            "list_processes",
+            None,
+            "list-call",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default()
+        )
+        .await,
         ToolCallHookAction::Skip { .. }
     ));
 
@@ -688,13 +688,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     hook.on_completion_call(&user_text_message("control processes"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        &hook,
-        "request-control-results",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request-control-results", &session_id).await;
 
     let long_handle = "x".repeat(60 * 1024);
     let long_disallowed_tool = "y".repeat(60 * 1024);
@@ -723,7 +717,15 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     let mut skipped = Vec::new();
     for (id, name, args) in &cases {
         accept_hook_tool_call(&hook, id, name, args, None).await;
-        let action = hook.on_tool_call(name, None, id, args).await;
+        let action = hook
+            .on_tool_call(
+                name,
+                None,
+                id,
+                args,
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await;
         let ToolCallHookAction::Skip { reason } = action else {
             panic!("{name} should return its durable result to the provider; got {action:?}")
         };

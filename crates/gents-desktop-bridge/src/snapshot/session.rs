@@ -1,10 +1,12 @@
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 
+use crate::client_runtime::ClientRuntime;
 use chrono::{DateTime, Utc};
-use gents_desktop_core::client::{
-    CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
+use gents_observe::client_projection::query::{
+    CanonicalTranscriptDependencies, SessionTranscriptQueryPage,
 };
+use gents_observe::client_projection::store::ClientStore;
 use gents_protocol::job::{JobOutcome, JobState};
 use gents_protocol::message::Message;
 use gents_protocol::output::rows::TranscriptMessageRow;
@@ -120,45 +122,35 @@ pub(super) fn message_is_runtime_control(
     )
 }
 
-pub(super) fn request_origin_view(
-    store: &ClientStore,
-    request: &AgentRequestRow,
-) -> Option<RequestOriginView> {
+pub(super) fn request_origin_view(request: &AgentRequestRow) -> Option<RequestOriginView> {
     use gents_session::request::lifecycle::RequestOrigin;
     Some(
         match gents_session::request::lifecycle::request_origin(request) {
             RequestOrigin::Person => return None,
-            RequestOrigin::SessionMessage {
-                parent_request_doc_id,
-            } => {
-                let parent = parent_request_doc_id.and_then(|doc_id| {
-                    store
-                        .requests
-                        .iter()
-                        .find(|row| row.doc_id.as_deref() == Some(doc_id))
-                });
+            RequestOrigin::SessionMessage { .. } => {
+                let source = request
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.started_by.as_ref());
                 RequestOriginView::SessionMessage {
-                    display_body: parent
-                        .and_then(|parent| {
-                            gents_session::request::lifecycle::session_message_display_body(
-                                request, parent,
-                            )
-                        })
+                    display_body:
+                        gents_session::request::lifecycle::signed_session_message_display_body(
+                            request,
+                        )
                         .map(str::to_owned),
-                    sender_node_did: parent
-                        .and_then(|row| normalize_optional(row.node_did.as_deref()))
-                        .or_else(|| normalize_optional(request.requester_did.as_deref())),
-                    sender_session_id: parent
-                        .and_then(|row| normalize_optional(row.session_id.as_deref())),
-                    sender_request_id: parent.map(|row| row.request_id.clone()).or_else(|| {
-                        normalize_optional(request.caused_by_parent_request_id.as_deref())
-                    }),
+                    sender_node_did: source.map(|source| source.node_did.clone()),
+                    sender_session_id: source.map(|source| source.session_id.clone()),
+                    sender_request_id: normalize_optional(
+                        request.caused_by_parent_request_id.as_deref(),
+                    ),
                 }
             }
             RequestOrigin::Trigger {
                 trigger_id,
                 trigger_kind,
             } => RequestOriginView::Trigger {
+                display_body: gents_automation::triggers::engine::trigger_display_body(request)
+                    .map(str::to_owned),
                 trigger_id: trigger_id.to_owned(),
                 trigger_kind: trigger_kind.map(str::to_owned),
             },
@@ -167,12 +159,23 @@ pub(super) fn request_origin_view(
                 sequence,
                 wrapup,
             } => RequestOriginView::GoalContinuation {
+                retry: gents_automation::triggers::engine::goal_source::goal_retry_presentation(
+                    request,
+                )
+                .map(|retry| crate::types::GoalRetryPresentationView {
+                    cause: retry.cause,
+                    attempt: retry.attempt,
+                    max: retry.max,
+                }),
                 goal_id: goal_id.map(str::to_owned),
                 sequence,
                 wrapup,
             },
             RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion {
                 notification: false,
+                tool_call_id: None,
+                reason: None,
+                result_range: None,
                 tool_call_doc_id: None,
                 tool_name: None,
                 status_kind: None,
@@ -182,43 +185,69 @@ pub(super) fn request_origin_view(
 }
 
 pub(super) fn message_origin(
-    store: &ClientStore,
     message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
-    tool_calls: &[&AgentToolCallRow],
 ) -> Option<RequestOriginView> {
-    if message.role != gents_protocol::output::MessageRole::User
-        || gents_protocol::output::authored::is_output_obligation(
-            message.role,
-            message.request_doc_id.as_deref(),
+    use gents_session::request::lifecycle::presentation_origin::{
+        classify, request_facts, Facts, Kind,
+    };
+    let mut facts = input_request.map(request_facts).unwrap_or(Facts {
+        user_role: true,
+        output_obligation: false,
+        completion_notification: false,
+        goal_continuation: false,
+        completion_wake: false,
+        parent_tool: false,
+        trigger: false,
+    });
+    facts.user_role = message.role == gents_protocol::output::MessageRole::User;
+    facts.output_obligation = gents_protocol::output::authored::is_output_obligation(
+        message.role,
+        message.request_doc_id.as_deref(),
+        &message.message_key,
+    );
+    facts.completion_notification =
+        gents_protocol::background_completion::is_background_completion_notification_message_key(
             &message.message_key,
-        )
-    {
+        );
+    let kind = classify(facts);
+    if matches!(kind, Kind::OtherRole | Kind::RuntimeControl) {
         return None;
     }
-    if gents_protocol::background_completion::is_background_completion_notification_message_key(
-        &message.message_key,
-    ) {
+    if kind == Kind::BackgroundResult {
         let tool_call_doc_id = match &message.publication {
             gents_protocol::output::MessagePublication::ToolDelivery { tool_call_doc_id } => {
                 Some(tool_call_doc_id.clone())
             }
             _ => None,
         };
-        let owning_tool = tool_call_doc_id.as_deref().and_then(|doc_id| {
-            tool_calls
-                .iter()
-                .find(|row| row.doc_id.as_deref() == Some(doc_id))
+        let metadata = message.blocks.iter().find_map(|block| {
+            let gents_protocol::output::MessageBlock::Text { text } = block else {
+                return None;
+            };
+            let gents_protocol::output::PayloadPresentation::Composed { parts } =
+                &text.presentation
+            else {
+                return None;
+            };
+            gents_tools::rendering::completion_metadata(parts)
         });
         return Some(RequestOriginView::BackgroundCompletion {
             notification: true,
+            tool_call_id: metadata.as_ref().map(|info| info.tool_call_id.clone()),
+            reason: metadata.as_ref().and_then(|info| info.reason.clone()),
+            result_range: metadata
+                .as_ref()
+                .map(|info| crate::types::CompletionResultRangeView {
+                    start_byte: info.result_start_byte,
+                    end_byte: info.result_end_byte,
+                }),
             tool_call_doc_id,
-            tool_name: owning_tool.and_then(|row| normalize_optional(row.tool_name.as_deref())),
-            status_kind: owning_tool
-                .map(|row| super::timeline::tool_status_kind(row.lifecycle_state.as_deref())),
+            tool_name: metadata.as_ref().map(|info| info.tool_name.clone()),
+            status_kind: metadata.as_ref().map(|info| info.status.clone()),
         });
     }
-    input_request.and_then(|request| request_origin_view(store, request))
+    input_request.and_then(request_origin_view)
 }
 
 pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> bool {
@@ -258,7 +287,7 @@ struct LoadedReduction {
 
 #[cfg(test)]
 pub fn build_session_snapshot_from_store(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
@@ -267,7 +296,7 @@ pub fn build_session_snapshot_from_store(
 
 #[cfg(test)]
 pub fn build_session_snapshot_from_store_for_node(
-    store: &gents_desktop_core::client::ClientStore,
+    store: &gents_observe::client_projection::store::ClientStore,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
@@ -291,7 +320,7 @@ pub fn build_session_snapshot_from_store_for_node(
 
 #[cfg(test)]
 pub async fn build_session_snapshot_for_node(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
@@ -325,7 +354,7 @@ pub async fn build_session_snapshot_for_node(
     reason = "projection inputs come from separate stores and request options"
 )]
 pub async fn build_session_snapshot_for_node_with_transcript(
-    core: &ClientCore,
+    core: &ClientRuntime,
     access: &ConfigAccess,
     node_did: Option<&str>,
     session_id: &str,
@@ -333,7 +362,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     transcript_store: Option<&ClientStore>,
     canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
     context_store: Option<&ClientStore>,
-    prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
+    prompt_ownership: Option<&gents_observe::client_projection::query::RequestPromptOwnership>,
     context_totals_exact: bool,
     include_live_tail: bool,
     request_projection: Option<&[AgentRequestRow]>,
@@ -506,27 +535,28 @@ pub(crate) async fn attach_context_history_rows(
         .iter()
         .map(|row| i64::from(row.message.sequence))
         .collect::<RapidHashSet<_>>();
-    let compactions = match gents_desktop_core::client::load_session_compaction_entries_on(
-        access,
-        session_id,
-        node_did,
-        requester_did,
-    )
-    .await
-    {
-        Ok(entries) => Some(entries),
-        Err(error) if error.permission_denied() => return Err(error),
-        Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                session_id,
-                node_did,
-                error = %error,
-                "loading session compaction history failed"
-            );
-            None
-        }
-    };
+    let compactions =
+        match gents_observe::client_projection::query::load_session_compaction_entries_on(
+            access,
+            session_id,
+            node_did,
+            requester_did,
+        )
+        .await
+        {
+            Ok(entries) => Some(entries),
+            Err(error) if error.permission_denied() => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    node_did,
+                    error = %error,
+                    "loading session compaction history failed"
+                );
+                None
+            }
+        };
     let reductions =
         match request_context::load_session_reductions(access, node_did, session_id, requester_did)
             .await
@@ -860,8 +890,8 @@ async fn fill_job_outcomes(
                 }
             }
             Err(gents_protocol::job::JobReadError::PermissionDenied) => {
-                return Err(crate::error::BridgeError::new(
-                    crate::error::BridgeErrorCode::PermissionDenied,
+                return Err(gents_store::client_error::BridgeError::new(
+                    gents_store::client_error::BridgeErrorCode::PermissionDenied,
                     "Access was denied. Check this client's permissions with the runtime owner.",
                 )
                 .into());
@@ -1126,7 +1156,7 @@ mod retry_eligibility_tests;
 #[cfg(test)]
 mod paging_coverage_tests {
     use super::*;
-    use gents_desktop_core::client::ClientStoreRows;
+    use gents_observe::client_projection::store::ClientStoreRows;
 
     #[test]
     fn many_reduction_rows_collapse_to_one_request_summary_that_pages() {
@@ -1254,7 +1284,8 @@ mod paging_coverage_tests {
                 });
             }
             let store = ClientStore::from_rows(rows);
-            let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+            let mut ownership =
+                gents_observe::client_projection::query::RequestPromptOwnership::default();
             if case.known {
                 let doc = if case.observed_request == 1 {
                     "request-doc"
@@ -1263,7 +1294,7 @@ mod paging_coverage_tests {
                 };
                 ownership.by_request_doc_id.insert(
                     doc.into(),
-                    gents_desktop_core::client::RequestPromptFact {
+                    gents_observe::client_projection::query::RequestPromptFact {
                         node_did: "node".into(),
                         session_id: "session".into(),
                         requester_did: None,

@@ -8,6 +8,14 @@
     "opener:default",
     "gents-desktop-bridge:default",
     "gents-desktop-bridge:full",
-    "gents-desktop-bridge:native-e2e"
+    "gents-desktop-bridge:native-e2e",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+        }
+      ]
+    }
   ]
 }

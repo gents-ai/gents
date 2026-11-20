@@ -1,17 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import type { SavedPeerView } from "@source-inc/gents-desktop-client/generated/SavedPeerView";
+import type { SavedRuntimeView } from "@source-inc/gents-desktop-client/generated/SavedRuntimeView";
 
 import { continueLabel } from "../src/lib/remoteNodes";
 
-const peer = (label: string, source: string | null, local = false): SavedPeerView => ({
-  peerId: label,
+const peer = (
+  label: string,
+  source: string | null,
+  local = false,
+): SavedRuntimeView => ({
   label,
   nodeDid: `did:key:${label}`,
-  addr: "addr",
-  source,
+
   graphql: null,
-  local,
+  local: local || source === "local-standard" || source === "local",
 });
 
 describe("continueLabel", () => {

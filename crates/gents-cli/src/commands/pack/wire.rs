@@ -24,7 +24,7 @@ pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
             &owner,
             &home,
             &request,
-            gents_service::home_state::load_held_user_identity,
+            gents_host::http::pack_wire_client::SIGNERS,
         )
         .await?,
     )

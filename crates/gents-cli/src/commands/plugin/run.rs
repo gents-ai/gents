@@ -40,9 +40,7 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
 /// as the CLI honors it. The input's declared `bind_dir` field is bound
 /// through the same owner a model tool's call uses
 /// ([`PluginExecutor::call_data_bound`]): the folder it names must be one
-/// the operator allowed, or be approved by them when the caller runs under
-/// [`gents::plugin::approval::scope_interactive`]; an input without the
-/// field runs sealed. There is no `--bind-dir` here: the operator never
+/// the operator allowed; an input without the field runs sealed. There is no `--bind-dir` here: the operator never
 /// names a folder directly on this path.
 pub async fn call_installed(
     home: &Path,
@@ -50,17 +48,29 @@ pub async fn call_installed(
     name: &str,
     input: serde_json::Value,
 ) -> Result<serde_json::Value> {
-    call_installed_inner(home, namespace, name, input, None, false).await
+    call_installed_inner(
+        home,
+        namespace,
+        name,
+        input,
+        None,
+        false,
+        &gents_loop::tool::ToolCallEnvelope::default(),
+    )
+    .await
 }
 
+/// `context` is the envelope of the operator's call: interactive when the
+/// operator may be asked for access.
 pub async fn call_installed_for_operator(
     home: &Path,
     namespace: &str,
     name: &str,
     input: serde_json::Value,
     operator: Option<(gents_store::config_client::ConfigAccess, String)>,
+    context: &gents_loop::tool::ToolCallEnvelope,
 ) -> Result<serde_json::Value> {
-    call_installed_inner(home, namespace, name, input, operator, true).await
+    call_installed_inner(home, namespace, name, input, operator, true, context).await
 }
 
 async fn call_installed_inner(
@@ -70,6 +80,7 @@ async fn call_installed_inner(
     input: serde_json::Value,
     operator: Option<(gents_store::config_client::ConfigAccess, String)>,
     ux: bool,
+    context: &gents_loop::tool::ToolCallEnvelope,
 ) -> Result<serde_json::Value> {
     let record = store::read_record(home, namespace, name).with_context(|| {
         format!(
@@ -95,7 +106,17 @@ async fn call_installed_inner(
         })
         .transpose()?;
     let call = executor
-        .call_data_bound_for(&record, input, None, false, data_caller)
+        .call_data_bound_for(
+            &record,
+            input,
+            gents_toolcalls::plugin::executor::ToolInvocation {
+                tool_root: None,
+                own_folder: None,
+                tool_calls: false,
+                context,
+            },
+            data_caller,
+        )
         .await
         .with_context(|| format!("calling plugin {coordinate}"))?;
     if let Some(note) = &call.binding_note {
@@ -149,9 +170,24 @@ async fn run_plugin(
         Some(dir) => {
             let bound = BoundDir::new(dir, None)
                 .with_context(|| format!("binding {} for {coordinate}", dir.display()))?;
-            executor.call_bound(record, input, bound).await
+            executor
+                .call_bound(
+                    record,
+                    input,
+                    bound,
+                    &gents_loop::tool::ToolCallEnvelope::default(),
+                )
+                .await
         }
-        None => executor.call(record, input).await,
+        None => {
+            executor
+                .call(
+                    record,
+                    input,
+                    &gents_loop::tool::ToolCallEnvelope::default(),
+                )
+                .await
+        }
     }
     .with_context(|| format!("calling plugin {coordinate}"))?;
     if let Some(note) = &call.binding_note {
@@ -202,7 +238,7 @@ mod tests {
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
             data_collection_schemas: Default::default(),
-            plugin_interface: None,
+            gents_version: None,
         }
     }
 
@@ -265,7 +301,7 @@ mod tests {
         let caller = || Some((access.clone(), node_did.clone()));
         let result = call_installed_for_operator(home.path(), "gents", "echo", serde_json::json!({
             "response": "ok", "writes": [{"op": "insert", "collection": "UxNote", "fields": {"body": "one"}}]
-        }), caller()).await.unwrap();
+        }), caller(), &gents_loop::tool::ToolCallEnvelope::default()).await.unwrap();
         assert_eq!(result["response"], "ok");
         assert!(result.get("writes").is_none());
         let refused = call_installed_for_operator(
@@ -279,6 +315,7 @@ mod tests {
                 ]
             }),
             caller(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
         assert!(refused.is_err());
@@ -292,7 +329,7 @@ mod tests {
             .to_owned();
         call_installed_for_operator(home.path(), "gents", "echo", serde_json::json!({
             "writes": [{"op": "update", "collection": "UxNote", "doc_id": doc, "fields": {"body": "uno"}}]
-        }), caller()).await.unwrap();
+        }), caller(), &gents_loop::tool::ToolCallEnvelope::default()).await.unwrap();
         let rows = access.execute("{ UxNote { body } }").await.unwrap();
         assert_eq!(rows["data"]["UxNote"], serde_json::json!([{"body": "uno"}]));
         call_installed_for_operator(
@@ -303,6 +340,7 @@ mod tests {
                 "writes": [{"op": "delete", "collection": "UxNote", "doc_id": doc, "fields": {}}]
             }),
             caller(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
         .unwrap();

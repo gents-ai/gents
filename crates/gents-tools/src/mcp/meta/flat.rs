@@ -73,7 +73,11 @@ impl ToolDyn for FlatRemoteTool {
     fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
         Box::pin(async { self.definition.clone() })
     }
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let arguments = gents_loop::tool::parse_tool_args(&args)?;
             Tool::call(
@@ -83,13 +87,18 @@ impl ToolDyn for FlatRemoteTool {
                     tool_name: self.tool_name.clone(),
                     arguments,
                 },
+                context,
             )
             .await
             .map_err(CallToolTool::into_dyn_error)
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         let Ok(arguments) = gents_loop::tool::parse_tool_args::<serde_json::Value>(args) else {
             return Ok(());
         };
@@ -100,6 +109,7 @@ impl ToolDyn for FlatRemoteTool {
                 tool_name: self.tool_name.clone(),
                 arguments,
             },
+            context,
         )
         .map_err(CallToolTool::into_dyn_error)
     }

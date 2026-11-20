@@ -1,6 +1,6 @@
 use gents_protocol::schemas;
 
-mod common;
+use crate::common;
 
 fn without(fields: &[&str]) -> String {
     schemas::INFERENCE_BACKEND

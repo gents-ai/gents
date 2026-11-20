@@ -23,6 +23,8 @@ pub(super) struct OwnedRuntimeTasks {
     pub(super) health_checker: AbortOnDropHandle<()>,
     pub(super) backend_prober: AbortOnDropHandle<()>,
     pub(super) runtime_snapshot_observer_handle: Option<AbortOnDropHandle<()>>,
+    /// Its cleanup tracker counts the terminal rows dropped permits still owe.
+    pub(super) admission_registry: gents_inference::admission::AdmissionRegistry,
 }
 
 pub(super) async fn shutdown_runtime(
@@ -43,6 +45,7 @@ pub(super) async fn shutdown_runtime(
             health_checker,
             backend_prober,
             runtime_snapshot_observer_handle,
+            admission_registry,
         } = tasks;
         let mut teardown_error = None;
         if let Err(error) = lifecycle.begin_shutdown().await {
@@ -65,7 +68,7 @@ pub(super) async fn shutdown_runtime(
         let background_process_stops = AbortOnDropHandle::new(tokio::spawn(async move {
             let report = background_executions.shutdown().await;
             tracing::info!(
-                target: "gents::shutdown",
+                target: "crate::shutdown",
                 stage = "managed_process_stop",
                 stopped = report.stopped,
                 unstopped = report.unstopped,
@@ -114,6 +117,10 @@ pub(super) async fn shutdown_runtime(
             }
         }
         lsp_pool.shutdown().await;
+        // The joined tasks dropped their permits; the terminal rows those
+        // drops owe are written before the runtime exits, or left to
+        // recovery when the teardown deadline cuts this wait.
+        admission_registry.drop_cleanup_idle().await;
         if let Err(error) = lifecycle.finish_shutdown().await {
             record_teardown_failure(
                 &mut teardown_error,

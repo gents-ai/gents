@@ -10,6 +10,7 @@ use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegmen
 use gents_protocol::output::{OutputSegment, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::STALL_CEILING;
 use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
@@ -173,7 +174,24 @@ where
         .map(|row| serde_json::from_value(row.clone()).expect("decode observed row"))
 }
 
-async fn fetch_request_lifecycle<R>(reader: &R, request_id: &str) -> Option<String>
+#[derive(Deserialize)]
+struct LifecycleRow {
+    lifecycle_state: Option<String>,
+}
+
+fn request_lifecycle(data: &serde_json::Value, request_id: &str) -> Option<String> {
+    assert!(
+        data["AgentRequest"].as_array().map_or(0, Vec::len) <= 1,
+        "live test request label is ambiguous: {request_id}"
+    );
+    optional_row::<LifecycleRow>(data, "AgentRequest").and_then(|r| r.lifecycle_state)
+}
+
+/// Waits for `request_id` to terminalize, observed as `reader`: ACP shows a
+/// request only to its related actors, so the reader is one of them or the
+/// node's native admin. Fails with the last rows read once the request has
+/// not changed for [`STALL_CEILING`].
+pub async fn wait_for_request_terminal<R>(reader: &R, request_id: &str) -> String
 where
     R: SnapshotReader + ?Sized,
 {
@@ -181,90 +199,53 @@ where
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{
-                lifecycle_state
+                _docID lifecycle_state execution_generation execution_lease_expires_at
+                terminal_output failure_reason
+            }}
+            InferenceCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 10) {{
+                call_id call_state failure_reason started_at ended_at
+            }}
+            AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 10) {{
+                _docID tool_name lifecycle_state started_at completed_at
             }}
         }}"#
     );
-    #[derive(Deserialize)]
-    struct Row {
-        lifecycle_state: Option<String>,
-    }
-    let data = reader.read_data(&query).await;
-    let rows = data["AgentRequest"].as_array().cloned().unwrap_or_default();
-    assert!(
-        rows.len() <= 1,
-        "live test request label is ambiguous: {request_id}"
-    );
-    optional_row::<Row>(&data, "AgentRequest").and_then(|r| r.lifecycle_state)
+    let rows = rows_when(reader, "AgentRequest", &query, |data| {
+        request_lifecycle(data, request_id).is_some_and(|state| is_terminal(&state))
+    })
+    .await;
+    request_lifecycle(&rows, request_id).expect("terminal row carries lifecycle_state")
 }
 
-/// Waits for `request_id` to terminalize, observed as `reader`: ACP shows a
-/// request only to its related actors, so the reader is one of them or the
-/// node's native admin.
-pub async fn wait_for_request_terminal<R>(reader: &R, request_id: &str, timeout: Duration) -> String
-where
-    R: SnapshotReader + ?Sized,
-{
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = reader.subscribe_changes("AgentRequest").await;
-    let mut last = String::from("<none>");
-    loop {
-        if let Some(state) = fetch_request_lifecycle(reader, request_id).await {
-            last = state.clone();
-            if is_terminal(&state) {
-                return state;
-            }
-        }
-        if tokio::time::Instant::now() >= deadline {
-            let escaped = escape_graphql_string(request_id);
-            let evidence = reader
-                .read_data(&format!(
-                    r#"{{
-                AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{
-                    _docID lifecycle_state execution_generation execution_lease_expires_at
-                    terminal_output failure_reason
-                }}
-                InferenceCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 10) {{
-                    call_id call_state failure_reason started_at ended_at
-                }}
-                AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 10) {{
-                    _docID tool_name lifecycle_state started_at completed_at
-                }}
-            }}"#
-                ))
-                .await;
-            panic!("timed out waiting for request {request_id} to terminalize; last={last}; evidence={evidence}");
-        }
-        if tokio::time::timeout_at(deadline, changes.recv())
-            .await
-            .is_err()
-        {
-            continue;
-        }
-    }
-}
-
-pub async fn wait_for_rows<R, F>(
+/// Resolves with the first read of `query` that satisfies `predicate`,
+/// re-reading on each change to `collection`, and panics with the last rows
+/// once `collection` has not changed for [`STALL_CEILING`]. The predicate
+/// must change only together with a `collection` change that `reader`
+/// observes: a reader other than the rows' owner sees a child row when its
+/// session link is published, which is a later change to the child's own
+/// collection.
+pub async fn rows_when<R, F>(
     reader: &R,
     collection: &str,
     query: &str,
-    timeout: Duration,
     predicate: F,
 ) -> serde_json::Value
 where
     R: SnapshotReader + ?Sized,
     F: Fn(&serde_json::Value) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + timeout;
     let mut changes = reader.subscribe_changes(collection).await;
     loop {
         let rows = reader.read_data(query).await;
         if predicate(&rows) {
             return rows;
         }
-        tokio::time::timeout_at(deadline, changes.recv())
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
             .await
-            .unwrap_or_else(|_| panic!("deadline waiting for {collection}: {rows}"));
+            .is_err()
+        {
+            panic!("{collection} stalled for {STALL_CEILING:?}: {rows}");
+        }
     }
 }
 

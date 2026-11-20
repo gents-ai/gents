@@ -1,5 +1,6 @@
 use super::*;
 use agent_management::AgentApplyError;
+use gents_protocol::operations::agent::AgentOperationError;
 use gents_protocol::operations::NextCall;
 
 /// The model tool's spelling of a declared next call.
@@ -14,6 +15,19 @@ pub(super) fn next_call(next: NextCall) -> Value {
     }
 }
 
+/// The catalog refusal, kept apart from other guidance so the tool can name
+/// the calls that grant the catalog to this agent and the call that confirms
+/// what it holds.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(super) struct CatalogRefusal(String);
+
+impl CatalogRefusal {
+    pub(super) fn in_error(error: &anyhow::Error) -> bool {
+        error.downcast_ref::<Self>().is_some()
+    }
+}
+
 /// A refused agent operation answers with what happened and the recovery its
 /// error declares for the requested operation. Another owner's failure passes
 /// on unchanged to that owner's classifiers in `failure_guidance`.
@@ -22,6 +36,9 @@ pub(super) fn agent_failure(
     params: &ConfigureAgentParams,
 ) -> anyhow::Error {
     match error {
+        AgentApplyError::Operation(error @ AgentOperationError::CatalogNotHeld) => {
+            CatalogRefusal(gents_protocol::error_chain::ErrorChain(&error).to_string()).into()
+        }
         AgentApplyError::Operation(error) => CommandGuidance {
             message: gents_protocol::error_chain::ErrorChain(&error).to_string(),
             next_call: next_call(agent_management::recovery_for(params, &error)),
@@ -47,13 +64,31 @@ fn missing_reference_next_step(
 }
 
 impl ConfigCommandTool {
+    /// Lean `SelfConfig.catalog_is_not_self_granted`: no call of the refused
+    /// agent grants the catalog, so the refusal names the calls of those who
+    /// can, and as the next call the one that confirms what this agent holds.
+    fn catalog_refusal(&self, message: String) -> (String, Value) {
+        let [permission, relation] = gents_protocol::operations::agent::CATALOG_REFUSAL_WORDS;
+        let agent = self.core.agent_did();
+        let message = format!(
+            "{message}. An Agent that administers the Node grants it with policy grant --subject {agent} --permission {relation}; a person who owns or administers the Node runs gents config agent grant-node-admin --graphql GRAPHQL_URL --node-did {} {agent}",
+            self.node_did
+        );
+        let next = if self.categories.contains("policy") {
+            json!({"argv": ["policy", "check", "--permission", permission]})
+        } else {
+            json!({"argv": ["agent", "get"]})
+        };
+        (message, json!({"next_call": next}))
+    }
+
     pub(super) fn failure_guidance(
         &self,
         error: &anyhow::Error,
         argv: &[String],
         deleting: bool,
     ) -> (String, Value) {
-        let missing = error.downcast_ref::<gents_documents::MissingReference>();
+        let missing = gents_documents::MissingReference::in_error(error);
         let message = missing.map_or_else(
             || format!("{error:#}"),
             |missing| {
@@ -63,10 +98,13 @@ impl ConfigCommandTool {
                 )
             },
         );
-        if let Some(hint) = error.downcast_ref::<CommandGuidance>() {
+        if let Some(hint) = CommandGuidance::in_error(error) {
             return (message, json!({"next_call":hint.next_call}));
         }
-        if let Some(schema) = error.downcast_ref::<gents_documents::OutcomeSourceSchemaError>() {
+        if CatalogRefusal::in_error(error) {
+            return self.catalog_refusal(message);
+        }
+        if let Some(schema) = gents_documents::OutcomeSourceSchemaError::in_error(error) {
             let next = if schema.missing_handoff {
                 json!({"argv":["collection","preview","update",schema.collection],"options":{"patch":[{"op":"add","path":format!("/{}/Fields/-",schema.collection),"value":{"Name":"handoff_id","Kind":"String"}}]}})
             } else {
@@ -74,7 +112,7 @@ impl ConfigCommandTool {
             };
             return (message, json!({"tool":"schema","next_call":next}));
         }
-        if let Some(missing) = error.downcast_ref::<super::ops::MissingConfigDocument>() {
+        if let Some(missing) = super::ops::MissingConfigDocument::in_error(error) {
             if let Some((resource, _)) = HELP_INDEX
                 .iter()
                 .find(|(r, _)| crud::resource_target(r) == Some(missing.target))
@@ -83,9 +121,7 @@ impl ConfigCommandTool {
             }
         }
         let resources = model_resources(&self.categories, self.core.held_grants().pack_install);
-        if error.downcast_ref::<super::ops::MissingAgent>().is_some()
-            && self.categories.contains("node")
-        {
+        if super::ops::MissingAgent::in_error(error) && self.categories.contains("node") {
             return (message, json!({"next_call":{"argv":["agent","list"]}}));
         }
         if let Some(missing) = missing {

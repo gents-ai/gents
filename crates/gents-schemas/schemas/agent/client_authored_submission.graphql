@@ -1,0 +1,10 @@
+type ClientAuthoredSubmission @policy(id: "0db680be49781d06d5793ca0eecc8fad2b1a5d05467c535325ddeb148f679b9c", resource: "journals") @index(fields: ["client_did", "node_did", "ordinal"], unique: true) {
+    submission_id: String @index(unique: true) @immutable
+    client_did: String @index @immutable
+    node_did: String @index @immutable
+    ordinal: Int @immutable
+    digest: String @immutable
+    pending: Boolean @index
+    payload: String
+    prepared: String
+}

@@ -13,7 +13,7 @@ use gents_eval::authoring::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDAT
 use gents_eval::authoring::dossier::{self, Dossier};
 use gents_eval::authoring::draft::{self, parse_reply};
 use gents_eval::authoring::validate::{assemble, validate, Assembled, Floors};
-use gents_eval::authoring::write::{self, case_table, commit, stage, Staged, Written};
+use gents_eval::authoring::write::{self, case_table, commit, stage, StageError, Staged, Written};
 use gents_pack::pack::resolved_pack::{resolve_pack_source, ResolvedPack};
 
 mod host;
@@ -100,7 +100,10 @@ pub(crate) async fn interview(
                     rounds,
                 });
             }
-            Err(messages) => {
+            Err(StageError::Host(error)) => {
+                return Err(error.context("the draft could not be checked; nothing was written"));
+            }
+            Err(StageError::Draft(messages)) => {
                 let listed = format!("- {}", messages.join("\n- "));
                 writeln!(out, "the draft did not validate:\n{listed}")?;
                 if rounds == MAX_VALIDATION_ROUNDS {
@@ -151,11 +154,11 @@ async fn checked(
     definition_id: Option<&str>,
     summary: &str,
     pilot: Option<&write::PilotNote>,
-) -> Result<(Assembled, Staged), Vec<String>> {
+) -> Result<(Assembled, Staged), StageError> {
     let draft = match parsed {
         Ok(Some(draft)) => draft,
-        Ok(None) => return Err(vec!["the reply carries no fenced json draft".to_owned()]),
-        Err(message) => return Err(vec![message]),
+        Ok(None) => return Err(vec!["the reply carries no fenced json draft".to_owned()].into()),
+        Err(message) => return Err(vec![message].into()),
     };
     let assembled = assemble(&draft, definition_id, &ctx.owner, &ctx.dossier.slot)?;
     validate(&assembled, ctx.registry, &ctx.dossier, &ctx.floors)?;
@@ -527,8 +530,13 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let graphql = format!("http://{}", listener.local_addr().unwrap());
         let app = axum::Router::new().route(
-            "/",
-            axum::routing::post(|| async { axum::Json(json!({"data": {"__typename": "Query"}})) }),
+            "/status",
+            axum::routing::get(|| async {
+                axum::Json(json!({
+                    gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD:
+                        gents_protocol::serve_lifecycle::ServeLifecycle::Ready,
+                }))
+            }),
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let out = root.path().join("out").display().to_string();

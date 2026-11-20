@@ -99,9 +99,11 @@ pub async fn served_config(mut config: Value) -> Served {
 }
 
 /// The CLI's User, made once per test process: concurrent first makes race on its metadata file.
-pub async fn cli_user() -> &'static gents_desktop_core::client::PrincipalIdentity {
-    static USER: tokio::sync::OnceCell<gents_desktop_core::client::PrincipalIdentity> =
-        tokio::sync::OnceCell::const_new();
+pub async fn cli_user(
+) -> &'static gents_store::client_journal::principal_identity::PrincipalIdentity {
+    static USER: tokio::sync::OnceCell<
+        gents_store::client_journal::principal_identity::PrincipalIdentity,
+    > = tokio::sync::OnceCell::const_new();
     USER.get_or_init(|| async {
         gents_service::home_state::client_identity_for(
             &gents_service::home_state::resolve_home_dir(None),
@@ -246,7 +248,7 @@ async fn serve(
     let mut http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
     let served = gents::runtime::embedded::ServedNode::default();
     if runtime.is_some() {
-        http = http.with_extra_routes(gents::runtime::embedded::agent_identity_routes(
+        http = http.with_authenticated_routes(gents::runtime::embedded::agent_identity_routes(
             served.clone(),
         ));
     }

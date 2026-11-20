@@ -29,8 +29,9 @@ env:
   GENTS_BUILD_GIT_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
   GENTS_BUILD_GIT_DIRTY: "false"
   # Keep the workspace's no-LTO/16-CGU release shape explicit on Linux. Cargo
-  # parallelism remains per architecture: workstation-1 (x86_64) has ample
-  # RAM, while the sparks (aarch64) serve a resident model and need a low cap.
+  # parallelism remains per architecture: the X64 release runner has ample
+  # RAM, while the ARM64 release runners also serve a resident model and need
+  # a low cap.
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
   RUST_BACKTRACE: "1"
 
@@ -49,7 +50,6 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             runner_arch: X64
-            runner_label: workstation-1
             # ~228 GB free; use the fast workspace release shape.
             release_lto: "off"
             cargo_jobs: "8"
@@ -62,11 +62,10 @@ jobs:
             glibc_baseline: "2.36"
           - target: aarch64-unknown-linux-gnu
             runner_arch: ARM64
-            runner_label: spark
-            # spark-1/2 serve the resident vLLM model in unified memory,
-            # leaving only ~7-9 GB free. Disable LTO and cap parallelism so the
-            # link fits. Cross-compiling on workstation-1 is the tracked
-            # long-term fix (see the build-flavors epic).
+            # The ARM64 release runners serve a resident vLLM model in unified
+            # memory, leaving only ~7-9 GB free. Disable LTO and cap parallelism
+            # so the link fits. Cross-compiling on the X64 release runner is
+            # the tracked long-term fix (see the build-flavors epic).
             release_lto: "off"
             cargo_jobs: "2"
             container_image: ""
@@ -75,7 +74,7 @@ jobs:
       - self-hosted
       - Linux
       - ${{ matrix.runner_arch }}
-      - ${{ matrix.runner_label }}
+      - ci-release
     container: ${{ matrix.container_image }}
     defaults:
       run:

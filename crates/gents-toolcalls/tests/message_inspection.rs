@@ -31,13 +31,15 @@ async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
         .transact_write("test.inspection.worker_session", |txn| {
             Box::pin(gents_session::session::ensure_session_in_txn(
                 txn,
-                "read-worker",
-                identity.did(),
-                signer.did(),
-                Some(signer.did()),
-                None,
-                None,
-                "2026-11-04T00:00:00Z",
+                gents_session::session::NewAgentSession {
+                    session_id: "read-worker",
+                    node_did: identity.did(),
+                    agent_did: signer.did(),
+                    requester_did: Some(signer.did()),
+                    title: None,
+                    provenance: None,
+                    created_at: "2026-11-04T00:00:00Z",
+                },
             ))
         })
         .await

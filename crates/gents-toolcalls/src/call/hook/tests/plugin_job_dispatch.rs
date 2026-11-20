@@ -365,7 +365,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         }
         hook = hook.with_job_driver(JobDriver::with_service_admission(runtime, admission));
     }
-    bind_claimed_hook_request(&hook, lifecycle, Utc::now() + chrono::Duration::minutes(5)).await;
+    bind_claimed_hook_request(&hook, lifecycle).await;
     hook.on_completion_call(&user_text_message("run the workflow"), &[])
         .await;
     Step0 {
@@ -524,7 +524,16 @@ impl Step0 {
 
     async fn call_as(&self, call_id: &str, args: &str) -> Value {
         accept_hook_tool_call(&self.hook, call_id, TOOL, args, None).await;
-        let action = self.hook.on_tool_call(TOOL, None, call_id, args).await;
+        let action = self
+            .hook
+            .on_tool_call(
+                TOOL,
+                None,
+                call_id,
+                args,
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await;
         let ToolCallHookAction::Skip { reason } = action else {
             panic!("a job tool call is answered by its hook: {action:?}");
         };
@@ -625,6 +634,7 @@ fn failed(row: &Value, class: &str) {
 
 #[tokio::test]
 async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_arguments() {
+    gents_lean_vocab::snapshot().await;
     let step = step0(
         json!({"result": {"answer": 42}}),
         Options {
@@ -1130,7 +1140,16 @@ async fn refused_dispatches_name_their_policy_and_next_help() {
                 .await
                 .unwrap();
                 assert!(input.ceiling.targets.is_empty());
-                let action = step.hook.on_tool_call(TOOL, None, "call-1", args).await;
+                let action = step
+                    .hook
+                    .on_tool_call(
+                        TOOL,
+                        None,
+                        "call-1",
+                        args,
+                        &gents_loop::tool::ToolCallEnvelope::default(),
+                    )
+                    .await;
                 let ToolCallHookAction::Skip { reason } = action else {
                     panic!("job call must return its admission result: {action:?}");
                 };
@@ -1417,7 +1436,16 @@ async fn pinned_step0_terminal_adopts_and_settles_in_one_transaction() {
     let row = step.row().await;
     let doc = row["_docID"].as_str().unwrap().to_owned();
     crate::call::lifecycle::delivery::fail_next_terminal_for_test(&doc);
-    let action = step.hook.on_tool_call(TOOL, None, "call-1", ARGS).await;
+    let action = step
+        .hook
+        .on_tool_call(
+            TOOL,
+            None,
+            "call-1",
+            ARGS,
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
+        .await;
     let ToolCallHookAction::Skip { reason } = action else {
         panic!("a job tool call is answered by its hook: {action:?}");
     };
@@ -1568,11 +1596,13 @@ async fn non_job_pause_ends_an_own_running_job_completed_paused() {
 }
 
 /// How the runtime Node shows its hop cap to a later step whose Agent cannot
-/// see that Node.
+/// see that Node: a cap the runtime may use, or a Node whose `runtime_reader`
+/// is revoked, which the hosting runtime still reads but may not use
+/// (`Identity.Household.runtimeMayUse`).
 #[derive(Clone, Copy, Debug)]
 enum NodeHopCap {
     Hidden(Option<u32>),
-    Unreadable,
+    Unusable,
 }
 
 impl Step0 {
@@ -1613,7 +1643,7 @@ impl Step0 {
                     .await
                     .unwrap();
             }
-            NodeHopCap::Unreadable => {
+            NodeHopCap::Unusable => {
                 gents_store::config_client::ConfigAccess::local_as(
                     self.node.clone(),
                     node_did.parse().unwrap(),
@@ -1859,8 +1889,8 @@ async fn step0_adoptions_suffix_handles_and_keep_scratch_by_call_as_the_lean_mod
     }
 }
 
-/// A later step reads the runtime Node's hop cap as the runtime: the Agent's
-/// own Node visibility is not an unset cap, and a Node the runtime cannot read
+/// A later step uses the runtime Node's hop cap as the runtime: the Agent's
+/// own Node visibility is not an unset cap, and a Node the runtime may not use
 /// bounds every spawn at hop 0.
 #[tokio::test]
 async fn later_steps_read_the_runtime_hop_cap_as_the_lean_model_says() {
@@ -1869,10 +1899,10 @@ async fn later_steps_read_the_runtime_hop_cap_as_the_lean_model_says() {
 
     for case in gents_lean_vocab::families::plugin_job_dispatch_later_step::cases() {
         let input = &case.input;
-        let cap = if input.cap_readable {
+        let cap = if input.node_usable {
             NodeHopCap::Hidden(input.cap.map(|cap| u32::try_from(cap).unwrap()))
         } else {
-            NodeHopCap::Unreadable
+            NodeHopCap::Unusable
         };
         let step = step0(
             adopting(),

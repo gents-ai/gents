@@ -1,0 +1,4 @@
+---- MODULE MCClientIdentityMetadataRemoveThenRename ----
+EXTENDS ClientIdentityMetadata
+
+====

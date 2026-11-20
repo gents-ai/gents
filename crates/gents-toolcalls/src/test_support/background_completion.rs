@@ -32,6 +32,13 @@ pub async fn desktop_owned_session(
         None,
     )
     .unwrap();
+    gents_session::test_support::create_agent_owned_session(
+        &db.agent_access,
+        db.node_did(),
+        session_id,
+        Some(desktop.did()),
+    )
+    .await;
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "desktop-parent",

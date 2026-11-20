@@ -1152,6 +1152,8 @@ fn apply_retry_summaries(
     }
 }
 
+/// `RunTimelineRetry.summary`: a failed attempt is a retry when the request
+/// made a later attempt by call sequence, which resumed executions continue.
 fn retry_summary_for_request(
     request: &TimelineRequestRow,
     inference_calls: &[TimelineInferenceCallRow],
@@ -1161,19 +1163,27 @@ fn retry_summary_for_request(
         .filter(|call| call.request_id == request.request_id)
         .filter(|call| call.call_kind == "inference")
         .collect::<Vec<_>>();
-
-    let mut retry_count = 0;
-    let mut last_transient_error = None;
-    for (index, call) in request_calls.iter().enumerate() {
-        if call.call_state == "failed" && index + 1 < request_calls.len() {
-            retry_count += 1;
-            last_transient_error = call.failure_reason.clone();
+    let retried = request_calls
+        .iter()
+        .copied()
+        .filter(|call| {
+            call.call_state == "failed"
+                && request_calls
+                    .iter()
+                    .any(|later| call.call_seq < later.call_seq)
+        })
+        .collect::<Vec<_>>();
+    let latest = retried.iter().copied().reduce(|kept, call| {
+        if kept.call_seq < call.call_seq {
+            call
+        } else {
+            kept
         }
-    }
-
+    });
+    let retry_count = u32::try_from(retried.len()).unwrap_or(u32::MAX);
     RetrySummary {
         retry_count,
-        last_transient_error,
+        last_transient_error: latest.and_then(|call| call.failure_reason.clone()),
         recovered: request_completed(request) && retry_count > 0,
     }
 }
@@ -2143,31 +2153,41 @@ mod tests {
     }
 
     #[test]
-    fn retry_summary_excludes_terminal_failed_attempt_without_successor() {
-        let rows = RunTimelineRows {
-            request: TimelineRequestRow {
-                request_id: "req-failed".to_string(),
-                lifecycle_state: Some(RequestLifecycleState::Failed),
-                created_at: Some("2026-05-04T12:00:00Z".to_string()),
+    fn retry_summary_follows_the_generated_model() {
+        gents_lean_vocab::families::run_timeline_retry_summary::replay(|i| {
+            let request = TimelineRequestRow {
+                request_id: i.name.clone(),
+                lifecycle_state: Some(if i.completed {
+                    RequestLifecycleState::Completed
+                } else {
+                    RequestLifecycleState::Failed
+                }),
                 ..Default::default()
-            },
-            inference_calls: vec![
-                inference_call("req-failed", 1, "failed", Some("retried transient")),
-                inference_call("req-failed", 2, "failed", Some("terminal provider error")),
-            ],
-            ..Default::default()
-        };
-
-        let timeline = build_run_timeline(rows);
-
-        assert_eq!(
-            timeline.request.retry_summary,
-            RetrySummary {
-                retry_count: 1,
-                last_transient_error: Some("retried transient".to_string()),
-                recovered: false,
+            };
+            let calls = i
+                .attempts
+                .iter()
+                .map(|attempt| TimelineInferenceCallRow {
+                    request_id: i.name.clone(),
+                    call_seq: i64::try_from(attempt.seq).unwrap(),
+                    call_state: if attempt.failed {
+                        "failed"
+                    } else {
+                        "completed"
+                    }
+                    .to_string(),
+                    failure_reason: attempt.reason.clone(),
+                    call_kind: "inference".to_string(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>();
+            let summary = retry_summary_for_request(&request, &calls);
+            gents_lean_vocab::families::run_timeline_retry_summary::Summary {
+                retries: u64::from(summary.retry_count),
+                last_transient: summary.last_transient_error,
+                recovered: summary.recovered,
             }
-        );
+        });
     }
 
     #[test]

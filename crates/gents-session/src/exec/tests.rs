@@ -42,6 +42,7 @@ async fn managed_exec_deadline_kills_process_group() {
             environment: None,
             tool_name: Some(tool_name.to_string()),
             live_output: None,
+            process_recorder: None,
         })
         .await
     });
@@ -97,6 +98,7 @@ async fn managed_exec_deadline_kills_process_group() {
             environment: None,
             tool_name: Some("r3-soak-next".to_string()),
             live_output: None,
+            process_recorder: None,
         }),
     )
     .await
@@ -129,6 +131,7 @@ async fn managed_exec_cancellation_kills_process_group() {
             environment: None,
             tool_name: Some(tool_name.to_string()),
             live_output: None,
+            process_recorder: None,
         })
         .await
     });
@@ -179,6 +182,7 @@ async fn managed_exec_deadline_kills_job_object() {
                 environment: None,
                 tool_name: Some(tool_name.to_string()),
                 live_output: None,
+                process_recorder: None,
             })
             .await
         }
@@ -221,6 +225,7 @@ async fn managed_exec_cancellation_kills_job_object() {
                 environment: None,
                 tool_name: Some(tool_name.to_string()),
                 live_output: None,
+                process_recorder: None,
             })
             .await
         }
@@ -352,6 +357,7 @@ async fn managed_exec_delivers_stdin_and_closes_the_pipe() {
         environment: None,
         tool_name: Some("stdin-passthrough".to_string()),
         live_output: None,
+        process_recorder: None,
     })
     .await;
 
@@ -385,6 +391,7 @@ async fn managed_exec_environment_replaces_the_inherited_environment() {
         )])),
         tool_name: Some("env-scope".to_string()),
         live_output: None,
+        process_recorder: None,
     })
     .await;
     match outcome {
@@ -414,6 +421,7 @@ async fn managed_exec_spawn_outcome_matches_the_lean_model() {
             environment: None,
             tool_name: Some("spawn-failure".to_string()),
             live_output: None,
+            process_recorder: None,
         })
         .await;
         if let ManagedExecOutcome::SpawnFailed { error } = &outcome {
@@ -517,6 +525,7 @@ async fn assert_bounded_capture_drain(retained_stream: &str) {
             environment: None,
             tool_name: Some(tool_name.clone()),
             live_output: None,
+            process_recorder: None,
         }),
     )
     .await;
@@ -574,6 +583,7 @@ async fn managed_exec_bounds_continuously_writing_descendant_after_direct_child_
             environment: None,
             tool_name: Some("continuous-descendant-pipe".to_string()),
             live_output: None,
+            process_recorder: None,
         }),
     )
     .await;
@@ -603,121 +613,57 @@ async fn managed_exec_bounds_continuously_writing_descendant_after_direct_child_
 
 #[cfg(unix)]
 #[tokio::test]
-async fn generated_process_stop_cases_drive_host_owner() {
+async fn owned_process_group_stops_match_lean() {
     use ownership::test_support::OwnedTestProcess;
-    use ownership::{ProcessIdentity, ProcessObservation, ProcessStopOutcome};
+    use ownership::{CancelProcessReply, ProcessIdentity, ProcessObservation, ProcessStopOutcome};
 
-    let observation = |name: &str| {
-        ProcessObservation::ALL
-            .into_iter()
-            .find(|observation| observation.as_str() == name)
-            .unwrap_or_else(|| panic!("unknown Lean process observation {name}"))
-    };
-    let cases = gents_lean_vocab::lean_process_stop_cases();
-    assert_eq!(cases.len(), 15);
-    for case in cases.iter().filter(|case| !case.live_evidence.is_empty()) {
-        let evidence = match case.live_evidence.as_str() {
-            "never_spawned" => ownership::LiveProcessEvidence::NeverSpawned,
-            "spawned_unverified" => ownership::LiveProcessEvidence::SpawnedUnverified,
-            "exited" => ownership::LiveProcessEvidence::Exited,
-            other => panic!("unknown live process evidence {other}"),
+    for case in gents_lean_vocab::families::process_stop_owned_process::cases::<
+        CancelProcessReply,
+        ProcessObservation,
+        ProcessStopOutcome,
+    >() {
+        let process = OwnedTestProcess::spawn(None).await;
+        assert_eq!(process.identity.observe(), ProcessObservation::Running);
+        let (before, after) = match case.input.before {
+            ProcessObservation::Running => {
+                let observed = process.identity.stop().await;
+                assert_eq!(process.identity.observe(), ProcessObservation::Exited);
+                observed
+            }
+            ProcessObservation::Exited => {
+                process.identity.stop().await;
+                process.identity.stop().await
+            }
+            ProcessObservation::Unowned => {
+                let reused = ProcessIdentity {
+                    start: format!("{}-reused", process.identity.start),
+                    ..process.identity.clone()
+                };
+                let observed = reused.stop().await;
+                assert_eq!(
+                    process.identity.observe(),
+                    ProcessObservation::Running,
+                    "an unproven identity must not be signalled"
+                );
+                observed
+            }
         };
         assert_eq!(
-            ownership::retire_stop_receipt(false),
-            case.retire_before_commit
-        );
-        assert_eq!(
-            ownership::retire_stop_receipt(true),
-            case.retire_after_commit
-        );
-        for (intent, expected) in [
-            (
-                ownership::NativeTerminalIntent::Completed,
-                case.settle_completed,
-            ),
-            (
-                ownership::NativeTerminalIntent::Cancelled,
-                case.settle_cancelled,
-            ),
-            (
-                ownership::NativeTerminalIntent::TimedOut,
-                case.settle_timed_out,
-            ),
-            (ownership::NativeTerminalIntent::Failed, case.settle_failed),
-            (
-                ownership::NativeTerminalIntent::Panicked,
-                case.settle_panicked,
-            ),
-        ] {
-            assert_eq!(
-                ownership::may_settle_native(intent, evidence),
-                expected,
-                "{} {intent:?}",
-                case.name
-            );
-        }
-        assert_eq!(
-            ownership::settle_live_cancel(case.worker_released, evidence).as_str(),
-            case.outcome,
+            (before, after),
+            (case.input.before, case.input.after),
             "{}",
-            case.name
+            case.input.name
         );
-    }
-    for case in cases {
-        let before = observation(&case.before);
-        let after = observation(&case.after);
         let outcome = ProcessStopOutcome::from_observations(before, after);
-        assert_eq!(outcome.as_str(), case.outcome, "{}", case.name);
-        assert_eq!(before.may_terminate(), case.may_terminate, "{}", case.name);
-        assert_eq!(
-            after.retain_process_record(),
-            case.retain_record,
-            "{}",
-            case.name
+        case.check(
+            gents_lean_vocab::families::process_stop_owned_process::OwnedProcessOutput {
+                outcome,
+                cancel_reply: outcome.cancel_reply(),
+                may_terminate: before.may_terminate(),
+            },
         );
-        assert_eq!(
-            outcome.cancel_reply().as_str(),
-            case.cancel_reply,
-            "{}",
-            case.name
-        );
+        process.finish().await;
     }
-    let case = |before: ProcessObservation, after: ProcessObservation| {
-        cases
-            .iter()
-            .find(|case| case.before == before.as_str() && case.after == after.as_str())
-            .expect("generated observation pair")
-    };
-
-    let process = OwnedTestProcess::spawn(None).await;
-    assert_eq!(process.identity.observe(), ProcessObservation::Running);
-    let (before, after) = process.identity.stop().await;
-    let stopped = case(before, after);
-    assert_eq!(stopped.outcome, "stopped");
-    assert_eq!(stopped.cancel_reply, "cancelled");
-    assert_eq!(process.identity.observe(), ProcessObservation::Exited);
-
-    let (before, after) = process.identity.stop().await;
-    let exited = case(before, after);
-    assert_eq!(exited.outcome, "alreadyExited");
-    assert!(!exited.may_terminate);
-    process.finish().await;
-
-    let process = OwnedTestProcess::spawn(None).await;
-    let reused = ProcessIdentity {
-        start: format!("{}-reused", process.identity.start),
-        ..process.identity.clone()
-    };
-    let (before, after) = reused.stop().await;
-    let unowned = case(before, after);
-    assert_eq!(unowned.outcome, "notOwned");
-    assert_eq!(unowned.cancel_reply, "lost");
-    assert_eq!(
-        process.identity.observe(),
-        ProcessObservation::Running,
-        "an unproven identity must not be signalled"
-    );
-    process.finish().await;
 }
 
 #[cfg(unix)]
@@ -758,6 +704,7 @@ fn concurrent_managed_commands_retain_complete_output() {
                                 environment: None,
                                 tool_name: None,
                                 live_output: None,
+                                process_recorder: None,
                             })
                             .await;
                             match outcome {
@@ -823,6 +770,7 @@ async fn managed_exec_liveness_follows_the_lean_composed_model() {
                 environment: None,
                 tool_name: Some(format!("liveness-{}", case.input.name)),
                 live_output: None,
+                process_recorder: None,
             }),
         )
         .await

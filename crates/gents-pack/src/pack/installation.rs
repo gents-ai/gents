@@ -17,6 +17,7 @@ mod catalog;
 mod declared_access;
 mod dependencies;
 mod documents;
+mod host_roots;
 mod hosted;
 pub use documents::declared_collections;
 pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
@@ -1119,9 +1120,9 @@ async fn plugin_replacement_conflict_in_txn(
 pub enum PluginStoreChangeError {
     #[error("{0}")]
     PinConflict(String),
-    #[error(transparent)]
-    Rejected(anyhow::Error),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Rejected(#[source] anyhow::Error),
+    #[error(fmt = gents_protocol::error_chain::held)]
     Unconfirmed(#[from] anyhow::Error),
 }
 
@@ -1172,7 +1173,7 @@ pub enum PackChangeError {
     Grant(#[from] GrantError),
     #[error(transparent)]
     Slots(#[from] super::SlotBindingError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 
@@ -1714,8 +1715,10 @@ pub async fn remove_pack(
     policy: DriftPolicy,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<RemoveReport, PackChangeError> {
+    // The callback re-reads the installation record and plans every removal
+    // from that read inside the transaction, so a confirmed conflict is rebuilt.
     access
-        .transact_write("pack.remove", |txn| {
+        .transact_signed_conflict_rebuild("pack.remove", |txn| {
             Box::pin(async move {
                 let record = read_record(txn, owner, coordinate).await?;
                 if record.doc_id.is_none() {

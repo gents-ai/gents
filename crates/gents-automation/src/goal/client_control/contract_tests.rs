@@ -35,14 +35,62 @@ pub(super) async fn receipt(
 
 /// Fixtures sharing a node slow down as it accumulates their documents, so
 /// the cases run on a small pool of nodes, a few at a time.
-const CASES_PER_NODE: usize = 32;
+const CASES_PER_NODE: usize = 8;
 const NODES_AT_ONCE: usize = 4;
 
-#[tokio::test]
-async fn generated_goal_client_controls_drive_signed_commands() {
+/// The family replays as one test per shard, so each test stays far inside
+/// the suite's per-test hang ceiling on a loaded host.
+const SHARDS: usize = 16;
+
+macro_rules! client_control_shards {
+    ($($name:ident = $shard:literal),* $(,)?) => {
+        const SHARD_TESTS: &[usize] = &[$($shard),*];
+        $(
+            #[tokio::test]
+            async fn $name() {
+                drive_client_control_shard($shard).await;
+            }
+        )*
+    };
+}
+
+client_control_shards!(
+    generated_goal_client_controls_drive_signed_commands_shard_0 = 0,
+    generated_goal_client_controls_drive_signed_commands_shard_1 = 1,
+    generated_goal_client_controls_drive_signed_commands_shard_2 = 2,
+    generated_goal_client_controls_drive_signed_commands_shard_3 = 3,
+    generated_goal_client_controls_drive_signed_commands_shard_4 = 4,
+    generated_goal_client_controls_drive_signed_commands_shard_5 = 5,
+    generated_goal_client_controls_drive_signed_commands_shard_6 = 6,
+    generated_goal_client_controls_drive_signed_commands_shard_7 = 7,
+    generated_goal_client_controls_drive_signed_commands_shard_8 = 8,
+    generated_goal_client_controls_drive_signed_commands_shard_9 = 9,
+    generated_goal_client_controls_drive_signed_commands_shard_10 = 10,
+    generated_goal_client_controls_drive_signed_commands_shard_11 = 11,
+    generated_goal_client_controls_drive_signed_commands_shard_12 = 12,
+    generated_goal_client_controls_drive_signed_commands_shard_13 = 13,
+    generated_goal_client_controls_drive_signed_commands_shard_14 = 14,
+    generated_goal_client_controls_drive_signed_commands_shard_15 = 15,
+);
+
+type ControlCase = gents_lean_vocab::family::Case<
+    gents_lean_vocab::families::goal_client_control_contracts_control::ControlInput<String>,
+    Option<gents_lean_vocab::families::goal_client_control_contracts_control::GoalSnapshot<String>>,
+>;
+
+/// The family's one replay site; the shards and their coverage check share it.
+fn control_cases() -> Vec<ControlCase> {
+    gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>()
+}
+
+#[test]
+fn generated_goal_client_control_shards_replay_every_case_once() {
+    gents_lean_vocab::family::assert_shards_cover(control_cases().len(), SHARD_TESTS, SHARDS);
+}
+
+async fn drive_client_control_shard(shard: usize) {
     use futures::StreamExt;
-    let cases =
-        gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>();
+    let cases = gents_lean_vocab::family::shard(control_cases(), shard, SHARDS);
     futures::stream::iter(cases.chunks(CASES_PER_NODE))
         .for_each_concurrent(NODES_AT_ONCE, |chunk| async move {
             let node = FixtureNode::start().await;
@@ -54,15 +102,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         .await;
 }
 
-async fn drive_signed_command(
-    node: &FixtureNode,
-    modeled_case: &gents_lean_vocab::family::Case<
-        gents_lean_vocab::families::goal_client_control_contracts_control::ControlInput<String>,
-        Option<
-            gents_lean_vocab::families::goal_client_control_contracts_control::GoalSnapshot<String>,
-        >,
-    >,
-) {
+async fn drive_signed_command(node: &FixtureNode, modeled_case: &ControlCase) {
     let case = &modeled_case.input;
     let before_execution = serde_json::to_value(&case.before.execution).unwrap();
     let terminal_parent = !case.facts.unfinished_request;
@@ -107,7 +147,9 @@ async fn drive_signed_command(
             ::identity::Did::new(fixture.identity.did()).unwrap(),
         );
         for permission in [
+            gents_store::config_client::NodePermission::CollectionGet,
             gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::CollectionGet,
             gents_store::config_client::NodePermission::DocumentUpdate,
             gents_store::config_client::NodePermission::DacRelationAdd,
         ] {
@@ -227,9 +269,15 @@ async fn drive_signed_command(
     let doc_id = persist_command(&access, &command).await;
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
     assert_eq!(
-        process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-            .await
-            .unwrap(),
+        process_command(
+            &fixture.node,
+            &identity,
+            &doc_id,
+            fixture.agent.as_ref(),
+            None
+        )
+        .await
+        .unwrap(),
         None,
         "{}",
         case.name
@@ -272,9 +320,15 @@ async fn drive_signed_command(
     };
     modeled_case.check(observed);
     let first_receipt = serde_json::to_value(receipt).unwrap();
-    process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-        .await
-        .unwrap();
+    process_command(
+        &fixture.node,
+        &identity,
+        &doc_id,
+        fixture.agent.as_ref(),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         serde_json::to_value(self::receipt(&access, &doc_id).await.unwrap()).unwrap(),
         first_receipt,
@@ -331,4 +385,126 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
             .unwrap_or(false);
         case.check(verified);
     }
+}
+
+/// The runtime command owner answers a client's idle resume by publishing the
+/// continuation as the selected Agent; each modeled reader then reads that
+/// request on the served node as the session model says.
+#[tokio::test]
+async fn generated_resume_continuation_is_read_through_the_session() {
+    use gents_lean_vocab::families::goal_client_control_contracts_resume_readers as family;
+    let cases = family::cases::<String>();
+    let before = &cases.first().expect("modeled resume readers").input.before;
+    let node = FixtureNode::start().await;
+    let fixture = node
+        .fixture_with_parent_state(&serde_json::to_value(&before.execution).unwrap(), true)
+        .await;
+    let access = fixture.user_access();
+    let session = access
+        .transact_readonly("test.goal_session", |txn| {
+            Box::pin(async {
+                gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    fixture.identity.did(),
+                    &fixture.session,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let revision = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
+    let now = Utc::now();
+    let mut command = SessionGoalControl {
+        version: SESSION_GOAL_CONTROL_VERSION,
+        command_id: uuid::Uuid::new_v4().to_string(),
+        requester_did: fixture.user.did().into(),
+        requester_peer_id: None,
+        node_did: fixture.identity.did().into(),
+        agent_did: session.session.agent_did.clone(),
+        agent_doc_id: fixture.agent_doc_id.clone(),
+        session_id: fixture.session.clone(),
+        session_doc_id: Some(session.doc_id),
+        issued_at: now.to_rfc3339(),
+        expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
+        expected: Some(GoalRevision {
+            document: fixture.goal.doc_id.clone(),
+            composite: revision,
+        }),
+        operation: GoalOperation::Resume {},
+        initial_request: None,
+        native_evidence: None,
+        signature: Vec::new(),
+    };
+    command.signature = fixture
+        .user
+        .sign(&command.signing_payload().unwrap())
+        .await
+        .unwrap();
+    let doc_id = persist_command(&access, &command).await;
+    let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
+    process_command(
+        &fixture.node,
+        &identity,
+        &doc_id,
+        fixture.agent.as_ref(),
+        None,
+    )
+    .await
+    .unwrap();
+    let GoalControlOutcome::Applied {
+        request_id: Some(continuation),
+        ..
+    } = receipt(&access, &doc_id).await.unwrap().outcome
+    else {
+        panic!("idle client resume did not publish a continuation");
+    };
+    let outsider = Arc::new(
+        tokio::task::spawn_blocking(|| {
+            gents_store::test_support::test_identity("goal-resume-outsider")
+        })
+        .await
+        .unwrap(),
+    );
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        fixture.node.clone(),
+        ::identity::Did::new(fixture.identity.did()).unwrap(),
+    );
+    admin
+        .grant_node_permission(
+            &::identity::Did::new(outsider.did()).unwrap(),
+            gents_store::config_client::NodePermission::DocumentRead,
+        )
+        .await
+        .unwrap();
+    let endpoint = match &access {
+        gents_store::config_client::ConfigAccess::Graphql(endpoint) => endpoint.url(),
+        gents_store::config_client::ConfigAccess::Local(_) => {
+            panic!("fixture requires served client access")
+        }
+    };
+    let outsider_access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, outsider.did())
+            .with_client_signing_capability(outsider.client_signing_capability().unwrap())
+            .unwrap(),
+    );
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(&continuation)
+    );
+    for case in &cases {
+        let reader = match case.input.reader.as_str() {
+            "requester" => access.clone(),
+            "agent" => fixture.agent_access(),
+            "outsider" => outsider_access.clone(),
+            other => panic!("unmapped modeled reader {other}"),
+        };
+        let rows = reader.execute(&query).await.unwrap();
+        let readable = rows["data"]["AgentRequest"]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1);
+        case.check(family::ResumeReaderOutput { readable });
+    }
+    node.shutdown().await;
 }

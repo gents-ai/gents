@@ -451,19 +451,14 @@ struct PanicMaterializer;
 impl MaterializerHandle for PanicMaterializer {
     fn materialize(
         &self,
-        _task: &gents_documents::automation::ResolvedTask,
-        _trigger_id: Option<&str>,
-        _trigger_kind: TriggerKind,
-        _trigger_doc_id: Option<&str>,
-        _source_doc_id: Option<&str>,
-        _correlation: Option<&str>,
-        _trigger_context: Option<&str>,
-        _rendered_prompt: &str,
-        _rendered_goal_objective: Option<&str>,
-        _durable_fire_key: &str,
-        _delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
-        _prepared_ids: Option<(&str, &str)>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
+        _fire: FireMaterialization<'_>,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<String, crate::triggers::engine::MaterializeError>>
+                + Send
+                + '_,
+        >,
+    > {
         Box::pin(async { panic!("injected materializer panic") })
     }
 

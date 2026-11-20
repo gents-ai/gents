@@ -221,9 +221,11 @@ where
         &agent.agent_did,
         agent.node_identity().clone(),
         prompt,
-        agent.deadline_duration.as_secs(),
-        ExecutionOrigin::Interactive,
-        agent.backend_id.as_deref().unwrap_or_default(),
+        gents_session::request::lifecycle::ExecutionBinding {
+            deadline_duration_secs: agent.deadline_duration.as_secs(),
+            execution_origin: ExecutionOrigin::Interactive,
+            backend_id: agent.backend_id.as_deref().unwrap_or_default().into(),
+        },
         TriggerLineage::default(),
         Some(agent.agent_identity.clone()),
     )
@@ -346,6 +348,20 @@ where
     hook.set_request_deadline_at(config.deadline).await;
     let provider_profile = config.provider_input_counter.profile();
     let deadline = config.deadline;
+    let request_token = tokio_util::sync::CancellationToken::new();
+    let identity = gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+        request.requester_did.clone(),
+        Some(request.node_did.clone()),
+        Some(request.agent_did.clone()),
+        Some(request.request_id.clone()),
+    );
+    config.tool_context = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        identity: Some(identity),
+        session_id: Some(request.session_id.clone()),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(deadline, request_token)
+    }
+    .call();
+    config.provider_call.capture = capture_scope.clone();
     let inference = async {
         let mut stream = Box::pin(crate::runtime::agent::loop_stream::run_loop_stream(
             model,
@@ -361,7 +377,8 @@ where
             &mut lifecycle,
             &response_doc_id,
             provider_profile,
-        );
+        )
+        .with_capture(capture_scope);
         let mut lease_poll = tokio::time::interval(std::time::Duration::from_secs(1));
         lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -397,32 +414,7 @@ where
             "provider stream ended without an explicit terminal response"
         ))
     };
-    let scoped_inference = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
-        request.requester_did.clone(),
-        Some(request.node_did.clone()),
-        Some(request.agent_did.clone()),
-        Some(request.request_id.clone()),
-        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            deadline,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            Some(request.session_id.clone()),
-            None,
-            Default::default(),
-            false,
-            async {
-                match capture_scope {
-                    Some(scope) => {
-                        gents_inference::rendered_request::scope::scope_request(scope, inference)
-                            .await
-                    }
-                    None => inference.await,
-                }
-            },
-        ),
-    );
-    let response = scoped_inference.await;
+    let response = Box::pin(inference).await;
 
     let session_id = hook.session_id().await;
     match response {

@@ -1,12 +1,11 @@
 use base64::Engine as _;
 use chrono::{DateTime, Local, NaiveDate};
-use gents_desktop_core::client::canonical_output::{
+use gents_observe::client_inference::AgentView;
+use gents_observe::client_projection::canonical_output::{
     project_canonical_message, terminal_tool_output, CanonicalMessageProjection,
 };
-use gents_desktop_core::client::{
-    session_summary_entries, ClientStore, SessionTranscriptQueryPage,
-};
-use gents_desktop_core::inference::AgentView;
+use gents_observe::client_projection::query::SessionTranscriptQueryPage;
+use gents_observe::client_projection::store::{session_summary_entries, ClientStore};
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::file_changes::{FileImage, ToolFileChanges};
 use gents_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
@@ -566,7 +565,8 @@ pub(super) fn clean(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use chrono::{Local, NaiveDate, TimeZone};
-    use gents_desktop_core::client::{ClientStore, ClientStoreRows, SessionTranscriptQueryPage};
+    use gents_observe::client_projection::query::SessionTranscriptQueryPage;
+    use gents_observe::client_projection::store::{ClientStore, ClientStoreRows};
     use gents_protocol::file_changes::{
         FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
     };

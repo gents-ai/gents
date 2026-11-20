@@ -1,4 +1,6 @@
+import Proofs.Session.TranscriptInputOrigin
 import Proofs.Conformance.Family
+import Proofs.Session.AgentSession
 import Proofs.Session.Client.Types
 import Proofs.Session.CommandPolicy.ArtifactAuthority
 import Proofs.Session.CommandPolicy.Sandbox
@@ -14,6 +16,14 @@ deriving instance Lean.ToJson for ClientTurnState
 deriving instance Lean.ToJson for RequestState
 
 attribute [conformance_function] ClientTurnState.isTerminal
+
+namespace AgentSession
+
+deriving instance Lean.ToJson for KeyOrder
+
+attribute [conformance_function] newerByKeys
+
+end AgentSession
 
 namespace CommandPolicy
 
@@ -49,7 +59,7 @@ namespace RequestExecutionLease
 
 deriving instance Lean.ToJson for Outcome
 
-attribute [conformance_function] Outcome.requestState providerEofIsFailure
+attribute [conformance_function] Outcome.requestState providerEofIsFailure retryWakeDispatches
 
 end RequestExecutionLease
 
@@ -61,3 +71,11 @@ deriving instance Lean.ToJson for DeliveryChoice, Delivery, Matches, Lookup, Rei
 attribute [conformance_function] resolveDelivery requestLookup reissueDecision interruptSettled
 
 end SessionOperations
+
+namespace TranscriptInputOrigin
+
+deriving instance Lean.ToJson for Kind
+
+attribute [conformance_function] classification
+
+end TranscriptInputOrigin

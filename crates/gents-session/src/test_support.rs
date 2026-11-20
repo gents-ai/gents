@@ -440,50 +440,66 @@ pub async fn create_agent_owned_session_at(
     requester_did: Option<&str>,
     created_at: &str,
 ) -> String {
-    let agent_did = access
-        .actor_did()
-        .expect("an Agent-owned session needs its Agent actor");
     access
         .transact_write("test.agent_owned_session", |txn| {
-            let agent_did = &agent_did;
-            Box::pin(async move {
-                crate::session::ensure_session_in_txn(
-                    txn,
-                    session_id,
-                    node_did,
-                    agent_did,
-                    requester_did,
-                    None,
-                    None,
-                    created_at,
-                )
-                .await?;
-                let session =
-                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
-                        txn, node_did, session_id,
-                    )
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("created session is not visible"))?;
-                let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
-                    txn,
-                    gents_store::collection::Collection::Agent,
-                    node_did,
-                    agent_did,
-                )
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("session Agent is not visible"))?;
-                crate::session::stage_created_session_relationships_in_txn(
-                    txn,
-                    &session.doc_id,
-                    &agent_doc,
-                    &identity::Did::new(agent_did)?,
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(session.doc_id)
-            })
+            Box::pin(stage_agent_owned_session_in_txn(
+                txn,
+                node_did,
+                session_id,
+                requester_did,
+                created_at,
+            ))
         })
         .await
         .unwrap()
+}
+
+pub async fn stage_agent_owned_session_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    created_at: &str,
+) -> anyhow::Result<String> {
+    let agent_did = txn
+        .actor_did()
+        .ok_or_else(|| anyhow::anyhow!("session fixture requires its Agent"))?;
+    let created = crate::session::ensure_session_in_txn(
+        txn,
+        crate::session::NewAgentSession {
+            session_id,
+            node_did,
+            agent_did,
+            requester_did,
+            title: None,
+            provenance: None,
+            created_at,
+        },
+    )
+    .await?;
+    let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+        txn, node_did, session_id,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("created session is not visible"))?;
+    if created {
+        let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
+            txn,
+            gents_store::collection::Collection::Agent,
+            node_did,
+            agent_did,
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("session Agent is not visible"))?;
+        crate::session::stage_created_session_relationships_in_txn(
+            txn,
+            &session.doc_id,
+            &agent_doc,
+            &identity::Did::new(agent_did)?,
+        )
+        .await?;
+    }
+    Ok(session.doc_id)
 }
 
 /// Makes the session owners' warnings visible to a scoped subscriber: tracing
@@ -584,10 +600,11 @@ pub async fn sequenced_history_on(
         session_id,
         node_did,
         requester,
-        None,
-        after,
-        excluded_request,
-        None,
+        output::sequenced::SequencedMessageFilter {
+            after_sequence: after,
+            exclude_request_doc_id: excluded_request,
+            ..Default::default()
+        },
     )
     .await
 }

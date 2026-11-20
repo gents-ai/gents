@@ -4,9 +4,10 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tokio::sync::watch;
 
 use super::core_start::{acquire_client_lifecycle, start_client_core_async, CLIENT_LIFECYCLE_WAIT};
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{spawn_client_update_task, ClientStartProgress, DesktopAppState};
 use crate::types::ClientUpdateEvent;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 pub(crate) enum ClientStartRegistration {
     Joined(watch::Receiver<ClientStartProgress>),
@@ -84,7 +85,7 @@ where
 
 pub(super) async fn run_detached_client_start<R>(
     app: AppHandle<R>,
-    paths: gents_desktop_core::client::DesktopPaths,
+    paths: gents_store::client_journal::paths::DesktopPaths,
     progress_tx: watch::Sender<ClientStartProgress>,
 ) where
     R: Runtime,
@@ -211,7 +212,7 @@ async fn reserve_client_listener(
     ),
     BridgeError,
 > {
-    use crate::host::local::{startup_lock, LocalListener};
+    use crate::host::local::{startup_lock, ListenerBindError, LocalListener};
 
     if !policy.client_host {
         return Ok((None, None));
@@ -236,12 +237,7 @@ async fn reserve_client_listener(
     };
     let listener = match LocalListener::bind(&policy.desktop_paths).await {
         Ok(listener) => Some(listener),
-        Err(error)
-            if matches!(
-                error.downcast_ref::<std::fs::TryLockError>(),
-                Some(std::fs::TryLockError::WouldBlock)
-            ) =>
-        {
+        Err(ListenerBindError::Held(_)) => {
             return Err(BridgeError::new(BridgeErrorCode::ClientStartFailed,
                 "the client installation is already in use; close its editor attachments before starting the desktop"));
         }

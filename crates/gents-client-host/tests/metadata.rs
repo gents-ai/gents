@@ -1,7 +1,6 @@
 use std::process::Command;
 
-#[path = "support/homes.rs"]
-mod homes;
+use crate::support::homes;
 
 #[test]
 fn artifact_description_does_not_open_a_client_store() {
@@ -36,7 +35,7 @@ fn artifact_description_does_not_open_a_client_store() {
         metadata["commands"],
         serde_json::json!(gents_desktop_bridge::host::protocol::ClientCommand::NAMES)
     );
-    assert_eq!(metadata["transportSupported"], cfg!(any(unix, windows)));
+    assert_eq!(metadata["transportSupported"], cfg!(unix));
     assert_eq!(metadata["runtimeKeyUnlock"], true);
     assert_eq!(metadata["editorCheckpointVersion"], 1);
     assert_eq!(metadata["editorCheckpointSupported"], cfg!(unix));

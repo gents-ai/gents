@@ -268,9 +268,10 @@ pub(super) async fn load_canonical_assistant_candidates_using(
             // request and must not silently strip reasoning, so it propagates.
             Err(error)
                 if candidate.request_doc_id != scope.request_doc_id
-                    && error
-                        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
-                        .is_some() =>
+                    && gents_loop::loop_stream::ReplayEvidenceViolation::in_chain(
+                        error.as_ref(),
+                    )
+                    .is_some() =>
             {
                 tracing::warn!(
                     header_doc_id = %candidate.header_doc_id,
@@ -306,20 +307,8 @@ pub(super) async fn load_canonical_assistant_candidates_using(
 
     let mut candidates = Vec::new();
     for item in selected {
-        let capture = replay_capture_from_row(
-            access,
-            &capture_rows,
-            &item.capture_key,
-            &item.node_did,
-            item.requester_did.as_deref(),
-            &item.session_id,
-            &item.request_id,
-            &item.request_doc_id,
-            &item.request_commits,
-            item.coordinate,
-            &mut capture_cache,
-        )
-        .await?;
+        let capture =
+            replay_capture_from_row(access, &capture_rows, &item, &mut capture_cache).await?;
         candidates.push(CanonicalAssistantCandidate {
             header_doc_id: item.header_doc_id,
             request_doc_id: item.request_doc_id,
@@ -356,13 +345,13 @@ struct PendingReplayCandidate {
 pub(super) struct SelectedReplayCandidate {
     pub(super) capture_key: String,
     header_doc_id: String,
-    request_doc_id: String,
-    node_did: String,
-    requester_did: Option<String>,
-    session_id: String,
-    request_id: String,
-    request_commits: BTreeSet<String>,
-    coordinate: CanonicalProviderCoordinate,
+    pub(super) request_doc_id: String,
+    pub(super) node_did: String,
+    pub(super) requester_did: Option<String>,
+    pub(super) session_id: String,
+    pub(super) request_id: String,
+    pub(super) request_commits: BTreeSet<String>,
+    pub(super) coordinate: CanonicalProviderCoordinate,
     block_indices: Vec<usize>,
     complete: bool,
     #[cfg(test)]

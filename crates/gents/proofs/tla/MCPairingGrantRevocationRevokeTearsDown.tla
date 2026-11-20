@@ -1,0 +1,4 @@
+---- MODULE MCPairingGrantRevocationRevokeTearsDown ----
+EXTENDS PairingGrantRevocation
+
+====

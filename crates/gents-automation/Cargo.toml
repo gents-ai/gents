@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Triggers, callbacks and goals for Gents"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [features]
 default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
@@ -38,6 +43,8 @@ bs58 = "0.5"
 chrono.workspace = true
 crypto.workspace = true
 defra-core.workspace = true
+defra-http.workspace = true
+reqwest.workspace = true
 gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
 defra-node.workspace = true
@@ -56,8 +63,9 @@ tokio-util = "0.7"
 tempfile = "3"
 
 [dev-dependencies]
+gents-workspace-hack = { workspace = true }
 tracing-subscriber.workspace = true
-gents-automation = { path = ".", features = ["test-fixtures"] }
+gents-automation = { path = ".", features = ["test-fixtures", "typescript"] }
 gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-documents = { workspace = true, features = ["test-fixtures"] }
 gents-inference = { workspace = true, features = ["test-fixtures"] }
@@ -69,5 +77,4 @@ gents-toolcalls = { workspace = true, features = ["test-fixtures"] }
 axum = { version = "0.8", features = ["ws"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
-reqwest.workspace = true
 gents-callback-fixture-create-workspace = { path = "../gents-callbacks/fixture_create_workspace" }

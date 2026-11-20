@@ -204,7 +204,7 @@ pub async fn owned_tool_result_threaded(
         ],
     ]);
     let profile = counter.profile();
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
         model.clone(),
@@ -237,7 +237,7 @@ pub async fn persisted_plugin_image_result_replay(
     let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let node = db.node.clone();
     let profile = counter.profile();
-    let mut config = owned_config(4);
+    let mut config = owned_config_for(4, &lifecycle);
     config.provider_input_counter = counter;
     let stream = run_loop_stream(
         ScriptedModel::new_turns(plugin_call_then_text_turns()),
@@ -309,7 +309,7 @@ pub async fn terminalization_with_principal_output(
         TaggedMessage::unassociated(Message::user("run echo")),
         Vec::new(),
         Arc::new(tools),
-        owned_config(turns + 2),
+        owned_config_for(turns + 2, &lifecycle),
     );
     let collected = collect_owned_scripted_stream(
         stream,
@@ -429,7 +429,11 @@ impl ToolDyn for ComposedChild {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             if self.name == "slow" {
                 tokio::time::sleep(
@@ -472,16 +476,22 @@ impl ToolDyn for ComposingParent {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            let dispatcher = context.effects().expect("live dispatcher");
             let mut spawned = String::new();
             let mut session = String::new();
             for (ordinal, name, arguments) in &self.children {
                 let arguments = arguments
                     .replace(SPAWNED_PROCESS, &spawned)
                     .replace(NEW_SESSION, &session);
-                let outcome = dispatcher.call(*ordinal, name, &arguments).await;
+                // A child runs without the parent's dispatcher, as the plugin
+                // host's `tool_calls` service runs it (`children_cannot_delegate`).
+                let outcome = dispatcher.call(context, *ordinal, name, &arguments).await;
                 assert!(
                     !matches!(
                         outcome,
@@ -532,7 +542,11 @@ impl ToolDyn for AdmissionChild {
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         let args: serde_json::Value = serde_json::from_str(args).unwrap();
         if args.get("admit").is_none_or(|value| value == true) {
             return Ok(());
@@ -543,7 +557,11 @@ impl ToolDyn for AdmissionChild {
         })
     }
 
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let args: serde_json::Value = serde_json::from_str(&args).unwrap();
             self.invoked
@@ -696,7 +714,10 @@ pub async fn allow_general_agent_target(
     .unwrap();
 }
 
-pub struct StoppingParent;
+/// Stops while its `stall` child is in flight: it drops the child call once
+/// the child's tool body has started, which follows the child's admission and
+/// running transition (`WallClockBound`: the stop is an event, not a delay).
+pub struct StoppingParent(pub Arc<tokio::sync::Notify>);
 
 impl ToolDyn for StoppingParent {
     fn name(&self) -> String {
@@ -713,16 +734,21 @@ impl ToolDyn for StoppingParent {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            let dispatcher = context.effects().expect("live dispatcher");
             // A script that exhausts its own allowance drops the child call it awaits.
-            let stopped = tokio::time::timeout(
-                std::time::Duration::from_millis(200),
-                dispatcher.call(1, "stall", "{}"),
-            )
-            .await;
-            assert!(stopped.is_err(), "the child outlives the script");
+            tokio::select! {
+                biased;
+                _ = self.0.notified() => {}
+                finished = dispatcher.call(context, 1, "stall", "{}") => {
+                    panic!("the child outlives the script: {finished:?}")
+                }
+            }
             Err(ToolError::ReportedFailure {
                 class: gents_loop::tool_call_lifecycle::FailureClass::External,
                 text: "the plugin exceeded its wall-clock budget".into(),
@@ -731,7 +757,8 @@ impl ToolDyn for StoppingParent {
     }
 }
 
-pub struct Stall;
+/// Never answers; notifies its shared `Notify` once its body has started.
+pub struct Stall(pub Arc<tokio::sync::Notify>);
 
 impl ToolDyn for Stall {
     fn name(&self) -> String {
@@ -748,8 +775,15 @@ impl ToolDyn for Stall {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            self.0.notify_one();
+            std::future::pending().await
+        })
     }
 }
 
@@ -772,10 +806,18 @@ impl ToolDyn for ParallelReadProbe {
             }
         })
     }
-    fn footprint(&self, _: &str) -> gents_loop::tool::ToolFootprint {
+    fn footprint(
+        &self,
+        _: &str,
+        _: &gents_loop::tool::ToolCallEnvelope,
+    ) -> gents_loop::tool::ToolFootprint {
         gents_loop::tool::ToolFootprint::Read
     }
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             self.gate.wait().await;
             if args.contains("first") {
@@ -874,16 +916,25 @@ impl ToolDyn for SerialReadMeasurement {
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
         self.0.definition(prompt)
     }
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        self.0.call(args)
+    fn call<'a>(
+        &'a self,
+        args: String,
+        context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
+        self.0.call(args, context)
     }
     fn call_with_receipt<'a>(
         &'a self,
         args: String,
+        context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, gents_loop::tool::ToolDispatchResult> {
-        self.0.call_with_receipt(args)
+        self.0.call_with_receipt(args, context)
     }
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
-        self.0.admit(args)
+    fn admit(
+        &self,
+        args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
+        self.0.admit(args, context)
     }
 }

@@ -1,11 +1,9 @@
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::{
-    client::DesktopPaths,
-    home_reset::{
-        lock_client_state, lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home,
-        HomeResetDisposition, HomeResetPlan, ManagedServerResetResult,
-    },
+use gents_desktop_core::home_reset::{
+    lock_client_state, lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home,
+    HomeResetDisposition, HomeResetPlan, ManagedServerResetResult,
 };
+use gents_store::client_journal::paths::DesktopPaths;
 
 use crate::cli::DesktopCommand;
 use gents_service::native_service::NativeServiceConfig;
@@ -74,7 +72,7 @@ async fn reset(
 ) -> Result<ManagedServerResetResult> {
     let desktop = select_desktop(
         desktop_home,
-        std::env::var_os(gents_desktop_core::client::DESKTOP_HOME_ENV),
+        std::env::var_os(gents_store::client_journal::paths::DESKTOP_HOME_ENV),
         &std::env::current_dir().context("resolving current directory")?,
     )?;
     let explicit_home = home.or_else(|| {
@@ -146,11 +144,17 @@ async fn reset(
         ),
     }
     let _home_lock = if plan.runtime.is_some() {
-        Some(gents_store::local::home::lock_home_store(&home)?)
+        Some(
+            gents_store::local::home::acquire_home_store(
+                &home,
+                gents_store::local::home::STORE_RELEASE_WAIT,
+            )
+            .await?,
+        )
     } else {
         None
     };
-    let _client_lock = lock_client_state(&desktop)?;
+    let _client_lock = lock_client_state(&desktop).await?;
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
     retire_then_clear(&settled, disposition, backup.as_deref(), retry, || {
@@ -353,14 +357,21 @@ fn run_browser_helper(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+
+    /// The stand-in desktop executables are checked in rather than written
+    /// here: Linux execve refuses a file any process holds open for writing
+    /// (ETXTBSY), and a concurrent test's spawn copies this process's
+    /// descriptors into its child until that child execs
+    /// (`tla/ScriptFixtureExec.tla`).
+    fn browser_helper(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/commands/desktop/browser-helper")
+            .join(name)
+    }
 
     #[test]
     fn stalled_browser_helper_is_killed_and_reaped() {
-        let directory = tempfile::tempdir().unwrap();
-        let executable = directory.path().join("desktop");
-        std::fs::write(&executable, "#!/bin/sh\nexec sleep 30\n").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let executable = browser_helper("stalled");
         let start = std::time::Instant::now();
         let error = run_browser_helper(
             &executable,
@@ -375,41 +386,34 @@ mod tests {
 
     #[test]
     fn browser_clear_requires_a_successful_native_completion_receipt() {
-        let directory = tempfile::tempdir().unwrap();
-        let executable = directory.path().join("desktop");
-        for (body, expected) in [
-            ("exit 0\n", false),
-            ("printf '%s' '{\"completed\":false}' > \"$2\"\n", false),
-            ("printf '%s' '{\"completed\":true}' > \"$2\"\n", true),
+        for (name, expected) in [
+            ("exit-zero", false),
+            ("incomplete", false),
+            ("completed", true),
         ] {
-            std::fs::write(&executable, format!("#!/bin/sh\n{body}")).unwrap();
-            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
             assert_eq!(
-                run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT)
-                    .is_ok(),
-                expected
+                run_browser_helper(
+                    &browser_helper(name),
+                    BrowserHelper::Clear,
+                    BROWSER_CLEAR_TIMEOUT
+                )
+                .is_ok(),
+                expected,
+                "{name}"
             );
         }
     }
 
     #[test]
     fn browser_check_reports_a_store_held_by_another_desktop() {
-        let directory = tempfile::tempdir().unwrap();
-        let executable = directory.path().join("desktop");
-        std::fs::write(
-            &executable,
-            "#!/bin/sh\n[ \"$2\" = --check ] || exit 9\nprintf '%s' '{\"completed\":false,\"error\":\"store held\"}' > \"$3\"\nexit 1\n",
+        let error = run_browser_helper(
+            &browser_helper("store-held"),
+            BrowserHelper::Check,
+            BROWSER_CHECK_TIMEOUT,
         )
-        .unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
-            .unwrap_err();
+        .unwrap_err();
         assert!(format!("{error:#}").contains("store held"), "{error:#}");
-        std::fs::write(
-            &executable,
-            "#!/bin/sh\necho \"error: unexpected argument '--check' found\" >&2\nexit 2\n",
-        )
-        .unwrap();
+        let executable = browser_helper("no-check");
         let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
             .unwrap_err()
             .to_string();

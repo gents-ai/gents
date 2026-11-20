@@ -21,7 +21,13 @@ pub mod views;
 mod documents_selection_tests;
 
 #[cfg(test)]
+mod provider_selection_tests;
+
+#[cfg(test)]
 mod documents_desired_state_tests;
 
 #[cfg(test)]
 mod config_store_pushdown_tests;
+
+#[cfg(test)]
+mod access_classification_tests;

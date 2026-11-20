@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "e2e_lifecycle/lifecycle_recovery.rs"]
 mod lifecycle_recovery;
 #[path = "e2e_lifecycle/lifecycle_terminal.rs"]

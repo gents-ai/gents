@@ -3,11 +3,12 @@ use gents_inference::backends::setup::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
-const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
+const LOG_TARGET: &str = "crate::inference_setup";
 
-pub use gents_desktop_core::inference::InferenceSetupState;
+pub use gents_observe::client_inference::InferenceSetupState;
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
@@ -119,9 +120,9 @@ pub fn inference_backend_recommendation(
 
 pub async fn discover_inference_models_for_core(
     request: InferenceDiscoveryRequest,
-    core: Option<&gents_desktop_core::client::ClientCore>,
+    core: Option<&crate::client_runtime::ClientRuntime>,
 ) -> Result<InferenceDiscoveryResult, BridgeError> {
-    use gents_desktop_core::inference::ModelDiscoveryError;
+    use gents_observe::client_inference::ModelDiscoveryError;
     let node_did = request.node_did.trim();
     let access = core.and_then(|core| {
         let access = core.operator_access(node_did);
@@ -142,7 +143,7 @@ pub async fn discover_inference_models_for_core(
             "The node is not running, so connected accounts could not be checked. Start the node and try again.",
         )
     };
-    let found = gents_desktop_core::inference::discover_models(
+    let found = gents_observe::client_inference::discover_models(
         access.as_ref(),
         node_did,
         request.provider,

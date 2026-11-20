@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "e2e_runtime/client_submission_contention.rs"]
 mod client_submission_contention;
 #[path = "e2e_runtime/completion_retry_tape.rs"]
@@ -10,6 +8,8 @@ mod document_config_bootstrap;
 mod effective_model_binding;
 #[path = "e2e_runtime/fork_invariants.rs"]
 mod fork_invariants;
+#[path = "e2e_runtime/interrupt_latch_contention.rs"]
+mod interrupt_latch_contention;
 #[path = "e2e_runtime/provider_fixture_redaction.rs"]
 mod provider_fixture_redaction;
 #[path = "e2e_runtime/rendered_request_capture.rs"]
@@ -39,3 +39,6 @@ mod session_input_edit;
 
 #[path = "e2e_runtime/enrollment_renewal.rs"]
 mod enrollment_renewal;
+
+#[path = "e2e_runtime/queued_user_turns.rs"]
+mod queued_user_turns;

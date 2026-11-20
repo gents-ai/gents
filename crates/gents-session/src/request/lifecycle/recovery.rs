@@ -9,8 +9,8 @@ pub(super) use canonical_recovery::request_segments;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use canonical_recovery::{
-    recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
-    RecoverySelectionRejected,
+    recover_expired_generation_with_access_for_test, RecoveryFacts, RecoveryResult,
+    RecoverySelectionChoice, RecoverySelectionRejected,
 };
 
 #[derive(Debug, Default)]
@@ -267,25 +267,10 @@ async fn recover_active_requests(
 fn definitive_output_corruption(error: &anyhow::Error) -> bool {
     use gents_protocol::output::recovery::RecoveryPlanError;
     use gents_protocol::output::ReconstructionError;
-    matches!(
-        error.downcast_ref::<RecoveryPlanError>(),
-        Some(
-            RecoveryPlanError::IdentityConflict { .. }
-                | RecoveryPlanError::ConflictingOrdinal { .. }
-                | RecoveryPlanError::InvalidWriter
-                | RecoveryPlanError::MalformedExtent
-        )
-    ) || matches!(
-        error.downcast_ref::<ReconstructionError>(),
-        Some(
-            ReconstructionError::ConflictingSegments { .. }
-                | ReconstructionError::ConflictingClosures { .. }
-                | ReconstructionError::InvalidWriter { .. }
-                | ReconstructionError::ExtentMismatch { .. }
-                | ReconstructionError::InvalidPayload { .. }
-                | ReconstructionError::InvalidStructure { .. }
-        )
-    )
+    RecoveryPlanError::in_chain(error.as_ref())
+        .is_some_and(RecoveryPlanError::is_definitive_corruption)
+        || ReconstructionError::in_chain(error.as_ref())
+            .is_some_and(ReconstructionError::is_definitive_corruption)
 }
 
 /// Resolve only identities provided by the validated runtime snapshot.

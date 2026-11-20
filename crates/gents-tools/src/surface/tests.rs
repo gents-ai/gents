@@ -108,6 +108,15 @@ async fn presented_mcp_tool_names_match_the_attached_tools() {
             true,
         ),
         (
+            "omitted style selects discovery",
+            vec![serde_json::from_value(serde_json::json!({
+                "mcp_service_id": "research",
+                "tool_names": ["search"]
+            }))
+            .unwrap()],
+            true,
+        ),
+        (
             "no selected names",
             vec![selection(Vec::new(), Vec::new())],
             false,
@@ -143,18 +152,16 @@ async fn presented_mcp_tool_names_match_the_attached_tools() {
         .unwrap();
 
         let names = surface.tool_names();
-        let presented = gents_protocol::tool_names::META_TOOL_NAMES
-            .iter()
-            .any(|meta| names.iter().any(|name| name == meta));
         let built = surface.build_tools(&runtime).await.unwrap();
-        let attached = gents_protocol::tool_names::META_TOOL_NAMES
-            .iter()
-            .any(|meta| built.iter().any(|tool| tool.name() == *meta));
-        assert_eq!(
-            presented, attached,
-            "{case}: advertised meta tool names must match the attached tools"
-        );
-        assert_eq!(attached, attaches, "{case}: attachment");
+        for meta in gents_protocol::tool_names::META_TOOL_NAMES {
+            let presented = names.iter().any(|name| name == meta);
+            let attached = built.iter().any(|tool| tool.name() == meta);
+            assert_eq!(
+                presented, attached,
+                "{case}: advertised {meta} must match the attached tool"
+            );
+            assert_eq!(attached, attaches, "{case}: {meta} attachment");
+        }
     }
 }
 
@@ -2510,9 +2517,10 @@ async fn configured_command_output_caps_bound_bash_and_cli_results() {
         ]
     );
     let built = config.host_tools().build_native_tools().unwrap();
+    let envelope = gents_loop::tool::ToolCallEnvelope::default();
     let call = |name: &str, args: serde_json::Value| {
         let tool = built.iter().find(|tool| tool.name() == name).unwrap();
-        tool.call(args.to_string())
+        tool.call(args.to_string(), &envelope)
     };
 
     let bash = call(
@@ -2789,7 +2797,13 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
         serde_json::json!({"path": "big.txt", "raw_json": true}),
         serde_json::json!({"path": "big.txt", "max_chars": 1000, "raw_json": true}),
     ] {
-        let raw = tool("read_file").call(args.to_string()).await.unwrap();
+        let raw = tool("read_file")
+            .call(
+                args.to_string(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await
+            .unwrap();
         let raw = serde_json::from_str::<String>(&raw).unwrap_or(raw);
         let output: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert!(

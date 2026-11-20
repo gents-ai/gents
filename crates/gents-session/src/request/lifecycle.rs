@@ -1,4 +1,5 @@
 pub mod client;
+pub mod runtime_publication;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use client::stage_request_relationships_in_txn;
 pub use client::{
@@ -27,6 +28,7 @@ use gents_protocol::row::AgentRequest;
 use gents_store::graphql::{escape_graphql_string, response_has_documents};
 
 pub mod backend_wait;
+pub mod presentation_origin;
 pub(crate) use backend_wait::{fresh_healthy, repark_expired_resume};
 mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
@@ -45,6 +47,8 @@ pub use execution_renewal::renew_once_at_with_access as renew_execution_lease_on
 pub(crate) use execution_renewal::renew_with_recheck_at;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_renewal::RenewalAttemptOutcome;
+#[cfg(test)]
+pub(crate) use execution_renewal::RenewalError;
 mod terminal_binding;
 pub use terminal_binding::is_exact_invocation_reply;
 pub mod terminal_tools;
@@ -63,16 +67,18 @@ pub use terminal_tools::ToolAccountingRejection;
 pub mod manual;
 pub mod materialize;
 mod session_message_presentation;
-pub use session_message_presentation::session_message_display_body;
 pub(crate) use session_message_presentation::session_message_display_body_with_content;
+pub use session_message_presentation::{
+    session_message_display_body, signed_session_message_display_body,
+};
 pub mod query;
 pub mod queue;
 mod recovery;
 pub mod requested_create;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use recovery::{
-    recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
-    RecoverySelectionRejected,
+    recover_expired_generation_with_access_for_test, RecoveryFacts, RecoveryResult,
+    RecoverySelectionChoice, RecoverySelectionRejected,
 };
 mod task_title;
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -86,14 +92,14 @@ pub use manual::{
 pub use materialize::build_session_message_request;
 pub(crate) use materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title;
 pub use materialize::{
-    build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
+    build_signed_request, ExecutionBinding, ParentLink, RequestIdentity, RequestSigner,
+    RequestSpec, RetryLink, SessionMessageRequest,
 };
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
 pub use queue::{
     pending_steer_edit, publish_edit_command, submit_pending_user_edit, submit_pending_user_steer,
-    PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
+    PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt, SteeredMessage,
 };
 pub use queue::{
     pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,
@@ -256,21 +262,19 @@ pub fn request_origin(row: &gents_protocol::row::AgentRequestRow) -> RequestOrig
             .filter(|value| !value.is_empty())
     }
     let input = row.input.as_ref();
-    let source = input
-        .and_then(|input| input.queue.as_ref())
-        .map(|queue| queue.source);
     let continuation = input.and_then(|input| input.goal_continuation.as_ref());
-    if continuation.is_some() || source == Some(queue::QueueSource::Goal) {
+    let kind = presentation_origin::classify(presentation_origin::request_facts(row));
+    if kind == presentation_origin::Kind::GoalContinuation {
         return RequestOrigin::GoalContinuation {
             goal_id: present(&row.caused_by_trigger_id),
             sequence: continuation.map(|continuation| continuation.sequence),
             wrapup: continuation.map(|continuation| continuation.wrapup),
         };
     }
-    if source == Some(queue::QueueSource::BackgroundCompletion) {
+    if kind == presentation_origin::Kind::BackgroundWake {
         return RequestOrigin::BackgroundCompletion;
     }
-    if present(&row.caused_by_parent_tool_call_doc_id).is_some() {
+    if kind == presentation_origin::Kind::SessionMessage {
         return RequestOrigin::SessionMessage {
             parent_request_doc_id: present(&row.caused_by_parent_request_doc_id),
         };
@@ -933,9 +937,11 @@ mod tests {
             root.clone(),
             agent.clone(),
             "hello",
-            60,
-            ExecutionOrigin::Interactive,
-            "backend",
+            crate::request::lifecycle::ExecutionBinding {
+                deadline_duration_secs: 60,
+                execution_origin: ExecutionOrigin::Interactive,
+                backend_id: "backend".into(),
+            },
             TriggerLineage::default(),
         )
         .await
@@ -975,35 +981,15 @@ mod tests {
 
     #[test]
     fn lean_workspace_references_preserve_exact_owner_and_attenuate_authority() {
-        use gents_lean_vocab::lean_contract_snapshot;
-        fn lineage(value: &serde_json::Value) -> WorkspaceLineage {
-            let field = |name: &str| value[name].as_str().map(str::to_owned);
-            WorkspaceLineage {
-                workspace_id: field("workspace_id"),
-                workspace_owner_node_did: field("workspace_owner_node_did"),
-                workspace_authority: field("workspace_authority"),
-                workspace_seal_hash: field("workspace_seal_hash"),
-            }
-        }
-        let cases = &lean_contract_snapshot().request_input_cases;
-        assert!(cases
-            .iter()
-            .any(|case| case["name"] == "workspace-foreign-owner-same-label-denied"));
-        for case in cases {
-            let name = case["name"].as_str().unwrap();
-            let request = lineage(&case["workspace"]);
-            let source = lineage(&case["workspace_source"]);
-            assert_eq!(
-                request
-                    .validate_source(
-                        &source,
-                        case["workspace_source_authenticated"].as_bool().unwrap(),
-                    )
+        gents_lean_vocab::families::request_input_contracts_workspace_source::replay(|case| {
+            let request: WorkspaceLineage = gents_lean_vocab::family::recode(&case.workspace);
+            let source: WorkspaceLineage = gents_lean_vocab::family::recode(&case.workspace_source);
+            gents_lean_vocab::families::request_input_contracts_workspace_source::WorkspaceAdmission {
+                workspace_accepted: request
+                    .validate_source(&source, case.workspace_source_authenticated)
                     .is_ok(),
-                case["expected_workspace_accepted"].as_bool().unwrap(),
-                "{name}: actual workspace source owner"
-            );
-        }
+            }
+        });
     }
 }
 

@@ -34,10 +34,8 @@ async fn authoring_tool(
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap()
-        .call(
-            json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadWrite"},"bash":{"mode":"Off"}}}})
-                .to_string(),
-        )
+        .call(json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadWrite"},"bash":{"mode":"Off"}}}})
+                .to_string(), &gents_loop::tool::ToolCallEnvelope::default())
         .await
         .unwrap();
     (fixture, tools)
@@ -239,6 +237,7 @@ async fn pack_authority_grants_what_a_plugins_pack_asks_for() {
             .call(
                 json!({"argv":["plugin","run","fixture/native_echo"],"options":{"input":{}}})
                     .to_string(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .unwrap();
@@ -372,16 +371,14 @@ async fn a_plugin_build_runs_confined_to_the_tool_root() {
         "failures":["deal.json: output differs from expect at 1 path(s): $.writes: returned [isle... instead of nothing","small.json: returned 1 instead of 2"],
         "shortened":[{"case":"deal.json","returned":{"ok":true,"writes":[&whole]},"expect":{"ok":true}}],
     }]});
-    std::fs::write(
+    gents_store::test_support::write_executable_script(
         &builder,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf stub > \"$2/plugins/tool_a.afb\"\nprintf x > {} 2>/dev/null\ncat <<'REPORT'\n{report}\nREPORT\n",
             escaped.display()
         ),
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _stub = PLUGIN_BUILDER_STUB.lock().await;
     let _builder = gents_store::test_support::EnvVarGuard::set(
         "GENTS_PLUGIN_BUILDER",
@@ -429,8 +426,16 @@ async fn a_plugin_build_runs_confined_to_the_tool_root() {
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    let case: Value =
-        serde_json::from_str(&tool.call(tested["next_call"].to_string()).await.unwrap()).unwrap();
+    let case: Value = serde_json::from_str(
+        &tool
+            .call(
+                tested["next_call"].to_string(),
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(case["case"], "deal.json", "{case}");
     assert_eq!(case["passed"], false, "{case}");
     assert_eq!(case["returned"]["writes"][0], whole.as_str(), "{case}");

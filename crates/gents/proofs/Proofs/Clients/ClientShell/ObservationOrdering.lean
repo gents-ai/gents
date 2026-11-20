@@ -326,6 +326,27 @@ theorem request_event_preserves_reload (s : State) :
     acceptsReload (requestEvent s) (beginRead s) = true := by
   simp [acceptsReload, requestEvent, beginRead]
 
+/-- The store after a capture saw a publication into it, a request event of
+it, both or neither. -/
+def sinceCapture (s : State) (publication event : Bool) : State :=
+  let published := if publication then dataChange s else s
+  if event then requestEvent published else published
+
+/-- The reload fence as a finite decision: whether a reload captured before
+`sinceCapture` still publishes. -/
+def reloadAcceptedSince (publication event : Bool) : Bool :=
+  let start : State :=
+    { dataEpoch := 0, provenanceEpoch := 0, requestEventEpoch := 0, transcriptEpoch := 0 }
+  acceptsReload (sinceCapture start publication event) (beginRead start)
+
+/-- The finite table decides every store, whatever its epochs: `ObserverResync`
+TLA reads its reload fence from it. -/
+theorem reload_accepted_since_any_state (s : State) (publication event : Bool) :
+    acceptsReload (sinceCapture s publication event) (beginRead s) =
+      reloadAcceptedSince publication event := by
+  cases publication <;> cases event <;>
+    simp [reloadAcceptedSince, sinceCapture, acceptsReload, dataChange, requestEvent, beginRead]
+
 def requestEvents (s : State) : Nat → State
   | 0 => s
   | n + 1 => requestEvent (requestEvents s n)
@@ -538,18 +559,12 @@ operator GraphQL endpoint (a discovery- or enrollment-only peer): nothing can
 be observed, and the state says so instead of reading as a connection attempt.
 A peer that is absent from the directory has no state.
 
-`refused` is a runtime that said it does not accept this client's credentials:
-the access owner classified a request as refused (HTTP 401/403, or a
-`PERMISSION_DENIED` envelope). That is the runtime's own answer, not an
-inference, so the state names it and the user can act on it (the device is not
-enrolled there, its key was rotated, or its grant was removed); the source keeps
-reconnecting on `reconnectDelayMs`, so restored access connects by itself.
-
-There is no state inferred from what the client cannot see. Native ACP hides
-the documents a reader may not read by design: a reader whose grant was revoked
-on the pinned served runtime sees fewer documents, possibly none, and the
-runtime does not say why. The client never infers a denial from an omitted or
-empty result; a view with nothing visible is an ordinary `connected` view. -/
+`refused` means access to the selected Node is unavailable: the native access
+owner refused the request, or the snapshot owner could not observe the
+already identified Node root (`selectedRootSnapshot`). It does not infer why
+access is unavailable. The source reconnects on `reconnectDelayMs`, so restored
+access connects by itself. Empty configuration beneath a visible Node is an
+ordinary connected view. -/
 inductive Status where
   | connecting | connected | disconnected | refused | noEndpoint
   deriving DecidableEq, Repr
@@ -667,15 +682,15 @@ def failedStreamEnd (error : AccessClassification.Error) : StreamEnd :=
 (`AccessClassification.Error.classification_survives_every_wrapping`). -/
 theorem classified_refusal_is_refused (holdings : List AccessClassification.Holding)
     (failure : AccessClassification.Failure) (refused : failure.classification = .refused) :
-    streamEndEvent (failedStreamEnd (AccessClassification.Error.wrapAll holdings
-      (.wrapper .sourced (.access failure)))) = some .refused := by
+    streamEndEvent (failedStreamEnd (AccessClassification.Chain.wrapAll holdings
+      (.wrapper .sourced (.owner failure)))) = some .refused := by
   simp [failedStreamEnd, AccessClassification.Error.classification_survives_every_wrapping,
     refused, streamEndEvent]
 
 /-- The premise of `classified_refusal_is_refused`: a denial held by a
 transparent variant is published as a transport failure. -/
 theorem hidden_refusal_reads_as_an_outage :
-    streamEndEvent (failedStreamEnd (.wrapper .transparent (.access .forbidden)))
+    streamEndEvent (failedStreamEnd (.wrapper .transparent (.owner .forbidden)))
       = some .transportFailed := by
   rfl
 
@@ -707,20 +722,21 @@ theorem stream_end_disarms (wasArmed : Bool) (streamEnd : StreamEnd) (event : Ev
   | completed => simp [streamEndEvent] at h; subst h; rfl
   | failed refused => cases refused <;> simp [streamEndEvent] at h <;> subst h <;> rfl
 
-/-- How the source's snapshot read ended. `refused` is an HTTP 401/403 or a
-`PERMISSION_DENIED` envelope (the access owner's classification).
-
-External premise: the pinned served runtime answers a User whose grant was
-revoked with HTTP 200, no `errors`, and `data` that omits the selected roots;
-it also accepts that User's SSE handshake and keeps its streams silent (observe
-test `revoked_user_is_answered_with_omitted_roots`). That is native ACP hiding
-what the User may not read, not a refusal: the snapshot reader decodes an
-omitted root as an empty list, and the read `succeeded`. Classifying it as a
-denial would show a state the runtime never asserted; classifying it as a
-failure would reconnect a quiet runtime forever. -/
+/-- How the selected Node snapshot ended. Native ACP may omit an unreadable
+Node with HTTP 200 and no errors. The snapshot targets an already identified
+Node: its missing root means this client cannot observe that Node, rather than
+that the Node has no configuration. Refusal is a presentation of unavailable
+access, not a claim about whether the grant was revoked or the Node removed.
+Unrelated omitted collections remain ordinary empty lists. -/
 inductive SnapshotOutcome where
   | succeeded | refused | unreachable
   deriving DecidableEq, Repr
+
+def selectedRootSnapshot (visible : Bool) : SnapshotOutcome :=
+  if visible then .succeeded else .refused
+
+theorem missing_selected_root_is_not_connected :
+    selectedRootSnapshot false = .refused := by rfl
 
 def snapshotEvent : SnapshotOutcome → Event
   | .succeeded => .snapshotSucceeded
@@ -1022,7 +1038,8 @@ structure Served where
   deriving DecidableEq, Repr
 
 def Served.read (served : Served) : SnapshotOutcome :=
-  if !served.reachable then .unreachable else if served.refuses then .refused else .succeeded
+  if !served.reachable then .unreachable
+  else if served.refuses then .refused else selectedRootSnapshot served.granted
 
 /-- The event the observer next produces by itself at `status` against a
 steady runtime, or `none` when only an outside change moves it. A `connecting`
@@ -1035,10 +1052,10 @@ def sourceEvent (served : Served) : Status → Option Event
     if served.reachable then some (snapshotEvent served.read) else some .transportFailed
   | .disconnected =>
     some (if !served.reachable then .transportFailed
-      else if served.refuses then .refused else .subscriptionsReady)
+      else if served.refuses || !served.granted then .refused else .subscriptionsReady)
   | .connected =>
     if !served.reachable then some .transportFailed
-    else if served.refuses then some .refused else none
+    else if served.refuses || !served.granted then some .refused else none
   | .noEndpoint => none
 
 def step (served : Served) (status : Status) : Status :=
@@ -1059,24 +1076,36 @@ theorem run_add (served : Served) (m n : Nat) (status : Status) :
   | zero => simp [run]
   | succ m ih => rw [Nat.add_right_comm, run_succ, run_succ, ih]
 
-/-- A reachable runtime, whether or not it still grants the User: every
-status with an endpoint is `connected` within two source steps, and stays
-there. A revoked User sees a connected view with nothing visible. -/
-theorem reachable_settles_connected (granted : Bool) (status : Status)
+/-- A reachable Node whose root is visible settles connected. -/
+theorem reachable_settles_connected (status : Status)
     (h : status ≠ .noEndpoint) (n : Nat) :
-    run ⟨true, granted, false⟩ (n + 2) status = .connected := by
-  have fixed : ∀ k, run ⟨true, granted, false⟩ k .connected = .connected := by
+    run ⟨true, true, false⟩ (n + 2) status = .connected := by
+  have fixed : ∀ k, run ⟨true, true, false⟩ k .connected = .connected := by
     intro k; induction k with
     | zero => rfl
     | succ k ih => rw [run_succ]; simpa [step, sourceEvent] using ih
   rw [Nat.add_comm, run_add]
-  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read,
+    selectedRootSnapshot]
 
-/-- A revoked User's connected view at a reachable runtime produces no event:
-no reconnect, no resnapshot loop. -/
-theorem quiet_view_never_reconnects (granted : Bool) :
-    sourceEvent ⟨true, granted, false⟩ .connected = none := by
-  cases granted <;> rfl
+/-- A visible quiet Node needs no reconnect. -/
+theorem quiet_view_never_reconnects :
+    sourceEvent ⟨true, true, false⟩ .connected = none := by rfl
+
+/-- Loss of the selected root reports unavailable access even when the
+transport still accepts this client's subscriptions. -/
+theorem hidden_node_settles_refused (status : Status)
+    (h : status ≠ .noEndpoint) (n : Nat) :
+    run ⟨true, false, false⟩ (n + 2) status = .refused := by
+  have fixed : ∀ k, run ⟨true, false, false⟩ k .refused = .refused := by
+    intro k; induction k with
+    | zero => rfl
+    | succ k ih =>
+      rw [run_succ]; simpa [step, sourceEvent, observe, snapshotEvent, Served.read,
+        selectedRootSnapshot] using ih
+  rw [Nat.add_comm, run_add]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read,
+    selectedRootSnapshot]
 
 /-- An unreachable runtime: every status with an endpoint is `disconnected`
 within two source steps and stays there, reconnecting, until the runtime
@@ -1089,7 +1118,8 @@ theorem unreachable_settles_disconnected (granted refuses : Bool) (status : Stat
     | zero => rfl
     | succ k ih => rw [run_succ]; simpa [step, sourceEvent, observe] using ih
   rw [Nat.add_comm, run_add]
-  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read,
+    selectedRootSnapshot]
 
 /-- A reachable runtime that refuses this client: every status with an
 endpoint is `refused` within two source steps and stays there, reconnecting on
@@ -1103,24 +1133,21 @@ theorem refusing_settles_refused (granted : Bool) (status : Status)
     | succ k ih =>
       rw [run_succ]; simpa [step, sourceEvent, observe, snapshotEvent, Served.read] using ih
   rw [Nat.add_comm, run_add]
-  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read,
+    selectedRootSnapshot]
 
-/-- What a steady runtime settles into reads as its cause: `ready` exactly for
-a reachable runtime that accepts the client, whatever the User may read there;
-`waiting` with `disconnected` only for an unreachable one; and `blocked` with
-`refused` for one that refuses the client, which is never a silent
-`connecting`. A revoked User of the served runtime is never shown an outage or
-a refusal. -/
+/-- Ready means the selected Node is visible; an unavailable Node is blocked,
+and a transport outage is waiting rather than an access refusal. -/
 theorem settled_presentation_names_the_cause (granted refuses : Bool) (status : Status)
     (h : status ≠ .noEndpoint) (n : Nat) :
-    presentation (some (run ⟨true, granted, false⟩ (n + 2) status)) = (.ready, .connected) ∧
+    presentation (some (run ⟨true, true, false⟩ (n + 2) status)) = (.ready, .connected) ∧
     presentation (some (run ⟨false, granted, refuses⟩ (n + 2) status)) =
       (.waiting, .disconnected) ∧
-    presentation (some (run ⟨true, granted, true⟩ (n + 2) status)) = (.blocked, .refused) := by
+    presentation (some (run ⟨true, false, false⟩ (n + 2) status)) = (.blocked, .refused) := by
   refine ⟨?_, ?_, ?_⟩
-  · rw [reachable_settles_connected granted status h n]; rfl
+  · rw [reachable_settles_connected status h n]; rfl
   · rw [unreachable_settles_disconnected granted refuses status h n]; rfl
-  · rw [refusing_settles_refused granted status h n]; rfl
+  · rw [hidden_node_settles_refused status h n]; rfl
 
 /-- Distinct statuses name distinct reasons, so an outage never reads as a
 connection attempt and a missing endpoint never reads as either. -/
@@ -1170,6 +1197,41 @@ def settlement (s : State) (read : Read) : LoadResult → Settlement
   | .transportFailed => .transportFailed
   | .refused => .refused
 
+/-- What a change delivered on a node's subscription is, by its collection. A
+`collection` is a configuration collection whose snapshot root is one
+self-contained view: its rows depend on no other root and no other root's
+follow-up reads depend on them. `node` is every other observed collection: the
+Node root, whose absence is a refusal, and the requests, sessions and triggers,
+from which the snapshot derives request closure, session heads and trigger
+candidates together. -/
+inductive Change where
+  | toolControl | transcript | toolCall | collection | node
+  deriving DecidableEq, Repr
+
+/-- What the observer does with a delivered change. -/
+inductive Delivery where
+  /-- `ClientDataPublication.transcriptInvalidation`; consumers re-read the
+  bounded transcript of the selected session. -/
+  | invalidateTranscript
+  /-- `ClientDataPublication.provenanceInvalidation`. -/
+  | invalidateProvenance
+  /-- A request event, and the collection is queued for its own reload. -/
+  | reloadCollection
+  /-- A request event, and the node is queued for a full load. -/
+  | resync
+  deriving DecidableEq, Repr
+
+/-- A collection change re-reads that collection's root, not the node. A full
+load per change re-reads every session, agent and request the node holds:
+a runtime whose backend probe rewrites each backend observation's catalog
+freshness every minute made every connected client read hundreds of kilobytes
+a minute to show a few changed rows. -/
+def deliver : Change → Delivery
+  | .toolControl | .transcript => .invalidateTranscript
+  | .toolCall => .invalidateProvenance
+  | .collection => .reloadCollection
+  | .node => .resync
+
 structure Slot where
   pending : Bool
   /-- The retry timer must fire before the next load (transport back-off). -/
@@ -1181,15 +1243,21 @@ structure Slot where
   premise is outside the model). -/
   armed : Bool
   status : Status
+  /-- Collections are queued for their own reload (`Delivery.reloadCollection`). -/
+  collections : Bool := false
+  /-- A collection reload is in flight. It and the full load never overlap:
+  one read per node is in flight. -/
+  reloadingCollections : Bool := false
   deriving DecidableEq, Repr
 
 def initial : Slot :=
   { pending := false, waiting := false, loading := false, armed := false, status := .connecting }
 
 /-- `SourceStarted`: a new source for the node, configured, replaced or
-reconnected. The previous source's load is aborted. -/
+reconnected. The previous source's read is aborted. -/
 def sourceStarted (n : Slot) : Slot :=
-  { n with loading := false, armed := false, status := .connecting }
+  { n with loading := false, reloadingCollections := false, armed := false,
+           status := .connecting }
 
 /-- `SubscriptionsReady`: every root is armed, so the snapshot may start. A
 refused slot stays refused until a read is accepted
@@ -1202,19 +1270,64 @@ def armed (n : Slot) : Slot :=
 resync request queues the node; queued requests coalesce into one load. -/
 def queue (n : Slot) : Slot := { n with pending := true }
 
-/-- A load starts only on an armed source. A refused slot is unarmed until its
-reconnect arms it. -/
-def startable (n : Slot) : Bool := n.pending && !n.waiting && !n.loading && n.armed
+/-- A load starts only on an armed source with no other read of the node in
+flight. A refused slot is unarmed until its reconnect arms it. -/
+def startable (n : Slot) : Bool :=
+  n.pending && !n.waiting && !n.loading && !n.reloadingCollections && n.armed
 
+/-- A full load reads every collection after the events that queued them, so
+it takes the queued collections with it. -/
 def start (n : Slot) : Slot :=
-  if startable n then { n with pending := false, loading := true } else n
+  if startable n then { n with pending := false, loading := true, collections := false } else n
+
+/-- A delivered collection change queues the collection; queued collections
+coalesce into one collection reload. -/
+def queueCollection (n : Slot) : Slot := { n with collections := true }
+
+/-- A collection reload waits for a queued or running full load, which reads
+the collection too, and for the back-off. Full loads go first: a collection
+publication would supersede a full load in flight, so collection changes on
+every load would keep the node's other rows from ever catching up. -/
+def collectionStartable (n : Slot) : Bool :=
+  n.collections && !n.pending && !n.waiting && !n.loading && !n.reloadingCollections && n.armed
+
+/-- A collection reload takes every queued collection: one read of their roots. -/
+def startCollections (n : Slot) : Slot :=
+  if collectionStartable n then { n with collections := false, reloadingCollections := true }
+  else n
+
+/-- How a finished collection reload settles. -/
+inductive CollectionSettlement where
+  | published
+  /-- A publication into the node's store since the capture rejected it. -/
+  | superseded
+  /-- The read failed; the full load owns the status, back-off and refusal. -/
+  | failed
+  deriving DecidableEq, Repr
+
+/-- A collection reload replaces only its collections' rows, through the reload
+fence (`ClientDataPublication.acceptsReload`): a request event since its capture
+leaves it publishable, a publication rejects it. -/
+def collectionSettlement (s : State) (read : Read) : LoadResult → CollectionSettlement
+  | .rows => if acceptsReload s read then .published else .superseded
+  | .transportFailed | .refused => .failed
+
+/-- A superseded collection reload queues its collections again; a failed one
+queues the node's full load, which reports the failure (`settle`). Neither
+changes the shown status: only a full load shows a node connected. -/
+def settleCollections (n : Slot) : CollectionSettlement → Slot
+  | .published => { n with reloadingCollections := false }
+  | .superseded => { n with reloadingCollections := false, collections := true }
+  | .failed => { n with reloadingCollections := false, pending := true }
 
 def timer (n : Slot) : Slot := { n with waiting := false }
 
-/-- A dropped stream aborts the node's load and disarms the source. A queued
-load stays queued; it starts once the transport task re-arms the source. -/
+/-- A dropped stream aborts the node's read and disarms the source. A queued
+load stays queued; it starts once the transport task re-arms the source, and
+that load reads every collection whose reload the drop aborted. -/
 def streamFailed (n : Slot) : Slot :=
-  { n with loading := false, armed := false, status := .disconnected }
+  { n with loading := false, reloadingCollections := false, armed := false,
+           status := .disconnected }
 
 def settle (n : Slot) : Settlement → Slot
   | .published => { n with loading := false, status := .connected }
@@ -1223,7 +1336,7 @@ def settle (n : Slot) : Settlement → Slot
       { n with loading := false, pending := true, waiting := true, status := .disconnected }
   | .refused =>
       { n with loading := false, pending := false, waiting := false, armed := false,
-               status := .refused }
+               collections := false, reloadingCollections := false, status := .refused }
 
 /-- A refusal the stream reports settles the slot as a refused load does. -/
 def streamRefused (n : Slot) : Slot := settle n .refused
@@ -1243,7 +1356,8 @@ and the shown status is kept (an outage stays `disconnected` until the runtime
 answers). The retry timer is cleared, so the re-arm's load starts at once. A
 connected node is left as it is (`retryNowRestarts`). -/
 def retryNow (n : Slot) : Slot :=
-  if retryNowRestarts n then { n with waiting := false, loading := false, armed := false }
+  if retryNowRestarts n then
+    { n with waiting := false, loading := false, reloadingCollections := false, armed := false }
   else n
 
 /-- What the user sees for a node, and why it is not stuck. -/
@@ -1287,21 +1401,22 @@ def Owned (n : Slot) : Prop :=
 theorem owned_never_stalls (n : Slot) (h : Owned n) : present n ≠ .stalled := by
   obtain ⟨_, hConnecting, hDisconnected, hRefused⟩ := h
   cases n with
-  | mk pending waiting loading armed status =>
+  | mk pending waiting loading armed status collections reloading =>
     cases status <;> cases pending <;> cases waiting <;> cases loading <;> cases armed <;>
       simp_all [present]
 
 /-- An owned connecting or disconnected slot names its next step: a load can
-start now, the retry timer is due, a load is running, or the source is
-arming. -/
+start now, the retry timer is due, a load or a collection reload is running,
+or the source is arming. -/
 theorem owned_names_next_step (n : Slot) (h : Owned n)
     (hs : n.status = .connecting ∨ n.status = .disconnected ∨ n.status = .refused) :
-    startable n = true ∨ n.waiting = true ∨ n.loading = true ∨ n.armed = false := by
+    startable n = true ∨ n.waiting = true ∨ n.loading = true ∨
+      n.reloadingCollections = true ∨ n.armed = false := by
   obtain ⟨hWaiting, hConnecting, hDisconnected, hRefused⟩ := h
   cases n with
-  | mk pending waiting loading armed status =>
+  | mk pending waiting loading armed status collections reloading =>
     rcases hs with hs | hs | hs <;> subst hs <;>
-      cases pending <;> cases waiting <;> cases loading <;> cases armed <;>
+      cases pending <;> cases waiting <;> cases loading <;> cases armed <;> cases reloading <;>
       simp_all [startable]
 
 theorem initial_owned : Owned initial := by
@@ -1417,11 +1532,90 @@ theorem queued_requests_coalesce (n : Slot) (k : Nat) :
   | zero => rfl
   | succ k ih => simp [queueAll] at ih ⊢; rw [ih]; simp [queue]
 
+theorem start_of_not_startable (n : Slot) (h : startable n = false) : start n = n := by
+  simp [start, h]
+
 theorem one_load_per_start (n : Slot) :
     start (start n) = start n := by
-  unfold start startable
-  by_cases h : n.pending && !n.waiting && !n.loading && n.armed
-  · simp [h]
-  · simp [h]
+  by_cases h : startable n = true
+  · exact start_of_not_startable _ (by simp only [start, h, ↓reduceIte]; simp [startable])
+  · rw [start_of_not_startable n (by simpa using h)]
+    exact start_of_not_startable n (by simpa using h)
+
+theorem queue_collection_owned (n : Slot) (h : Owned n) : Owned (queueCollection n) := by
+  cases n; simp_all [Owned, queueCollection]
+
+theorem start_collections_owned (n : Slot) (h : Owned n) : Owned (startCollections n) := by
+  unfold startCollections
+  split
+  · cases n; simp_all [Owned]
+  · exact h
+
+theorem settle_collections_owned (n : Slot) (h : Owned n) (outcome : CollectionSettlement) :
+    Owned (settleCollections n outcome) := by
+  cases n; cases outcome <;> simp_all [Owned, settleCollections]
+
+/-- One read per node: a full load and a collection reload never start beside
+each other. -/
+theorem one_read_in_flight (n : Slot) :
+    (startable n = true → n.reloadingCollections = false) ∧
+      (collectionStartable n = true → n.loading = false) ∧
+      startable (startCollections n) = (startable n && !collectionStartable n) ∧
+      collectionStartable (start n) = (collectionStartable n && !startable n) := by
+  cases n with
+  | mk pending waiting loading armed status collections reloading =>
+    cases pending <;> cases waiting <;> cases loading <;> cases armed <;> cases collections <;>
+      cases reloading <;> simp [startable, collectionStartable, start, startCollections]
+
+/-- A full load takes the queued collections: its read starts after every
+event that queued them. -/
+theorem full_load_takes_queued_collections (n : Slot) (h : startable n = true) :
+    (start n).collections = false := by
+  simp [start, h]
+
+/-- A queued full load goes before any queued collection. -/
+theorem queued_load_goes_first (n : Slot) (h : n.pending = true) :
+    collectionStartable n = false := by
+  simp [collectionStartable, h]
+
+/-- A collection reload starts once nothing else is queued or running for an
+armed node. -/
+theorem queued_collection_starts (n : Slot) (hc : n.collections = true) (hp : n.pending = false)
+    (hw : n.waiting = false) (hl : n.loading = false) (hr : n.reloadingCollections = false)
+    (ha : n.armed = true) : (startCollections n).reloadingCollections = true := by
+  simp [startCollections, collectionStartable, hc, hp, hw, hl, hr, ha]
+
+/-- However many request events arrive while a collection reload runs, it
+publishes (the safety half of the TLA model's EventualPublication). -/
+theorem request_events_never_supersede_collections (s : State) (events : Nat) :
+    collectionSettlement (requestEvents s events) (beginRead s) .rows = .published := by
+  have h := arbitrarily_many_request_events_preserve_reload s events
+  simp [collectionSettlement, h]
+
+/-- NoStaleCommit for collection reloads: a publication since capture
+supersedes the reload, and its collections are queued for a fresh read. -/
+theorem publication_supersedes_collections_and_requeues (s : State) (n : Slot) :
+    collectionSettlement (dataChange s) (beginRead s) .rows = .superseded ∧
+      (settleCollections n
+        (collectionSettlement (dataChange s) (beginRead s) .rows)).collections = true := by
+  have h := publication_rejects_reload s
+  simp [collectionSettlement, h, settleCollections]
+
+/-- A failed collection read is not lost: the node's full load is queued. -/
+theorem failed_collections_queue_full_load (n : Slot) (result : LoadResult)
+    (h : result ≠ .rows) (s : State) (read : Read) :
+    (settleCollections n (collectionSettlement s read result)).pending = true := by
+  cases result <;> simp_all [collectionSettlement, settleCollections]
+
+/-- A collection reload never changes the shown status. -/
+theorem collection_reload_keeps_status (n : Slot) (outcome : CollectionSettlement) :
+    (settleCollections n outcome).status = n.status := by
+  cases outcome <;> rfl
+
+/-- Only a collection change reloads a collection; a node change still loads
+the whole node. -/
+theorem only_collections_reload_alone (change : Change) :
+    deliver change = .reloadCollection ↔ change = .collection := by
+  cases change <;> simp [deliver]
 
 end ObserverResync

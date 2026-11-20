@@ -62,8 +62,10 @@ async fn document_install_records_portable_source_and_history() {
         )
         .await
         .unwrap();
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/tests/fixtures/packs/shared_fixture");
+    let fixture = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../gents/tests/fixtures/packs/shared_fixture");
     let (bytes, _) = pack_dir(&fixture).unwrap();
     let archive = PackArchive::from_bytes(&bytes).unwrap();
     let config = load_pack_config(

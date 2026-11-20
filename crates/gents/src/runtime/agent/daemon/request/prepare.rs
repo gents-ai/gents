@@ -2,17 +2,16 @@ use anyhow::{Context, Result};
 use tracing::Instrument;
 
 use super::super::AgentDaemon;
-use super::is_stale_compaction_generation;
 use crate::runtime::agent::loop_stream::{AggregateTokenBudget, FoldedPrompt};
 use crate::turn::prompt::{BuiltPrompt, PromptBuilder};
 use crate::turn::provider_input::budget::ContextCalibration;
 use crate::turn::provider_input::ProviderInputProfile;
-use gents_inference::admission::{self, CallKind};
 use gents_inference::compaction;
 use gents_inference::llm::message::Message;
 use gents_loop::loop_stream::{
     provider_messages, provider_view_tagged, LoopReplayInput, TaggedMessage,
 };
+use gents_loop::provider_call::admission::{AdmissionCallContext, CallKind};
 use gents_observe::observe::runtime_trace::RequestTraceAttrs;
 use gents_protocol::row::AgentRequest;
 use gents_session::session;
@@ -30,6 +29,11 @@ pub(super) struct RequestInputs<'a> {
     pub(super) effective_seed: Option<i64>,
     pub(super) resume_from_history: bool,
     pub(super) resume_same_request: bool,
+    /// The request's admission, from which its calls are admitted.
+    pub(super) admission: &'a AdmissionCallContext,
+    /// The request's capture scope, which its provider calls are captured in.
+    pub(super) capture:
+        Option<&'a std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
 }
 
 pub(super) struct PreparedRequestInput {
@@ -61,6 +65,15 @@ struct SessionReduction<'a> {
     assembly_attempt: i32,
 }
 
+pub(super) struct LoadedAdmission {
+    pub(super) resume_from_history: bool,
+    pub(super) resume_same_request: bool,
+    pub(super) aggregate_token_budget: Option<AggregateTokenBudget>,
+    pub(super) context_calibration: ContextCalibration,
+    /// The call sequence this execution continues: zero for a fresh claim.
+    pub(super) last_call_seq: u64,
+}
+
 impl<M> AgentDaemon<M>
 where
     M: gents_inference::llm::rig_compat::ProviderModel,
@@ -69,7 +82,7 @@ where
         &self,
         request: &AgentRequest,
         resumed_from_backend: bool,
-    ) -> Result<(bool, bool, Option<AggregateTokenBudget>, ContextCalibration)> {
+    ) -> Result<LoadedAdmission> {
         if let Some(guard) = &self.root_execution_guard {
             guard
                 .validate(&self.node, self.agent_config.agent_identity.as_ref())
@@ -95,12 +108,18 @@ where
             &request.session_id,
         )
         .await;
-        Ok((
+        let last_call_seq = if resumed_from_backend {
+            gents_inference::admission::last_recorded_call_seq(&access, request).await?
+        } else {
+            0
+        };
+        Ok(LoadedAdmission {
             resume_from_history,
             resume_same_request,
             aggregate_token_budget,
             context_calibration,
-        ))
+            last_call_seq,
+        })
     }
 
     pub(super) async fn request_capture_scope(
@@ -490,6 +509,8 @@ where
             aggregate_token_budget,
             context_calibration,
             effective_seed,
+            admission: admission_context,
+            capture,
             ..
         } = inputs;
         let SessionReduction {
@@ -523,17 +544,17 @@ where
             &options,
             self.agent_config.context_window,
         )?;
-        let result = admission::scope_call(
-            CallKind::Compaction,
-            1,
-            self.compactor.reduce(
+        options.provider_call.admission = Some(admission_context.for_call(CallKind::Compaction, 1));
+        options.provider_call.capture = capture.cloned();
+        let result = self
+            .compactor
+            .reduce(
                 projected_native.clone(),
                 self.agent_config.context_window,
                 &options,
                 admission,
-            ),
-        )
-        .await?;
+            )
+            .await?;
 
         // The seeded anchor described the unreduced history.
         context_calibration.invalidate_anchor();
@@ -613,7 +634,9 @@ where
                         summaries.push(compaction::bounded_summary(entry.summary));
                     }
                     Err(error)
-                        if is_stale_compaction_generation(&error) && assembly_attempt == 0 =>
+                        if gents_session::session::StaleCompactionGeneration::occurs_in(
+                            error.as_ref(),
+                        ) && assembly_attempt == 0 =>
                     {
                         tracing::info!(
                             request_id = %request.request_id,
@@ -622,7 +645,11 @@ where
                         );
                         return Ok(None);
                     }
-                    Err(error) if is_stale_compaction_generation(&error) => {
+                    Err(error)
+                        if gents_session::session::StaleCompactionGeneration::occurs_in(
+                            error.as_ref(),
+                        ) =>
+                    {
                         tracing::warn!(
                             request_id = %request.request_id,
                             session_id = %request.session_id,

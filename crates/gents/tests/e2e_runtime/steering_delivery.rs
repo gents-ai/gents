@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents::Gents;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
@@ -13,9 +12,10 @@ use gents_session::request::lifecycle::{
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::UNREACHED_DEADLINE;
 use tokio::sync::Notify;
 
-use crate::queue_management::{enqueue_owned, row_as};
+use super::queue_management::{enqueue_owned, row_as};
 use crate::support::agent_requests::{canonical_now, RequestActors};
 use crate::support::agent_transcript;
 use crate::support::builder_runtime::{
@@ -27,6 +27,7 @@ use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::test_db;
+use gents_store::test_support::STALL_CEILING;
 
 const MODEL: &str = "steering-model";
 const BACKEND: &str = "steering-backend";
@@ -49,7 +50,11 @@ impl ToolDyn for HeldTool {
             }
         })
     }
-    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             self.entered.notify_one();
             self.release.notified().await;
@@ -58,12 +63,8 @@ impl ToolDyn for HeldTool {
     }
 }
 
-async fn wait_for_signed_request_terminal(
-    access: &ConfigAccess,
-    request_id: &str,
-    timeout: Duration,
-) -> String {
-    crate::support::live_inference::wait_for_request_terminal(access, request_id, timeout).await
+async fn wait_for_signed_request_terminal(access: &ConfigAccess, request_id: &str) -> String {
+    crate::support::live_inference::wait_for_request_terminal(access, request_id).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -124,7 +125,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(60)
+        .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
         .done()
         .build()
         .await
@@ -212,12 +213,7 @@ async fn steering_arriving_during_terminal_response_continues_same_physical_requ
     );
     backend.release(name);
     assert_eq!(
-        wait_for_signed_request_terminal(
-            &access,
-            "active-steering-request",
-            Duration::from_secs(60)
-        )
-        .await,
+        wait_for_signed_request_terminal(&access, "active-steering-request").await,
         "completed"
     );
     let consumed = row_as(&fixture, &replacement.request_doc_ids[0]).await;
@@ -338,7 +334,7 @@ fn held_runtime(
         .backend_id(BACKEND)
         .model_name(MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(60)
+        .deadline_duration_secs(UNREACHED_DEADLINE.as_secs())
         .custom_tool(HeldTool {
             entered: entered.clone(),
             release: release.clone(),
@@ -444,7 +440,7 @@ async fn signed_agent_steering_survives_a_forced_mid_turn_crash() {
             .unwrap(),
     )
     .await;
-    let reached = tokio::time::timeout(Duration::from_secs(60), entered.notified()).await;
+    let reached = tokio::time::timeout(STALL_CEILING, entered.notified()).await;
     assert!(reached.is_ok(), "head did not reach the held tool");
     let queued = caller_message(
         &caller,
@@ -489,24 +485,15 @@ async fn signed_agent_steering_survives_a_forced_mid_turn_crash() {
             .unwrap(),
     )
     .await;
-    let head_state = wait_for_signed_request_terminal(
-        &worker.agent_access,
-        "priority-head",
-        Duration::from_secs(60),
-    )
-    .await;
+    let head_state = wait_for_signed_request_terminal(&worker.agent_access, "priority-head").await;
     let head_row = worker.request_row(&active, FIELDS).await;
     assert_eq!(head_state, "failed", "head={head_row}");
     assert_eq!(
         head_row["failure_reason"], "execution lease expired",
         "head={head_row}"
     );
-    let queued_state = wait_for_signed_request_terminal(
-        &worker.agent_access,
-        "priority-queued",
-        Duration::from_secs(60),
-    )
-    .await;
+    let queued_state =
+        wait_for_signed_request_terminal(&worker.agent_access, "priority-queued").await;
     let queued_row = worker.request_row(&queued, FIELDS).await;
     assert_eq!(
         queued_state, "completed",

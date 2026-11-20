@@ -25,7 +25,7 @@ structure TranscriptCase where
   expectedOrdered : Bool
   expectedDuplicateReusedSequence : Bool
   expectedStrongDrain : Bool
-  deriving Repr
+  post : TranscriptState
 
 private instance (rows : List MessageRow) : Decidable (StrictlyIncreasingMessages rows) := by
   induction rows with
@@ -80,7 +80,8 @@ private def observedCase (name group action : String)
   , expectedPairClosed := decide post.PairClosed
   , expectedOrdered := decide post.OrderedBySequence
   , expectedDuplicateReusedSequence := pre.hasToolResultKey key && pre == post
-  , expectedStrongDrain := decide post.StrongDrain }
+  , expectedStrongDrain := decide post.StrongDrain
+  , post }
 
 private def empty : TranscriptState := ⟨0, 1, [], [], ∅⟩
 private def key : ToolResultKey := ⟨0, 10, 20⟩

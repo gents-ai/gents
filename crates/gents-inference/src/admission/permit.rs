@@ -177,10 +177,29 @@ impl StreamGuardLifecycle for AdmissionPermit {
     }
 
     fn finish_stream(self) -> BoxFuture<'static, Result<(), AdmissionError>> {
-        Box::pin(async move {
-            let mut permit = self;
-            permit.finish().await
-        })
+        let finalizing = Finalizing {
+            _in_flight: self.runtime.hold(),
+            permit: self,
+        };
+        Box::pin(finalizing.run())
+    }
+}
+
+/// A stream's finalizer owns the permit on a task that a dropped stream
+/// aborts without joining, so a stop cannot join it either. It is counted in
+/// the cleanup tracker from the caller's task, and the count ends only after
+/// the permit's `Drop` has counted its own cleanup: fields drop in order.
+struct Finalizing {
+    permit: AdmissionPermit,
+    _in_flight: Option<gents_store::drop_cleanup::CleanupInFlight>,
+}
+
+impl Finalizing {
+    /// Takes the whole value: an `async move` block that names only
+    /// `finalizing.permit` captures that field alone and drops the count when
+    /// the block is built.
+    async fn run(mut self) -> Result<(), AdmissionError> {
+        self.permit.finish().await
     }
 }
 

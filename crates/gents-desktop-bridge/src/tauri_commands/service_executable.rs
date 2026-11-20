@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::error::{BridgeError, BridgeErrorCode};
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 const RUNTIME_DIR: &str = "runtime";
 

@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gents_documents::{FileToolMode, FileTools, HostTools, Tools};
 use gents_inference::rendered_request::{decode_capture_json, CapturePayloadKind};
 use gents_store::graphql::escape_graphql_string;
@@ -65,7 +63,7 @@ async fn live_tool_turn_captures_are_attributed_and_reconstructable() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(access, REQUEST, Duration::from_secs(120)).await,
+        wait_for_request_terminal(access, REQUEST).await,
         "completed"
     );
     let query = format!(

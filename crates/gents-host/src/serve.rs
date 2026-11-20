@@ -522,6 +522,10 @@ async fn serve_foreground(
     // A home whose identity can never own the node is refused from its
     // configuration alone, before any store is reserved or opened.
     gents_store::local::home::ensure_home_identity_can_serve(&home_dir)?;
+    let init_config = read_init_config(&home_dir)?;
+    if let Some(config) = init_config.as_ref() {
+        gents_store::local::document_acp::ensure_home_opens(config)?;
+    }
     let data_dir = args
         .data_dir
         .clone()
@@ -533,6 +537,7 @@ async fn serve_foreground(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
+    gents_store::local::backend_protection::refuse_earlier_lineage(&data_dir)?;
     let watched_home = home_dir.clone();
     let (_held_home, home_identity) =
         tokio::task::spawn_blocking(move || home_watch::hold_home(&watched_home)).await??;
@@ -543,7 +548,15 @@ async fn serve_foreground(
     } else {
         None
     };
-    let store_lock = gents_store::local::home::lock_store(&home_dir, &data_dir)?;
+    // A previous runtime of this home that is still shutting down is awaited
+    // for as long as its own shutdown may take.
+    let store_lock = gents_store::local::home::acquire_store(
+        &home_dir,
+        &data_dir,
+        gents::runtime::shutdown::agent_drain_budget()
+            .saturating_add(gents::runtime::shutdown::node_close_budget()),
+    )
+    .await?;
     let backend_store_key =
         gents_store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
     let protected_backend = gents_store::local::backend_protection::ProtectedBackendStore::open(
@@ -585,7 +598,6 @@ async fn serve_foreground(
     if let Some(url) = &advertised_graphql_url {
         gents_p2p::p2p_reconcile::endpoint::validate_advertised_graphql_url(url)?;
     }
-    let init_config = read_init_config(&home_dir)?;
     if let (Some(explicit), Some(config)) = (args.node_name.as_deref(), init_config.as_ref()) {
         if explicit != config.node_name {
             anyhow::bail!(
@@ -613,7 +625,14 @@ async fn serve_foreground(
     let _post_open_keychain_prompt_guard =
         gents_service::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
     let protected_backend = protected_backend
-        .preflight(&backend_store_key, Some(identity.did()))
+        .preflight(
+            &backend_store_key,
+            &identity,
+            init_config
+                .as_ref()
+                .map(|config| config.document_acp)
+                .unwrap_or_default(),
+        )
         .await?;
     let effective_tool_ceiling = args
         .tool_ceiling
@@ -720,6 +739,11 @@ async fn serve_foreground(
         activation_rx,
         replicated_schema.clone(),
         serve_lifecycle.clone(),
+        init_config
+            .as_ref()
+            .map(|config| config.document_acp)
+            .unwrap_or_default(),
+        Some(identity.clone()),
     );
     let scrape_state = runtime_routers.scrape_state;
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
@@ -741,9 +765,18 @@ async fn serve_foreground(
         .with_startup_gate(client_access_ready.clone(), bind_probe_path.clone());
     let streams =
         crate::http::shutdown_streams::ShutdownStreams::new(runtime.shutdown_tx.subscribe());
+    let edge = gents_store::local::document_acp::HttpEdge::new(
+        init_config
+            .as_ref()
+            .map(|config| config.document_acp)
+            .unwrap_or_default(),
+        identity.did(),
+    );
     let http_config = defra_node::HttpConfig::with_addr(http_addr)
-        .with_extra_routes(extra_routes)
-        .with_router_transform(Arc::new(move |router| authority.wrap(streams.wrap(router))));
+        .with_authenticated_routes(extra_routes)
+        .with_router_transform(Arc::new(move |router| {
+            authority.wrap(streams.wrap(edge.wrap(router)))
+        }));
     anyhow::ensure!(
         server_identity.node_identity_did.as_deref() == Some(identity.did()),
         "runtime identity does not match the protected store identity"
@@ -894,7 +927,7 @@ async fn serve_foreground(
             let p2p_status =
                 load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission)
                     .await?;
-            if let Some(p2p) = gents_store::identity::node_p2p(&node) {
+            if let Some(p2p) = gents_p2p::node_access::operations(&node) {
                 *enrollment_offer_issuer.write().await =
                     Some(gents_p2p::p2p_reconcile::EnrollmentOfferIssuer::new(
                         node.clone(),
@@ -1161,6 +1194,15 @@ async fn serve_foreground(
     if home_watch::home_replaced(&home_dir, home_identity).await {
         home_watch::exit_home_gone(&home_dir);
     }
+    // Declared before the drain, so a process that opens this home while it
+    // runs (a supervisor's or a desktop's next start) waits for the release
+    // instead of being refused (Lean `StoreHandoff.decide`). The release
+    // itself is this process ending its claim.
+    drop(
+        store_lifetime
+            .as_ref()
+            .and_then(gents_store::config_client::ConfigAccess::begin_store_release),
+    );
     let runtime_result = gents::runtime::shutdown::observe_stage(
         "agent_drain",
         gents::runtime::shutdown::agent_drain_budget(),
@@ -1574,7 +1616,7 @@ async fn load_local_server_p2p_status(
             "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
-            let p2p = gents_store::identity::node_p2p(node).ok_or_else(|| {
+            let p2p = gents_p2p::node_access::operations(node).ok_or_else(|| {
                 anyhow::anyhow!(
                     "P2P transport was requested but is not available on the embedded node"
                 )

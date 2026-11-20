@@ -1,13 +1,14 @@
 //! Provider account sign-in and observation served by the Tauri commands.
 
 use super::{CredentialSave, IssuedOAuthCredential, PendingOAuthCredentials};
-use crate::error::{BridgeError, BridgeErrorCode};
 use gents_inference::auth::credential::{
-    list_oauth_credentials_on, OAuthCredential, SignIn, SignInResult,
+    list_stored_accounts, OAuthCredential, SignIn, SignInResult, StoredAccount,
 };
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use serde::Serialize;
 
-const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
+const LOG_TARGET: &str = "crate::inference_setup";
 
 pub(crate) fn provider_label(provider: &str) -> &'static str {
     match provider {
@@ -24,9 +25,7 @@ pub(crate) async fn require_reachable_configuration(
     provider: &str,
 ) -> Result<(), BridgeError> {
     let probe = match access {
-        Ok(access) => list_oauth_credentials_on(&access, node_did)
-            .await
-            .map(|_| ()),
+        Ok(access) => list_stored_accounts(&access, node_did).await.map(|_| ()),
         Err(error) => Err(error),
     };
     probe.map_err(|error| {
@@ -156,7 +155,7 @@ pub(crate) async fn observe_provider_accounts(
         .map(ProviderAccountView::pending_save)
         .collect();
     let stored = match access {
-        Ok(access) => list_oauth_credentials_on(&access, node_did).await,
+        Ok(access) => list_stored_accounts(&access, node_did).await,
         Err(error) => Err(error),
     };
     match stored {
@@ -205,18 +204,24 @@ impl ProviderAccountView {
 
 impl From<&OAuthCredential> for ProviderAccountView {
     fn from(credential: &OAuthCredential) -> Self {
+        Self::from(&StoredAccount::from(credential))
+    }
+}
+
+impl From<&StoredAccount> for ProviderAccountView {
+    fn from(account: &StoredAccount) -> Self {
         Self {
-            credential_id: credential.credential_id.clone(),
-            node_did: credential.node_did.clone(),
-            provider: credential.provider.clone(),
-            account_id: gents_inference::auth::credential::account_display_label(credential),
-            plan_type: credential.chatgpt_plan_type.clone(),
-            access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
-            last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
-            enabled: credential.enabled,
+            credential_id: account.credential_id.clone(),
+            node_did: account.node_did.clone(),
+            provider: account.provider.clone(),
+            account_id: account.identity.clone(),
+            plan_type: account.plan.clone(),
+            access_token_expires_at: account.access_token_expires_at.to_rfc3339(),
+            last_refresh: account.last_refresh.map(|value| value.to_rfc3339()),
+            enabled: account.enabled,
             pending_save: false,
-            account_ref: credential.account_ref.clone(),
-            label: gents_inference::auth::credential::effective_account_label(credential),
+            account_ref: account.account_ref.clone(),
+            label: account.label.clone(),
         }
     }
 }

@@ -13,6 +13,7 @@ use super::super::{
     HomePackInstall, InstalledVia, PackInferenceBindingPreview, PackInferenceBindings,
     PackInstallOptions,
 };
+use super::host_roots::default_host_tool_roots;
 use super::{DriftPolicy, InstallReport, InstalledPackPlugin, PackChangeError, PackIdentity};
 
 pub(crate) fn sdl_paths(manifest: &super::super::PackManifest) -> std::collections::BTreeSet<&str> {
@@ -823,6 +824,7 @@ async fn prepare_document_pack_archive_inputs(
         owner,
         provisioner.and_then(|context| context.selected_agent_did),
         &mut config,
+        root.snapshot.as_ref(),
     )
     .await?;
     prepare_document_pack_install_inner(
@@ -848,10 +850,9 @@ async fn prepare_document_pack_archive_inputs(
     .await
 }
 
-/// The Tools of `tools` that select host tools and name no root: the ones an
-/// install runs under its installer's root ([`installer_tool_root`]), by
-/// position.
-fn host_tools_without_root(tools: &[gents_documents::Tools]) -> Result<Vec<usize>> {
+/// Authored Tools that require a host root but leave it unset. Installation
+/// retains their live host configuration before considering an installer default.
+pub(super) fn host_tools_without_root(tools: &[gents_documents::Tools]) -> Result<Vec<usize>> {
     let mut rootless = Vec::new();
     for (index, tools) in tools.iter().enumerate() {
         let unset = tools.host.as_ref().is_some_and(|host| {
@@ -869,9 +870,8 @@ fn host_tools_without_root(tools: &[gents_documents::Tools]) -> Result<Vec<usize
     Ok(rootless)
 }
 
-/// The Tools documents an install of the authored `tools` would run under
-/// its installer's root, by `tools_id`: what an install preview lists and
-/// an approval covers before anything is written.
+/// Authored Tools eligible for installer-root defaulting, by `tools_id`.
+/// Install preparation excludes roots retained from its live snapshot.
 pub fn tools_taking_installer_root(tools: &[gents_documents::Tools]) -> Result<Vec<String>> {
     Ok(host_tools_without_root(tools)?
         .into_iter()
@@ -941,46 +941,6 @@ pub async fn installer_tool_root(
             })
         })
         .await
-}
-
-/// A pack cannot name a folder on the node it will be installed on, so a pack
-/// Tools document that selects host tools without a root takes its
-/// installer's ([`installer_tool_root`]). The root is still admitted by the
-/// node's WorkspaceRoot policy when the agent runs, and the agent still needs
-/// the User's reader grant on the published root that covers it
-/// (`tools::surface::agents_tool_root_readers`), which an approved install
-/// makes for this root alone. With no such root to take, the document is left
-/// as the pack wrote it.
-///
-/// Returns the `tools_id` of each Tools it gave the root. This is the one
-/// place that knows a root was supplied rather than authored, so the fact is
-/// carried from here into the pack's installation record
-/// (`RecordedDocument::installer_root`) and the grant reads it there. A
-/// Tools whose root the pack names, by literal or variable, is never among
-/// them once that root renders to a path, including the installer's own. A
-/// root that renders empty (`${ROOT:-}` with no value) names nothing: the
-/// document is rootless as installed, takes the installer's root like one
-/// that authors none, and is among them.
-async fn default_host_tool_roots(
-    access: &ConfigAccess,
-    owner: &str,
-    installer: Option<&str>,
-    config: &mut PackConfig,
-) -> Result<Vec<String>> {
-    let rootless = host_tools_without_root(&config.tools)?;
-    if rootless.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut supplied = Vec::new();
-    if let Some(root) = installer_tool_root(access, owner, installer).await? {
-        for index in rootless {
-            if let Some(host) = config.tools[index].host.as_mut() {
-                host.root = Some(root.clone());
-                supplied.push(config.tools[index].tools_id.clone());
-            }
-        }
-    }
-    Ok(supplied)
 }
 
 /// The installed root's live configuration, read before an upgrade so the
@@ -1106,7 +1066,7 @@ async fn load_dependency(
                 let record = super::read_record(txn, owner, coordinate).await?;
                 anyhow::ensure!(record.doc_id.is_none() || record.digest.as_deref() == Some(archive.digest()) || selected.is_some(),
                     "installed dependency {coordinate} has a different artifact; update it explicitly before installing its dependent");
-                let snapshot = super::dependency_snapshot_in_txn(txn, owner, coordinate, Some(archive.digest())).await?;
+                let snapshot = super::dependency_snapshot_in_txn(txn, owner, coordinate, if selected.is_some() { None } else { Some(archive.digest()) }).await?;
                 Ok::<_, anyhow::Error>((snapshot, record))
             })
         })
@@ -1156,10 +1116,14 @@ async fn load_dependency(
         .finish()
         .with_context(|| format!("preparing dependency {coordinate}"))?;
     let mut bound = bound?;
-    // A dependency rendered from its archive is installed by this install,
-    // so its rootless host tools take the installer's root as the root's do.
-    let installer_root_tools =
-        default_host_tool_roots(access, owner, installer, &mut bound.config).await?;
+    let installer_root_tools = default_host_tool_roots(
+        access,
+        owner,
+        installer,
+        &mut bound.config,
+        snapshot.as_ref(),
+    )
+    .await?;
     Ok(LoadedDependency {
         installer_root_tools,
         bound,

@@ -1,0 +1,28 @@
+name: TLA+ nightly
+
+# Every TLA+ model config against the result its header states. The pull
+# request gate checks only the specs a change selects; main's contract job
+# and this run check all of them.
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tla-nightly
+  cancel-in-progress: false
+
+jobs:
+  tla:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Model-check every TLA+ configuration
+        run: python3 crates/gents/proofs/tla/scripts/tla_check.py run --all --fresh --jobs 3 --heap 4g

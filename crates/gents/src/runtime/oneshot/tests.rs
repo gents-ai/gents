@@ -42,9 +42,9 @@ async fn oneshot_fixture(
 }
 
 async fn capture_scripted_request(
+    call: &gents_loop::provider_call::ProviderCall,
     request: CompletionRequest,
 ) -> Result<serde_json::Value, CompletionError> {
-    use rig::http_client::HttpClientExt;
     let dto = rig::providers::openai::completion::CompletionRequest::try_from((
         "scripted".to_owned(),
         request,
@@ -67,10 +67,10 @@ async fn capture_scripted_request(
             |error| CompletionError::ProviderError(error.to_string()),
         )?))
         .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
-    let _response = transport
-        .send_streaming(outbound)
-        .await
-        .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
+    let _response =
+        gents_loop::rig_compat::http::Transport::send_streaming(&transport, call, outbound)
+            .await
+            .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
     assert_eq!(
         inner.send_count(),
         1,
@@ -80,8 +80,23 @@ async fn capture_scripted_request(
     Ok(body)
 }
 
+/// Streams one text chunk, then empty chunks until `eof` is cancelled, then
+/// ends without a terminal response.
 #[derive(Clone)]
-struct PartialThenEmptyProvider(Arc<AtomicUsize>);
+struct PartialThenEmptyProvider {
+    call: gents_loop::provider_call::ProviderCall,
+    observations: Arc<AtomicUsize>,
+    eof: tokio_util::sync::CancellationToken,
+}
+
+impl gents_loop::provider_call::ForCall for PartialThenEmptyProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
+}
 
 #[allow(refining_impl_trait)]
 impl CompletionModel for PartialThenEmptyProvider {
@@ -90,7 +105,11 @@ impl CompletionModel for PartialThenEmptyProvider {
     type Client = ();
 
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self(Arc::new(AtomicUsize::new(0)))
+        Self {
+            call: Default::default(),
+            observations: Arc::new(AtomicUsize::new(0)),
+            eof: tokio_util::sync::CancellationToken::new(),
+        }
     }
 
     async fn completion(
@@ -104,18 +123,21 @@ impl CompletionModel for PartialThenEmptyProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        capture_scripted_request(request).await?;
+        capture_scripted_request(&self.call, request).await?;
 
-        let observations = self.0.clone();
+        let observations = self.observations.clone();
+        let eof = self.eof.clone();
         let inner: rig::streaming::StreamingResult<()> =
             Box::pin(futures::stream::unfold(false, move |started| {
                 let observations = observations.clone();
+                let eof = eof.clone();
                 async move {
                     let text = if started {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        if observations.fetch_add(1, Ordering::SeqCst) >= 300 {
-                            return None;
+                        tokio::select! {
+                            () = eof.cancelled() => return None,
+                            () = tokio::time::sleep(Duration::from_millis(10)) => {}
                         }
+                        observations.fetch_add(1, Ordering::SeqCst);
                         String::new()
                     } else {
                         "durable one-shot partial".to_string()
@@ -135,7 +157,10 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         .with_identity_binding_for_test(binding)
         .build_with_identity_arc_for_test(db.node_identity.clone());
     Arc::make_mut(&mut behavior.agent).model_name = "scripted".to_owned();
-    Arc::make_mut(&mut behavior.agent).stream_liveness_timeout = Duration::from_secs(1);
+    // Renewal comes due with half the lease left; that half is the margin for a
+    // loaded host's poll delay and renewal commit, which a 1 s lease does not
+    // cover (`tla/LeaseRenewalStarvation`, `MarginSpent`).
+    Arc::make_mut(&mut behavior.agent).stream_liveness_timeout = Duration::from_secs(8);
     Arc::make_mut(&mut behavior.agent).deadline_duration = Duration::from_secs(60);
     let prompt = LayeredPromptBuilder::for_agent(
         &behavior.agent.system_prompt,
@@ -151,10 +176,18 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         gents_inference::rendered_request::CaptureScopeKind::OneShot,
     );
     let observations = Arc::new(AtomicUsize::new(0));
+    let eof = tokio_util::sync::CancellationToken::new();
+    let returned = tokio_util::sync::CancellationToken::new();
     let observe_renewal = async {
-        let mut initial = None;
+        let mut silent_lease = None;
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::select! {
+                () = returned.cancelled() => return false,
+                () = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
+            if observations.load(Ordering::SeqCst) == 0 {
+                continue;
+            }
             let snapshot = agent_access.execute("{ AgentRequest { lifecycle_state execution_generation execution_lease_expires_at } }").await.unwrap();
             let rows = snapshot["data"]["AgentRequest"].as_array().unwrap();
             let Some(row) = rows.first() else { continue };
@@ -166,38 +199,46 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
                 row["execution_lease_expires_at"].as_str().unwrap(),
             )
             .unwrap();
-            let (first_generation, first_expiry) =
-                initial.get_or_insert_with(|| (generation.to_owned(), expiry));
-            if chrono::Utc::now() <= *first_expiry {
-                continue;
+            let (silent_generation, silent_expiry) =
+                silent_lease.get_or_insert_with(|| (generation.to_owned(), expiry));
+            assert_eq!(
+                generation, silent_generation,
+                "renewal keeps the owning generation"
+            );
+            if expiry > *silent_expiry {
+                eof.cancel();
+                return true;
             }
-            assert_eq!(generation, first_generation);
-            assert!(expiry > *first_expiry && expiry > chrono::Utc::now());
-            break;
         }
     };
-    let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let (result, ()) = tokio::join!(
-            run_oneshot_owned(
-                node.clone(),
-                &behavior.agent,
-                &behavior.tools,
-                None,
-                &prompt,
-                PartialThenEmptyProvider(observations.clone()),
-                "exercise explicit renewal during silence",
-                Arc::new(Vec::new()),
-                config,
-                &[],
-                BackgroundToolRegistry::default(),
-                gents_tools::native::lsp::LspPool::new(),
-            ),
-            observe_renewal
-        );
+    let run = async {
+        let result = run_oneshot_owned(
+            node.clone(),
+            &behavior.agent,
+            &behavior.tools,
+            None,
+            &prompt,
+            PartialThenEmptyProvider {
+                call: Default::default(),
+                observations: observations.clone(),
+                eof: eof.clone(),
+            },
+            "exercise explicit renewal during silence",
+            Arc::new(Vec::new()),
+            config,
+            &[],
+            BackgroundToolRegistry::default(),
+            gents_tools::native::lsp::LspPool::new(),
+        )
+        .await;
+        returned.cancel();
         result
-    })
-    .await
-    .expect("one-shot must renew its short lease and converge after provider EOF");
+    };
+    let (result, renewed) = tokio::join!(run, observe_renewal);
+    assert!(
+        renewed,
+        "one-shot must renew its lease while the provider is silent; it returned {result:?}"
+    );
     assert!(
         result.is_err(),
         "a stream ending without an explicit terminal response cannot succeed"
@@ -278,8 +319,18 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
 
 #[derive(Clone)]
 struct OutputObligationProvider {
+    call: gents_loop::provider_call::ProviderCall,
     calls: Arc<AtomicUsize>,
     access: gents_store::config_client::ConfigAccess,
+}
+
+impl gents_loop::provider_call::ForCall for OutputObligationProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -303,7 +354,7 @@ impl CompletionModel for OutputObligationProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        let body = capture_scripted_request(request).await?;
+        let body = capture_scripted_request(&self.call, request).await?;
 
         let turn = self.calls.fetch_add(1, Ordering::SeqCst);
         let chunks = match turn {
@@ -476,6 +527,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             None,
             &prompt,
             OutputObligationProvider {
+                call: Default::default(),
                 calls: calls.clone(),
                 access: agent_access.clone(),
             },
@@ -534,7 +586,13 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
 }
 
 #[derive(Clone)]
-struct OneshotBashProvider(Arc<AtomicUsize>);
+struct OneshotBashProvider(Arc<AtomicUsize>, gents_loop::provider_call::ProviderCall);
+
+impl gents_loop::provider_call::ForCall for OneshotBashProvider {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self(self.0.clone(), call.clone())
+    }
+}
 
 #[allow(refining_impl_trait)]
 impl CompletionModel for OneshotBashProvider {
@@ -543,7 +601,7 @@ impl CompletionModel for OneshotBashProvider {
     type Client = ();
 
     fn make(_: &(), _: impl Into<String>) -> Self {
-        Self(Arc::new(AtomicUsize::new(0)))
+        Self(Arc::new(AtomicUsize::new(0)), Default::default())
     }
 
     async fn completion(
@@ -557,7 +615,7 @@ impl CompletionModel for OneshotBashProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        let body = capture_scripted_request(request).await?;
+        let body = capture_scripted_request(&self.1, request).await?;
         let chunks = match self.0.fetch_add(1, Ordering::SeqCst) {
             0 => vec![
                 RawStreamingChoice::ToolCall(rig::streaming::RawStreamingToolCall::new(
@@ -629,7 +687,7 @@ async fn oneshot_bash_uses_owned_request_context() {
         &agent.tools,
         None,
         &prompt,
-        OneshotBashProvider(calls.clone()),
+        OneshotBashProvider(calls.clone(), Default::default()),
         "inspect the directory",
         tools,
         config,

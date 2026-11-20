@@ -28,7 +28,11 @@ impl ToolDyn for NamedPendingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
     }
 }
@@ -50,7 +54,11 @@ impl ToolDyn for NoisyTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async { Ok("x".repeat(100)) })
     }
 }
@@ -80,7 +88,8 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
             "background_timeout_secs": 60}},
         "remote": {"services": [{"mcp_service_id": "search", "style": "flat",
             "tool_names": ["query"], "background_tool_names": ["query"],
-            "background_timeout_secs": 120, "wait_timeout_secs": 1}]}
+            "background_timeout_secs": 120, "wait_timeout_secs": 1,
+            "max_wait_timeout_secs": 1}]}
     }))
     .unwrap();
     let remote_name = gents_tools::mcp::meta::flat_tool_name("search", "query");
@@ -139,15 +148,23 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         children.push(child);
     }
 
-    let started = std::time::Instant::now();
-    let args = json!({"tool_call_id": children[1]}).to_string();
-    let waited = invoke(&hook, "timed-wait", "wait_process", &args).await;
-    assert_eq!(waited["status"], "running", "{waited}");
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
-        "configured 1s wait took {:?}",
-        started.elapsed()
-    );
+    // The remote target's own wait bound ends both waits; the child never
+    // finishes. A wait that ignored the target would instead run to the
+    // 600 s maximum the second call requests, past the hang ceiling, or end
+    // on the caller's deadline, so the bound is checked by which event ended
+    // the wait, not by elapsed time (TLA+ `WallClockBound`). The default
+    // and maximum each target resolves are the gents-tools surface tests'.
+    for (name, args) in [
+        ("timed-wait", json!({"tool_call_id": children[1]})),
+        (
+            "timed-wait-clamped",
+            json!({"tool_call_id": children[1], "timeout_secs": 600}),
+        ),
+    ] {
+        let waited = invoke(&hook, name, "wait_process", &args.to_string()).await;
+        assert_eq!(waited["status"], "running", "{waited}");
+        assert_eq!(waited["error"]["reason"], "wait_timeout", "{waited}");
+    }
 
     let args = json!({"tool_name": "bash", "args": {"timeout_secs": 0}}).to_string();
     let receipt = invoke(&hook, "timed-zero", "spawn_process", &args).await;
@@ -198,7 +215,8 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         session_id: session,
     } = fixture;
     let node = db.node.clone();
-    let node_view = gents_store::config_client::ConfigAccess::local(node.clone())
+    let node_view = gents_store::test_support::unrelated_document_reader(&node)
+        .await
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
             gents_store::graphql::escape_graphql_string(&request_id),
@@ -394,8 +412,14 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
         r#"{"service_id":"metrics-prod","tool_name":"query_metrics","arguments":{"window":"5m"}}"#;
     accept_hook_tool_call(&hook, "call-selected", "call_tool", args, None).await;
     assert!(matches!(
-        hook.on_tool_call("call_tool", None, "call-selected", args)
-            .await,
+        hook.on_tool_call(
+            "call_tool",
+            None,
+            "call-selected",
+            args,
+            &gents_loop::tool::ToolCallEnvelope::default()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let selected = selected_row(&access, &session_id, "call-selected").await;
@@ -414,8 +438,14 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
 
     accept_hook_tool_call(&hook, "call-native", "read_file", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("read_file", None, "call-native", "{}")
-            .await,
+        hook.on_tool_call(
+            "read_file",
+            None,
+            "call-native",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let native = selected_row(&access, &session_id, "call-native").await;

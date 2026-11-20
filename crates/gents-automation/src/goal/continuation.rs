@@ -55,22 +55,17 @@ pub fn goal_continuation_identity(
     })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "called from goal, watcher and agent tests with this shape"
-)]
 pub fn prepare_goal_continuation(
     parent: &AgentRequest,
     agent_did: String,
     goal_id: &str,
     content: &str,
-    continuation_sequence: i64,
-    wrapup: bool,
+    goal_continuation: GoalContinuationInput,
     created_at: &str,
     hop: u32,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     let continuation =
-        goal_continuation_identity(goal_id, &parent.request_id, continuation_sequence)?;
+        goal_continuation_identity(goal_id, &parent.request_id, goal_continuation.sequence)?;
     let input = parent.input.continuation(
         RequestQueue {
             delivery: Default::default(),
@@ -82,10 +77,7 @@ pub fn prepare_goal_continuation(
             interrupted_request_id: None,
             background_completion_wake_version: None,
         },
-        Some(GoalContinuationInput {
-            sequence: continuation_sequence,
-            wrapup,
-        }),
+        Some(goal_continuation),
         &parent.doc_id,
     );
     let admission =

@@ -156,7 +156,7 @@ impl AggregateTokenLedger {
         let Some(usage) = usage else {
             return AggregateTokenCharge::Missing;
         };
-        let charged = crate::provider_usage::charged_usage_total(usage);
+        let charged = crate::rig_compat::charged_usage_total(usage);
         if charged == 0 {
             return AggregateTokenCharge::Missing;
         }
@@ -344,7 +344,7 @@ mod tests {
                     cache_creation_input_tokens: 0,
                 });
                 let charged_tokens = usage
-                    .map(crate::provider_usage::charged_usage_total)
+                    .map(crate::rig_compat::charged_usage_total)
                     .unwrap_or_default();
                 let charge = ledger.charge_reported(usage);
                 LedgerOutput {

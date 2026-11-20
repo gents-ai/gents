@@ -1,4 +1,4 @@
-use gents_desktop_core::client::{ClientStore, ClientStoreRows};
+use gents_observe::client_projection::store::{ClientStore, ClientStoreRows};
 use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,

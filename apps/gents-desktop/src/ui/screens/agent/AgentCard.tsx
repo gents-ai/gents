@@ -18,7 +18,6 @@ import { useApp } from "@/app/AppContext";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useHomeDid, useNodeReach } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
-import { joinedPeerId } from "@/lib/nodes";
 import {
   InferenceSummary,
   OnlineStatus,
@@ -26,7 +25,6 @@ import {
   counted,
   useNodeConnection,
 } from "../NodeFacts";
-import { leaseLeft } from "../../../hooks/nodeAccess";
 import { cn } from "@gents/ui/lib/utils";
 import { CONNECTION_GROUP } from "./ConnectionGroup";
 import { AgentMark } from "../parts";
@@ -320,7 +318,6 @@ export function AgentCard({
     nodeDid: deployment.nodeDid,
     section,
   });
-  const peerId = joinedPeerId(deployment, homeDid);
   const facts = [
     reach.ceiling,
     reach.root && shortPath(reach.root, { home: reach.local ? home : null, max: 40 }),
@@ -362,15 +359,6 @@ export function AgentCard({
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
             {facts.join(" · ")}
-
-            {peerId && (
-              <>
-                {facts.length ? " · " : ""}
-                <span title={peerId} className="font-mono">
-                  {peerId.slice(-8)}
-                </span>
-              </>
-            )}
           </p>
           {edit && edit.tags.length > 0 && (
             <ul aria-label="Tags" className="mt-2 flex flex-wrap gap-1">
@@ -439,40 +427,21 @@ export function AgentCard({
 
 const CONNECTION_PROBLEMS = new Set(["disconnected", "refused", "no_endpoint"]);
 
-function ConnectionSummary({
-  deployment,
-  local,
-}: {
-  deployment: NodeView;
-  local: boolean;
-}) {
+function ConnectionSummary({ deployment }: { deployment: NodeView; local: boolean }) {
   const connection = useNodeConnection(deployment);
-  const now = useMinute();
   const problem =
     connection.stopped || CONNECTION_PROBLEMS.has(connection.status.reason);
-  const lease = local ? null : leaseLeft(deployment.leaseExpiresAt, now);
   const line = "truncate text-xs text-muted-foreground";
   const detail = problem ? (
-    <span className={line} title={deployment.lastError ?? connection.detail}>
-      {deployment.lastError ?? connection.detail}
-    </span>
-  ) : lease ? (
     <span
-      className={cn(
-        "truncate text-xs",
-        lease.soon ? "text-warning" : "text-muted-foreground",
-      )}
-      title={
-        deployment.leaseExpiresAt
-          ? new Date(deployment.leaseExpiresAt).toLocaleString()
-          : undefined
-      }
+      className={line}
+      title={deployment.runtime?.lastReconcileError ?? connection.detail}
     >
-      {lease.text}
+      {deployment.runtime?.lastReconcileError ?? connection.detail}
     </span>
-  ) : deployment.addr ? (
-    <span className={cn(line, "font-mono")} title={deployment.addr}>
-      {deployment.addr}
+  ) : deployment.graphql ? (
+    <span className={cn(line, "font-mono")} title={deployment.graphql}>
+      {deployment.graphql}
     </span>
   ) : null;
   return (

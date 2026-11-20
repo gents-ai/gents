@@ -575,6 +575,41 @@ theorem later_terminalization_newer (a b : RequestFact)
   try dsimp only [Time, RequestId] at *
   omega
 
+/-- How one key of a row compares with the same key of another. -/
+inductive KeyOrder where
+  | less
+  | equal
+  | greater
+  deriving DecidableEq, Repr
+
+def KeyOrder.of (a b : Nat) : KeyOrder :=
+  if a < b then .less else if a = b then .equal else .greater
+
+/-- `newer` as a finite decision over how the two rows' keys compare, in
+order: created second, live rank, terminalization time, `request_id`. TLA
+`SessionHeadObservation` reads it as a table. -/
+def newerByKeys (created live terminalized id : KeyOrder) : Bool :=
+  match created, live, terminalized, id with
+  | .greater, _, _, _ => true
+  | .equal, .greater, _, _ => true
+  | .equal, .equal, .greater, _ => true
+  | .equal, .equal, .equal, .greater => true
+  | _, _, _, _ => false
+
+theorem newerByKeys_of (a₁ b₁ a₂ b₂ a₃ b₃ a₄ b₄ : Nat) :
+    newerByKeys (.of a₁ b₁) (.of a₂ b₂) (.of a₃ b₃) (.of a₄ b₄) =
+      decide (a₁ > b₁ ∨ (a₁ = b₁ ∧ (a₂ > b₂ ∨ (a₂ = b₂ ∧
+        (a₃ > b₃ ∨ (a₃ = b₃ ∧ a₄ > b₄)))))) := by
+  simp only [KeyOrder.of]
+  repeat' split
+  all_goals simp only [newerByKeys] <;> (first | rfl | (symm; simp only [decide_eq_true_eq, decide_eq_false_iff_not]; omega))
+
+theorem newer_eq_newerByKeys (a b : RequestFact) :
+    newer a b = newerByKeys (.of a.createdAt b.createdAt) (.of (liveRank a) (liveRank b))
+      (.of (terminalRank a) (terminalRank b)) (.of a.observed.requestId b.observed.requestId) := by
+  rw [newerByKeys_of]
+  rfl
+
 def newest : List RequestFact → Option RequestFact
   | [] => none
   | row :: rest => match newest rest with

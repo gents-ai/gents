@@ -289,13 +289,16 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         "{keyless:#}"
     );
     let foreign_paths =
-        gents_desktop_core::client::DesktopPaths::from_root(foreign_identities.join("cli"));
+        gents_store::client_journal::paths::DesktopPaths::from_root(foreign_identities.join("cli"));
     assert!(
         !foreign_paths.identity_key_path().exists(),
         "the refused command minted a client identity"
     );
     foreign_paths.ensure_root_dirs().await?;
-    gents_desktop_core::client::PrincipalIdentity::load_or_create(&foreign_paths).await?;
+    gents_store::client_journal::principal_identity::PrincipalIdentity::load_or_create(
+        &foreign_paths,
+    )
+    .await?;
     // Private status reads as its caller: another client key is not an
     // administrator of this node, so it is refused the ceiling and told why.
     let foreign = run_cli_json_with_env(&elsewhere, &remote_args, &foreign_env)
@@ -371,6 +374,7 @@ fn assert_keys_in_order(report: &str, keys: &[&str]) {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tools_explain_refuses_a_live_root_the_server_cannot_resolve() -> Result<()> {
     let tempdir = tempfile::tempdir()?;

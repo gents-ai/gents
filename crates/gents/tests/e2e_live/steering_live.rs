@@ -47,7 +47,11 @@ impl ToolDyn for HeldTool {
             }
         })
     }
-    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             self.entered.notify_one();
             self.release.notified().await;
@@ -189,7 +193,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     );
     release.notify_one();
     assert_eq!(
-        wait_for_request_terminal(&access, ACTIVE, Duration::from_secs(600)).await,
+        wait_for_request_terminal(&access, ACTIVE).await,
         "completed"
     );
     for id in receipt.request_doc_ids {

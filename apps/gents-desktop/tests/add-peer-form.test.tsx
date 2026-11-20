@@ -2,18 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AddPeerForm, type AddPeerFormProps } from "@source-inc/gents-desktop-fleet";
-import type { EnrollmentRequestView } from "@source-inc/gents-desktop-client";
+import type { ClientAccessRequestView } from "@source-inc/gents-desktop-client";
 
-const enrollmentRequest: EnrollmentRequestView = {
+const enrollmentRequest: ClientAccessRequestView = {
   requestId: "enrollment-request-1",
-  networkId: "network-amy",
-  adminDid: "did:key:z6MkAmy",
-  serverPeer: "server-peer-amy",
-  serverLabel: "Amy",
-  ownerNode: "did:key:z6MkAmy",
+  nodeDid: "did:key:z6MkAmy",
+  clientDid: "did:key:client",
   state: "pending",
-  activationError: null,
-  expiresAt: "2099-01-01T00:00:00Z",
 };
 
 function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
@@ -21,7 +16,7 @@ function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
     addingPeer: false,
     disabled: false,
     localError: null,
-    onRequestStatusEnrollment: vi.fn(async () => enrollmentRequest),
+    onRequestRuntimeAccess: vi.fn(async () => enrollmentRequest),
     ...overrides,
   };
   render(<AddPeerForm {...props} />);
@@ -29,7 +24,7 @@ function renderForm(overrides: Partial<AddPeerFormProps> = {}) {
 }
 
 describe("AddPeerForm", () => {
-  it("shows authenticated status enrollment as the only remote authority", () => {
+  it("shows the runtime address as the remote connection entry point", () => {
     renderForm();
 
     const statusForm = screen.getByTestId("fleet-status-form");
@@ -37,9 +32,9 @@ describe("AddPeerForm", () => {
     expect(screen.queryByText("Use a signed pairing invite")).not.toBeInTheDocument();
   });
 
-  it("requests authenticated enrollment without creating a raw peer", async () => {
+  it("requests access without creating a runtime peer", async () => {
     const props = renderForm({
-      onRequestStatusEnrollment: vi.fn(async () => enrollmentRequest),
+      onRequestRuntimeAccess: vi.fn(async () => enrollmentRequest),
     });
     fireEvent.change(screen.getByTestId("fleet-add-server-address"), {
       target: { value: "http://127.0.0.1:9181" },
@@ -47,11 +42,11 @@ describe("AddPeerForm", () => {
     fireEvent.click(screen.getByTestId("fleet-fetch-status"));
 
     await waitFor(() => {
-      expect(props.onRequestStatusEnrollment).toHaveBeenCalledWith(
+      expect(props.onRequestRuntimeAccess).toHaveBeenCalledWith(
         "http://127.0.0.1:9181",
       );
       expect(screen.getByTestId("fleet-import-status")).toHaveTextContent(
-        "Enrollment request enrollment-request-1 sent · waiting for pairing request acceptance",
+        "Access request enrollment-request-1 sent · waiting for administrator approval",
       );
     });
   });

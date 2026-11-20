@@ -1,6 +1,5 @@
 use rapidhash::RapidHashMap;
 use std::os::unix::fs::{symlink, PermissionsExt};
-#[cfg(target_os = "macos")]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -19,6 +18,7 @@ async fn capture(cwd: PathBuf, path: &str, program: &str, script: &str) -> Manag
         environment: Some(RapidHashMap::from_iter([("PATH".into(), path.into())])),
         tool_name: None,
         live_output: None,
+        process_recorder: None,
     })
     .await
 }
@@ -141,22 +141,16 @@ async fn supplied_path_preserves_native_spawn_errors() {
     std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+/// The script is checked in rather than written here: Linux execve refuses a
+/// file any process holds open for writing (ETXTBSY), and a sibling test's
+/// spawn copies this process's descriptors into its child until that child
+/// execs. `tla/ScriptFixtureExec.tla` checks the interleaving.
 #[tokio::test]
 async fn supplied_path_retains_native_script_fallback() {
-    let directory = tempfile::tempdir().unwrap();
-    let script = directory.path().join("fixture-command");
-    std::fs::write(&script, "printf fallback").unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let directory =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/exec/process/spawn/script-fallback");
     assert_eq!(
-        complete_output(
-            capture(
-                directory.path().to_path_buf(),
-                ".",
-                "fixture-command",
-                "unused",
-            )
-            .await,
-        ),
+        complete_output(capture(directory, ".", "fixture-command", "unused").await),
         b"fallback"
     );
 }
@@ -217,7 +211,6 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
     .await;
 }
 
-#[cfg(target_os = "macos")]
 async fn run_isolated_capture_test(
     test_name: &str,
     root: &Path,
@@ -272,7 +265,6 @@ async fn run_isolated_capture_test(
 /// Other tests' native reference forks can retain the driver's pipe writers.
 /// File capture isolates that driver; the probe itself still checks managed
 /// stdout/stderr completeness before publishing its verified marker.
-#[cfg(target_os = "macos")]
 async fn probe_output(path: &Path) -> Vec<u8> {
     use tokio::io::AsyncReadExt;
     let mut bytes = Vec::new();
@@ -353,34 +345,31 @@ fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
 /// Darwin's posix_spawn file actions reject dup2 sources at or above OPEN_MAX
 /// with EBADF. The CLI raises the soft descriptor limit above that bound, so
 /// the owner must still spawn with piped stdio once pipes land past it.
-/// The probe holds descriptors past that bound process-wide, so it runs in its
-/// own test process: concurrent tests that spawn without the owner would
-/// otherwise inherit the exhausted descriptor table and fail with EBADF.
+/// The probe owns the process's descriptor table, so it runs in its own test
+/// process on every platform: concurrent tests that spawn without the owner
+/// would otherwise inherit the exhausted table and fail with EBADF, and a
+/// descriptor a concurrent test closes would let the probe pipe land below
+/// OPEN_MAX.
 #[tokio::test]
 async fn spawn_succeeds_when_pipes_exceed_open_max() {
-    #[cfg(target_os = "macos")]
-    {
-        const FIXTURE: &str = "GENTS_SPAWN_OPEN_MAX_FIXTURE";
-        if let Some(root) = std::env::var_os(FIXTURE) {
-            exercise_spawn_succeeds_when_pipes_exceed_open_max().await;
-            tokio::fs::write(PathBuf::from(root).join("verified"), b"complete")
-                .await
-                .unwrap();
-            return;
-        }
-
-        let root = tempfile::tempdir().unwrap();
-        let mut environment = std::env::vars().collect::<RapidHashMap<_, _>>();
-        environment.insert(FIXTURE.into(), root.path().to_string_lossy().into_owned());
-        run_isolated_capture_test(
-            "exec::process::spawn::tests::spawn_succeeds_when_pipes_exceed_open_max",
-            root.path(),
-            environment,
-        )
-        .await;
+    const FIXTURE: &str = "GENTS_SPAWN_OPEN_MAX_FIXTURE";
+    if let Some(root) = std::env::var_os(FIXTURE) {
+        exercise_spawn_succeeds_when_pipes_exceed_open_max().await;
+        tokio::fs::write(PathBuf::from(root).join("verified"), b"complete")
+            .await
+            .unwrap();
+        return;
     }
-    #[cfg(not(target_os = "macos"))]
-    exercise_spawn_succeeds_when_pipes_exceed_open_max().await;
+
+    let root = tempfile::tempdir().unwrap();
+    let mut environment = std::env::vars().collect::<RapidHashMap<_, _>>();
+    environment.insert(FIXTURE.into(), root.path().to_string_lossy().into_owned());
+    run_isolated_capture_test(
+        "exec::process::spawn::tests::spawn_succeeds_when_pipes_exceed_open_max",
+        root.path(),
+        environment,
+    )
+    .await;
 }
 
 async fn exercise_spawn_succeeds_when_pipes_exceed_open_max() {

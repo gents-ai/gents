@@ -1,0 +1,4 @@
+---- MODULE MCGuestAllowanceWakeCounted ----
+EXTENDS GuestAllowance
+
+====

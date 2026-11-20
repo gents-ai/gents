@@ -102,9 +102,13 @@ where
     ) -> OwnedWorkOutcome {
         use gents_toolcalls::call::task_hooks::TaskAgentResult;
 
-        let result =
-            Box::pin(self.handle_request(lifecycle, stream_writer, shutdown, interrupt_rx.clone()))
-                .await;
+        // Erased so the agent loop's `Send` proof restarts here: through the
+        // request, inference, tool-call and store futures the inline proof
+        // sits at the trait solver's recursion limit.
+        let work: std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<HandleRequestOutcome>> + Send + '_>,
+        > = Box::pin(self.handle_request(lifecycle, stream_writer, shutdown, interrupt_rx.clone()));
+        let result = work.await;
 
         match result {
             Ok(HandleRequestOutcome::Completed) => {
@@ -261,7 +265,7 @@ where
 /// A work failure caused by losing the execution lease is not this execution's
 /// failure to report.
 async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::Error) -> bool {
-    if error.is::<gents_session::request::lifecycle::ExecutionOwnershipLost>() {
+    if gents_session::request::lifecycle::ExecutionOwnershipLost::occurs_in(error) {
         return true;
     }
     matches!(lifecycle.owns_execution().await, Ok(false))

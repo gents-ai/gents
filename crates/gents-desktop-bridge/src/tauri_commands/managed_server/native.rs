@@ -1,9 +1,10 @@
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::tauri_commands::service_executable::{
     ensure_installable_location, resolve_service_executable,
 };
 use gents_service::args::ServiceAction;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use tauri::{AppHandle, Runtime};
 
 pub(super) fn ensure_launchable_here<R>(
@@ -69,11 +70,9 @@ where
 }
 
 pub(super) fn native_error(error: anyhow::Error) -> BridgeError {
-    let code = if gents_protocol::error_chain::find_source::<
-        gents_service::native_service::UnsupportedNativeServicePlatform,
-    >(error.as_ref())
-    .is_some()
-    {
+    let code = if gents_service::native_service::UnsupportedNativeServicePlatform::occurs_in(
+        error.as_ref(),
+    ) {
         BridgeErrorCode::Unsupported
     } else {
         BridgeErrorCode::Backend

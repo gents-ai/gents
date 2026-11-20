@@ -1,10 +1,8 @@
-#![cfg(all(target_os = "macos", feature = "editor-e2e"))]
-
 use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents_desktop_bridge::host::{local, protocol};
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::local::store_key::{StoreEncryption, StoreKeyCustody};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -12,8 +10,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio_util::codec::LengthDelimitedCodec;
 
-#[path = "support/homes.rs"]
-mod homes;
+use crate::support::homes;
 
 async fn script(extension: &Path, root: &Path, name: &str) -> Result<()> {
     let mut command = Command::new("node");
@@ -126,8 +123,11 @@ async fn retire(paths: &DesktopPaths) -> Result<()> {
             acknowledged,
             "disposable installation retirement was not acknowledged"
         );
-        gents_store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir())
-            .await?;
+        // The installation answers only once its store is free.
+        drop(gents_store::local::home::lock_store(
+            paths.root(),
+            paths.node_data_dir(),
+        )?);
         Ok::<_, anyhow::Error>(())
     })
     .await

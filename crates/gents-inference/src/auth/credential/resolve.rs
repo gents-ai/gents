@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rapidhash::{HashSetExt, RapidHashSet};
 use serde_json::Value;
 
 use super::*;
@@ -57,6 +58,51 @@ pub fn pick_oauth_pool<'c>(
     pool
 }
 
+/// One node's credential rows as a runtime view holds them between loads, so
+/// readiness asks the resolver's picks of the rows it was resolved against
+/// rather than of a later read.
+#[derive(Debug, Clone, Default)]
+pub struct NodeOAuthAccounts {
+    rows: Vec<OAuthCredential>,
+}
+
+impl NodeOAuthAccounts {
+    pub async fn load(
+        access: &gents_store::config_client::ConfigAccess,
+        node_did: &str,
+    ) -> Result<Self> {
+        let rows = super::list_oauth_credentials_on(access, node_did).await?;
+        let mut seen = RapidHashSet::with_capacity(rows.len());
+        for row in &rows {
+            anyhow::ensure!(row.doc_id.is_some(), "OAuthCredential missing physical ID");
+            anyhow::ensure!(row.node_did == node_did, "OAuthCredential owner mismatch");
+            anyhow::ensure!(
+                seen.insert(row.credential_id.as_str()),
+                "duplicate OAuthCredential {}",
+                row.credential_id
+            );
+        }
+        Ok(Self { rows })
+    }
+
+    pub fn resolves(&self, node_did: &str, provider: &str, pick: AccountPick<'_>) -> bool {
+        pick_oauth_credential(&self.rows, node_did, provider, pick).is_some()
+    }
+
+    /// The credential ids of [`pick_oauth_pool`], in rotation order.
+    pub fn pool_ids(&self, node_did: &str, provider: &str) -> Vec<String> {
+        pick_oauth_pool(&self.rows, node_did, provider)
+            .into_iter()
+            .map(|row| row.credential_id.clone())
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn rows_mut(&mut self) -> &mut Vec<OAuthCredential> {
+        &mut self.rows
+    }
+}
+
 pub async fn resolve_oauth_credential(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
@@ -64,11 +110,10 @@ pub async fn resolve_oauth_credential(
     pick: AccountPick<'_>,
 ) -> Result<Option<OAuthCredential>> {
     let response = access
-        .execute(&enabled_oauth_credentials_query(
-            node_did,
-            provider,
-            OAUTH_CREDENTIAL_FIELDS,
-        ))
+        .execute_for_use(
+            &enabled_oauth_credentials_query(node_did, provider, OAUTH_CREDENTIAL_FIELDS),
+            "OAuthCredential",
+        )
         .await?;
     pick_from_response(&response, node_did, provider, pick)
 }
@@ -79,11 +124,10 @@ pub async fn resolve_oauth_pool(
     provider: &str,
 ) -> Result<Vec<OAuthCredential>> {
     let response = access
-        .execute(&enabled_oauth_credentials_query(
-            node_did,
-            provider,
-            OAUTH_CREDENTIAL_FIELDS,
-        ))
+        .execute_for_use(
+            &enabled_oauth_credentials_query(node_did, provider, OAUTH_CREDENTIAL_FIELDS),
+            "OAuthCredential",
+        )
         .await?;
     let rows = oauth_credentials_from_response(&response)
         .into_iter()
@@ -120,7 +164,6 @@ pub(crate) fn runtime_account_query(node_did: &str, provider: &str) -> String {
 }
 
 pub(crate) struct RuntimeAccountSelection {
-    pub(crate) doc_id: String,
     pub(crate) account_ref: Option<String>,
     pub(crate) connected_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -138,10 +181,6 @@ pub(crate) fn runtime_account_from_response(
     pick_oauth_credential(&rows, node_did, provider, pick)
         .map(|row| {
             Ok(RuntimeAccountSelection {
-                doc_id: row
-                    .doc_id
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("selected account has no document ID"))?,
                 account_ref: row.account_ref.clone(),
                 connected_at: row.connected_at,
             })
@@ -156,11 +195,10 @@ pub async fn resolve_oauth_credential_in_txn(
     pick: AccountPick<'_>,
 ) -> Result<Option<OAuthCredential>> {
     let response = txn
-        .execute(&enabled_oauth_credentials_query(
-            node_did,
-            provider,
-            OAUTH_PICK_FIELDS,
-        ))
+        .execute_for_use(
+            &enabled_oauth_credentials_query(node_did, provider, OAUTH_PICK_FIELDS),
+            "OAuthCredential",
+        )
         .await?;
     let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "OAuthCredential")
         .into_iter()

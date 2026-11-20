@@ -22,7 +22,11 @@ impl ToolDyn for SchemaArgumentProbe {
         })
     }
 
-    fn admit(&self, args: &str) -> Result<(), ToolError> {
+    fn admit(
+        &self,
+        args: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<(), ToolError> {
         self.admitted
             .lock()
             .unwrap()
@@ -30,7 +34,11 @@ impl ToolDyn for SchemaArgumentProbe {
         Ok(())
     }
 
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             self.dispatched
                 .lock()

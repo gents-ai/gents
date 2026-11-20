@@ -1024,6 +1024,7 @@ impl Stepper {
                 serde_json::to_value(input).unwrap(),
                 Some(data),
                 jobs,
+                &gents_loop::tool::ToolCallEnvelope::default(),
             )
             .await
             .1
@@ -1043,6 +1044,7 @@ struct LiveTools;
 impl gents_loop::tool_effects::ToolEffectDispatcher for LiveTools {
     fn call<'a>(
         &'a self,
+        _parent: &'a gents_loop::tool::ToolCallEnvelope,
         _ordinal: u32,
         _name: &'a str,
         _arguments: &'a str,
@@ -1066,22 +1068,25 @@ async fn job_step_runs_without_a_tool_dispatcher() {
     // tools, so the step's `false` below is the job entry's, not an
     // absent dispatcher's.
     let (input, _) = step.input(&step.row).await;
-    let ordinary = gents_loop::tool_effects::scope(
-        live(),
-        step.job.runtime.plugins.call_data_bound_with_receipt(
+    let envelope = gents_loop::tool::ToolCallEnvelope::default().with_effects(live());
+    let ordinary = step
+        .job
+        .runtime
+        .plugins
+        .call_data_bound_with_receipt(
             &step.installed,
             serde_json::to_value(&input).unwrap(),
-            None,
-            true,
-        ),
-    )
-    .await
-    .1;
+            crate::plugin::executor::ToolInvocation {
+                tool_root: None,
+                own_folder: None,
+                tool_calls: true,
+                context: &envelope,
+            },
+        )
+        .await
+        .1;
     assert!(ordinary.authority.unwrap().host_tools);
-    assert_eq!(
-        gents_loop::tool_effects::scope(live(), step.run(&step.row)).await,
-        StepOutcome::Settled
-    );
+    assert_eq!(step.run(&step.row).await, StepOutcome::Settled);
     let evidence = step.state(&step.row).await.unwrap().evidence.unwrap();
     let authority = evidence.authority.unwrap();
     assert!(!authority.host_tools);
@@ -1769,10 +1774,9 @@ fn attempt_of(outcome: &Result<StepOutcome>) -> &'static str {
         Ok(StepOutcome::Settled) => "settled",
         Ok(StepOutcome::Refused(Refusal::Terminal)) => "refused_terminal",
         Err(error)
-            if crate::plugin::executor::publication_busy(error)
-                || gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
-                    error.as_ref(),
-                ) =>
+            if gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                error.as_ref(),
+            ) =>
         {
             "publication_busy"
         }

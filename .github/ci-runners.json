@@ -1,0 +1,108 @@
+{
+  "roles": {
+    "linux": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-linux"],
+      "hosted": "ubuntu-latest",
+      "fallback": "ubuntu-latest"
+    },
+    "browser": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-browser"],
+      "pool": "hosted",
+      "hosted": "ubuntu-latest",
+      "fallback": "ubuntu-latest"
+    },
+    "portable": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-portable"],
+      "host_groups": ["ci-portable-a", "ci-portable-b", "ci-portable-c"],
+      "partitions": 4,
+      "comment": "Each portable host has 60 GB and three runners. At 10 build jobs per runner the rustc processes of three concurrent builds exhausted memory: on 2026-11-17 both minisforums swapped, their runners lost GitHub and job trees ran orphaned for 5 to 6 hours. 6 build jobs per runner keeps three builds within the host's memory. ci-portable-c is workstation-1 (48 threads, 125 GB shared with eval inference): two runners in a 44 GB slice. host_groups spread the portable test jobs across hosts. The in-build slice runs as `partitions` hash partitions on any free portable runner: pinned one per host group, the two workstation-1 partitions waited 11 to 29 minutes for its two runners while the minisforums idled (main runs 44607280697, 44615894888).",
+      "jobs": {
+        "build": 6,
+        "test": 8
+      },
+      "fallback": "macos",
+      "target": {
+        "max_gib": 65,
+        "floor_gib": 50
+      },
+      "cache": {
+        "systemd_unit": "gents-sccache.service"
+      }
+    },
+    "macos": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-macos"],
+      "hosted": "macos-latest",
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "runtime": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-runtime"],
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "runtime-isolated": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-runtime-isolated"],
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "cli": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-cli"],
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "desktop": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-desktop"],
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "support": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-support"]
+    },
+    "notary": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-notary"]
+    },
+    "release-macos": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-desktop"]
+    },
+    "release-candidate-macos": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-release-candidate"]
+    },
+    "docker": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-docker"]
+    },
+    "inference": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-inference"]
+    },
+    "release-linux-x64": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-release"]
+    },
+    "release-linux-arm64": {
+      "labels": ["self-hosted", "Linux", "ARM64", "ci-release"]
+    }
+  }
+}

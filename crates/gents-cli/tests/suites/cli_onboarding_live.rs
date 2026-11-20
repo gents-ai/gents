@@ -616,7 +616,7 @@ mod no_model {
         let live = LiveBox::new()?;
         let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
         let copy = live.root.join("copy-of-gents");
-        fs::copy(cli_bin(), &copy)?;
+        gents_store::test_support::copy_executable(Path::new(cli_bin()), &copy)?;
         let mut command = live.gents_from(&copy);
         command.arg("--home").arg(&home.home);
         let mut installing = Terminal::spawn(&command, &live.log("copy"))?;
@@ -831,26 +831,13 @@ mod no_model {
 
     /// `command` under a shell that outlives it on the same terminal and prints that
     /// terminal's flags afterward, as the shell a person returns to would find them.
+    ///
+    /// The `stty` forwarder is checked in rather than written here: Linux
+    /// execve refuses a file any process holds open for writing (ETXTBSY),
+    /// and a concurrent test's spawn copies this process's descriptors into
+    /// its child until that child execs (`tla/ScriptFixtureExec.tla`).
     fn reporting_terminal_flags(command: &Command) -> Result<Command> {
-        use std::os::unix::fs::PermissionsExt;
-        let directory = command
-            .get_current_dir()
-            .context("terminal fixture needs a working directory")?
-            .join("terminal-tools");
-        fs::create_dir_all(&directory)?;
-        let forwarder = directory.join("stty");
-        fs::write(
-            &forwarder,
-            br#"#!/bin/sh
-/bin/stty "$@"
-status=$?
-if [ "$status" -eq 0 ] && [ "$#" -eq 1 ] && [ "$1" = "-echo" ]; then
-    printf '%s\n' GENTS_TEST_TERMINAL_ECHO_DISABLED >&2
-fi
-exit "$status"
-"#,
-        )?;
-        fs::set_permissions(&forwarder, fs::Permissions::from_mode(0o755))?;
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/terminal-tools");
         let inherited = command
             .get_envs()
             .find(|(key, _)| *key == std::ffi::OsStr::new("PATH"))

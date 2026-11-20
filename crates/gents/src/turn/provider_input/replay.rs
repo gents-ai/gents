@@ -65,7 +65,7 @@ pub(crate) fn owned_replay_input(
                 .await
                 .map_err(replay_resolution_error)?;
                 tracing::info!(
-                    target: "gents::turn::provider_input",
+                    target: "crate::turn::provider_input",
                     request_id = %request.request_id,
                     request_doc_id = %request.doc_id,
                     session_id = %request.session_id,
@@ -109,9 +109,9 @@ pub(crate) fn tag_canonical_history(
 /// A violation anywhere under the resolver's context is a request error the
 /// loop refuses; every other failure is storage the loop reports.
 fn replay_resolution_error(error: anyhow::Error) -> ReplayEvidenceResolveError {
-    match error.downcast::<ReplayEvidenceViolation>() {
-        Ok(violation) => ReplayEvidenceResolveError::Violation(violation),
-        Err(error) => ReplayEvidenceResolveError::Storage {
+    match ReplayEvidenceViolation::in_chain(error.as_ref()).cloned() {
+        Some(violation) => ReplayEvidenceResolveError::Violation(violation),
+        None => ReplayEvidenceResolveError::Storage {
             source: error.into(),
         },
     }

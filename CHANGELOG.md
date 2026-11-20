@@ -6,6 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- An application pairing no longer reinstalls its collections on authority
+  read before its author lost the P2P mutation grant: each install re-reads
+  the author's authority after the operations before it, and a change to the
+  author's Agent, context or tools wakes the pairing reconciler instead of
+  waiting for the periodic sweep (30 s by default). Documents written between
+  the withdrawal and that sweep can still reach the peer, because replicators
+  check no grant when they push (#3825).
 - Breaking for desktop package consumers: `desktop_peer_status_fetch`,
   `DesktopApiAdapter.fetchPeerStatus` and `PeerStatusFetchRequest` are
   removed. A node's connection is checked with `reconnectNode`

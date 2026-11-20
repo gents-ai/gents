@@ -33,6 +33,7 @@ use crate::support::{
     snapshots::{fetch_runtime_snapshot, SnapshotChanges, SnapshotReader},
     test_db, TestDb,
 };
+use gents_store::test_support::STALL_CEILING;
 
 const RESEARCHER_AGENT_NAME: &str = "live-researcher";
 const BACKGROUND_WORKER_AGENT_NAME: &str = "live-background-worker";
@@ -159,11 +160,9 @@ async fn live_local_create_session() -> Result<()> {
         "agent_new must start a new session"
     );
 
-    let caused_terminal =
-        wait_for_request_terminal(&live, &caused.request_id, Duration::from_secs(180)).await;
+    let caused_terminal = wait_for_request_terminal(&live, &caused.request_id).await;
     assert_eq!(caused_terminal, "completed");
-    let caused_answer =
-        wait_for_assistant_answer(&live, &caused.request_id, Duration::from_secs(30)).await;
+    let caused_answer = wait_for_assistant_answer(&live, &caused.request_id, STALL_CEILING).await;
     tracing::info!("[live-local] started session answer = {caused_answer:?}");
     assert!(
         !caused_answer.trim().is_empty(),
@@ -203,12 +202,10 @@ async fn live_local_create_session() -> Result<()> {
     .await;
     let wake =
         wait_for_background_wake(&live, session_id, request_id, Duration::from_secs(60)).await;
-    let wake_state =
-        wait_for_request_terminal(&live, &wake.request_id, Duration::from_secs(180)).await;
+    let wake_state = wait_for_request_terminal(&live, &wake.request_id).await;
     assert_eq!(wake_state, "completed");
 
-    let parent_terminal =
-        wait_for_request_terminal(&live, request_id, Duration::from_secs(60)).await;
+    let parent_terminal = wait_for_request_terminal(&live, request_id).await;
     assert_eq!(parent_terminal, "completed");
 
     agent.shutdown().await;
@@ -336,11 +333,9 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         Duration::from_secs(180),
     )
     .await;
-    let parent_state =
-        wait_for_request_terminal(&live, agent_request_id, Duration::from_secs(180)).await;
+    let parent_state = wait_for_request_terminal(&live, agent_request_id).await;
     assert_eq!(parent_state, "completed");
-    let parent_answer =
-        wait_for_assistant_answer(&live, agent_request_id, Duration::from_secs(30)).await;
+    let parent_answer = wait_for_assistant_answer(&live, agent_request_id, STALL_CEILING).await;
     assert!(
         !parent_answer.trim().is_empty(),
         "parent did not persist a reply after the agent_new receipt: {parent_answer:?}"
@@ -388,8 +383,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     assert_eq!(receipt["session_id"], caused.session_id.as_str());
 
     child_release.release();
-    let caused_terminal =
-        wait_for_request_terminal(&live, &caused.request_id, Duration::from_secs(180)).await;
+    let caused_terminal = wait_for_request_terminal(&live, &caused.request_id).await;
     assert_eq!(caused_terminal, "completed");
 
     let caused_answer = terminal_assistant_answer(&live, &caused.request_id).await;
@@ -432,11 +426,9 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         background_tool.child_request_id.is_none(),
         "native background tool must use the childless lane"
     );
-    let tool_parent_state =
-        wait_for_request_terminal(&live, tool_request_id, Duration::from_secs(180)).await;
+    let tool_parent_state = wait_for_request_terminal(&live, tool_request_id).await;
     assert_eq!(tool_parent_state, "completed");
-    let tool_parent_answer =
-        wait_for_assistant_answer(&live, tool_request_id, Duration::from_secs(30)).await;
+    let tool_parent_answer = wait_for_assistant_answer(&live, tool_request_id, STALL_CEILING).await;
     assert!(
         !tool_parent_answer.trim().is_empty(),
         "parent did not persist a reply after the background process receipt: {tool_parent_answer:?}"
@@ -494,7 +486,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(&live, managed_create_request_id, Duration::from_secs(180)).await,
+        wait_for_request_terminal(&live, managed_create_request_id).await,
         "completed"
     );
     let managed_caused =
@@ -530,7 +522,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(&live, managed_list_request_id, Duration::from_secs(180)).await,
+        wait_for_request_terminal(&live, managed_list_request_id).await,
         "completed"
     );
 
@@ -564,8 +556,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(&live, managed_message_request_id, Duration::from_secs(180))
-            .await,
+        wait_for_request_terminal(&live, managed_message_request_id).await,
         "completed"
     );
     let messages =
@@ -605,8 +596,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
 
     managed_child_release.release();
     assert_eq!(
-        wait_for_request_terminal(&live, &managed_caused.request_id, Duration::from_secs(240))
-            .await,
+        wait_for_request_terminal(&live, &managed_caused.request_id).await,
         "completed"
     );
     let managed_answer = terminal_assistant_answer(&live, &managed_caused.request_id).await;
@@ -659,7 +649,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(&live, managed_tool_request_id, Duration::from_secs(180),).await,
+        wait_for_request_terminal(&live, managed_tool_request_id,).await,
         "completed"
     );
     let managed_process_handle = managed_tool.tool_call_id.clone();
@@ -683,12 +673,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            &live,
-            managed_tool_list_request_id,
-            Duration::from_secs(180)
-        )
-        .await,
+        wait_for_request_terminal(&live, managed_tool_list_request_id).await,
         "completed"
     );
 
@@ -722,12 +707,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            &live,
-            managed_tool_read_request_id,
-            Duration::from_secs(180)
-        )
-        .await,
+        wait_for_request_terminal(&live, managed_tool_read_request_id).await,
         "completed"
     );
 
@@ -767,12 +747,8 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     );
     managed_tool_release.release();
 
-    let managed_tool_wait_state = wait_for_request_terminal(
-        &live,
-        managed_tool_wait_request_id,
-        Duration::from_secs(240),
-    )
-    .await;
+    let managed_tool_wait_state =
+        wait_for_request_terminal(&live, managed_tool_wait_request_id).await;
     assert_eq!(managed_tool_wait_state, "completed");
 
     let managed_tool_terminal_read_request_id = "req-live-managed-background-tool-read-terminal";
@@ -804,19 +780,12 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         Duration::from_secs(60),
     )
     .await;
-    let managed_tool_state = wait_for_request_terminal(
-        &live,
-        managed_tool_terminal_read_request_id,
-        Duration::from_secs(180),
-    )
-    .await;
+    let managed_tool_state =
+        wait_for_request_terminal(&live, managed_tool_terminal_read_request_id).await;
     assert_eq!(managed_tool_state, "completed");
-    let managed_tool_answer = wait_for_assistant_answer(
-        &live,
-        managed_tool_terminal_read_request_id,
-        Duration::from_secs(30),
-    )
-    .await;
+    let managed_tool_answer =
+        wait_for_assistant_answer(&live, managed_tool_terminal_read_request_id, STALL_CEILING)
+            .await;
     assert!(
         !managed_tool_answer.trim().is_empty(),
         "the inspection request did not persist a reply: {managed_tool_answer:?}"
@@ -928,7 +897,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(&live, fan_out_request_id, Duration::from_secs(240)).await,
+        wait_for_request_terminal(&live, fan_out_request_id).await,
         "completed"
     );
     let caused =
@@ -965,7 +934,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     assert_ne!(alpha.session_id, beta.session_id);
     for started in [&alpha, &beta] {
         assert_eq!(
-            wait_for_request_terminal(&live, &started.request_id, Duration::from_secs(240)).await,
+            wait_for_request_terminal(&live, &started.request_id).await,
             "completed"
         );
         wait_for_completion_notification(
@@ -1047,7 +1016,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .collect::<RapidHashSet<_>>();
     assert_eq!(listed_agents, RapidHashSet::from_iter(["alpha", "beta"]));
     assert_eq!(
-        wait_for_request_terminal(&live, list_request_id, Duration::from_secs(180)).await,
+        wait_for_request_terminal(&live, list_request_id).await,
         "completed"
     );
     wait_for_session_quiescent(&live, session_id, Duration::from_secs(120)).await;
@@ -1086,7 +1055,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .unwrap_or_else(|| panic!("agent_message receipt missing; transcript={messages:#?}"));
     assert_eq!(receipt["delivery"], "request");
     assert_eq!(
-        wait_for_request_terminal(&live, &continued.request_id, Duration::from_secs(240)).await,
+        wait_for_request_terminal(&live, &continued.request_id).await,
         "completed"
     );
     wait_for_completion_notification(&live, &message_row.doc_id, Duration::from_secs(60)).await;
@@ -1217,7 +1186,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     .await;
     wait_for_started_marker(&live, "BLOCKER_STARTED", Duration::from_secs(120)).await;
     assert_eq!(
-        wait_for_request_terminal(&live, start_request_id, Duration::from_secs(240)).await,
+        wait_for_request_terminal(&live, start_request_id).await,
         "completed"
     );
     let other_session = "session-live-interrupt-other";
@@ -1245,7 +1214,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     assert_eq!(refusal["ok"], false, "non-spawner interrupt: {refusal}");
     assert_eq!(refusal["code"], "interrupt_not_permitted");
     assert_eq!(
-        wait_for_request_terminal(&live, refused_request_id, Duration::from_secs(180)).await,
+        wait_for_request_terminal(&live, refused_request_id).await,
         "completed"
     );
     let still = fetch_request_lifecycle(&live, &worker.request_id)
@@ -1282,8 +1251,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     assert_eq!(accepted["ok"], true, "spawner interrupt: {accepted}");
     assert_eq!(accepted["status"], "interrupting");
     assert_eq!(accepted["request_id"], worker.request_id.as_str());
-    let worker_terminal =
-        wait_for_request_terminal(&live, &worker.request_id, Duration::from_secs(120)).await;
+    let worker_terminal = wait_for_request_terminal(&live, &worker.request_id).await;
     assert_eq!(worker_terminal, "interrupted");
     assert!(
         !release.is_released(),
@@ -1406,7 +1374,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     assert_eq!(first.agent_did, relay_agent_did.as_str());
     assert_eq!(first.request_hop, Some(1));
     assert_eq!(
-        wait_for_request_terminal(&live, &first.request_id, Duration::from_secs(300)).await,
+        wait_for_request_terminal(&live, &first.request_id).await,
         "completed",
         "the relay must finish its turn after its onward start is refused"
     );
@@ -1415,7 +1383,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         &first.request_id,
         &first.session_id,
         |value| value["tool_name"] == AGENT_NEW_TOOL_NAME,
-        Duration::from_secs(30),
+        STALL_CEILING,
     )
     .await;
     assert_eq!(refused["ok"], false);
@@ -1467,7 +1435,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         &first.request_id,
         &first.session_id,
         |value| value.get("sessions").is_some(),
-        Duration::from_secs(30),
+        STALL_CEILING,
     )
     .await;
     let started_by = listed["sessions"]
@@ -1711,7 +1679,7 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     wait_for_started_marker(&fx.live, "LEAF_STARTED", Duration::from_secs(240)).await;
     wait_for_started_marker(&fx.live, "MIDDLE_STARTED", Duration::from_secs(240)).await;
     assert_eq!(
-        wait_for_request_terminal(&fx.live, start_request_id, Duration::from_secs(240)).await,
+        wait_for_request_terminal(&fx.live, start_request_id).await,
         "completed"
     );
 
@@ -1741,7 +1709,7 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     assert_eq!(accepted["status"], "interrupting");
     assert_eq!(accepted["request_id"], middle.request_id.as_str());
     assert_eq!(
-        wait_for_request_terminal(&fx.live, &middle.request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&fx.live, &middle.request_id).await,
         "interrupted"
     );
     let middle_bash = timeline_tools(&fx.live, &middle.request_id)
@@ -1787,7 +1755,7 @@ sentence that repeats, verbatim, every code word reported in the notifications."
 
     leaf_release.release();
     assert_eq!(
-        wait_for_request_terminal(&fx.live, &leaf.request_id, Duration::from_secs(240)).await,
+        wait_for_request_terminal(&fx.live, &leaf.request_id).await,
         "completed"
     );
     wait_for_tool_call_state(
@@ -1909,7 +1877,7 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
     assert_eq!(worker.request_hop, Some(1));
     wait_for_started_marker(&fx.live, "STEERED_STARTED", Duration::from_secs(240)).await;
     assert_eq!(
-        wait_for_request_terminal(&fx.live, start_request_id, Duration::from_secs(240)).await,
+        wait_for_request_terminal(&fx.live, start_request_id).await,
         "completed"
     );
 
@@ -1962,7 +1930,7 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
     );
 
     assert_eq!(
-        wait_for_request_terminal(&fx.live, &worker.request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal(&fx.live, &worker.request_id).await,
         "interrupted"
     );
     assert!(
@@ -1971,7 +1939,7 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
     );
     release.release();
     assert_eq!(
-        wait_for_request_terminal(&fx.live, &steer.request_id, Duration::from_secs(240)).await,
+        wait_for_request_terminal(&fx.live, &steer.request_id).await,
         "completed"
     );
     let steer_answer = terminal_assistant_answer(&fx.live, &steer.request_id).await;
@@ -2101,7 +2069,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
         .expect("the Goal session must start the worker");
     wait_for_started_marker(&fx.live, "GOAL_WORKER_STARTED", Duration::from_secs(240)).await;
     assert_eq!(
-        wait_for_request_terminal(&fx.live, start_request_id, Duration::from_secs(240)).await,
+        wait_for_request_terminal(&fx.live, start_request_id).await,
         "completed"
     );
     let continuation = wait_for_session_request(
@@ -2115,8 +2083,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(&fx.live, &continuation.request_id, Duration::from_secs(240))
-            .await,
+        wait_for_request_terminal(&fx.live, &continuation.request_id).await,
         "completed"
     );
     let worker_state = fetch_request_lifecycle(&fx.live, &worker.request_id)
@@ -2129,7 +2096,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
 
     release.release();
     assert_eq!(
-        wait_for_request_terminal(&fx.live, &worker.request_id, Duration::from_secs(240)).await,
+        wait_for_request_terminal(&fx.live, &worker.request_id).await,
         "completed"
     );
     let notification =
@@ -2544,8 +2511,7 @@ async fn live_randomized_soak() -> Result<()> {
         let request_id = format!("req-live-soak-{step}");
         tracing::info!(seed, step, root, %prompt, "[live-soak] op");
         fx.request(&request_id, root, &prompt).await;
-        let state =
-            wait_for_request_terminal(&fx.live, &request_id, Duration::from_secs(300)).await;
+        let state = wait_for_request_terminal(&fx.live, &request_id).await;
         assert_eq!(
             state, "completed",
             "soak seed={seed} operation {step} failed"
@@ -3421,7 +3387,7 @@ async fn load_timeline(
 ) -> gents_observe::observe::run_timeline::RunTimelineRows {
     // A published header can name a closing segment whose parent link the
     // writer has not committed yet; that dependency is incomplete, not denied.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + STALL_CEILING;
     let mut changes = node.subscribe_changes("AgentOutputSegment").await;
     let mut messages = node.subscribe_changes("AgentMessage").await;
     loop {
@@ -3795,10 +3761,10 @@ async fn assert_wake_observed(node: &LiveUser, session_id: &str, parent_request_
     let wake =
         wait_for_background_wake(node, session_id, parent_request_id, Duration::from_secs(60))
             .await;
-    let state = wait_for_request_terminal(node, &wake.request_id, Duration::from_secs(180)).await;
+    let state = wait_for_request_terminal(node, &wake.request_id).await;
     assert_eq!(state, "completed");
 
-    let answer = wait_for_assistant_answer(node, &wake.request_id, Duration::from_secs(30)).await;
+    let answer = wait_for_assistant_answer(node, &wake.request_id, STALL_CEILING).await;
     assert!(
         !answer.trim().is_empty(),
         "the completion wake did not persist a reply: {answer:?}"

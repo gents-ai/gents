@@ -1,5 +1,3 @@
-#![cfg(target_os = "macos")]
-
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -7,14 +5,14 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents_desktop_bridge::host::local;
-use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
-use gents_desktop_core::client::DesktopPaths;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
+use gents_store::client_journal::paths::DesktopPaths;
 use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-#[path = "support/homes.rs"]
-mod homes;
+use crate::support::homes;
 
 #[tokio::test]
 async fn a_retained_editor_cache_miss_stops_before_identity_or_store_startup() {

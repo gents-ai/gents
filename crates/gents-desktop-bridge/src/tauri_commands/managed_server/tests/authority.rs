@@ -212,6 +212,7 @@ async fn reprovisioning_with_another_name_leaves_the_home_and_preference_alone()
         &crate::tests::support::runtime_handle(),
         gents_server::server_host::ProvisionOptions {
             home: node_home.clone(),
+            desktop_root: state.policy.desktop_paths.root().to_path_buf(),
             node_name: "Scout".to_string(),
             tool_ceiling: runtime_tool_ceiling(ManagedServerToolCeiling::Readwrite),
             tool_root: None,

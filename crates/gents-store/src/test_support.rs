@@ -1,6 +1,61 @@
 pub mod acp_policies;
+pub mod bounded_process;
+#[cfg(unix)]
+mod executable_script;
 pub mod relationships;
 pub mod wire_database;
+
+#[cfg(unix)]
+pub use executable_script::{copy_executable, hold_sibling, write_executable_script, HeldSibling};
+
+/// Hang detector for every wait without a deadline of its own: the longest a
+/// wait may observe no progress (no change to the documents it watches, no
+/// output from the process it waits on) before it fails with the state it
+/// last saw. It is the one suite-wide ceiling, far above any host's scheduling
+/// delay, never a per-test latency budget (TLA+ `WallClockBound`): the runtime
+/// has no quiescence notification to fail on instead, and a fixture that holds
+/// a provider response or a process is quiet by design.
+pub const STALL_CEILING: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// A fixture deadline the scenario does not exercise: beyond any run the hang
+/// ceiling lets finish, so the product's deadline cut is never enabled
+/// (`WallClockBound` `DeadlineMode = "unreached"`).
+pub const UNREACHED_DEADLINE: std::time::Duration =
+    std::time::Duration::from_secs(4 * STALL_CEILING.as_secs());
+
+/// [`UNREACHED_DEADLINE`] from now, as the wall-clock instant a fixture binds.
+pub fn unreached_deadline_at() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() + chrono::TimeDelta::from_std(UNREACHED_DEADLINE).expect("bounded")
+}
+
+/// Resolves with the first `Some` that `read` returns, re-running it after
+/// each committed change to `collections` and failing with `what` once none
+/// has changed for [`STALL_CEILING`]. The subscription opens before the first
+/// read, so a change committed between two reads is never missed; `read` must
+/// change its answer only together with a change to `collections`.
+pub async fn read_when_changed<T, F>(
+    node: &defra_node::Node,
+    collections: &[&str],
+    what: &str,
+    mut read: F,
+) -> T
+where
+    F: AsyncFnMut() -> Option<T>,
+{
+    let mut changes =
+        crate::subscription_source::subscribe_collections(node, collections.iter().copied())
+            .expect("observe the awaited collections");
+    loop {
+        if let Some(value) = read().await {
+            return value;
+        }
+        match tokio::time::timeout(STALL_CEILING, changes.recv()).await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("{what}: the change feed for {collections:?} closed"),
+            Err(_) => panic!("{what}: {collections:?} unchanged for {STALL_CEILING:?}"),
+        }
+    }
+}
 
 pub fn attach_node_extensions(
     node: &std::sync::Arc<defra_node::Node>,
@@ -32,6 +87,74 @@ pub fn pin_fixed_signing_identity(dir: &std::path::Path) -> crate::identity::Key
 pub fn test_identity(name: &str) -> crate::identity::KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
     crate::identity::KeyIdentity::load_or_create(path, None).unwrap()
+}
+
+fn home_status_body(
+    node_did: &str,
+    reports: &gents_protocol::delegation_audience::ReportedDelegationAudience,
+    provider_time: Option<u64>,
+) -> serde_json::Value {
+    use gents_protocol::client_authentication::ClientAuthentication;
+    use gents_protocol::delegation_audience::ReportedDelegationAudience;
+    let authentication = match reports {
+        ReportedDelegationAudience::Named(audience) => ClientAuthentication::Vera {
+            worker: audience.worker.clone(),
+            deployment: audience.deployment,
+        },
+        ReportedDelegationAudience::Absent => ClientAuthentication::Local,
+        ReportedDelegationAudience::Unavailable => ClientAuthentication::Unavailable,
+    };
+    let mut status = serde_json::json!({
+        gents_protocol::delegation_audience::STATUS_NODE_DID_FIELD: node_did,
+        gents_protocol::client_authentication::STATUS_FIELD: authentication,
+    });
+    if let Some(reported) = reports.status_value() {
+        status[gents_protocol::delegation_audience::STATUS_DELEGATION_AUDIENCE_FIELD] = reported;
+    }
+    if let Some(time) = provider_time {
+        status[gents_protocol::delegation_audience::STATUS_PROVIDER_TIME_FIELD] = time.into();
+    }
+    status
+}
+
+pub async fn signed_home_status(
+    node: &dyn crate::identity::NodeIdentity,
+    reports: &gents_protocol::delegation_audience::ReportedDelegationAudience,
+    provider_time: Option<u64>,
+    nonce: &gents_protocol::home_attestation::HomeNonce,
+) -> serde_json::Value {
+    let mut status = home_status_body(node.did(), reports, provider_time);
+    crate::identity::home_status::attest(Some(node), nonce, &mut status).await;
+    status
+}
+
+pub fn local_home_status_now(
+    node_did: &str,
+    sign: &dyn Fn(&[u8]) -> Vec<u8>,
+    query: Option<&str>,
+) -> serde_json::Value {
+    use gents_protocol::home_attestation::{
+        HomeAttestation, HomeNonce, HomeStatement, HOME_NONCE_QUERY, STATUS_HOME_ATTESTATION_FIELD,
+    };
+    let mut status = home_status_body(
+        node_did,
+        &gents_protocol::delegation_audience::ReportedDelegationAudience::Absent,
+        None,
+    );
+    let nonce = query
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .find_map(|pair| {
+            let (name, value) = pair.split_once('=')?;
+            (name == HOME_NONCE_QUERY).then(|| HomeNonce::parse(value).ok())?
+        });
+    if let Some(nonce) = nonce {
+        let statement = HomeStatement::of_status(&status, &nonce);
+        let signature = sign(&statement.signing_payload());
+        status[STATUS_HOME_ATTESTATION_FIELD] =
+            serde_json::json!(HomeAttestation::signed(statement, &signature));
+    }
+    status
 }
 
 pub async fn delete_configuration_document(
@@ -154,4 +277,125 @@ pub async fn verified_block_signer_as(node: &defra_node::Node, reader: &str, cid
         defra_core::block::Signature::from_dag_cbor(&signature).expect("decode block signature");
     db::block::verify::verified_signature_signer_did(&block, &signature)
         .unwrap_or_else(|error| panic!("verify {cid}: {error}"))
+}
+
+/// Makes write-attempt events visible to a scoped subscriber. tracing caches
+/// one interest per callsite for the whole process, and while a single
+/// dispatcher is registered it computes that interest from the default of
+/// whichever thread reaches the callsite first; a thread with no default
+/// caches `never`, which then hides the event from a scoped subscriber on
+/// another thread. A global default that enables the target is every such
+/// thread's default.
+#[cfg(test)]
+pub(crate) fn enable_scoped_event_capture() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        tracing::subscriber::set_global_default(CapturedTargetSubscriber)
+            .expect("no other global tracing default in this test binary");
+    });
+}
+
+#[cfg(test)]
+struct CapturedTargetSubscriber;
+
+#[cfg(test)]
+impl tracing::Subscriber for CapturedTargetSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
+        tracing::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {}
+
+    fn enter(&self, _span: &tracing::Id) {}
+
+    fn exit(&self, _span: &tracing::Id) {}
+}
+
+pub fn unbound_journal_schema() -> String {
+    use gents_protocol::schemas::{CLIENT_JOURNAL_POLICY_ID, CLIENT_JOURNAL_POLICY_RESOURCE};
+    let directive = format!(
+        r#" @policy(id: "{CLIENT_JOURNAL_POLICY_ID}", resource: "{CLIENT_JOURNAL_POLICY_RESOURCE}")"#
+    );
+    let sdl = gents_protocol::schemas::PENDING_CHAT_SUBMISSION;
+    assert!(sdl.contains(&directive));
+    sdl.replacen(&directive, "", 1)
+}
+
+pub async fn client_journal_node(
+    client_did: &str,
+) -> anyhow::Result<std::sync::Arc<defra_node::Node>> {
+    let node = std::sync::Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(client_did)
+            .build()
+            .await?,
+    );
+    node.add_collection(&unbound_journal_schema()).await?;
+    Ok(node)
+}
+
+pub fn local_authentication_route(
+    node: std::sync::Arc<dyn crate::identity::NodeIdentity>,
+) -> axum::Router {
+    axum::Router::new().route(
+        "/status",
+        axum::routing::get(
+            move |query: axum::extract::Query<rapidhash::RapidHashMap<String, String>>| {
+                let node = node.clone();
+                async move {
+                    let nonce = query
+                        .get(gents_protocol::home_attestation::HOME_NONCE_QUERY)
+                        .and_then(|nonce| {
+                            gents_protocol::home_attestation::HomeNonce::parse(nonce).ok()
+                        });
+                    axum::Json(match nonce {
+                        Some(nonce) => {
+                            signed_home_status(
+                                node.as_ref(),
+                                &gents_protocol::delegation_audience::ReportedDelegationAudience::Absent,
+                                None,
+                                &nonce,
+                            )
+                            .await
+                        }
+                        None => serde_json::json!({
+                            "node_did": node.did(),
+                            (gents_protocol::client_authentication::STATUS_FIELD):
+                                gents_protocol::client_authentication::ClientAuthentication::Local,
+                        }),
+                    })
+                }
+            },
+        ),
+    )
+}
+
+pub async fn unrelated_document_reader(
+    node: &std::sync::Arc<defra_node::Node>,
+) -> crate::config_client::ConfigAccess {
+    use crate::identity::NodeIdentity as _;
+    let identity = tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir().unwrap();
+        crate::identity::KeyIdentity::load_or_create(directory.path().join("reader.key"), None)
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    let actor = identity.did().parse().unwrap();
+    crate::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    )
+    .grant_node_permission(&actor, crate::config_client::NodePermission::DocumentRead)
+    .await
+    .unwrap();
+    crate::config_client::ConfigAccess::local_as(node.clone(), actor)
 }

@@ -2,6 +2,7 @@ use super::*;
 use gents_protocol::background_completion::{
     background_completion_notification_message_key, BACKGROUND_COMPLETION_WAKE_PROMPT,
 };
+use gents_session::request::lifecycle::queue::BackgroundCompletionNotification;
 use gents_tools::rendering::tool_completion_presentation;
 
 pub(super) struct SideEffects {
@@ -250,22 +251,26 @@ async fn ensure_notification_delivery(
             access,
             node,
             parent,
-            delivery.content,
-            delivery.message_key,
-            BACKGROUND_COMPLETION_WAKE_PROMPT,
-            RequestQueue {
-                delivery: Default::default(),
-                position: None,
-                source: QueueSource::BackgroundCompletion,
-                policy: QueuePolicy::Coalesce,
-                key: Some(format!("background_completion:{}", parent.session_id)),
-                queued_after_request_id: Some(parent.request_id.clone()),
-                interrupted_request_id: None,
-                background_completion_wake_version: None,
+            BackgroundCompletionNotification {
+                content: delivery.content,
+                message_key: delivery.message_key,
+                wake_content: BACKGROUND_COMPLETION_WAKE_PROMPT,
+                queue: RequestQueue {
+                    delivery: Default::default(),
+                    position: None,
+                    source: QueueSource::BackgroundCompletion,
+                    policy: QueuePolicy::Coalesce,
+                    key: Some(QueueSource::BackgroundCompletion.queue_key(&parent.session_id)),
+                    queued_after_request_id: Some(parent.request_id.clone()),
+                    interrupted_request_id: None,
+                    background_completion_wake_version: None,
+                },
+                existing_notification_doc_id: existing
+                    .as_ref()
+                    .map(|receipt| receipt.doc_id.as_str()),
+                wake,
             },
-            existing.as_ref().map(|receipt| receipt.doc_id.as_str()),
             &delivery.native,
-            wake,
         )
         .await?;
     Ok(SideEffects {

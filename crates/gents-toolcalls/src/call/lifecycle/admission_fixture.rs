@@ -9,6 +9,11 @@ use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use gents_session::request::streaming::DefraStreamWriter;
 use gents_store::identity::NodeIdentity;
 
+/// The fixture claim's request deadline. Every accepted fixture tool inherits
+/// it and the delivery owner refuses work past it; no test here exercises
+/// that cut, so it lies beyond any run (`WallClockBound` `"unreached"`).
+const FIXTURE_DEADLINE_SECS: u64 = gents_store::test_support::UNREACHED_DEADLINE.as_secs();
+
 pub struct PublishedAdmissionOptions {
     pub name: String,
     pub real_identity: bool,
@@ -315,7 +320,8 @@ async fn complete_child_managed_inner(
         .verify_fresh_for_claim_with_identity(&request, identity)
         .await
         .expect("verify the child request and its native claim admission");
-    let mut request = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
+    let mut request =
+        RequestLifecycle::new_with_node_did(node.clone(), request, FIXTURE_DEADLINE_SECS);
     request.bind_managed_agent(identity).unwrap();
     request.set_client_claim_admission(admission);
     assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
@@ -402,19 +408,20 @@ pub(crate) async fn ensure_managed_fixture_session(
         agent.as_ref(),
     )
     .unwrap();
-    let agent_did = gents_store::graphql::escape_graphql_string(agent.did());
-    let node_did = gents_store::graphql::escape_graphql_string(root.did());
     let requester_did = if requester_did == Some(root.did()) {
         Some(agent.did())
     } else {
         requester_did
     };
-    let requester = requester_did.map_or_else(
-        || "null".to_owned(),
-        |did| format!("\"{}\"", gents_store::graphql::escape_graphql_string(did)),
-    );
-    let created = gents_store::graphql::escape_graphql_string(created_at);
-    access.write("fixture.create_managed_session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{node_did}", requester_did: {requester}, agent_did: "{agent_did}", created_at: "{created}" }}) {{ _docID }} }}"#)).await.expect("create managed fixture session");
+    gents_session::test_support::create_agent_owned_session_at(
+        &access,
+        root.did(),
+        session_id,
+        requester_did,
+        created_at,
+    )
+    .await;
+
     agent
 }
 
@@ -552,8 +559,11 @@ pub async fn claimed_signed_request_create_as_agent(
             .unwrap()
             .unwrap()
     };
-    let mut lifecycle =
-        RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
+        node.clone(),
+        row.try_into().unwrap(),
+        FIXTURE_DEADLINE_SECS,
+    );
     lifecycle.bind_managed_agent(agent_identity).unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
@@ -678,7 +688,8 @@ pub async fn published_admission_with_owner(
         admission.is_some(),
         "fixture client request lacks native claim admission"
     );
-    let mut request = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
+    let mut request =
+        RequestLifecycle::new_with_node_did(node.clone(), request, FIXTURE_DEADLINE_SECS);
     request.bind_managed_agent(agent.as_ref())?;
     request.set_client_claim_admission(admission);
     anyhow::ensure!(
@@ -838,7 +849,8 @@ pub async fn pending_client_fixture_request(
         admission.is_some(),
         "fixture client request lacks native claim admission"
     );
-    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(node.clone(), request, FIXTURE_DEADLINE_SECS);
     lifecycle.bind_managed_agent(agent)?;
     lifecycle.set_client_claim_admission(admission);
     Ok(lifecycle)
@@ -1299,17 +1311,21 @@ pub async fn materialize_session_at(
             let caused = caused.clone();
             let created_at = created_at.clone();
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
-                    txn,
-                    &caused.session_id,
-                    &caused.node_did,
-                    &caused.agent_did,
-                    caused.requester_did.as_deref(),
-                    None,
+                let provenance =
                     gents_session::request::lifecycle::materialize::created_session_provenance(
                         &caused,
-                    ),
-                    &created_at,
+                    );
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    gents_session::session::NewAgentSession {
+                        session_id: &caused.session_id,
+                        node_did: &caused.node_did,
+                        agent_did: &caused.agent_did,
+                        requester_did: caused.requester_did.as_deref(),
+                        title: None,
+                        provenance,
+                        created_at: &created_at,
+                    },
                 )
                 .await
             })
@@ -1384,13 +1400,15 @@ mod lifecycle_tests {
             .unwrap()
             .is_some()
         );
-        assert!(gents_session::request::binding::load_agent_request(
-            &fixture.node,
-            &request.request().request_id,
-        )
-        .await
-        .unwrap()
-        .is_none());
+        assert!(
+            gents_session::request::binding::load_agent_request_with_access(
+                &gents_store::test_support::unrelated_document_reader(&fixture.node).await,
+                &request.request().request_id,
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
         teardown(fixture.node, fixture.path).await;
     }
 

@@ -21,13 +21,15 @@ where
 }
 
 pub trait ProviderModel:
-    rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static> + 'static
+    rig::completion::CompletionModel<Response: 'static, StreamingResponse: 'static>
+    + crate::provider_call::ForCall
+    + 'static
 {
 }
 
 impl<M> ProviderModel for M
 where
-    M: rig::completion::CompletionModel + 'static,
+    M: rig::completion::CompletionModel + crate::provider_call::ForCall + 'static,
     M::Response: 'static,
     M::StreamingResponse: 'static,
 {
@@ -40,6 +42,31 @@ where
     C: rig::client::CompletionClient,
     C::CompletionModel: ProviderModel,
 {
+}
+
+/// Rig's request, error, usage and stream-event types, for provider code that
+/// reads or produces them without implementing a Rig trait. A Rig type that
+/// such code needs is added here rather than named at the call site, so this
+/// list is the whole completion surface a replacement of Rig must cover.
+pub mod completion {
+    pub use rig::completion::{CompletionError, CompletionRequest, Usage};
+    pub use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
+}
+
+pub mod call;
+pub mod http;
+pub mod model;
+
+pub fn charged_usage_total(usage: rig::completion::Usage) -> u64 {
+    usage.input_tokens.saturating_add(usage.output_tokens)
+}
+
+pub fn contract_usage_input_tokens(usage: &rig::completion::Usage) -> Option<u64> {
+    crate::provider_usage::contract_input_tokens(
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.cache_creation_input_tokens,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -529,7 +556,6 @@ fn from_rig_image(image: &rig::completion::message::Image) -> message::Image {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     match msg {
         rig::completion::Message::System { content } => message::Message::System {
@@ -546,7 +572,6 @@ pub fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_user_content(
     content: &rig::completion::message::UserContent,
 ) -> message::UserContent {
@@ -572,7 +597,6 @@ pub fn from_rig_user_content(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn from_rig_assistant_content(
     content: &rig::completion::message::AssistantContent,
 ) -> message::AssistantContent {

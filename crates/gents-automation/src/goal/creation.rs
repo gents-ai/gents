@@ -1,4 +1,5 @@
 use super::*;
+use crate::operations::goal::GoalStart;
 
 /// Stage the two native grants for a Goal or claim created by this transaction.
 pub(super) async fn stage_goal_relationships_in_txn(
@@ -59,7 +60,9 @@ pub(crate) async fn finish_goal_relationships(
     let actor = access
         .actor_did()
         .context("Goal publication requires an authenticated actor")?;
-    access.transact_write("goal.repair_relationships", |txn| {
+    // Each attempt re-selects only unlinked rows and updates them guarded on
+    // parent_linked = false, so a confirmed conflict is rebuilt.
+    access.transact_signed_conflict_rebuild("goal.repair_relationships", |txn| {
         let actor = &actor;
         Box::pin(async move {
             let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
@@ -213,8 +216,34 @@ pub enum CreateGoalForSessionError {
     InvalidBudget,
     #[error("the current session already has a goal with a different objective or budget")]
     Conflict,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Storage(#[from] anyhow::Error),
+}
+
+impl From<gents_store::config_client::ConfigClientError> for CreateGoalForSessionError {
+    fn from(error: gents_store::config_client::ConfigClientError) -> Self {
+        Self::Storage(anyhow::Error::new(error))
+    }
+}
+
+impl gents_store::config_client::TransactionFailure for CreateGoalForSessionError {
+    fn config_client_error(&self) -> Option<&gents_store::config_client::ConfigClientError> {
+        match self {
+            Self::Storage(error) => {
+                gents_store::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::InvalidObjective | Self::InvalidBudget | Self::Conflict => None,
+        }
+    }
+
+    fn rerun_requested(&self) -> Option<&gents_store::config_client::RerunNote> {
+        match self {
+            Self::Storage(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+            Self::InvalidObjective | Self::InvalidBudget | Self::Conflict => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,18 +284,44 @@ pub fn replacement_goal_identity(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn stage_goal_and_claim(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    session_id: &str,
-    objective: &str,
-    token_budget: Option<i64>,
-    initial_state: GoalState,
-    now: &str,
-    identity: Option<&GoalCreationIdentity>,
-    first_request_doc_id: Option<&str>,
+    staging: GoalStaging<'_>,
 ) -> Result<StagedGoal> {
+    stage_goal_and_claim_typed(txn, staging)
+        .await
+        .map_err(|error| match error {
+            CreateGoalForSessionError::Storage(error) => error,
+            refusal => anyhow::Error::new(refusal),
+        })
+}
+
+/// A Goal row and its creation claim as one transaction stages them.
+pub(super) struct GoalStaging<'a> {
+    pub(super) start: GoalStart<'a>,
+    pub(super) initial_state: GoalState,
+    pub(super) now: &'a str,
+    pub(super) identity: Option<&'a GoalCreationIdentity>,
+    pub(super) first_request_doc_id: Option<&'a str>,
+}
+
+async fn stage_goal_and_claim_typed(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    staging: GoalStaging<'_>,
+) -> std::result::Result<StagedGoal, CreateGoalForSessionError> {
+    let GoalStaging {
+        start:
+            GoalStart {
+                node_did,
+                session_id,
+                objective,
+                token_budget,
+            },
+        initial_state,
+        now,
+        identity,
+        first_request_doc_id,
+    } = staging;
     let create_request = GoalCreateRequest {
         caller: node_did.to_string(),
         current_session: session_id.to_string(),
@@ -278,10 +333,9 @@ pub(super) async fn stage_goal_and_claim(
         goal_tools: true,
         goal_create: true,
     };
-    anyhow::ensure!(
-        decide_model_goal_create(&create_request, None) == GoalCreateDisposition::Fresh,
-        "invalid goal objective or token budget"
-    );
+    if decide_model_goal_create(&create_request, None) != GoalCreateDisposition::Fresh {
+        return Err(anyhow::anyhow!("invalid goal objective or token budget").into());
+    }
     let fingerprint = goal_creation_fingerprint(&create_request);
     let objective = fingerprint.objective.as_str();
     let goal_id = identity
@@ -341,10 +395,9 @@ pub(super) async fn stage_goal_and_claim(
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
-    anyhow::ensure!(
-        claims.len() <= 1,
-        "goal creation key resolved to multiple claims"
-    );
+    if claims.len() > 1 {
+        return Err(anyhow::anyhow!("goal creation key resolved to multiple claims").into());
+    }
     if let Some(claim) = claims.first() {
         let claim_fingerprint = GoalCreationFingerprint {
             owner: claim
@@ -371,7 +424,7 @@ pub(super) async fn stage_goal_and_claim(
             || decide_model_goal_create(&create_request, Some(&claim_fingerprint))
                 != GoalCreateDisposition::Idempotent
         {
-            return Err(anyhow::Error::new(CreateGoalForSessionError::Conflict));
+            return Err(CreateGoalForSessionError::Conflict);
         }
     } else {
         create_goal_child_in_txn(
@@ -401,7 +454,7 @@ pub(super) async fn stage_goal_and_claim(
         if !goals.iter().all(|candidate| {
             candidate.objective.trim() == objective && candidate.token_budget == token_budget
         }) {
-            return Err(anyhow::Error::new(CreateGoalForSessionError::Conflict));
+            return Err(CreateGoalForSessionError::Conflict);
         }
         return Ok(StagedGoal {
             disposition: StagedGoalDisposition::Idempotent,
@@ -567,7 +620,12 @@ async fn create_goal_for_session_inner(
         disposition => unreachable!("owned authorized create preflight returned {disposition:?}"),
     }
     let requested_fingerprint = goal_creation_fingerprint(&create_request);
-    let objective = requested_fingerprint.objective.as_str();
+    let start = GoalStart {
+        node_did,
+        session_id,
+        objective: requested_fingerprint.objective.as_str(),
+        token_budget,
+    };
 
     if access.actor_did().as_deref() != Some(actor_did) {
         return Err(CreateGoalForSessionError::Storage(anyhow::anyhow!(
@@ -584,7 +642,9 @@ async fn create_goal_for_session_inner(
                         &caller.request_id,
                         caller.doc_id.as_deref().context("Goal tool caller has no physical identity")?,
                     ).await?;
-                    anyhow::ensure!(context.can_create(), "Goal creation requires an unassigned caller with no current Goal, or the exact current assignment");
+                    if !context.can_create() {
+                        return Err(CreateGoalForSessionError::Storage(anyhow::anyhow!("Goal creation requires an unassigned caller with no current Goal, or the exact current assignment")));
+                    }
                     Some(context)
                 } else { None };
                 let identity = if let Some(tool_context::GoalToolContext { assignment: RequestAssignmentObservation::Assigned(goal), .. }) = &context {
@@ -601,32 +661,31 @@ async fn create_goal_for_session_inner(
                     .context("goal creation requires a visible physical session")?;
                 let actor = crate::operations::goal::acting_in_txn(txn, node_did, &session.session.agent_did).await?;
                 if let Err(refusal) = crate::operations::goal::admit_start_in_txn(
-                    txn, actor, node_did, session_id, objective, token_budget, None,
+                    txn, actor, start, None,
                     identity.as_ref().map(|identity| identity.creation_key.as_str()),
                 ).await? {
                     use gents_protocol::operations::goal::GoalOperationError;
-                    return Err(anyhow::Error::new(match refusal {
+                    return Err(match refusal {
                         GoalOperationError::Conflict => CreateGoalForSessionError::Conflict,
                         GoalOperationError::InvalidObjective => CreateGoalForSessionError::InvalidObjective,
                         GoalOperationError::InvalidBudget => CreateGoalForSessionError::InvalidBudget,
                         refusal => CreateGoalForSessionError::Storage(anyhow::Error::new(refusal)),
-                    }));
+                    });
                 }
-                let mut staged = stage_goal_and_claim(
+                let mut staged = stage_goal_and_claim_typed(
                     txn,
-                    node_did,
-                    session_id,
-                    objective,
-                    token_budget,
-                    GoalState {
-                        status: GoalStatus::Active,
-                        blocked_audits: 0,
-                        wrapup_requested: false,
-                        wrapup_completed: false,
+                    GoalStaging {
+                        start,
+                        initial_state: GoalState {
+                            status: GoalStatus::Active,
+                            blocked_audits: 0,
+                            wrapup_requested: false,
+                            wrapup_completed: false,
+                        },
+                        now: &Utc::now().to_rfc3339(),
+                        identity: identity.as_ref(),
+                        first_request_doc_id: context.as_ref().and_then(|context| context.request.doc_id.as_deref()),
                     },
-                    &Utc::now().to_rfc3339(),
-                    identity.as_ref(),
-                    context.as_ref().and_then(|context| context.request.doc_id.as_deref()),
                 ).await?;
                 if let Some(context) = context {
                     if matches!(staged.disposition, StagedGoalDisposition::Created) {
@@ -640,7 +699,7 @@ async fn create_goal_for_session_inner(
                             .context("bound Goal row disappeared")?;
                     }
                 }
-                Ok(staged)
+                Ok::<_, CreateGoalForSessionError>(staged)
             })
         },
     )
@@ -657,10 +716,7 @@ async fn create_goal_for_session_inner(
                 StagedGoalDisposition::Idempotent => CreateGoalForSessionOutcome::Idempotent(goal),
             })
         }
-        Err(error) if caller.is_some() => match error.downcast::<CreateGoalForSessionError>() {
-            Ok(error) => Err(error),
-            Err(error) => Err(CreateGoalForSessionError::Storage(error)),
-        },
+        Err(error) if caller.is_some() => Err(error),
         Err(error) => {
             let (existing, claim) = access
                 .transact_readonly("goal.reconcile_creation", |txn| {
@@ -675,7 +731,7 @@ async fn create_goal_for_session_inner(
                 .await
                 .map_err(CreateGoalForSessionError::Storage)?;
             if let Some(existing) = existing {
-                if existing.objective.trim() == objective
+                if existing.objective.trim() == start.objective
                     && existing.token_budget == token_budget
                     && claim == Some(requested_fingerprint.clone())
                 {
@@ -686,10 +742,7 @@ async fn create_goal_for_session_inner(
                 }
                 return Err(CreateGoalForSessionError::Conflict);
             }
-            match error.downcast::<CreateGoalForSessionError>() {
-                Ok(error) => Err(error),
-                Err(error) => Err(CreateGoalForSessionError::Storage(error)),
-            }
+            Err(error)
         }
     }
 }

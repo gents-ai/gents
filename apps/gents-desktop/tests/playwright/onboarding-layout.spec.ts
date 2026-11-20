@@ -5,7 +5,9 @@ test.beforeEach(async ({ page }) => {
   await gotoHarness(page, "empty-fleet");
 });
 
-test("setup actions do not overlap the theme control", async ({ page }) => {
+test("setup actions do not overlap the theme control @own-viewport", async ({
+  page,
+}) => {
   const next = page.getByTestId("setup-next");
   await next.scrollIntoViewIfNeeded();
   const action = await next.boundingBox();
@@ -19,11 +21,11 @@ test("setup actions do not overlap the theme control", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("remote connection fields fit a narrow viewport with the keyboard open", async ({
+test("remote connection fields fit a narrow viewport with the keyboard open @own-viewport", async ({
   page,
 }) => {
   await page.getByRole("radio", { name: /Remote connect/ }).click();
-  const address = page.getByRole("textbox", { name: "Invitation or server address" });
+  const address = page.getByRole("textbox", { name: "Server address" });
   await address.fill("https://gents.example.net:8787");
   await page.evaluate(() => {
     Object.defineProperties(window.visualViewport, {
@@ -52,11 +54,11 @@ test("remote connection fields fit a narrow viewport with the keyboard open", as
   ).toBeLessThanOrEqual(1);
 });
 
-test("keyboard submission accepts the native owner's bare server address", async ({
+test("keyboard submission accepts the native owner's bare server address @own-viewport", async ({
   page,
 }) => {
   await page.getByRole("radio", { name: /Remote connect/ }).click();
-  const address = page.getByRole("textbox", { name: "Invitation or server address" });
+  const address = page.getByRole("textbox", { name: "Server address" });
   await address.fill("100.69.4.79:9191");
   await address.press("Enter");
   await expect(page.getByRole("heading", { name: "Waiting for access" })).toBeVisible();

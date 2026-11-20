@@ -794,6 +794,7 @@ async fn serve(State(shared): State<Arc<Shared>>, request: axum::extract::Reques
 struct Shell {
     intents: mpsc::UnboundedSender<Intent>,
     updates: Arc<Mutex<std::sync::mpsc::Receiver<Input>>>,
+    source: tokio::task::JoinHandle<()>,
 }
 
 /// What `gents` opens the shell with, beside its work.
@@ -829,14 +830,25 @@ fn open_shell_with(work: Result<Work, String>, launch: Launch) -> Shell {
         cwd: launch.cwd,
         tree: launch.tree,
     };
-    runtime.spawn(source::run(opening, intended, sender, runtime.clone()));
+    let source = runtime.spawn(source::run(opening, intended, sender, runtime.clone()));
     Shell {
         intents,
         updates: Arc::new(Mutex::new(updates)),
+        source,
     }
 }
 
 impl Shell {
+    /// Ends the source and waits for everything it started: a node shut down under one of its
+    /// subscriptions or reads waits out its whole request drain timeout.
+    async fn close(self) {
+        let Shell {
+            intents, source, ..
+        } = self;
+        drop(intents);
+        source.await.expect("the source ends when the shell does");
+    }
+
     async fn next(&self) -> Update {
         let updates = self.updates.clone();
         let input = test_runtime_handle()
@@ -2008,6 +2020,7 @@ async fn skills_list_only_what_the_agents_context_allows_and_is_on() {
         ],
     };
     assert_eq!(told.last(), Some(&allowed));
+    on.shell.close().await;
     on.node.shutdown().await.expect("node shutdown");
 }
 
@@ -2023,6 +2036,7 @@ async fn an_agent_with_no_context_offers_no_skills() {
         skills: Vec::new(),
     };
     assert_eq!(told.last(), Some(&none));
+    on.shell.close().await;
     on.node.shutdown().await.expect("node shutdown");
 }
 
@@ -2067,6 +2081,7 @@ async fn a_skill_turn_sends_the_listed_skill() {
             serde_json::from_value(request["input"].clone()).unwrap();
         assert_eq!(input.selected_skill_ids, ["commit"]);
     }
+    on.shell.close().await;
     on.node.shutdown().await.expect("node shutdown");
 }
 
@@ -2175,6 +2190,7 @@ async fn a_goal_starts_with_its_objective_as_the_sessions_next_message() {
         (&json!("ship it"), &json!("s1")),
         "{requests}"
     );
+    on.shell.close().await;
     on.node.shutdown().await.expect("node shutdown");
 }
 
@@ -2205,6 +2221,7 @@ async fn a_goal_with_no_session_starts_one_first() {
             .is_some_and(|(opened, listed)| opened < listed),
         "the new session joins the list: {told:?}"
     );
+    on.shell.close().await;
     on.node.shutdown().await.expect("node shutdown");
 }
 
@@ -2237,6 +2254,7 @@ async fn a_refused_goal_shows_the_owners_reason() {
     let owner = gents_automation::operations::goal::start(&access, OWNER, &input, &create);
     let owner = anyhow::Error::from(owner.await.unwrap_err());
     assert_eq!(*message, format!("Couldn’t set the goal: {owner:#}"));
+    on.shell.close().await;
     on.node.shutdown().await.expect("node shutdown");
 }
 
@@ -2385,6 +2403,7 @@ pub(super) fn home_serving(
                     tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
                     tool_root: None,
                     store_encryption: None,
+                    document_acp: Default::default(),
                 },
             )
             .unwrap();
@@ -3367,6 +3386,7 @@ async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
     assert_eq!(read, [prompts("s1", vec![asking])], "no notice: {read:?}");
     let stored = gents_session::operations::mailbox::get(&access, &gate).await;
     assert_eq!(stored.unwrap().status, "dismissed");
+    shell.close().await;
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -3449,6 +3469,7 @@ async fn a_reply_is_a_request_caused_by_its_item() {
         requests,
         [json!({ "content": "ship it", "caused_by_source_doc_id": question })]
     );
+    shell.close().await;
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -3667,6 +3688,7 @@ async fn an_act_notices_and_rereads_its_menu() {
     );
     let stored = gents_session::operations::mailbox::get(&access, &item).await;
     assert_eq!(stored.unwrap().status, "dismissed");
+    shell.close().await;
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -4323,6 +4345,7 @@ async fn a_new_form_saves_under_the_id_it_showed() {
         (&drafts["name"], &drafts["enabled"]),
         (&json!("drafts"), &json!(false))
     );
+    shell.close().await;
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -4670,7 +4693,7 @@ async fn changing_the_default_agent_enables_it() {
     let (node, work, home) = served(config).await;
     let access = work.access();
     let scout = || async {
-        let state = gents_desktop_core::inference::load_inference_setup_state(&access, OWNER);
+        let state = gents_observe::client_inference::load_inference_setup_state(&access, OWNER);
         let agents = state.await.unwrap().agents;
         let scout = agents
             .into_iter()
@@ -4749,8 +4772,17 @@ async fn folder_rows_toggle_and_remove() {
     act(MenuAct::RemoveFolder(notes_at.clone())).await.unwrap();
     let none = read().await.unwrap();
 
-    let folder = |path: &str, access: &str, other: &str| MenuRow {
-        text: format!(" {path}   {access}"),
+    let user_home = allowed::user_home();
+    let folder = |path: &str, access: BindAccess, other: &str| MenuRow {
+        text: super::sections::folders(
+            &[allowed::AllowedDir {
+                path: path.into(),
+                access,
+            }],
+            user_home.as_deref(),
+        )[1]
+        .text
+        .clone(),
         tone: Tone::Plain,
         enter: None,
         d: Some(MenuAct::SetFolderAccess {
@@ -4773,13 +4805,16 @@ async fn folder_rows_toggle_and_remove() {
         listed,
         [
             add.clone(),
-            folder(&notes_at, "Read only", "read_write"),
-            folder(&repos_at, "Read and write", "read"),
+            folder(&notes_at, BindAccess::Read, "read_write"),
+            folder(&repos_at, BindAccess::ReadWrite, "read"),
         ]
     );
     assert_eq!(widened, Ok(format!("{notes_at} read and write")));
     assert_eq!(removed, Ok(format!("{repos_at} removed")));
-    assert_eq!(left, [add, folder(&notes_at, "Read and write", "read")]);
+    assert_eq!(
+        left,
+        [add, folder(&notes_at, BindAccess::ReadWrite, "read")]
+    );
     let refused = refused.unwrap_err();
     assert!(
         refused.starts_with(&format!("{missing} does not exist or cannot be read")),
@@ -4794,18 +4829,45 @@ async fn folder_rows_toggle_and_remove() {
             " The working folder is always readable. Other paths are asked about."
         ]
     );
-    let dirs = [allowed::AllowedDir {
-        path: notes.clone(),
-        access: BindAccess::Read,
-    }];
-    let under = super::sections::folders(
-        &dirs,
-        Some(folders.path().canonicalize().unwrap().as_path()),
+    let dirs = [
+        allowed::AllowedDir {
+            path: notes.clone(),
+            access: BindAccess::Read,
+        },
+        allowed::AllowedDir {
+            path: repos.clone(),
+            access: BindAccess::ReadWrite,
+        },
+    ];
+    let texts = |home_dir: Option<&std::path::Path>| -> Vec<_> {
+        super::sections::folders(&dirs, home_dir)
+            .into_iter()
+            .map(|row| row.text)
+            .collect()
+    };
+    let under = folders.path().canonicalize().unwrap();
+    let outside = home.path().canonicalize().unwrap();
+    assert_eq!(
+        texts(Some(under.as_path())),
+        [
+            " + Add a folder",
+            " ~/notes   Read only",
+            " ~/repos   Read and write"
+        ]
     );
-    let at_home = super::sections::folders(&dirs, Some(notes.as_path()));
-    assert_eq!(under[1].text, " ~/notes   Read only");
-    assert_eq!(at_home[1].text, " ~   Read only");
-    assert_eq!(under[1].d, folder(&notes_at, "", "read_write").d);
+    assert_eq!(texts(Some(notes.as_path()))[1], " ~   Read only");
+    let absolute = [
+        " + Add a folder".to_string(),
+        format!(" {notes_at}   Read only"),
+        format!(" {repos_at}   Read and write"),
+    ];
+    assert_eq!(texts(Some(outside.as_path())), absolute);
+    assert_eq!(texts(None), absolute);
+    let under = super::sections::folders(&dirs, Some(under.as_path()));
+    assert_eq!(
+        under[1].d,
+        folder(&notes_at, BindAccess::Read, "read_write").d
+    );
 }
 
 #[tokio::test]
@@ -5039,6 +5101,7 @@ async fn choosing_a_profile_rereads_the_agents_not_the_profiles() {
     };
     assert_eq!(*menu, MenuId::Agents);
     assert!(rows.as_ref().unwrap()[0].text.contains("Other"), "{rows:?}");
+    shell.close().await;
     node.shutdown().await.expect("node shutdown");
 }
 

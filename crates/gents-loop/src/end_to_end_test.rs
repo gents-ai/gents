@@ -21,6 +21,7 @@ mod provider_finish_tests;
 struct ScriptedModel {
     turns: Arc<Mutex<Vec<Vec<RawStreamingChoice<()>>>>>,
     requests: Arc<Mutex<Vec<String>>>,
+    call: crate::provider_call::ProviderCall,
 }
 
 impl ScriptedModel {
@@ -28,6 +29,16 @@ impl ScriptedModel {
         Self {
             turns: Arc::new(Mutex::new(turns.into_iter().rev().collect())),
             requests: Arc::default(),
+            call: Default::default(),
+        }
+    }
+}
+
+impl crate::provider_call::ForCall for ScriptedModel {
+    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
         }
     }
 }
@@ -57,7 +68,7 @@ impl CompletionModel for ScriptedModel {
             .lock()
             .unwrap()
             .push(serde_json::to_string(&request.chat_history).unwrap());
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
         let items = self
             .turns
             .lock()
@@ -100,7 +111,11 @@ impl Tool for EchoTool {
         }
     }
 
-    fn admit(&self, _args: &Self::Args) -> Result<(), Self::Error> {
+    fn admit(
+        &self,
+        _args: &Self::Args,
+        _context: &crate::tool::ToolCallEnvelope,
+    ) -> Result<(), Self::Error> {
         if self.policy_allows {
             Ok(())
         } else {
@@ -115,7 +130,11 @@ impl Tool for EchoTool {
         error
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &crate::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         self.calls
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -150,7 +169,15 @@ struct AdmissionGate {
 struct SettlementGate {
     entered: tokio::sync::Notify,
     dropped: std::sync::atomic::AtomicBool,
-    request_id: Mutex<Option<String>>,
+    caller: Mutex<Option<&'static str>>,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    /// A task-local the caller of the loop stream sets, standing in for the
+    /// ones that remain (the workspace-approval context, the rendered-request
+    /// capture scope): settlement the stream drives must observe the caller's.
+    static CALLER_SCOPE: &'static str;
 }
 
 impl RecordingHook {
@@ -191,6 +218,7 @@ impl SessionHook for RecordingHook {
         _tool_call_id: Option<String>,
         _internal_call_id: &str,
         _args: &str,
+        _context: &crate::tool::ToolCallEnvelope,
     ) -> ToolCallHookAction {
         self.log(RecordedCall::ToolCall {
             tool_name: tool_name.to_string(),
@@ -241,9 +269,7 @@ impl SessionHook for RecordingHook {
                 }
             }
             let _guard = Dropped(gate.clone());
-            *gate.request_id.lock().unwrap() =
-                crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-                    .and_then(|context| context.request_id);
+            *gate.caller.lock().unwrap() = CALLER_SCOPE.try_with(|scope| *scope).ok();
             gate.entered.notify_one();
             std::future::pending::<()>().await;
         }
@@ -290,6 +316,7 @@ fn scripted_tool_call() -> RawStreamingChoice<()> {
 
 pub(crate) fn test_loop_config() -> LoopConfig {
     LoopConfig {
+        provider_call: Default::default(),
         replay: crate::loop_stream::LoopReplayInput::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
             BackendProviderKind::OpenAiCompatible,
@@ -321,6 +348,7 @@ pub(crate) fn test_loop_config() -> LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
+        tool_context: crate::tool::ToolCallEnvelope::default(),
     }
 }
 
@@ -347,6 +375,12 @@ async fn cancelling_a_pending_provider_stream_drops_it() {
     }
     #[derive(Clone)]
     struct Model(Arc<AtomicBool>);
+    impl crate::provider_call::ForCall for Model {
+        fn for_call(&self, _call: &crate::provider_call::ProviderCall) -> Self {
+            self.clone()
+        }
+    }
+
     #[allow(refining_impl_trait)]
     impl CompletionModel for Model {
         type Response = ();
@@ -387,13 +421,120 @@ async fn cancelling_a_pending_provider_stream_drops_it() {
     assert!(dropped.load(Ordering::SeqCst));
 }
 
+/// TLA+ `InterruptPartialOutput`: a chunk the provider has handed to the
+/// loop reaches the consumer in the same poll, so an interrupt that wins the
+/// consumer's next select cannot drop it with the stream. A spent cooperative
+/// budget makes every tokio resource poll return `Pending`; the handoff must
+/// not be one of them.
 #[tokio::test]
-async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
+async fn a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use crate::tool_call_lifecycle::runtime::{
-        current_tool_runtime_context, scope_request_tool_execution, scope_tool_request_identity,
+    use futures::StreamExt;
+
+    use crate::loop_stream::LoopStreamItem;
+    use crate::session_hook::NoopSessionHook;
+
+    struct GatedChunk {
+        open: Arc<AtomicBool>,
+        emitted: Arc<AtomicBool>,
+    }
+    impl futures::Stream for GatedChunk {
+        type Item = Result<RawStreamingChoice<()>, CompletionError>;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            if !self.open.load(Ordering::SeqCst) || self.emitted.swap(true, Ordering::SeqCst) {
+                return std::task::Poll::Pending;
+            }
+            std::task::Poll::Ready(Some(Ok(RawStreamingChoice::Message(
+                "received partial".into(),
+            ))))
+        }
+    }
+    #[derive(Clone)]
+    struct Model {
+        open: Arc<AtomicBool>,
+        emitted: Arc<AtomicBool>,
+        call: crate::provider_call::ProviderCall,
+    }
+    impl crate::provider_call::ForCall for Model {
+        fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+            Self {
+                call: call.clone(),
+                ..self.clone()
+            }
+        }
+    }
+
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for Model {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            unreachable!()
+        }
+
+        async fn completion(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            unreachable!()
+        }
+
+        async fn stream(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
+            Ok(StreamingCompletionResponse::stream(Box::pin(GatedChunk {
+                open: self.open.clone(),
+                emitted: self.emitted.clone(),
+            })))
+        }
+    }
+
+    let model = Model {
+        call: Default::default(),
+        open: Arc::new(AtomicBool::new(false)),
+        emitted: Arc::new(AtomicBool::new(false)),
     };
+    let stream = crate::loop_stream::run_loop_stream::<_, NoopSessionHook>(
+        model.clone(),
+        None,
+        TaggedMessage::unassociated(Message::user("hello")),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        test_loop_config(),
+    );
+    futures::pin_mut!(stream);
+    assert!(futures::poll!(stream.next()).is_pending());
+    assert!(!model.emitted.load(Ordering::SeqCst));
+
+    model.open.store(true, Ordering::SeqCst);
+    while tokio::task::coop::has_budget_remaining() {
+        tokio::task::consume_budget().await;
+    }
+    let polled = futures::poll!(stream.next());
+    assert!(
+        model.emitted.load(Ordering::SeqCst),
+        "the provider was polled"
+    );
+    let std::task::Poll::Ready(Some(Ok(LoopStreamItem::Text(text)))) = polled else {
+        panic!("a received provider chunk stayed inside the loop stream");
+    };
+    assert_eq!(text, "received partial");
+}
+
+#[tokio::test]
+async fn cancelling_a_foreground_tool_keeps_its_request_and_drops_execution() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::tool_call_lifecycle::runtime::ToolRequestIdentity;
 
     struct PendingTool {
         dropped: Arc<AtomicBool>,
@@ -417,6 +558,7 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
         fn call<'a>(
             &'a self,
             _: String,
+            context: &'a crate::tool::ToolCallEnvelope,
         ) -> crate::tool::BoxFuture<'a, Result<String, crate::tool::ToolError>> {
             struct Dropped(Arc<AtomicBool>);
             impl Drop for Dropped {
@@ -428,7 +570,7 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
             let observed = self.observed.clone();
             Box::pin(async move {
                 let _marker = marker;
-                *observed.lock().unwrap() = current_tool_runtime_context().unwrap().request_id;
+                *observed.lock().unwrap() = context.runtime().unwrap().request_id;
                 std::future::pending().await
             })
         }
@@ -444,24 +586,27 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
         dropped: dropped.clone(),
         observed: observed.clone(),
     })]);
-    scope_tool_request_identity(
-        Some("requester".into()),
-        Some("node".into()),
-        Some("agent".into()),
-        Some("request".into()),
-        scope_request_tool_execution(None, Default::default(), async {
-            let mut completion = Box::pin(run_loop_to_text(
-                model,
-                Message::user("echo"),
-                Vec::new(),
-                tools,
-                test_loop_config(),
-            ));
-            assert!(futures::poll!(&mut completion).is_pending());
-            drop(completion);
-        }),
-    )
-    .await;
+    let scope_call = crate::tool_call_lifecycle::runtime::ToolScopeEntry {
+        identity: Some(ToolRequestIdentity::new(
+            Some("requester".into()),
+            Some("node".into()),
+            Some("agent".into()),
+            Some("request".into()),
+        )),
+        ..crate::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, Default::default())
+    }
+    .call();
+    let mut config = test_loop_config();
+    config.tool_context = scope_call;
+    let mut completion = Box::pin(run_loop_to_text(
+        model,
+        Message::user("echo"),
+        Vec::new(),
+        tools,
+        config,
+    ));
+    assert!(futures::poll!(&mut completion).is_pending());
+    drop(completion);
     assert_eq!(*observed.lock().unwrap(), Some("request".into()));
     assert!(dropped.load(Ordering::SeqCst));
 }
@@ -469,60 +614,45 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
 #[tokio::test]
 async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
     use futures::StreamExt;
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["canonical_dispatch_observation_cases"]
-        .as_array()
-        .unwrap();
-    assert!(!cases.is_empty());
-    assert!(cases.iter().any(|case| case["inputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|input| !input["policy_allows"].as_bool().unwrap())));
-    for case in cases {
-        let inputs = case["inputs"].as_array().unwrap();
-        let expected_results = case["expected"].as_array().unwrap();
-        assert_eq!(inputs.len(), expected_results.len());
-        for (input, expected) in inputs.iter().zip(expected_results) {
-            let may_invoke = expected["may_invoke"].as_bool().unwrap();
-            let policy_allows = input["policy_allows"].as_bool().unwrap();
-            let model = ScriptedModel::new(vec![
-                vec![scripted_tool_call(), RawStreamingChoice::FinalResponse(())],
-                vec![
-                    RawStreamingChoice::Message("done".into()),
-                    RawStreamingChoice::FinalResponse(()),
-                ],
-            ]);
-            let calls = Arc::new(Mutex::new(Vec::new()));
-            let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
-                calls: calls.clone(),
-                policy_allows,
-            })]);
-            let hook = RecordingHook {
-                deny_dispatch: policy_allows && !may_invoke,
-                ..Default::default()
-            };
-            let observed_hook = hook.clone();
-            use crate::rendered_request::scope::{
-                ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
-            };
-            let scope = test_scope(
-                crate::rendered_request::RenderedRequestContext {
-                    request_doc_id: "dispatch-doc".into(),
-                    request_commit_cid: "dispatch-cid".into(),
-                    request_id: "dispatch-request".into(),
-                    node_did: "did:test:agent".into(),
-                    requester_did: "did:test:requester".into(),
-                    agent_did: "general".into(),
-                    session_id: "dispatch-session".into(),
-                    model_name: "scripted".into(),
-                    provider_family: None,
-                },
-                Arc::new(|_| Box::pin(async { Ok(()) })),
-            );
-            let mut config = test_loop_config();
-            config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
-            let failure = scope_request(scope, async {
+    for case in gents_lean_vocab::families::dispatch_observation_contracts_loop_election::cases() {
+        let input = &case.input;
+        let model = ScriptedModel::new(vec![
+            vec![scripted_tool_call(), RawStreamingChoice::FinalResponse(())],
+            vec![
+                RawStreamingChoice::Message("done".into()),
+                RawStreamingChoice::FinalResponse(()),
+            ],
+        ]);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
+            calls: calls.clone(),
+            policy_allows: input.policy_allows,
+        })]);
+        let hook = RecordingHook {
+            deny_dispatch: !input.hook_elects,
+            ..Default::default()
+        };
+        let observed_hook = hook.clone();
+        use crate::rendered_request::scope::{arming_sink, test_scope, CaptureScopeKind};
+        let scope = test_scope(
+            crate::rendered_request::RenderedRequestContext {
+                request_doc_id: "dispatch-doc".into(),
+                request_commit_cid: "dispatch-cid".into(),
+                request_id: "dispatch-request".into(),
+                node_did: "did:test:agent".into(),
+                requester_did: "did:test:requester".into(),
+                agent_did: "general".into(),
+                session_id: "dispatch-session".into(),
+                model_name: "scripted".into(),
+                provider_family: None,
+            },
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+        );
+        let mut config = test_loop_config();
+        config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
+        let failure = {
+            config.provider_call.capture = Some(scope);
+            async {
                 let stream = crate::loop_stream::run_loop_stream(
                     model,
                     Some(hook),
@@ -557,56 +687,30 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
                     }
                 }
                 failure
-            })
-            .await;
-            assert_eq!(
-                calls.lock().unwrap().len(),
-                usize::from(may_invoke),
-                "{}: {expected}",
-                case["name"]
-            );
-            let recorded = observed_hook.calls();
-            let elections = recorded
-                .iter()
-                .filter(|call| matches!(call, RecordedCall::ToolCall { .. }))
-                .count();
-            let rejections = recorded
-                .iter()
-                .filter(|call| matches!(call, RecordedCall::AdmissionRejected { .. }))
-                .count();
-            if policy_allows {
-                assert_eq!(
-                    failure.is_some(),
-                    !may_invoke,
-                    "{}: {expected}; {failure:?}",
-                    case["name"]
-                );
-                assert_eq!(
-                    (elections, rejections),
-                    (1, 0),
-                    "the test must reach the hook"
-                );
-            } else {
-                assert!(!may_invoke && !expected["running"].as_bool().unwrap());
-                assert!(
-                    failure.is_none(),
-                    "{}: a policy rejection is a tool result, not a loop failure: {failure:?}",
-                    case["name"]
-                );
-                assert_eq!(
-                    (elections, rejections),
-                    (0, 1),
-                    "{}: a rejected call must never reach the dispatch election",
-                    case["name"]
-                );
             }
         }
+        .await;
+        let recorded = observed_hook.calls();
+        let elections = recorded
+            .iter()
+            .filter(|call| matches!(call, RecordedCall::ToolCall { .. }))
+            .count();
+        let rejections = recorded
+            .iter()
+            .filter(|call| matches!(call, RecordedCall::AdmissionRejected { .. }))
+            .count();
+        let invocations = calls.lock().unwrap().len();
+        case.check(Some(gents_lean_vocab::families::dispatch_observation_contracts_loop_election::LoopElectionOutput {
+            invocations: invocations as u64,
+            loop_failed: failure.is_some(),
+            elections: elections as u64,
+            rejections: rejections as u64,
+        }));
     }
 }
 
-async fn with_steering_capture_scope(future: impl std::future::Future<Output = ()>) {
-    use crate::rendered_request::scope::{scope_request, test_scope};
-    let scope = test_scope(
+fn steering_capture_scope() -> Arc<crate::rendered_request::scope::RequestCaptureScope> {
+    crate::rendered_request::scope::test_scope(
         crate::rendered_request::RenderedRequestContext {
             request_doc_id: "steering-doc".into(),
             request_commit_cid: "steering-cid".into(),
@@ -619,22 +723,19 @@ async fn with_steering_capture_scope(future: impl std::future::Future<Output = (
             provider_family: None,
         },
         Arc::new(|_| Box::pin(async { Ok(()) })),
-    );
-    scope_request(scope, future).await;
+    )
 }
 
 fn steering_loop_config() -> LoopConfig {
-    use crate::rendered_request::scope::{ambient_arming_sink, CaptureScopeKind};
+    use crate::rendered_request::scope::{arming_sink, CaptureScopeKind};
     let mut config = test_loop_config();
-    config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
+    config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
+    config.provider_call.capture = Some(steering_capture_scope());
     config
 }
 
 #[tokio::test]
-async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
-    use crate::tool_call_lifecycle::runtime::{
-        scope_request_tool_execution, scope_tool_request_identity,
-    };
+async fn cancelling_pending_settlement_drops_hook_in_the_callers_scope() {
     use futures::StreamExt;
 
     let gate = Arc::new(SettlementGate::default());
@@ -650,47 +751,36 @@ async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
         calls: Arc::default(),
         policy_allows: true,
     })]);
-    scope_tool_request_identity(
-        Some("requester".into()),
-        Some("node".into()),
-        Some("agent".into()),
-        Some("request".into()),
-        scope_request_tool_execution(
-            None,
-            Default::default(),
-            with_steering_capture_scope(async {
-                let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
-                    model,
-                    Some(hook),
-                    TaggedMessage::unassociated(Message::user("echo")),
-                    Vec::new(),
-                    tools,
-                    steering_loop_config(),
-                ));
-                loop {
-                    match stream.next().await.unwrap().unwrap() {
-                        crate::loop_stream::LoopStreamItem::AuthoredInputReady {
-                            reply, ..
-                        }
-                        | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
-                            reply.send(Ok(Vec::new())).unwrap();
-                        }
-                        crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
-                        _ => {}
+    CALLER_SCOPE
+        .scope("request", async {
+            let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
+                model,
+                Some(hook),
+                TaggedMessage::unassociated(Message::user("echo")),
+                Vec::new(),
+                tools,
+                steering_loop_config(),
+            ));
+            loop {
+                match stream.next().await.unwrap().unwrap() {
+                    crate::loop_stream::LoopStreamItem::AuthoredInputReady { reply, .. }
+                    | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                        reply.send(Ok(Vec::new())).unwrap();
                     }
+                    crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
+                    _ => {}
                 }
-                let mut next = Box::pin(stream.next());
-                tokio::select! {
-                    () = gate.entered.notified() => {},
-                    item = &mut next => panic!("settlement did not remain pending: {item:?}"),
-                }
-                drop(next);
-                drop(stream);
-            }),
-        ),
-    )
-    .await;
-    assert_eq!(*gate.request_id.lock().unwrap(), Some("request".into()));
+            }
+            let mut next = Box::pin(stream.next());
+            tokio::select! {
+                () = gate.entered.notified() => {},
+                item = &mut next => panic!("settlement did not remain pending: {item:?}"),
+            }
+            drop(next);
+            drop(stream);
+        })
+        .await;
+    assert_eq!(*gate.caller.lock().unwrap(), Some("request"));
     assert!(gate.dropped.load(std::sync::atomic::Ordering::SeqCst));
 }
 
@@ -725,11 +815,8 @@ async fn failed_input_publication_prevents_provider_dispatch() {
 
 #[tokio::test]
 async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication() {
-    with_steering_capture_scope(
-        modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication_scoped(
-        ),
-    )
-    .await;
+    modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication_scoped()
+        .await;
 }
 
 async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication_scoped(
@@ -845,7 +932,17 @@ impl rig::completion::GetTokenUsage for RequestIdResponse {
 
 #[derive(Clone)]
 struct RequestIdModel {
+    call: crate::provider_call::ProviderCall,
     request_id: Option<String>,
+}
+
+impl crate::provider_call::ForCall for RequestIdModel {
+    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -869,7 +966,7 @@ impl CompletionModel for RequestIdModel {
         &self,
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
         let items = vec![
             Ok(RawStreamingChoice::Message("answer".into())),
             Ok(RawStreamingChoice::MessageId("msg_1".into())),
@@ -885,10 +982,11 @@ impl CompletionModel for RequestIdModel {
 
 #[tokio::test]
 async fn the_accepted_assistant_message_records_the_final_responses_request_id() {
-    with_steering_capture_scope(async {
+    async {
         for reported in [Some("req_abc"), None] {
             let stream = crate::loop_stream::run_loop_stream(
                 RequestIdModel {
+                    call: Default::default(),
                     request_id: reported.map(str::to_owned),
                 },
                 Some(RecordingHook::default()),
@@ -924,15 +1022,13 @@ async fn the_accepted_assistant_message_records_the_final_responses_request_id()
             assert_eq!(id.as_deref(), Some("msg_1"));
             assert_eq!(request_id.as_deref(), reported);
         }
-    })
+    }
     .await;
 }
 
 #[tokio::test]
 async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without_invoking() {
-    use crate::rendered_request::scope::{
-        ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
-    };
+    use crate::rendered_request::scope::{arming_sink, test_scope, CaptureScopeKind};
     use crate::tool::{BoxFuture, ToolError, ToolFootprint};
     use futures::StreamExt;
 
@@ -950,13 +1046,17 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
                 }
             })
         }
-        fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(
+            &'a self,
+            _: String,
+            _context: &'a crate::tool::ToolCallEnvelope,
+        ) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async {
                 self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok("done".into())
             })
         }
-        fn footprint(&self, _: &str) -> ToolFootprint {
+        fn footprint(&self, _: &str, _: &crate::tool::ToolCallEnvelope) -> ToolFootprint {
             ToolFootprint::Read
         }
     }
@@ -1000,49 +1100,53 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
                 Arc::new(|_| Box::pin(async { Ok(()) })),
             );
             let mut config = test_loop_config();
-            config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
-            scope_request(scope, async {
-                let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
-                    model,
-                    Some(hook),
-                    TaggedMessage::unassociated(Message::user("work")),
-                    Vec::new(),
-                    tools,
-                    config,
-                ));
-                loop {
-                    match stream
-                        .next()
-                        .await
-                        .expect("stream item")
-                        .expect("stream succeeds")
-                    {
-                        crate::loop_stream::LoopStreamItem::AuthoredInputReady {
-                            reply, ..
+            config.on_rendered_request = Some(arming_sink(CaptureScopeKind::Inference));
+            {
+                config.provider_call.capture = Some(scope);
+                async {
+                    let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
+                        model,
+                        Some(hook),
+                        TaggedMessage::unassociated(Message::user("work")),
+                        Vec::new(),
+                        tools,
+                        config,
+                    ));
+                    loop {
+                        match stream
+                            .next()
+                            .await
+                            .expect("stream item")
+                            .expect("stream succeeds")
+                        {
+                            crate::loop_stream::LoopStreamItem::AuthoredInputReady {
+                                reply,
+                                ..
+                            }
+                            | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                                reply.send(Ok(Vec::new())).unwrap();
+                            }
+                            crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
+                            _ => {}
                         }
-                        | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
-                            reply.send(Ok(Vec::new())).unwrap();
-                        }
-                        crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
-                        _ => {}
                     }
+                    assert!(
+                        !observed
+                            .calls()
+                            .iter()
+                            .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
+                        "turn publication precedes admission"
+                    );
+                    let mut next = Box::pin(stream.next());
+                    tokio::select! {
+                        () = gate.entered.notified() => {},
+                        result = &mut next => panic!("hook did not hold admission: {result:?}"),
+                    }
+                    drop(next);
+                    drop(stream);
+                    gate.release.notify_one();
                 }
-                assert!(
-                    !observed
-                        .calls()
-                        .iter()
-                        .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
-                    "turn publication precedes admission"
-                );
-                let mut next = Box::pin(stream.next());
-                tokio::select! {
-                    () = gate.entered.notified() => {},
-                    result = &mut next => panic!("hook did not hold admission: {result:?}"),
-                }
-                drop(next);
-                drop(stream);
-                gate.release.notify_one();
-            })
+            }
             .await;
             invocations.push(invoked.load(std::sync::atomic::Ordering::SeqCst) != 0);
         }
@@ -1080,7 +1184,15 @@ async fn empty_output_is_retried_through_the_owned_loop() {
 }
 
 #[derive(Clone)]
-struct UnavailableModel;
+struct UnavailableModel {
+    call: crate::provider_call::ProviderCall,
+}
+
+impl crate::provider_call::ForCall for UnavailableModel {
+    fn for_call(&self, call: &crate::provider_call::ProviderCall) -> Self {
+        Self { call: call.clone() }
+    }
+}
 
 #[allow(refining_impl_trait)]
 impl CompletionModel for UnavailableModel {
@@ -1089,7 +1201,9 @@ impl CompletionModel for UnavailableModel {
     type Client = ();
 
     fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
-        Self
+        Self {
+            call: Default::default(),
+        }
     }
 
     async fn completion(
@@ -1103,7 +1217,7 @@ impl CompletionModel for UnavailableModel {
         &self,
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::rendered_request::scope::claim_pending(self.call.capture.as_ref());
         Err(CompletionError::ProviderError(
             "HTTP status 503: unavailable".into(),
         ))
@@ -1119,7 +1233,9 @@ async fn exhausted_backend_failure_retains_its_typed_availability_verdict() {
         _,
         crate::session_hook::NoopSessionHook,
     >(
-        UnavailableModel,
+        UnavailableModel {
+            call: Default::default(),
+        },
         None,
         TaggedMessage::unassociated(Message::user("hello")),
         Vec::new(),

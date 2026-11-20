@@ -225,22 +225,25 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
                 .unwrap();
                 let positioned = file.is_some();
                 let result = tool
-                    .call(LspArgs {
-                        action: serde_json::to_value(action)
-                            .unwrap()
-                            .as_str()
-                            .unwrap()
-                            .into(),
-                        file,
-                        line: positioned.then_some(1),
-                        symbol: positioned.then(|| "x".to_string()),
-                        query: None,
-                        new_name: None,
-                        apply: None,
-                        payload: None,
-                        timeout: Some(5),
-                        limit: None,
-                    })
+                    .call(
+                        LspArgs {
+                            action: serde_json::to_value(action)
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .into(),
+                            file,
+                            line: positioned.then_some(1),
+                            symbol: positioned.then(|| "x".to_string()),
+                            query: None,
+                            new_name: None,
+                            apply: None,
+                            payload: None,
+                            timeout: Some(5),
+                            limit: None,
+                        },
+                        &gents_loop::tool::ToolCallEnvelope::default(),
+                    )
                     .await;
                 match result {
                     Ok(output) => {
@@ -274,7 +277,7 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
                     vec![fixture_server(FIXTURE_PY.into())],
                 );
                 let _ = LspWritethrough::new(pool.clone(), config)
-                    .after_mutation(&lib)
+                    .after_mutation(&gents_loop::tool::ToolCallEnvelope::default(), &lib)
                     .await;
                 (None, None)
             }
@@ -308,7 +311,10 @@ async fn result_limit_is_parsed_and_rejected_outside_bounds() {
             "action": "status", "limit": limit,
         }))
         .unwrap();
-        let error = tool.call(args).await.unwrap_err();
+        let error = tool
+            .call(args, &gents_loop::tool::ToolCallEnvelope::default())
+            .await
+            .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -415,50 +421,59 @@ async fn fixture_hover_definition_and_rename_preview() {
     )
     .unwrap();
     let hover = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("hover");
     assert!(hover.contains("hello hover"), "{hover}");
     let defn = tool
-        .call(LspArgs {
-            action: "definition".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "definition".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("definition");
     assert!(defn.contains("lib.rs") || defn.contains("Found"), "{defn}");
     let preview = tool
-        .call(LspArgs {
-            action: "rename".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: Some("Z".into()),
-            apply: Some(false),
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "rename".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: Some("Z".into()),
+                apply: Some(false),
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("rename preview");
     assert!(!preview.is_empty(), "{preview}");
@@ -489,18 +504,21 @@ async fn rename_file_allows_a_new_destination() {
     )
     .unwrap();
     let output = tool
-        .call(LspArgs {
-            action: "rename_file".into(),
-            file: Some("old.rs".into()),
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: Some("new.rs".into()),
-            apply: Some(true),
-            payload: None,
-            timeout: Some(5),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "rename_file".into(),
+                file: Some("old.rs".into()),
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: Some("new.rs".into()),
+                apply: Some(true),
+                payload: None,
+                timeout: Some(5),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("rename_file must admit a destination that does not exist yet");
     assert!(output.contains("Applied edit"), "{output}");
@@ -572,7 +590,15 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
         operator_guard_home: None,
     };
     let pool = LspPool::new();
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let prepared = vec![
         super::edits::PreparedEdit {
             path: std::fs::canonicalize(&first).unwrap(),
@@ -708,18 +734,21 @@ while True:
     )
     .unwrap();
     let out = tool
-        .call(LspArgs {
-            action: "definition".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "definition".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("definition completes");
     assert!(!out.contains("/etc/passwd"), "{out}");
@@ -815,18 +844,21 @@ while True:
     )
     .unwrap();
     let _ = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await;
     assert!(!target.exists(), "workspace/applyEdit must not write files");
 }
@@ -896,18 +928,21 @@ async fn execute_command_is_argument_invalid() {
     )
     .unwrap();
     let err = tool
-        .call(LspArgs {
-            action: "request".into(),
-            file: None,
-            line: None,
-            symbol: None,
-            query: Some("workspace/executeCommand".into()),
-            new_name: None,
-            apply: None,
-            payload: Some(r#"{"command":"evil"}"#.into()),
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "request".into(),
+                file: None,
+                line: None,
+                symbol: None,
+                query: Some("workspace/executeCommand".into()),
+                new_name: None,
+                apply: None,
+                payload: Some(r#"{"command":"evil"}"#.into()),
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .unwrap_err();
     let text = err.to_string();
@@ -975,8 +1010,10 @@ async fn simultaneous_first_calls_share_one_process() {
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let first = pool.get_or_start(key.clone(), &server, &config);
-    let second = pool.get_or_start(key.clone(), &server, &config);
+    let ambient_call_1013 = gents_loop::tool::ToolCallEnvelope::default();
+    let first = pool.get_or_start(&ambient_call_1013, key.clone(), &server, &config);
+    let ambient_call_1019 = gents_loop::tool::ToolCallEnvelope::default();
+    let second = pool.get_or_start(&ambient_call_1019, key.clone(), &server, &config);
     let (a, b) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         tokio::join!(first, second)
     })
@@ -990,9 +1027,7 @@ async fn simultaneous_first_calls_share_one_process() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent() {
-    use crate::runtime_context::{
-        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
-    };
+    use crate::runtime_context::ToolWorkspaceScope;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let first_home = root.join("first-runtime");
@@ -1022,70 +1057,65 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
         operator_guard_home: None,
     };
     let pool = LspPool::new();
-    let initial = scope_request_tool_execution_with_workspace_overlay(
-        None,
-        Default::default(),
+    let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+        &gents_loop::tool::ToolCallEnvelope::default(),
         ToolWorkspaceScope {
             runtime_home: Some(first_home),
             ..Default::default()
         },
-        None,
-        None,
-        None,
-        Default::default(),
-        false,
-        pool.get_or_start(key.clone(), &server, &config),
-    )
-    .await
-    .unwrap();
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, Default::default()),
+    );
+    let initial = pool
+        .get_or_start(&scope_call, key.clone(), &server, &config)
+        .await
+        .unwrap();
     let next_key = PoolKey {
         runtime_home: Some(second_home.clone()),
         ..key.clone()
     };
-    let next = scope_request_tool_execution_with_workspace_overlay(
-        None,
-        Default::default(),
+    let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+        &gents_loop::tool::ToolCallEnvelope::default(),
         ToolWorkspaceScope {
             runtime_home: Some(second_home),
             ..Default::default()
         },
-        None,
-        None,
-        None,
-        Default::default(),
-        false,
-        async {
-            assert!(pool.get_ready(&key).await.is_none());
-            assert!(pool
-                .inspect_session(&config.session_id, &config.agent_did, &root, &config.digest)
-                .await
-                .unwrap()
-                .is_empty());
-            let error = pool
-                .get_or_start(key.clone(), &server, &config)
-                .await
-                .err()
-                .unwrap();
-            assert!(error.contains("runtime protection changed"), "{error}");
-            pool.get_or_start(next_key.clone(), &server, &config)
-                .await
-                .unwrap()
-        },
-    )
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, Default::default()),
+    );
+    let next = async {
+        assert!(pool.get_ready(&scope_call, &key).await.is_none());
+        assert!(pool
+            .inspect_session(
+                &scope_call,
+                &config.session_id,
+                &config.agent_did,
+                &root,
+                &config.digest
+            )
+            .await
+            .unwrap()
+            .is_empty());
+        let error = pool
+            .get_or_start(&scope_call, key.clone(), &server, &config)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("runtime protection changed"), "{error}");
+        pool.get_or_start(&scope_call, next_key.clone(), &server, &config)
+            .await
+            .unwrap()
+    }
     .await;
     assert!(!std::ptr::eq(initial.client(), next.client()));
     drop(initial);
     drop(next);
-    pool.retire(&key).await;
-    pool.retire(&next_key).await;
+    pool.retire(&key, None).await;
+    pool.retire(&next_key, None).await;
 }
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes() {
-    use crate::runtime_context::{
-        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
-    };
+    use crate::runtime_context::ToolWorkspaceScope;
 
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
@@ -1116,6 +1146,7 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
                 tool_ceiling: "readwrite".into(),
                 tool_root: None,
                 store_encryption: None,
+                document_acp: Default::default(),
             },
         )
         .unwrap();
@@ -1147,45 +1178,40 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
         operator_guard_home: None,
     };
     let pool = LspPool::new();
-    scope_request_tool_execution_with_workspace_overlay(
-        None,
-        Default::default(),
+    let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+        &gents_loop::tool::ToolCallEnvelope::default(),
         ToolWorkspaceScope {
             runtime_home: Some(home.clone()),
             workspace_authority: Some(crate::native::WorkspaceAuthority::ReadWrite),
             ..Default::default()
         },
-        None,
-        None,
-        None,
-        Default::default(),
-        false,
-        async {
-            let first = pool
-                .get_or_start(key.clone(), &server, &config)
-                .await
-                .unwrap();
-            let unchanged = pool
-                .get_or_start(key.clone(), &server, &config)
-                .await
-                .unwrap();
-            assert!(std::ptr::eq(first.client(), unchanged.client()));
-            assert_eq!(std::fs::read_to_string(&starts).unwrap().lines().count(), 1);
-            drop(unchanged);
-            drop(first);
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, Default::default()),
+    );
+    async {
+        let first = pool
+            .get_or_start(&scope_call, key.clone(), &server, &config)
+            .await
+            .unwrap();
+        let unchanged = pool
+            .get_or_start(&scope_call, key.clone(), &server, &config)
+            .await
+            .unwrap();
+        assert!(std::ptr::eq(first.client(), unchanged.client()));
+        assert_eq!(std::fs::read_to_string(&starts).unwrap().lines().count(), 1);
+        drop(unchanged);
+        drop(first);
 
-            write_config(&second_key);
-            assert!(pool.get_ready(&key).await.is_none());
-            let refreshed = pool
-                .get_or_start(key.clone(), &server, &config)
-                .await
-                .unwrap();
-            assert_eq!(std::fs::read_to_string(&starts).unwrap().lines().count(), 2);
-            assert!(pool.has_ready(&key).await);
-            drop(refreshed);
-            pool.shutdown().await;
-        },
-    )
+        write_config(&second_key);
+        assert!(pool.get_ready(&scope_call, &key).await.is_none());
+        let refreshed = pool
+            .get_or_start(&scope_call, key.clone(), &server, &config)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&starts).unwrap().lines().count(), 2);
+        assert!(pool.has_ready(&scope_call, &key).await);
+        drop(refreshed);
+        pool.shutdown().await;
+    }
     .await;
 }
 
@@ -1243,15 +1269,24 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         None,
     )
     .unwrap();
-    workspace::scope(scope, async {
+    let approval_call = crate::runtime_context::ToolHostContext {
+        approval: scope.clone(),
+        ..Default::default()
+    }
+    .call();
+    async {
         let initial = pool
-            .get_or_start(key.clone(), &server, &config)
+            .get_or_start(&approval_call, key.clone(), &server, &config)
             .await
             .unwrap();
         assert_eq!(
             initial
                 .client()
-                .request("fixture/readable", serde_json::json!({"path":private}))
+                .request(
+                    "fixture/readable",
+                    serde_json::json!({"path":private}),
+                    None
+                )
                 .await
                 .unwrap(),
             true,
@@ -1260,15 +1295,21 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             workspace::WorkspaceKey::canonical("node", "requester", &config.agent_did, &root)
                 .unwrap();
         workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
-        assert!(pool.get_ready(&key).await.is_none());
-        assert!(!pool.has_ready(&key).await);
+        assert!(pool.get_ready(&approval_call, &key).await.is_none());
+        assert!(!pool.has_ready(&approval_call, &key).await);
         assert!(pool
-            .inspect_session(&config.session_id, &config.agent_did, &root, &config.digest,)
+            .inspect_session(
+                &approval_call,
+                &config.session_id,
+                &config.agent_did,
+                &root,
+                &config.digest,
+            )
             .await
             .unwrap()
             .is_empty());
         let error = pool
-            .get_or_start(key.clone(), &server, &config)
+            .get_or_start(&approval_call, key.clone(), &server, &config)
             .await
             .err()
             .unwrap();
@@ -1279,14 +1320,18 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             ..key.clone()
         };
         let guarded = pool
-            .get_or_start(guarded_key.clone(), &server, &config)
+            .get_or_start(&approval_call, guarded_key.clone(), &server, &config)
             .await
             .unwrap();
         assert!(!std::ptr::eq(initial.client(), guarded.client()));
         assert_eq!(
             guarded
                 .client()
-                .request("fixture/readable", serde_json::json!({"path":private}))
+                .request(
+                    "fixture/readable",
+                    serde_json::json!({"path":private}),
+                    None
+                )
                 .await
                 .unwrap(),
             false,
@@ -1294,16 +1339,26 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         assert_eq!(
             guarded
                 .client()
-                .request("fixture/readable", serde_json::json!({"path":ordinary}))
+                .request(
+                    "fixture/readable",
+                    serde_json::json!({"path":ordinary}),
+                    None
+                )
                 .await
                 .unwrap(),
             true,
         );
         let alias = root.join("permission-alias");
         std::fs::hard_link(&private, &alias).unwrap();
-        assert!(pool.get_ready(&guarded_key).await.is_none());
+        assert!(pool.get_ready(&approval_call, &guarded_key).await.is_none());
         let states = pool
-            .inspect_session(&config.session_id, &config.agent_did, &root, &config.digest)
+            .inspect_session(
+                &approval_call,
+                &config.session_id,
+                &config.agent_did,
+                &root,
+                &config.digest,
+            )
             .await
             .unwrap();
         assert!(matches!(
@@ -1311,20 +1366,20 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             Some(super::pool::PoolServerState::Failed(error)) if error.contains("hard-link alias")
         ));
         let error = pool
-            .get_or_start(guarded_key.clone(), &server, &config)
+            .get_or_start(&approval_call, guarded_key.clone(), &server, &config)
             .await
             .err()
             .unwrap();
         assert!(error.contains("hard-link alias"), "{error}");
         std::fs::remove_file(alias).unwrap();
-        let cached = pool.get_ready(&guarded_key).await.unwrap();
+        let cached = pool.get_ready(&approval_call, &guarded_key).await.unwrap();
         assert!(std::ptr::eq(guarded.client(), cached.client()));
         drop(cached);
         drop(initial);
         drop(guarded);
-        pool.retire(&key).await;
-        pool.retire(&guarded_key).await;
-    })
+        pool.retire(&key, None).await;
+        pool.retire(&guarded_key, None).await;
+    }
     .await;
 }
 
@@ -1371,7 +1426,12 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
         None,
     )
     .unwrap();
-    workspace::scope(scope, async {
+    let approval_call = crate::runtime_context::ToolHostContext {
+        approval: scope.clone(),
+        ..Default::default()
+    }
+    .call();
+    async {
         let selection_changed = async {
             tokio::time::timeout(std::time::Duration::from_secs(10), async {
                 while !ready.exists() {
@@ -1386,8 +1446,9 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
             workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
             std::fs::write(&release, "continue").unwrap();
         };
+        let ambient_call_1529 = approval_call.clone();
         let (started, ()) = tokio::join!(
-            pool.get_or_start(key.clone(), &server, &config),
+            pool.get_or_start(&ambient_call_1529, key.clone(), &server, &config),
             selection_changed
         );
         let error = match started {
@@ -1407,12 +1468,12 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
         assert_eq!(pool.live_count().await, 0);
         std::fs::remove_file(workspace::preferences_file(&home)).unwrap();
         let retried = pool
-            .get_or_start(key.clone(), &server, &config)
+            .get_or_start(&approval_call, key.clone(), &server, &config)
             .await
             .expect("admission changes must not create initialization backoff");
         drop(retried);
         pool.shutdown().await;
-    })
+    }
     .await;
 }
 
@@ -1447,7 +1508,15 @@ async fn resolved_executable_path_is_subject_to_command_prefix_policy() {
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let error = match LspPool::new().get_or_start(key, &server, &config).await {
+    let error = match LspPool::new()
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+    {
         Ok(_) => panic!("absolute-path prefix must constrain a catalog bare command"),
         Err(error) => error,
     };
@@ -1528,14 +1597,22 @@ while True:
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let result = super::actions::request::request_maybe_retry(
         lease.client(),
         "textDocument/documentSymbol",
         serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
         std::time::Duration::from_secs(2),
         std::time::Duration::from_secs(gents_documents::tool_limits::MAX_ACTION_TIMEOUT_SECS),
-        true,
+        true, None,
     )
     .await
     .expect("empty array should be retried");
@@ -1550,6 +1627,7 @@ while True:
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(gents_documents::tool_limits::MAX_ACTION_TIMEOUT_SECS),
             true,
+            None,
         ),
     )
     .await
@@ -1558,7 +1636,7 @@ while True:
     assert!(empty.is_null() || empty.as_array().is_some_and(Vec::is_empty));
     let counts = lease
         .client()
-        .request("fixture/retryCounts", serde_json::json!({}))
+        .request("fixture/retryCounts", serde_json::json!({}), None)
         .await
         .expect("fixture retry counts");
     assert_eq!(counts["documentSymbols"], 2);
@@ -1707,7 +1785,15 @@ async fn busy_fixture_symbols(
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let started = std::time::Instant::now();
     let result = super::actions::request::request_maybe_retry(
         lease.client(),
@@ -1715,7 +1801,7 @@ async fn busy_fixture_symbols(
         serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
         std::time::Duration::from_secs(timeout_secs),
         std::time::Duration::from_secs(gents_documents::tool_limits::MAX_ACTION_TIMEOUT_SECS),
-        true,
+        true, None,
     )
     .await;
     Some((result, started.elapsed()))
@@ -1751,7 +1837,15 @@ async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
         operator_guard_home: None,
     };
     let pool = LspPool::new();
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let uri = super::uri::path_to_file_uri(&path);
     lease
         .client()
@@ -1829,7 +1923,12 @@ while True:
     };
     let pool = LspPool::new();
     let first = pool
-        .get_or_start(key.clone(), &server, &config)
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key.clone(),
+            &server,
+            &config,
+        )
         .await
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -1840,7 +1939,15 @@ while True:
     .await
     .expect("fixture server should exit");
     drop(first);
-    let _second = pool.get_or_start(key, &server, &config).await.unwrap();
+    let _second = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let starts = std::fs::read_to_string(counter).unwrap();
     assert_eq!(starts.lines().count(), 2, "{starts:?}");
 }
@@ -1880,15 +1987,23 @@ async fn rust_analyzer_readiness_waits_for_workspace_and_quiescence() {
         operator_guard_home: None,
     };
     let pool = LspPool::new();
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     let polls = lease
         .client()
-        .request("fixture/statusPolls", serde_json::json!({}))
+        .request("fixture/statusPolls", serde_json::json!({}), None)
         .await
         .unwrap()
         .as_u64()
         .unwrap();
-    lease.client().shutdown_exit().await;
+    lease.client().shutdown_exit(None).await;
     assert!(
         polls > 28,
         "readiness returned before a nonempty workspace status and quiescence: {polls}"
@@ -1958,17 +2073,33 @@ while True:
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let first = pool.get_or_start(key.clone(), &server, &config);
-    let second = pool.get_or_start(key.clone(), &server, &config);
+    let ambient_call_2163 = gents_loop::tool::ToolCallEnvelope::default();
+    let first = pool.get_or_start(&ambient_call_2163, key.clone(), &server, &config);
+    let ambient_call_2169 = gents_loop::tool::ToolCallEnvelope::default();
+    let second = pool.get_or_start(&ambient_call_2169, key.clone(), &server, &config);
     let (a, b) = tokio::join!(first, second);
     assert!(a.is_err(), "first initialize should fail");
     assert!(b.is_err(), "waiter should see initialize failure");
-    let during_backoff = pool.get_or_start(key.clone(), &server, &config).await;
+    let during_backoff = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key.clone(),
+            &server,
+            &config,
+        )
+        .await;
     assert!(during_backoff.is_err(), "backoff should reject retry");
     let starts = std::fs::read_to_string(&counter).unwrap_or_default();
     assert_eq!(starts.matches('x').count(), 1, "{starts}");
     pool.expire_init_backoffs().await;
-    let after = pool.get_or_start(key, &server, &config).await;
+    let after = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
+        .await;
     assert!(
         after.is_err(),
         "retry after backoff should still fail initialize"
@@ -2007,7 +2138,12 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
         operator_guard_home: None,
     };
     let lease = pool
-        .get_or_start(key.clone(), &server, &config)
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key.clone(),
+            &server,
+            &config,
+        )
         .await
         .expect("start");
     drop(lease);
@@ -2019,7 +2155,11 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
     )
     .await;
     pool.sweep_idle().await;
-    assert!(!pool.has_ready(&key).await);
+    assert!(
+        !pool
+            .has_ready(&gents_loop::tool::ToolCallEnvelope::default(), &key)
+            .await
+    );
     assert_eq!(pool.live_count().await, 0);
 }
 
@@ -2092,7 +2232,12 @@ while True:
         operator_guard_home: None,
     };
     let _lease = pool
-        .get_or_start(key, &server, &config)
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
         .await
         .expect("start");
     let writethrough = LspWritethrough::new(pool.clone(), config);
@@ -2100,7 +2245,11 @@ while True:
     let _guard = lock.lock().await;
     let note = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        writethrough.after_mutation_under_lock(&path, MutationKind::Write),
+        writethrough.after_mutation_under_lock(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            &path,
+            MutationKind::Write,
+        ),
     )
     .await
     .expect("format-on-write must not deadlock")
@@ -2130,8 +2279,10 @@ async fn rust_analyzer_starts_and_reports_ready() {
     {
         return;
     }
-    let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/lsp_rust_workspace");
+    let src = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("tests/fixtures/lsp_rust_workspace");
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("src")).unwrap();
     // rust-analyzer prefers Cargo.toml over rust-project.json. An isolated
@@ -2149,7 +2300,9 @@ async fn rust_analyzer_starts_and_reports_ready() {
     // default toolchain with no rust-analyzer component installed.
     server.command = super::admit::admit_command(
         "rust-analyzer",
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        &std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        ),
     )
     .expect("repository rust-analyzer must pass host executable admission")
     .to_string_lossy()
@@ -2162,18 +2315,21 @@ async fn rust_analyzer_starts_and_reports_ready() {
     );
     let tool = LspTool::new(config, LspPool::new()).unwrap();
     let symbols = tool
-        .call(LspArgs {
-            action: "symbols".into(),
-            file: Some("src/lib.rs".into()),
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: Some(120),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "symbols".into(),
+                file: Some("src/lib.rs".into()),
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: Some(120),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("rust-analyzer must return document symbols after cold start");
     assert!(
@@ -2181,18 +2337,21 @@ async fn rust_analyzer_starts_and_reports_ready() {
         "document symbols must include add, got: {symbols}"
     );
     let hover = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("src/lib.rs".into()),
-            line: Some(4),
-            symbol: Some("add".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: Some(40),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("src/lib.rs".into()),
+                line: Some(4),
+                symbol: Some("add".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: Some(40),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("rust-analyzer must accept hover after start");
     assert!(
@@ -2201,18 +2360,21 @@ async fn rust_analyzer_starts_and_reports_ready() {
         "hover must include the add signature, got: {hover}"
     );
     let status = tool
-        .call(LspArgs {
-            action: "status".into(),
-            file: None,
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "status".into(),
+                file: None,
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("status");
     assert!(
@@ -2232,10 +2394,12 @@ async fn rust_analyzer_hover_on_gents_crate() {
     {
         return;
     }
-    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root");
+    let workspace_root = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../..")
+    .canonicalize()
+    .expect("workspace root");
     let auth = workspace_root.join("crates/gents/src/tools/native/lsp/auth.rs");
     let policy = workspace_root.join("crates/gents-loop/src/tool_policy.rs");
     let advertised_line = first_line_containing(&auth, "pub fn lsp_advertised");
@@ -2260,18 +2424,21 @@ async fn rust_analyzer_hover_on_gents_crate() {
         ("crates/gents-loop/src/tool_policy.rs", "meet"),
     ] {
         let symbols = tool
-            .call(LspArgs {
-                action: "symbols".into(),
-                file: Some(file.into()),
-                line: None,
-                symbol: None,
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: Some(60),
-                limit: None,
-            })
+            .call(
+                LspArgs {
+                    action: "symbols".into(),
+                    file: Some(file.into()),
+                    line: None,
+                    symbol: None,
+                    query: None,
+                    new_name: None,
+                    apply: None,
+                    payload: None,
+                    timeout: Some(60),
+                    limit: None,
+                },
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
             .await
             .unwrap_or_else(|err| panic!("document symbols for {file}: {err}"));
         assert!(
@@ -2281,18 +2448,21 @@ async fn rust_analyzer_hover_on_gents_crate() {
     }
 
     let advertised = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("crates/gents/src/tools/native/lsp/auth.rs".into()),
-            line: Some(advertised_line),
-            symbol: Some("lsp_advertised".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: Some(60),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("crates/gents/src/tools/native/lsp/auth.rs".into()),
+                line: Some(advertised_line),
+                symbol: Some("lsp_advertised".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: Some(60),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("hover lsp_advertised");
     assert!(
@@ -2301,18 +2471,21 @@ async fn rust_analyzer_hover_on_gents_crate() {
     );
 
     let meet = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("crates/gents-loop/src/tool_policy.rs".into()),
-            line: Some(meet_line),
-            symbol: Some("meet".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: Some(60),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("crates/gents-loop/src/tool_policy.rs".into()),
+                line: Some(meet_line),
+                symbol: Some("meet".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: Some(60),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("hover meet");
     assert!(
@@ -2321,18 +2494,21 @@ async fn rust_analyzer_hover_on_gents_crate() {
     );
 
     let status = tool
-        .call(LspArgs {
-            action: "status".into(),
-            file: None,
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "status".into(),
+                file: None,
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("status");
     assert!(
@@ -2513,12 +2689,10 @@ fn requested_result_limit_applies_to_diagnostics_symbols_and_references() {
 #[cfg(unix)]
 #[tokio::test]
 async fn linter_fallback_obeys_its_total_deadline() {
-    use std::os::unix::fs::PermissionsExt;
-
     let workspace = tempfile::tempdir().unwrap();
     let host = tempfile::tempdir().unwrap();
     let linter_path = host.path().join("hung-biome");
-    std::fs::write(
+    gents_store::test_support::write_executable_script(
         &linter_path,
         r#"#!/bin/sh
 : > "$0.started"
@@ -2526,9 +2700,6 @@ exec sleep 30
 "#,
     )
     .unwrap();
-    let mut permissions = std::fs::metadata(&linter_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&linter_path, permissions).unwrap();
     let source = workspace.path().join("source.js");
     std::fs::write(&source, "const x = 1;\n").unwrap();
     std::fs::write(workspace.path().join("package.json"), "{}").unwrap();
@@ -2556,6 +2727,7 @@ exec sleep 30
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         super::actions::diagnostics::run_linter_diagnostics(
+            &gents_loop::tool::ToolCallEnvelope::default(),
             &config,
             std::slice::from_ref(&server),
             &source,
@@ -2581,15 +2753,14 @@ exec sleep 30
         trigger.cancel();
     };
     let servers = [server];
-    let result = crate::runtime_context::scope_request_tool_execution(
-        None,
-        cancellation,
-        super::actions::diagnostics::run_linter_diagnostics(
-            &config,
-            &servers,
-            &source,
-            std::time::Duration::from_secs(60),
-        ),
+    let ambient_call_2854 =
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, cancellation).call();
+    let result = super::actions::diagnostics::run_linter_diagnostics(
+        &ambient_call_2854,
+        &config,
+        &servers,
+        &source,
+        std::time::Duration::from_secs(60),
     );
     let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         tokio::join!(result, cancel_when_running)
@@ -2725,7 +2896,8 @@ while True:
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let start = pool.get_or_start(key.clone(), &server, &config);
+    let ambient_call_2996 = gents_loop::tool::ToolCallEnvelope::default();
+    let start = pool.get_or_start(&ambient_call_2996, key.clone(), &server, &config);
     tokio::select! {
         _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {}
         _ = start => {}
@@ -2807,12 +2979,18 @@ while True:
         operator_guard_home: None,
     };
     let lease = pool
-        .get_or_start(key.clone(), &server, &config)
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key.clone(),
+            &server,
+            &config,
+        )
         .await
         .expect("start");
     let request = lease.client().request(
         "textDocument/hover",
         serde_json::json!({"textDocument":{"uri":"file://x"}}),
+        None,
     );
     tokio::select! {
         _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {}
@@ -2828,7 +3006,10 @@ while True:
     })
     .await;
     assert!(seen.is_ok(), "expected $/cancelRequest");
-    assert!(pool.has_ready(&key).await);
+    assert!(
+        pool.has_ready(&gents_loop::tool::ToolCallEnvelope::default(), &key)
+            .await
+    );
 }
 
 #[test]
@@ -2872,9 +3053,15 @@ async fn explicit_disabled_under_unrestricted_sandbox_is_unenforceable() {
     } else {
         "/bin/true"
     };
-    let err = crate::native::prepare_managed_command(root.path(), command, &[], &constraints)
-        .await
-        .unwrap_err();
+    let err = crate::native::prepare_managed_command(
+        &gents_loop::tool::ToolCallEnvelope::default(),
+        root.path(),
+        command,
+        &[],
+        &constraints,
+    )
+    .await
+    .unwrap_err();
     assert!(
         err.to_string().to_lowercase().contains("disabled")
             || err.to_string().contains("unenforceable")
@@ -2936,34 +3123,40 @@ async fn reload_retires_current_snapshot_clients() {
     );
     let tool = LspTool::new(config, pool.clone()).unwrap();
     let _ = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("hover starts client");
     assert_eq!(pool.live_count().await, 1);
     let out = tool
-        .call(LspArgs {
-            action: "reload".into(),
-            file: None,
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "reload".into(),
+                file: None,
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("reload");
     assert!(out.contains("retired"), "{out}");
@@ -2994,9 +3187,8 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
         deny_all_argv: false,
         deny_git_metadata_writes: false,
     };
-    let met = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-        None,
-        tokio_util::sync::CancellationToken::new(),
+    let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+        &gents_loop::tool::ToolCallEnvelope::default(),
         crate::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
             workspace_cwd: None,
@@ -3004,14 +3196,12 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
             workspace_authority: Some(crate::native::WorkspaceAuthority::ReadWrite),
             workspace_artifact: None,
         },
-        None,
-        None,
-        None,
-        Default::default(),
-        false,
-        async { super::overlay_lsp_constraints(&constraints) },
-    )
-    .await;
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        ),
+    );
+    let met = async { super::overlay_lsp_constraints(&scope_call, &constraints) }.await;
     assert_eq!(met.execution_mode, CommandExecutionMode::WorkspaceWrite);
     assert_eq!(met.sandbox, CommandExecutionMode::WorkspaceWrite);
 }
@@ -3046,7 +3236,15 @@ async fn start_client_initializes_with_pool_key_workspace() {
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let lease = pool
+        .get_or_start(
+            &gents_loop::tool::ToolCallEnvelope::default(),
+            key,
+            &server,
+            &config,
+        )
+        .await
+        .unwrap();
     assert_eq!(lease.client().workspace(), overlay.path());
     assert_ne!(lease.client().workspace(), baked.path());
 }
@@ -3089,9 +3287,8 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    let spawned = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
-        None,
-        tokio_util::sync::CancellationToken::new(),
+    let scope_call = crate::runtime_context::entered_with_workspace_overlay(
+        &gents_loop::tool::ToolCallEnvelope::default(),
         crate::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
             workspace_cwd: Some(source.clone()),
@@ -3099,20 +3296,21 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
             workspace_authority: Some(crate::native::WorkspaceAuthority::ReadOnly),
             workspace_artifact: Some(fixture.grant.clone()),
         },
-        None,
-        None,
-        None,
-        Default::default(),
-        false,
-        async {
-            let mut artifact_config = config.clone();
-            artifact_config.constraints.execution_mode = CommandExecutionMode::ArtifactWrite;
-            artifact_config.constraints.sandbox = CommandExecutionMode::ArtifactWrite;
-            let artifact_tool = LspTool::new(artifact_config, pool.clone()).unwrap();
-            let mut spawned = None;
-            for tested_tool in [&tool, &artifact_tool] {
-                let result = tested_tool
-                    .call(LspArgs {
+        gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        ),
+    );
+    let spawned = async {
+        let mut artifact_config = config.clone();
+        artifact_config.constraints.execution_mode = CommandExecutionMode::ArtifactWrite;
+        artifact_config.constraints.sandbox = CommandExecutionMode::ArtifactWrite;
+        let artifact_tool = LspTool::new(artifact_config, pool.clone()).unwrap();
+        let mut spawned = None;
+        for tested_tool in [&tool, &artifact_tool] {
+            let result = tested_tool
+                .call(
+                    LspArgs {
                         action: "capabilities".into(),
                         file: Some("README.md".into()),
                         line: None,
@@ -3123,39 +3321,39 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
                         payload: None,
                         timeout: None,
                         limit: None,
-                    })
-                    .await;
-                match result {
-                    Ok(_) => {
-                        spawned = Some(CommandExecutionMode::ArtifactWrite.as_str().to_string())
+                    },
+                    &scope_call,
+                )
+                .await;
+            match result {
+                Ok(_) => spawned = Some(CommandExecutionMode::ArtifactWrite.as_str().to_string()),
+                Err(error) => assert!(matches!(
+                    error,
+                    ToolError::ReportedFailure {
+                        class: FailureClass::PolicyDenied,
+                        ..
                     }
-                    Err(error) => assert!(matches!(
-                        error,
-                        ToolError::ReportedFailure {
-                            class: FailureClass::PolicyDenied,
-                            ..
-                        }
-                    )),
-                }
+                )),
             }
-            let error = pool
-                .get_or_start(key.clone(), &server, &config)
-                .await
-                .err()
-                .expect("pool must deny directly");
-            assert_eq!(error, super::ARTIFACT_SCOPE_DENIAL);
-            assert!(pool.get_ready(&key).await.is_none());
-            let linter = super::actions::diagnostics::run_linter_diagnostics(
-                &config,
-                &[server.clone()],
-                &source.join("README.md"),
-                std::time::Duration::from_secs(1),
-            )
-            .await;
-            assert_eq!(linter.as_deref(), Some(super::ARTIFACT_SCOPE_DENIAL));
-            spawned
-        },
-    )
+        }
+        let error = pool
+            .get_or_start(&scope_call, key.clone(), &server, &config)
+            .await
+            .err()
+            .expect("pool must deny directly");
+        assert_eq!(error, super::ARTIFACT_SCOPE_DENIAL);
+        assert!(pool.get_ready(&scope_call, &key).await.is_none());
+        let linter = super::actions::diagnostics::run_linter_diagnostics(
+            &scope_call,
+            &config,
+            &[server.clone()],
+            &source.join("README.md"),
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(linter.as_deref(), Some(super::ARTIFACT_SCOPE_DENIAL));
+        spawned
+    }
     .await;
     assert_eq!(pool.live_count().await, 0);
     spawned

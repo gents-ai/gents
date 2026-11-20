@@ -63,12 +63,7 @@ async fn a_goal_task_with_a_lost_receipt_is_decided_by_the_durable_row_and_inher
         agent_signer.did(),
     )
     .await;
-    bind_claimed_hook_request(
-        &hook,
-        lifecycle,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_claimed_hook_request(&hook, lifecycle).await;
     hook.on_completion_call(&user_text_message("start agents"), &[])
         .await;
 
@@ -88,6 +83,7 @@ async fn a_goal_task_with_a_lost_receipt_is_decided_by_the_durable_row_and_inher
             None,
             "goal-call",
             &args,
+            &gents_loop::tool::ToolCallEnvelope::default(),
         ),
     )
     .await;

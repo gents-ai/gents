@@ -7,9 +7,11 @@ repository.workspace = true
 description = "The runtime host: serving, runtime preparation and the runtime's HTTP surface"
 
 [features]
+vera = ["gents/vera"]
 test-fixtures = ["gents-session/test-fixtures", "gents-service/test-home-guard"]
 
 [dependencies]
+gents-observe = { workspace = true, features = ["typescript"] }
 gents = { path = "../gents" }
 gents-store = { workspace = true }
 gents-documents = { workspace = true }
@@ -60,7 +62,7 @@ subtle.workspace = true
 tempfile = "3"
 tokio.workspace = true
 tokio-util.workspace = true
-tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 uuid.workspace = true
 
@@ -68,7 +70,10 @@ uuid.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
-gents = { path = "../gents", features = ["test-home-guard"] }
+gents-host = { path = ".", features = ["test-fixtures"] }
+gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
+gents-workspace-hack = { workspace = true }
+gents = { path = "../gents", features = ["test-fixtures", "typescript"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
 gents-session = { workspace = true, features = ["test-fixtures"] }
 acp.workspace = true
@@ -78,3 +83,4 @@ db.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
+notify = { version = "8.2", default-features = false, features = ["macos_kqueue"] }

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
@@ -72,25 +70,23 @@ impl LeanSurface {
 mod generated;
 pub use generated::*;
 
-mod canonical_execution;
-mod canonical_output;
 pub mod canonical_wire;
 pub mod claude_replay;
 pub mod consumer_scan;
 pub mod family;
 mod plugin_job_wire;
+mod request_input_wire;
 mod session_turn_wire;
 mod title;
+pub mod tla;
 
 /// Family types generated from `families.schema.json`, which Lean emits.
 pub mod families {
     include!(concat!(env!("OUT_DIR"), "/families.rs"));
 }
 
-pub use canonical_execution::*;
-pub use canonical_output::*;
-pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use plugin_job_wire::*;
+pub use request_input_wire::*;
 pub use session_turn_wire::*;
 pub use title::*;
 
@@ -109,41 +105,96 @@ pub(crate) enum LeanVocabularyParseError<'a> {
     },
 }
 
-static LEAN_CONTRACT_SNAPSHOT: OnceLock<LeanContractSnapshot> = OnceLock::new();
+/// The process's snapshot, or the panic message of its load, raised again at
+/// each read so a failed load fails the tests that read the model and no other.
+static LEAN_CONTRACT_SNAPSHOT: OnceLock<Result<LeanContractSnapshot, String>> = OnceLock::new();
 
+/// Returns the Lean contract snapshot, loading it on this thread on the
+/// process's first read. Async code awaits [`snapshot`] first; after that,
+/// this and every generated `families::*::cases()` read return at once.
 pub fn lean_contract_snapshot() -> &'static LeanContractSnapshot {
-    LEAN_CONTRACT_SNAPSHOT.get_or_init(load_lean_contract_snapshot)
+    loaded(LEAN_CONTRACT_SNAPSHOT.get_or_init(load_lean_contract_snapshot_once))
 }
 
-fn lean_plugin_resource_group<T>(key: &str, cases: &serde_json::Value) -> Vec<T>
+/// Returns the Lean contract snapshot, loading it on Tokio's blocking pool on
+/// the process's first read, so no runtime thread waits for Lean.
+///
+/// The load builds and runs the Lean model with `lake`, synchronously, for as
+/// long as the machine takes, minutes when Lean recompiles. Run on a
+/// `#[tokio::test]` runtime's only thread, it starved the execution lease
+/// renewal of a test that had claimed a request, and the fence rejected its
+/// next producer action (`LeaseRenewalStarvation.tla`, `SyncInsideLease`;
+/// #3704, #3891, #3892). Off the runtime it is the model's `OffRuntime`
+/// configuration. The load stays lazy so only tests that read the model run
+/// `lake` and depend on the proofs.
+pub async fn snapshot() -> &'static LeanContractSnapshot {
+    loaded(load_off_runtime(&LEAN_CONTRACT_SNAPSHOT, load_lean_contract_snapshot_once).await)
+}
+
+fn loaded(
+    snapshot: &'static Result<LeanContractSnapshot, String>,
+) -> &'static LeanContractSnapshot {
+    match snapshot {
+        Ok(snapshot) => snapshot,
+        Err(message) => panic!("{message}"),
+    }
+}
+
+async fn load_off_runtime<T>(cell: &'static OnceLock<T>, load: fn() -> T) -> &'static T
 where
-    T: serde::de::DeserializeOwned,
+    T: Send + Sync,
 {
-    serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
+    if let Some(value) = cell.get() {
+        return value;
+    }
+    match tokio::task::spawn_blocking(move || cell.get_or_init(load)).await {
+        Ok(value) => value,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
 }
 
-pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
-    lean_contract_snapshot()
-        .recovery_sweep_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
+fn load_lean_contract_snapshot_once() -> Result<LeanContractSnapshot, String> {
+    std::panic::catch_unwind(load_lean_contract_snapshot).map_err(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|message| (*message).to_owned())
+            })
+            .unwrap_or_else(|| "loading the Lean conformance contract panicked".to_owned())
+    })
 }
 
-pub fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {
-    lean_contract_snapshot()
-        .r6_backgrounding_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean R6 backgrounding case {name:?} was not emitted"))
-}
+#[cfg(test)]
+mod off_runtime_load_tests {
+    use std::sync::{mpsc, Mutex, OnceLock};
+    use std::time::Duration;
 
-pub fn lean_transcript_case(name: &str) -> &'static LeanTranscriptCase {
-    lean_contract_snapshot()
-        .transcript_conformance_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean transcript case {name:?} was not emitted"))
+    static RELEASE: Mutex<Option<mpsc::Receiver<()>>> = Mutex::new(None);
+    static CELL: OnceLock<bool> = OnceLock::new();
+
+    /// Waits for a release that only another task on the loading runtime
+    /// sends: true when it arrived, false when the load held that runtime.
+    fn load_waiting_for_the_runtime() -> bool {
+        let release = RELEASE.lock().unwrap().take().expect("one load");
+        release.recv_timeout(Duration::from_secs(30)).is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_first_load_leaves_the_runtime_thread_free() {
+        let (release, waiting) = mpsc::channel();
+        *RELEASE.lock().unwrap() = Some(waiting);
+        let (loaded, ()) = tokio::join!(
+            super::load_off_runtime(&CELL, load_waiting_for_the_runtime),
+            async move { release.send(()).unwrap() },
+        );
+        assert!(
+            *loaded,
+            "the load ran on the runtime thread it was awaited on"
+        );
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -152,23 +203,6 @@ pub struct QueueImage {
     pub folding: Vec<String>,
     pub pending: Vec<String>,
     pub terminal: BTreeSet<String>,
-}
-
-impl LeanQueueManagementState {
-    pub fn image(&self, native: impl Fn(u64) -> String) -> QueueImage {
-        let ids = |entries: &[LeanFoldQueueEntry]| {
-            entries
-                .iter()
-                .map(|entry| native(entry.request_id))
-                .collect()
-        };
-        QueueImage {
-            active: self.active.map(&native),
-            folding: ids(&self.folding),
-            pending: ids(&self.pending),
-            terminal: self.terminal.iter().copied().map(&native).collect(),
-        }
-    }
 }
 
 pub fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>) {
@@ -245,9 +279,10 @@ fn mutate_leaves(value: &mut serde_json::Value, field: Option<&str>, selected: b
 }
 
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
-    let proofs_dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../gents/proofs"));
+    let proofs_dir = gents_lean_contract::proofs_dir()
+        .unwrap_or_else(|error| panic!("failed to locate the Lean proofs: {error:#}"));
     let stdout = gents_lean_contract::run_prepared_generator(
-        proofs_dir,
+        &proofs_dir,
         LEAN_CONTRACT_TARGET,
         LEAN_CONTRACT_FILE,
     )

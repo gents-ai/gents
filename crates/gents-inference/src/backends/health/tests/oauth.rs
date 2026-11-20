@@ -82,15 +82,31 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     let doc = crate::backends::registry::capture_backend_document(&node, &configured)
         .await
         .unwrap();
-    crate::backends::registry::set_backend_probe_status_for_connection(
-        &node,
-        &configured,
-        &doc,
-        "healthy",
-        Utc::now(),
-    )
-    .await
-    .unwrap();
+    let publication_allowed = |native_read: bool| {
+        gents_lean_vocab::families::household_backend_probe_access::cases()
+            .into_iter()
+            .find(|case| {
+                case.input.native_read == native_read
+                    && case.input.same_doc
+                    && case.input.same_connection
+                    && case.input.committed
+            })
+            .unwrap()
+            .check(native_read);
+        native_read
+    };
+    assert_eq!(
+        crate::backends::registry::set_backend_probe_status_for_connection(
+            &node,
+            &configured,
+            &doc,
+            "healthy",
+            Utc::now(),
+        )
+        .await
+        .is_ok(),
+        publication_allowed(true)
+    );
     let observation = user_access
         .transact_readonly("test.runtime_probe.observation", |txn| {
             Box::pin(async move {
@@ -152,6 +168,33 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
         )
         .await
         .unwrap();
+    let runtime = identity::Did::new(did).unwrap();
+    let usable = gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone())
+        .transact_readonly("test.runtime_use.backend_node", |txn| {
+            let (runtime, parent) = (&runtime, parent.to_owned());
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    txn.runtime_may_use(runtime, "Node", std::slice::from_ref(&parent))
+                        .await?,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(usable, vec![false]);
+    let hosting_read = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(did).unwrap(),
+    )
+    .execute("{ InferenceBackendMetadata { _docID } }")
+    .await
+    .unwrap();
+    assert_eq!(
+        hosting_read["data"]["InferenceBackendMetadata"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
     assert!(
         crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
             .await
@@ -163,7 +206,7 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             .await
             .is_err()
     );
-    assert!(
+    assert_eq!(
         crate::backends::registry::set_backend_probe_status_for_connection(
             &node,
             &configured,
@@ -172,7 +215,64 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
             Utc::now(),
         )
         .await
+        .is_ok(),
+        publication_allowed(false)
+    );
+    assert!(
+        crate::backends::registry::record_model_catalog_for_document(
+            &node,
+            &configured,
+            &doc,
+            gents_documents::BackendModelCatalog {
+                node_did: configured.catalog_scope().map(str::to_owned),
+                observed_at: Utc::now().to_rfc3339(),
+                models: vec![],
+            },
+        )
+        .await
         .is_err()
+    );
+    assert_eq!(
+        user_access
+            .transact_readonly("test.runtime_probe.retained_observation", |txn| {
+                Box::pin(async move {
+                    crate::backends::registry::lookup_backend_observation_in_txn(
+                        txn,
+                        did,
+                        "runtime-probe",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .probe_status
+            .as_deref(),
+        Some("healthy")
+    );
+    gents_store::config_client::ConfigAccess::local_as(node.clone(), did.parse().unwrap())
+        .grant_node_permission(
+            &user.did().parse().unwrap(),
+            gents_store::config_client::NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
+    user_access
+        .transact_write("test.probe.remove_backend", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.delete_configuration_document("InferenceBackendMetadata", doc)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(
+        crate::backends::registry::list_enabled_backends_for_runtime(&node, did)
+            .await
+            .unwrap()
+            .is_empty()
     );
     models.shutdown().await;
 }

@@ -66,8 +66,6 @@ pub struct WorkspaceOverlay {
     pub cwd: PathBuf,
     pub authority: WorkspaceAuthority,
     pub instruction_manifest: String,
-    #[allow(dead_code)]
-    pub seal_hash: Option<String>,
 }
 
 pub fn frozen_instruction_manifest_from_overlay(
@@ -407,7 +405,7 @@ async fn load_request_workspace_overlay(
         bail!("artifact_write requires a sealed ReadOnly workspace binding");
     }
     let live_tree_hash = if sealed {
-        Some(super::adapter::working_tree_hash(Path::new(&placement.host_path)).await?)
+        Some(super::adapter::working_tree_hash(Path::new(&placement.host_path), None).await?)
     } else {
         None
     };
@@ -527,7 +525,6 @@ pub(crate) fn bind_workspace_overlay(
         cwd,
         authority: input.authority,
         instruction_manifest: workspace.instruction_manifest.clone(),
-        seal_hash: workspace.seal_hash.clone(),
     })
 }
 

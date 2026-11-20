@@ -4,8 +4,9 @@ use gents_pack::plugin::allowed;
 use gents_tools::plugin::approval;
 use tauri::{Runtime, State, WebviewWindow};
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {

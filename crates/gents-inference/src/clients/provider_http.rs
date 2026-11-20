@@ -1,16 +1,15 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use crate::llm::rig_compat::http::{
+    self as http_client, HeaderMap, LazyBody, MultipartForm, Request, ReqwestClient, Response,
+    StreamingResponse, Transport,
+};
 use bytes::Bytes;
 use chrono::Utc;
 use gents_loop::account_usage::UsageSource;
 use gents_loop::provider_limit::ProviderLimitHeaders;
 use reqwest::StatusCode;
-use rig::http_client::{
-    self, HeaderMap, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient, Response,
-    StreamingResponse,
-};
-use rig::wasm_compat::WasmCompatSend;
 
 use crate::usage_observation::UsageReporter;
 
@@ -78,18 +77,13 @@ pub(crate) fn rejected_response_error(
     http_client::Error::InvalidStatusCodeWithMessage(status, annotated)
 }
 
-impl HttpClientExt for ProviderHttpClient {
-    fn send<T, U>(
+impl Transport for ProviderHttpClient {
+    fn send(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        T: Into<Bytes> + WasmCompatSend,
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
+        _call: &gents_loop::provider_call::ProviderCall,
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
         let (parts, body) = req.into_parts();
-        let body: Bytes = body.into();
         let request = self
             .inner
             .request(parts.method, parts.uri.to_string())
@@ -113,37 +107,30 @@ impl HttpClientExt for ProviderHttpClient {
             if let Some(headers) = builder.headers_mut() {
                 *headers = response.headers().clone();
             }
-            let body: LazyBody<U> = Box::pin(async move {
-                let bytes = response
+            let body: LazyBody<Bytes> = Box::pin(async move {
+                response
                     .bytes()
                     .await
-                    .map_err(|error| instance_error(error.without_url()))?;
-                Ok(U::from(bytes))
+                    .map_err(|error| instance_error(error.without_url()))
             });
             builder.body(body).map_err(http_client::Error::Protocol)
         }
     }
 
-    fn send_multipart<U>(
+    fn send_multipart(
         &self,
+        call: &gents_loop::provider_call::ProviderCall,
         req: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
-        HttpClientExt::send_multipart(&self.inner, req)
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<Bytes>>>> + Send + 'static {
+        Transport::send_multipart(&self.inner, call, req)
     }
 
-    fn send_streaming<T>(
+    fn send_streaming(
         &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-    where
-        T: Into<Bytes>,
-    {
+        _call: &gents_loop::provider_call::ProviderCall,
+        req: Request<Bytes>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
         let (parts, body) = req.into_parts();
-        let body: Bytes = body.into();
         let request = self
             .inner
             .request(parts.method, parts.uri.to_string())
@@ -172,7 +159,7 @@ impl HttpClientExt for ProviderHttpClient {
                 *headers = response.headers().clone();
             }
             use futures::StreamExt;
-            let stream: http_client::sse::BoxedStream = Box::pin(
+            let stream: http_client::BoxedStream = Box::pin(
                 response
                     .bytes_stream()
                     .map(|chunk| chunk.map_err(|error| instance_error(error.without_url()))),

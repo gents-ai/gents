@@ -36,7 +36,11 @@ impl ToolDyn for Probe {
             }
         })
     }
-    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             Ok(json!({"ordinal": self.0.fetch_add(1, Ordering::SeqCst) + 1}).to_string())
         })
@@ -58,7 +62,11 @@ impl ToolDyn for Stall {
             }
         })
     }
-    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             self.0.notify_one();
             std::future::pending().await
@@ -95,7 +103,13 @@ pub async fn control(
     accept_hook_tool_call(&fixture.hook, internal_id, tool, &args, None).await;
     let ToolCallHookAction::Skip { reason } = fixture
         .hook
-        .on_tool_call(tool, None, internal_id, &args)
+        .on_tool_call(
+            tool,
+            None,
+            internal_id,
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
     else {
         panic!("{tool} did not return its result")
@@ -123,13 +137,19 @@ pub async fn session_tool_rows(
 }
 
 pub async fn guest_stopped(digest: &str, within: std::time::Duration) {
-    tokio::time::timeout(within, async {
-        while crate::plugin::host_calls::live::count(digest) != 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the guest still occupies its worker thread");
+    tokio::time::timeout(within, guest_released(digest))
+        .await
+        .expect("the guest still occupies its worker thread");
+}
+
+/// Resolves once no guest of `digest` occupies a worker thread.
+pub async fn guest_released(digest: &str) {
+    crate::plugin::host_calls::live::released(digest).await;
+}
+
+/// The compute allowance of each running guest of `digest`.
+pub async fn guest_allowances(digest: &str) -> Vec<std::time::Duration> {
+    crate::plugin::host_calls::live::started(digest).await
 }
 
 pub fn spinning_wat(name: &str, host_calls: bool) -> String {
@@ -190,11 +210,10 @@ pub async fn spawn_spinner(
     )
     .await;
     let id = receipt["tool_call_id"].as_str().unwrap().to_owned();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while crate::plugin::host_calls::live::count(&digest) == 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        crate::plugin::host_calls::live::started(&digest),
+    )
     .await
     .expect("the guest started");
     (fixture, executions, id, digest, home)
@@ -218,15 +237,35 @@ pub async fn script_with_children(
     let hook = &fixture.hook;
     accept_hook_tool_call(hook, "script", "plugin", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("plugin", None, "script", "{}").await,
+        hook.on_tool_call(
+            "plugin",
+            None,
+            "script",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let completed = hook
-        .admit_tool_effect("script", 1, "probe", "{}")
+        .admit_tool_effect(
+            "script",
+            1,
+            "probe",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("probe", None, &completed, "{}").await,
+        hook.on_tool_call(
+            "probe",
+            None,
+            &completed,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     hook.on_tool_result(
@@ -239,23 +278,55 @@ pub async fn script_with_children(
     .await;
     hook.finish_tool_effect(&completed, None).await.unwrap();
     let pending = hook
-        .admit_tool_effect("script", 2, "probe", "{}")
+        .admit_tool_effect(
+            "script",
+            2,
+            "probe",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .unwrap();
     let running = hook
-        .admit_tool_effect("script", 3, "probe", "{}")
+        .admit_tool_effect(
+            "script",
+            3,
+            "probe",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("probe", None, &running, "{}").await,
+        hook.on_tool_call(
+            "probe",
+            None,
+            &running,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let cancelled = hook
-        .admit_tool_effect("script", 4, "probe", "{}")
+        .admit_tool_effect(
+            "script",
+            4,
+            "probe",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("probe", None, &cancelled, "{}").await,
+        hook.on_tool_call(
+            "probe",
+            None,
+            &cancelled,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::default()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     hook.finish_tool_effect(

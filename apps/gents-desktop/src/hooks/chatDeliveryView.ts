@@ -20,6 +20,7 @@ export type DeliveryAffordances = {
 
 export function sendStatus(draft: ChatDraft, now: number): SendStatus {
   if (draft.confirmed) return "confirmed";
+  if (draft.locallyRetained) return "pending";
   return draft.pendingUntil !== undefined && now < draft.pendingUntil
     ? "pending"
     : "failed";

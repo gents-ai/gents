@@ -106,10 +106,8 @@ fn configuration_fingerprint_reflects_schedule_set() {
                 trigger_doc_id: "s1-doc".to_string(),
                 schedule_doc_id: "s1-schedule-doc".to_string(),
                 schedule_id: "s1".to_string(),
-                task_id: "t1".to_string(),
                 task: task.clone(),
                 cadence: ScheduleCadence::Interval { interval_secs: 60 },
-                enabled: true,
                 concurrency: ConcurrencyMode::Serial,
             },
         )]),
@@ -152,4 +150,23 @@ fn configuration_fingerprint_reflects_lsp_configuration() {
         fingerprint_tool_surface(Some(r#"{"format_on_write":true}"#.to_string())),
     );
     assert_ne!(baseline, lsp_changed.configuration_fingerprint());
+}
+
+#[test]
+fn generated_probe_request_cases_preserve_startup_failure() {
+    use gents_lean_vocab::families::proofs_backend_health_await_probe_request as family;
+
+    family::replay(|input: &family::Input| {
+        let unavailable = UnavailableAgent::new(
+            AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
+            "backend probe pending",
+        )
+        .with_awaiting_first_probe(input.awaiting_probe);
+        let admission = effective_agent_admission(
+            false,
+            Some(&unavailable),
+            input.startup_failed.then_some("executor failed"),
+        );
+        matches!(admission, EffectiveAgentAdmission::AwaitFirstProbe)
+    });
 }

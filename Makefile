@@ -46,6 +46,10 @@ help:
 	@echo "  make fmt-check             Check Rust and desktop UI formatting"
 	@echo "  make lint                  Check the product build, then clippy all targets (-D warnings)"
 	@echo "  make proofs                Build Lean proofs"
+	@echo "  make gate [BASE=origin/main]  Run the pull request gate for this change (what CI runs)"
+	@echo "  make gate-plan             Show the jobs the gate selects for this change"
+	@echo "  make gate-run JOB=<job>    Run one gate job (fmt, lint, contract, ts-unit, test:<group>, ...)"
+	@echo "  make lean-regen            Regenerate Lean decoders and family schema (FORCE=1 ignores the stamp)"
 	@echo
 	@echo "Tests:"
 	@echo "  make test                  Run core Rust and CLI tests"
@@ -74,7 +78,6 @@ help:
 	@echo
 	@echo "Live:"
 	@echo "  make live-cli              Run live CLI end-to-end tests"
-	@echo "  make live-enrollment       Run live client enrollment and runtime tests"
 	@echo "  make live-onboarding       Run bare gents against real launchd and a PTY (macOS)"
 	@echo "  make live-eval             Run live inference eval-driver tests"
 	@echo "  make live-agent            Run live inference runtime tests"
@@ -147,6 +150,10 @@ CORE_PACK_TESTS ?= $(CORE_PACKS)
 
 .PHONY: core-packs core-packs-test
 core-packs:
+	@for pack in $(CORE_PACKS); do \
+		version="$$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' "core-packs/$$pack/manifest.json")"; \
+		test "$$version" = "$(RELEASE_VERSION)" || { echo "core-packs/$$pack/manifest.json has version $${version:-<none>}, not the workspace version $(RELEASE_VERSION); a core pack's version follows the runtime, so set its \"version\" to \"$(RELEASE_VERSION)\"" >&2; exit 1; }; \
+	done
 	@tool="$(CORE_PACK_TOOL)"; \
 	if [ -z "$$tool" ]; then $(MAKE) build-cli && tool="$(CARGO_TARGET_DIR)/$(CLI_PROFILE_DIR)/gents"; fi; \
 	tool="$$(cd "$$(dirname "$$tool")" && pwd)/$$(basename "$$tool")"; \
@@ -205,7 +212,7 @@ dist-docs:
 	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)"
 	@ls -lh "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz" "$(DIST_DIR)/SHA256SUMS-docs.txt"
 
-.PHONY: fmt fmt-check lint proofs
+.PHONY: fmt fmt-check lint proofs lean-regen
 fmt:
 	$(CARGO) fmt --all
 	$(NPM) --prefix $(DESKTOP_DIR) run format
@@ -221,23 +228,47 @@ lint:
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
 
+# ---- Pull request gate ----
+# scripts/ci/gate.py owns the selection (changed crates and their reverse
+# dependents from cargo metadata) and every command; .github/workflows/ci.yml
+# runs these same recipes, passing its plan in GATE_PLAN.
+BASE ?= origin/main
+GATE := python3 scripts/ci/gate.py
+
+.PHONY: gate gate-plan gate-run gate-selftest
+gate:
+	$(GATE) all --base $(BASE)
+
+gate-plan:
+	@$(GATE) plan --base $(BASE)
+
+gate-run:
+	@test -n "$(JOB)" || { echo "usage: make gate-run JOB=<job> [BASE=<ref>]" >&2; exit 2; }
+	$(GATE) run "$(JOB)" --base $(BASE)
+
+gate-selftest:
+	python3 scripts/ci/test_gate.py
+
+lean-regen:
+	$(CARGO) run -q -p gents-lean-vocab $(CARGO_PROFILE_FLAG) --example decoders_from_snapshot -- --regenerate $(if $(FORCE),--force,)
+
 .PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-eval-drivers test-evals live-configurator-eval
 test: test-agent test-cli test-eval-drivers
 
-RUNTIME_TEST_PACKAGES := $(shell .github/scripts/compile-rust-ci-suite.sh runtime --list-packages)
+RUNTIME_TEST_PACKAGES = $(shell $(GATE) packages store session runtime) gents-loop
 
 test-agent:
 	$(CARGO) test --no-fail-fast $(addprefix -p ,$(RUNTIME_TEST_PACKAGES)) $(CARGO_PROFILE_FLAG)
 
 test-agent-conformance:
-	$(CARGO) test -p gents --test conformance $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents --test integration conformance:: $(CARGO_PROFILE_FLAG)
 
 test-eval-drivers:
 	$(CARGO) test -p gents-eval $(CARGO_PROFILE_FLAG)
 
 test-evals:
-	$(CARGO) test -p gents-eval --test onboarding_evals $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents-eval --test eval_runner_canary $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents-eval --test integration onboarding_evals:: $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents-eval --test integration eval_runner_canary:: $(CARGO_PROFILE_FLAG)
 
 live-configurator-eval:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} scripts/evals/run-ladder.sh $${GENTS_EVAL_SUITE:-all} $${GENTS_EVAL_TRIALS:-3} $${GENTS_EVAL_CONCURRENCY:-4}
@@ -245,7 +276,7 @@ live-configurator-eval:
 test-agent-e2e: live-agent
 
 test-cli:
-	$(CARGO) test -p gents-cli $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+	$(CARGO) test -p gents-cli $(CARGO_PROFILE_FLAG) -- --nocapture
 
 .PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-invariants desktop-ui-screenshots desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-agent desktop-ui-visual desktop-ui-live-e2e desktop-ui-live-e2e-real desktop-native-preflight desktop-native-dev desktop-native-build
 desktop-ui:
@@ -301,20 +332,18 @@ desktop-native-dev: build-cli
 desktop-native-build: desktop-native-stage-sidecar
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json --config $(DESKTOP_LOCAL_TAURI_CONFIG)
 
-.PHONY: live-eval live-cli live-enrollment live-onboarding live-agent live-triggers live-client live-editor live-desktop-smoke
+.PHONY: live-eval live-cli live-onboarding live-agent live-triggers live-client live-editor live-desktop-smoke
 live-cli:
 	@if [ -z "$$GENTS_LIVE_DESKTOP_BIN" ]; then $(CARGO) build -p gents-desktop --bin gents-desktop $(CARGO_PROFILE_FLAG); elif [ ! -x "$$GENTS_LIVE_DESKTOP_BIN" ]; then echo "GENTS_LIVE_DESKTOP_BIN must name an executable desktop binary" >&2; exit 2; fi
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --skip cli_onboarding_live:: --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test integration $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),cli_live_suite::) $(CARGO_PROFILE_FLAG) -- --ignored --skip cli_onboarding_live:: --nocapture --test-threads=1
 
 LIVE_FILTER ?=
-live-enrollment:
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test cli_enrollment $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-onboarding:
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e,native-e2e --test cli_live_suite $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),cli_onboarding_live::) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e,native-e2e --test integration $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),cli_live_suite::cli_onboarding_live::) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-agent:
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test integration $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),e2e_live::) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
 
 live-triggers:
 	$(CARGO) build -p gents-fs-runner $(CARGO_PROFILE_FLAG)
@@ -322,15 +351,15 @@ live-triggers:
 
 live-client:
 	$(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG)
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime native_client_submits_signed_input_and_observes_live_and_durable_output $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime enrolled_client_resumes_a_durable_goal_and_observes_completion $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime managed_runtime_replacement_preserves_running_input_enrollment_and_transcript $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test integration runtime::native_client_submits_signed_input_and_observes_live_and_durable_output $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
+	$(CARGO) test -p gents-client-host --features runtime-e2e --test integration runtime::enrolled_client_resumes_a_durable_goal_and_observes_completion $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test integration runtime::managed_runtime_replacement_preserves_running_input_enrollment_and_transcript $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
 
 live-editor:
 	@test -d "$$GENTS_VSCODE_ROOT" || { echo "Set GENTS_VSCODE_ROOT to the installed-editor extension checkout" >&2; exit 2; }
 	@test -f "$$GENTS_VSCODE_VSIX" || { echo "Set GENTS_VSCODE_VSIX to the built editor extension package" >&2; exit 2; }
 	@unzip -Z -1 "$$GENTS_VSCODE_VSIX" '*gents-media-host*' >/dev/null 2>&1 || { echo "The editor VSIX must bundle gents-media-host; rebuild the extension package with its native helpers" >&2; exit 2; }
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features editor-e2e --test runtime $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),editor_preserves_live_session_and_draft_across_window_reload) $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features editor-e2e --test integration $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),runtime::editor_preserves_live_session_and_draft_across_window_reload) $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
 
 live-desktop-smoke:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:chat
@@ -340,8 +369,8 @@ live-desktop-smoke:
 
 .PHONY: live-eval
 live-eval:
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-eval --features live-e2e --test eval_runner_canary $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-eval --features live-e2e --test integration $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),eval_runner_canary::) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
 
 .PHONY: live-delivery
 live-delivery:
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} GENTS_DELIVERY_SOURCE_SHA=$${GENTS_DELIVERY_SOURCE_SHA:-$$(git rev-parse HEAD)} $(CARGO) test -p gents --features live-e2e --test trigger_delivery_live $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --skip process::delivery_crash_child --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} GENTS_DELIVERY_SOURCE_SHA=$${GENTS_DELIVERY_SOURCE_SHA:-$$(git rev-parse HEAD)} $(CARGO) test -p gents --features live-e2e --test integration $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),trigger_delivery_live::) $(CARGO_PROFILE_FLAG) -- --ignored --skip process::delivery_crash_child --nocapture --test-threads=1

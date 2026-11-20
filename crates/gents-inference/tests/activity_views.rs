@@ -1,5 +1,3 @@
-#![cfg(feature = "test-fixtures")]
-
 use gents_inference::views::activity::InferenceCalls;
 use gents_protocol::document_query::{fields::inference_call, Create, Input};
 use gents_store::config_client::ConfigAccess;

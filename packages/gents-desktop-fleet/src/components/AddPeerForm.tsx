@@ -1,4 +1,4 @@
-import type { EnrollmentRequestView } from "@source-inc/gents-desktop-client";
+import type { ClientAccessRequestView } from "@source-inc/gents-desktop-client";
 import { StatusEnrollmentForm } from "./addPeer/StatusEnrollmentForm.js";
 import { useStatusEnrollment } from "./addPeer/useStatusEnrollment.js";
 
@@ -6,19 +6,19 @@ export type AddPeerFormProps = {
   addingPeer: boolean;
   disabled: boolean;
   localError: string | null;
-  onRequestStatusEnrollment: (
+  onRequestRuntimeAccess: (
     serverAddress: string,
-  ) => Promise<EnrollmentRequestView>;
+  ) => Promise<ClientAccessRequestView>;
 };
 
 export function AddPeerForm({
   addingPeer,
   disabled,
   localError,
-  onRequestStatusEnrollment,
+  onRequestRuntimeAccess,
 }: AddPeerFormProps) {
   const discovery = useStatusEnrollment({
-    onRequestStatusEnrollment,
+    onRequestRuntimeAccess,
   });
   const busy = disabled || addingPeer || discovery.fetchingStatus;
 

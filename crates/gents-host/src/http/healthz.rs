@@ -198,6 +198,7 @@ mod tests {
         let (activation_runtime, activation_observation) =
             crate::http::router::empty_activation_state();
         RuntimeHttpState {
+            client_access_decisions: Default::default(),
             graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
                 "http://localhost:9181/api/v0/graphql",
             ),
@@ -223,6 +224,8 @@ mod tests {
             activation_observation,
             replicated_schema: Default::default(),
             serve_lifecycle: Default::default(),
+            document_acp: Default::default(),
+            node_identity: None,
         }
     }
 

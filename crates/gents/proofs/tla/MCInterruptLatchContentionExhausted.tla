@@ -1,0 +1,4 @@
+---- MODULE MCInterruptLatchContentionExhausted ----
+EXTENDS InterruptLatchContention
+
+====

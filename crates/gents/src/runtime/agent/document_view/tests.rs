@@ -341,9 +341,12 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     let load_skill =
         gents_tools::native::skills::LoadSkillTool::new(agent_config.skills.clone(), ceiling);
     let loaded = load_skill
-        .call(gents_tools::native::skills::LoadSkillArgs {
-            name: "Research".to_string(),
-        })
+        .call(
+            gents_tools::native::skills::LoadSkillArgs {
+                name: "Research".to_string(),
+            },
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .expect("load_skill");
     assert!(
@@ -910,7 +913,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
         .get("trigger-resolve-active")
         .expect("trigger-resolve-active present in active_schedules");
     assert_eq!(resolved.schedule_id, "schedule-resolve-active");
-    assert_eq!(resolved.task_id, "task-resolve-active");
+    assert_eq!(resolved.task.task_id, "task-resolve-active");
     assert_eq!(resolved.task.agent_did, default_agent_did);
     assert_eq!(resolved.task.prompt_template, "do the thing");
     assert_eq!(
@@ -980,7 +983,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
         .get("trigger-active")
         .expect("trigger-active present in active_event_triggers");
     assert_eq!(resolved.trigger_id, "trigger-active");
-    assert_eq!(resolved.task_id, "task-trigger-active");
+    assert_eq!(resolved.task.task_id, "task-trigger-active");
     assert_eq!(resolved.task.agent_did, default_agent_did);
     assert_eq!(resolved.task.prompt_template, "do the thing on event");
     assert_eq!(resolved.source_collection, "CustomerSignup");
@@ -1657,21 +1660,22 @@ async fn readiness_follows_the_backend_account_reference() {
     );
 
     let original = view
-        .oauth_credentials
-        .values()
-        .next()
+        .oauth_accounts
+        .rows_mut()
+        .first()
         .expect("original row")
         .clone();
     let mut account = original.clone();
-    account.value.credential_id = format!("{}:acct-x", original.value.credential_id);
-    account.value.account_ref = Some("acct-x".to_string());
-    view.oauth_credentials
-        .insert(account.value.credential_id.clone(), account.clone());
+    account.credential_id = format!("{}:acct-x", original.credential_id);
+    account.account_ref = Some("acct-x".to_string());
+    view.oauth_accounts.rows_mut().push(account);
     assert!(ready(view.clone()).await, "an enabled acct-x row resolves");
 
-    account.value.enabled = false;
-    view.oauth_credentials
-        .insert(account.value.credential_id.clone(), account);
+    view.oauth_accounts
+        .rows_mut()
+        .last_mut()
+        .expect("acct-x row")
+        .enabled = false;
     assert!(!ready(view).await, "a disabled acct-x row never resolves");
 }
 
@@ -1943,6 +1947,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
                 view.compactions.insert(
                     "compaction-b".into(),
                     DocumentRecord {
+                        version: Some("fixture-compaction-version".into()),
                         doc_id: "compaction-b".into(),
                         value: compaction,
                     },

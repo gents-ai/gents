@@ -111,6 +111,30 @@ def scope (world : World) (entries : List Entry) (workdir : Option Path) : Optio
       | none => [])
   else none
 
+/-- The agent's own folder, read-write, for a plugin whose pack came from
+this runtime's release (maintainer decision 2026-11-13: if the Engineer or an
+application needs to save data, it can). The own folder is the one the agent's
+file-writing tools write, chosen for it at setup; an agent without one has
+none. Installing Gents is the consent, so nothing is asked and nothing is
+written to the allowed list. A plugin of any other pack gains nothing, and a
+folder the list could never hold is never granted. -/
+def ownFolderGrant (world : World) (release : Bool) (ownFolder : Option Path) : List Entry :=
+  match release, ownFolder with
+  | true, some dir =>
+    if dir ∈ world.present ∧ allowable world dir = true then [⟨dir, .readWrite⟩] else []
+  | _, _ => []
+
+/-- What one plugin's call may bind: the shared scope, and its agent's own
+folder when the plugin's pack is a release's core pack. -/
+def pluginScope (world : World) (entries : List Entry) (workdir : Option Path) (release : Bool)
+    (ownFolder : Option Path) : Option (List Entry) :=
+  (scope world entries workdir).map (· ++ ownFolderGrant world release ownFolder)
+
+theorem registry_plugin_gains_nothing (world : World) (entries : List Entry)
+    (workdir ownFolder : Option Path) :
+    pluginScope world entries workdir false ownFolder = scope world entries workdir := by
+  simp [pluginScope, ownFolderGrant]
+
 /-- The widest access any entry covering `target` gives. -/
 def granted (entries : List Entry) (target : Path) : Option Access :=
   (entries.filter fun entry => under target entry.path).foldl
@@ -220,5 +244,69 @@ theorem list_grants_nothing_in_gents_home (world : World) (entries : List Entry)
   simp only [Bool.not_eq_false] at hcovers
   have := allowable_covers_nothing_in_gents_home world entry.path target (hlist entry hmem) hcovers
   simp [hinside] at this
+
+theorem granted_append_uncovered (entries extra : List Entry) (target : Path)
+    (h : ∀ entry ∈ extra, under target entry.path = false) :
+    granted (entries ++ extra) target = granted entries target := by
+  have : extra.filter (fun entry => under target entry.path) = [] :=
+    List.filter_eq_nil_iff.mpr fun entry hmem => by simp [h entry hmem]
+  simp [granted, List.filter_append, this]
+
+/-- Outside the agent's own folder a core pack's plugin is granted exactly
+what any plugin is. -/
+theorem nothing_outside_the_own_folder_changes (world : World) (entries : List Entry)
+    (workdir ownFolder : Option Path) (release : Bool) (target : Path)
+    (houtside : ∀ dir, ownFolder = some dir → under target dir = false) :
+    (pluginScope world entries workdir release ownFolder).map (granted · target) =
+      (scope world entries workdir).map (granted · target) := by
+  cases hscope : scope world entries workdir with
+  | none => simp [pluginScope, hscope]
+  | some held =>
+    have hsame := granted_append_uncovered held (ownFolderGrant world release ownFolder) target
+      (by
+        intro entry hmem
+        cases release <;> cases ownFolder <;> simp [ownFolderGrant] at hmem
+        obtain ⟨_, rfl⟩ := hmem
+        exact houtside _ rfl)
+    simp [pluginScope, hscope, hsame]
+
+/-- The own-folder grant never reaches into the gents home. -/
+theorem own_folder_grant_is_allowable (world : World) (release : Bool) (ownFolder : Option Path) :
+    ∀ entry ∈ ownFolderGrant world release ownFolder, allowable world entry.path = true := by
+  intro entry hmem
+  cases release <;> cases ownFolder <;> simp [ownFolderGrant] at hmem
+  obtain ⟨hok, rfl⟩ := hmem
+  exact hok.2
+
+/-! ## A fixed world the executor replays -/
+
+/-- The paths a replay names: the agent's own folder, a file to write inside
+it, a sibling folder outside it, and a folder inside the gents home. -/
+inductive Target | ownFolder | insideOwnFolder | outsideOwnFolder | insideGentsHome
+  deriving DecidableEq, Repr
+
+def fixtureWorld : World :=
+  { userHome := some ["home", "user"]
+    gentsHome := ["home", "user", ".gents"]
+    present := [["work", "engineer"], ["work", "engineer", "chart.svg"], ["work", "other"],
+      ["home", "user", ".gents", "keys"]] }
+
+def Target.path : Target → Path
+  | .ownFolder => ["work", "engineer"]
+  | .insideOwnFolder => ["work", "engineer", "chart.svg"]
+  | .outsideOwnFolder => ["work", "other"]
+  | .insideGentsHome => ["home", "user", ".gents", "keys"]
+
+/-- What a plugin may bind at `target` with an empty allowed list, its session
+working in the agent's own folder: read there for every plugin, read-write for
+a core pack's plugin when the agent has its own folder, nothing elsewhere. -/
+def fixtureGrant (release ownFolder : Bool) (target : Target) : Option Access :=
+  (pluginScope fixtureWorld [] (some ["work", "engineer"]) release
+    (if ownFolder then some ["work", "engineer"] else none)).bind (granted · target.path)
+
+example : fixtureGrant true true .insideOwnFolder = some .readWrite := by decide
+example : fixtureGrant false true .insideOwnFolder = some .read := by decide
+example : fixtureGrant true true .outsideOwnFolder = none := by decide
+example : fixtureGrant true true .insideGentsHome = none := by decide
 
 end Pack.AllowedFolders

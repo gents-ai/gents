@@ -30,9 +30,9 @@ pub enum StoreCompatibilityError {
         #[source]
         source: std::io::Error,
     },
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Home(#[from] HomeError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Key(#[from] StoreKeyError),
     #[error("opening a copy of {} to check it", path.display())]
     Open {
@@ -185,7 +185,8 @@ pub(crate) async fn check_copy(
         .map_err(io(&std::env::temp_dir()))?;
     let copied = copy.path().join("data");
     let (from, to) = (data.clone(), copied.clone());
-    tokio::task::spawn_blocking(move || copy_tree(&from, &to))
+    let skipped = crate::local::document_acp::vera_dir(&data);
+    tokio::task::spawn_blocking(move || copy_tree(&from, &to, &skipped))
         .await
         .map_err(|source| StoreCompatibilityError::Check {
             path: data.clone(),
@@ -264,14 +265,19 @@ fn insecure_key_file(home: &Path) -> Result<Option<PathBuf>, StoreCompatibilityE
     }
 }
 
-fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+/// `skipped` is the embedded Vera node's directory: the copy is opened to
+/// read collection bindings and schema only, which never reach it.
+fn copy_tree(from: &Path, to: &Path, skipped: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
+        if entry.path() == skipped {
+            continue;
+        }
         let kind = entry.file_type()?;
         let target = to.join(entry.file_name());
         if kind.is_dir() {
-            copy_tree(&entry.path(), &target)?;
+            copy_tree(&entry.path(), &target, skipped)?;
         } else if kind.is_file() {
             std::fs::copy(entry.path(), &target)?;
         }

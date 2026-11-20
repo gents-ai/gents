@@ -5,11 +5,14 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 
 use crate::backends::provider::BackendProviderKind;
+use crate::llm::rig_compat::http::Uri;
+use crate::llm::rig_compat::model::LiftedClient;
+use crate::llm::rig_compat::providers::{ChatCompletionsClient, OpenRouterClient, ResponsesClient};
 use crate::resolved::ResolvedAgent;
 
 pub enum BackendClient {
     OpenAiChatCompletions(
-        rig::providers::openai::CompletionsClient<
+        ChatCompletionsClient<
             crate::clients::inference_http::SessionTaggingHttpClient<
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
                     crate::clients::provider_http::ProviderHttpClient,
@@ -18,7 +21,7 @@ pub enum BackendClient {
         >,
     ),
     OpenAiResponses(
-        rig::providers::openai::Client<
+        ResponsesClient<
             crate::clients::inference_http::SessionTaggingHttpClient<
                 crate::clients::inference_http::ResponsesNormalizingHttpClient<
                     crate::rendered_request::RenderedRequestCapturingHttpClient<
@@ -29,14 +32,14 @@ pub enum BackendClient {
         >,
     ),
     OpenRouter(
-        rig::providers::openrouter::Client<
+        OpenRouterClient<
             crate::rendered_request::RenderedRequestCapturingHttpClient<
                 crate::clients::provider_http::ProviderHttpClient,
             >,
         >,
     ),
     ChatGptCodex(
-        rig::providers::openai::Client<
+        ResponsesClient<
             crate::clients::chatgpt_codex::ChatGptCodexHttpClient<
                 crate::auth::credential::DbCredentialBearer,
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
@@ -46,23 +49,23 @@ pub enum BackendClient {
         >,
     ),
     XaiGrokChatCompletions(
-        rig::providers::openai::CompletionsClient<
-            crate::clients::xai_grok::CapturingXaiGrokOAuthHttpClient,
-        >,
+        ChatCompletionsClient<crate::clients::xai_grok::CapturingXaiGrokOAuthHttpClient>,
     ),
-    XaiGrokResponses(
-        rig::providers::openai::Client<crate::clients::xai_grok::CapturingXaiGrokOAuthHttpClient>,
-    ),
+    XaiGrokResponses(ResponsesClient<crate::clients::xai_grok::CapturingXaiGrokOAuthHttpClient>),
     ClaudeSubscription(
-        crate::clients::claude_subscription::ClaudeSubscriptionClient<
-            crate::auth::credential::DbCredentialBearer,
+        LiftedClient<
+            crate::clients::claude_subscription::ClaudeSubscriptionModel<
+                crate::auth::credential::DbCredentialBearer,
+            >,
         >,
     ),
     /// A Messages client with a static credential: the Anthropic API key, or a
     /// Claude platform backend, whose route names its provider kind.
     AnthropicApiKey(
-        crate::clients::claude_subscription::ClaudeSubscriptionClient<
-            crate::clients::claude_subscription::ApiKeyBearer,
+        LiftedClient<
+            crate::clients::claude_subscription::ClaudeSubscriptionModel<
+                crate::clients::claude_subscription::ApiKeyBearer,
+            >,
         >,
     ),
 }
@@ -70,17 +73,17 @@ pub enum BackendClient {
 impl BackendClient {
     pub fn replay_issuer(&self) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
         let request = match self {
-            Self::OpenAiChatCompletions(client) => client.post("/chat/completions")?,
-            Self::OpenAiResponses(client) => client.post("/responses")?,
-            Self::OpenRouter(client) => client.post("/chat/completions")?,
-            Self::ChatGptCodex(client) => client.post("/responses")?,
-            Self::XaiGrokChatCompletions(client) => client.post("/chat/completions")?,
-            Self::XaiGrokResponses(client) => client.post("/responses")?,
+            Self::OpenAiChatCompletions(client) => client.client().post("/chat/completions")?,
+            Self::OpenAiResponses(client) => client.client().post("/responses")?,
+            Self::OpenRouter(client) => client.client().post("/chat/completions")?,
+            Self::ChatGptCodex(client) => client.client().post("/responses")?,
+            Self::XaiGrokChatCompletions(client) => client.client().post("/chat/completions")?,
+            Self::XaiGrokResponses(client) => client.client().post("/responses")?,
             Self::ClaudeSubscription(_) => return claude_subscription_replay_issuer(),
             Self::AnthropicApiKey(client) => {
                 return messages_replay_issuer(
                     self.provider_family(),
-                    client.route.issuer_uri()?.parse()?,
+                    client.0.route.issuer_uri()?.parse()?,
                 )
             }
         }
@@ -96,8 +99,8 @@ impl BackendClient {
     /// Other accounts a refused request can be reissued on at once: the pool's size, none for a single account.
     pub fn account_hops(&self) -> u32 {
         match self {
-            Self::ClaudeSubscription(client) if client.rotation.is_some() => {
-                u32::try_from(client.accounts.len()).unwrap_or(u32::MAX)
+            Self::ClaudeSubscription(client) if client.0.rotation.is_some() => {
+                u32::try_from(client.0.accounts.len()).unwrap_or(u32::MAX)
             }
             _ => 0,
         }
@@ -115,6 +118,7 @@ impl BackendClient {
             }
             Self::ClaudeSubscription(_) => BackendProviderKind::ClaudeCliSubscription.as_str(),
             Self::AnthropicApiKey(client) => client
+                .0
                 .route
                 .platform_kind
                 .unwrap_or(BackendProviderKind::AnthropicApiKey)
@@ -127,13 +131,13 @@ pub fn claude_subscription_replay_issuer(
 ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
     messages_replay_issuer(
         BackendProviderKind::ClaudeCliSubscription.as_str(),
-        rig::http_client::Uri::from_static(crate::clients::claude_messages::MESSAGES_URI),
+        Uri::from_static(crate::clients::claude_messages::MESSAGES_URI),
     )
 }
 
 fn messages_replay_issuer(
     family: &str,
-    destination: rig::http_client::Uri,
+    destination: Uri,
 ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
     Ok(
         gents_loop::rendered_request::transport::replay_issuer_for_destination(
@@ -197,19 +201,20 @@ pub async fn build_backend_client(
                 agent.agent_did, agent.backend_endpoint
             );
             if agent.openai_wire_api == gents_loop::openai_wire::OpenAiWireApi::ChatCompletions {
-                let client = crate::clients::inference_http::build_openai_chat_completions_client(
-                    api_key,
-                    &agent.backend_endpoint,
-                    crate::clients::inference_http::SessionTaggingHttpClient::new(
-                        crate::rendered_request::RenderedRequestCapturingHttpClient::new(
-                            api_key_http(&cache, &node, agent)?,
+                let client =
+                    crate::llm::rig_compat::providers::build_openai_chat_completions_client(
+                        api_key,
+                        &agent.backend_endpoint,
+                        crate::clients::inference_http::SessionTaggingHttpClient::new(
+                            crate::rendered_request::RenderedRequestCapturingHttpClient::new(
+                                api_key_http(&cache, &node, agent)?,
+                            ),
                         ),
-                    ),
-                )
-                .with_context(|| build_context.clone())?;
+                    )
+                    .with_context(|| build_context.clone())?;
                 Ok(BackendClient::OpenAiChatCompletions(client))
             } else {
-                let client = crate::clients::inference_http::build_openai_responses_client(
+                let client = crate::llm::rig_compat::providers::build_openai_responses_client(
                     api_key,
                     &agent.backend_endpoint,
                     crate::clients::inference_http::SessionTaggingHttpClient::new(
@@ -231,20 +236,14 @@ pub async fn build_backend_client(
                 "building OpenRouter completion client for agent {} against {}",
                 agent.agent_did, agent.backend_endpoint
             );
-            let client: rig::providers::openrouter::Client<
-                crate::rendered_request::RenderedRequestCapturingHttpClient<
+            let client = crate::llm::rig_compat::providers::build_openrouter_client(
+                api_key,
+                &agent.backend_endpoint,
+                crate::rendered_request::RenderedRequestCapturingHttpClient::<
                     crate::clients::provider_http::ProviderHttpClient,
-                >,
-            > = rig::providers::openrouter::Client::builder()
-                .api_key(api_key)
-                .base_url(&agent.backend_endpoint)
-                .http_client(
-                    crate::rendered_request::RenderedRequestCapturingHttpClient::<
-                        crate::clients::provider_http::ProviderHttpClient,
-                    >::new(api_key_http(&cache, &node, agent)?),
-                )
-                .build()
-                .with_context(|| build_context.clone())?;
+                >::new(api_key_http(&cache, &node, agent)?),
+            )
+            .with_context(|| build_context.clone())?;
             Ok(BackendClient::OpenRouter(client))
         }
         BackendProviderKind::ChatGptCodex => {
@@ -353,7 +352,7 @@ pub async fn build_backend_client(
                     agent.agent_did
                 )
             })?;
-            Ok(BackendClient::ClaudeSubscription(client))
+            Ok(BackendClient::ClaudeSubscription(client.lifted()))
         }
         BackendProviderKind::AnthropicApiKey => {
             let usage = crate::usage_observation::UsageAccount::for_agent(agent)
@@ -363,7 +362,8 @@ pub async fn build_backend_client(
                     agent.node_did(),
                     api_key.to_owned(),
                     usage,
-                ),
+                )
+                .lifted(),
             ))
         }
         BackendProviderKind::ClaudeGateway
@@ -473,7 +473,8 @@ pub async fn build_backend_client(
                     agent.backend_id.as_deref().unwrap_or(""),
                     bearer,
                     route,
-                ),
+                )
+                .lifted(),
             ))
         }
     }
@@ -690,7 +691,7 @@ mod tests {
             assert_eq!(issuer.family, kind.as_str());
             let first_party = messages_replay_issuer(
                 "AnthropicApiKey",
-                rig::http_client::Uri::from_static(crate::clients::claude_messages::MESSAGES_URI),
+                Uri::from_static(crate::clients::claude_messages::MESSAGES_URI),
             )
             .unwrap()
             .unwrap();
@@ -1077,6 +1078,6 @@ mod tests {
         let BackendClient::AnthropicApiKey(client) = &client else {
             panic!("not a Messages client");
         };
-        assert!(client.route.gateway_mark_from_token);
+        assert!(client.0.route.gateway_mark_from_token);
     }
 }

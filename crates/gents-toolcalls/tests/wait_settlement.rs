@@ -15,13 +15,7 @@ async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
     hook.on_completion_call(&user_text_message("Wait on a job"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        &hook,
-        "job-wait-request",
-        &session,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "job-wait-request", &session).await;
     accept_hook_tool_call(&hook, "job-call", "plugin_job_tool", "{}", None).await;
     let job = fetch_tool_call_row(&hook, &session, "job-call").await;
     let job_doc = job["_docID"].as_str().unwrap();
@@ -42,7 +36,13 @@ async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
     let args = r#"{"tool_call_id":"job-call"}"#;
     accept_hook_tool_call(&hook, "wait-call", "wait_process", args, None).await;
     let ToolCallHookAction::Skip { reason } = hook
-        .on_tool_call("wait_process", None, "wait-call", args)
+        .on_tool_call(
+            "wait_process",
+            None,
+            "wait-call",
+            args,
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
     else {
         panic!("wait_process must publish a structured refusal")

@@ -69,6 +69,27 @@ fn trigger_prompt_header(intent: &FireIntent) -> String {
     header + "]"
 }
 
+pub fn trigger_display_body(request: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    let gents_session::request::lifecycle::RequestOrigin::Trigger {
+        trigger_id,
+        trigger_kind,
+    } = gents_session::request::lifecycle::request_origin(request)
+    else {
+        return None;
+    };
+    let kind = if trigger_kind == Some("event") {
+        "event"
+    } else {
+        "scheduled"
+    };
+    request
+        .content
+        .as_deref()?
+        .strip_prefix(&format!("[{kind} trigger:{trigger_id} · task:"))?
+        .split_once("]\n\n")
+        .map(|(_, body)| body)
+}
+
 pub struct FireIntent {
     pub trigger_id: Option<String>,
     pub trigger_kind: TriggerKind,
@@ -115,24 +136,28 @@ pub(crate) struct MaterializeDuplicate {
     pub request_id: String,
 }
 
-pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> FireResult {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MaterializeError {
+    #[error(transparent)]
+    BudgetExhausted(#[from] MaterializeBudgetExhausted),
+    #[error(transparent)]
+    Duplicate(#[from] MaterializeDuplicate),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Other(#[from] anyhow::Error),
+}
+
+pub(crate) fn fire_result_from_materialize(result: Result<String, MaterializeError>) -> FireResult {
     match result {
         Ok(request_id) => FireResult::Fired { request_id },
-        Err(error) => {
-            if let Some(exhausted) = error.downcast_ref::<MaterializeBudgetExhausted>() {
-                FireResult::BudgetExhausted {
-                    reason: exhausted.reason.clone(),
-                }
-            } else if let Some(duplicate) = error.downcast_ref::<MaterializeDuplicate>() {
-                FireResult::Duplicate {
-                    request_id: duplicate.request_id.clone(),
-                }
-            } else {
-                FireResult::Errored {
-                    error: format!("materialize: {error}"),
-                }
-            }
-        }
+        Err(MaterializeError::BudgetExhausted(exhausted)) => FireResult::BudgetExhausted {
+            reason: exhausted.reason,
+        },
+        Err(MaterializeError::Duplicate(duplicate)) => FireResult::Duplicate {
+            request_id: duplicate.request_id,
+        },
+        Err(error) => FireResult::Errored {
+            error: format!("materialize: {error}"),
+        },
     }
 }
 
@@ -156,26 +181,31 @@ pub trait TriggerSource: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>>;
 }
 
+/// One fire a materializer turns into a request: the Task and its rendered
+/// prompt, the trigger and source that caused it, and the fire's durable
+/// identity, prepared delivery and reserved request and session ids.
+pub(crate) struct FireMaterialization<'a> {
+    pub(crate) task: &'a gents_documents::automation::ResolvedTask,
+    pub(crate) trigger_id: Option<&'a str>,
+    pub(crate) trigger_kind: TriggerKind,
+    pub(crate) trigger_doc_id: Option<&'a str>,
+    pub(crate) source_doc_id: Option<&'a str>,
+    pub(crate) correlation: Option<&'a str>,
+    pub(crate) trigger_context: Option<&'a str>,
+    pub(crate) rendered_prompt: &'a str,
+    pub(crate) rendered_goal_objective: Option<&'a str>,
+    pub(crate) durable_fire_key: &'a str,
+    pub(crate) delivery: Option<&'a durable::PreparedFire>,
+    pub(crate) prepared_ids: Option<(&'a str, &'a str)>,
+}
+
 pub(crate) trait MaterializerHandle: Send + Sync {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "positional contract shared by the production and spy materializers"
-    )]
     fn materialize(
         &self,
-        task: &gents_documents::automation::ResolvedTask,
-        trigger_id: Option<&str>,
-        trigger_kind: TriggerKind,
-        trigger_doc_id: Option<&str>,
-        source_doc_id: Option<&str>,
-        correlation: Option<&str>,
-        trigger_context: Option<&str>,
-        rendered_prompt: &str,
-        rendered_goal_objective: Option<&str>,
-        durable_fire_key: &str,
-        delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
-        prepared_ids: Option<(&str, &str)>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
+        fire: FireMaterialization<'_>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<String, MaterializeError>> + Send + '_>,
+    >;
 
     /// Recovers an admitted fire as the Agent of the fire's Task. The fire's
     /// receipt and request are that Agent's rows, so recovery does not depend
@@ -303,22 +333,22 @@ impl TriggerEngine {
         };
         let mut materialized = self
             .materializer
-            .materialize(
-                &intent.task,
-                intent.trigger_id.as_deref(),
-                intent.trigger_kind,
-                trigger_doc_id.as_deref(),
-                source_doc_id.as_deref(),
-                intent.correlation.as_deref(),
-                intent.trigger_context.as_deref(),
-                &rendered,
-                rendered_goal_objective.as_deref(),
-                &intent.durable_fire_key,
-                delivery.as_ref(),
-                prepared_ids
+            .materialize(FireMaterialization {
+                task: &intent.task,
+                trigger_id: intent.trigger_id.as_deref(),
+                trigger_kind: intent.trigger_kind,
+                trigger_doc_id: trigger_doc_id.as_deref(),
+                source_doc_id: source_doc_id.as_deref(),
+                correlation: intent.correlation.as_deref(),
+                trigger_context: intent.trigger_context.as_deref(),
+                rendered_prompt: &rendered,
+                rendered_goal_objective: rendered_goal_objective.as_deref(),
+                durable_fire_key: &intent.durable_fire_key,
+                delivery: delivery.as_ref(),
+                prepared_ids: prepared_ids
                     .as_ref()
                     .map(|(request, session)| (request.as_str(), session.as_str())),
-            )
+            })
             .await;
         if materialized.is_err() && rendered_goal_objective.is_some() && delivery.is_none() {
             if let Ok(Some(request_id)) = self

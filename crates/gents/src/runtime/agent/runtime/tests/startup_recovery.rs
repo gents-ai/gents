@@ -694,7 +694,9 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         "backend-unavailable",
         "http://127.0.0.1:9/v1",
         1,
-        "unknown",
+        // A probed unhealthy backend: `unknown` awaits the first probe and
+        // holds requests instead (Lean `awaitingFirstProbe`).
+        "unhealthy",
     )
     .await;
     let node = fixture.db.node.clone();

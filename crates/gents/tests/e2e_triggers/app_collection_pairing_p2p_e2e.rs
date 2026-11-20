@@ -44,7 +44,7 @@ async fn signed_invitation_delivers_request_without_http() {
     use gents_p2p::p2p_reconcile::enrollment_offer::EnrollmentOfferIssuer;
     use gents_protocol::enrollment::EnrollmentDecisionKind;
 
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     let host = test_p2p_db("invite-host").await;
     let guest = test_p2p_db("invite-guest").await;
     wait_for_peer_identity(&host.node).await;
@@ -61,7 +61,7 @@ async fn signed_invitation_delivers_request_without_http() {
     let issuer = EnrollmentOfferIssuer::new(
         host.node.clone(),
         host.node_identity.clone(),
-        gents_store::identity::node_p2p(&host.node).unwrap(),
+        gents_p2p::node_access::operations(&host.node).unwrap(),
         NETWORK_ID.to_owned(),
         host.node_identity.did().to_owned(),
         "client".to_owned(),
@@ -216,27 +216,44 @@ async fn fetch_pairing_applied(node: &Arc<EmbeddedNode>, peer_id: &str) -> Optio
 }
 
 async fn replicator_carries(node: &Arc<EmbeddedNode>, peer: &str, collection: &str) -> bool {
+    route_toward(node, peer, collection).await == Route::Carries
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    Absent,
+    StandsWithout,
+    Carries,
+}
+
+async fn route_toward(node: &Arc<EmbeddedNode>, peer: &str, collection: &str) -> Route {
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
-    let Some(id) = admin
+    let id = admin
         .resolve_collection_id(collection)
         .await
-        .expect("resolve collection id")
-    else {
-        return false;
-    };
-    admin
-        .list_replicators()
-        .await
-        .expect("list replicators")
+        .expect("resolve collection id");
+    let replicators = admin.list_replicators().await.expect("list replicators");
+    let toward = replicators
         .iter()
-        .any(|replicator| {
-            (replicator.id.as_deref() == Some(peer)
+        .filter(|replicator| {
+            replicator.id.as_deref() == Some(peer)
                 || replicator
                     .address
                     .as_deref()
-                    .is_some_and(|address| address.contains(peer)))
-                && replicator.collections.iter().any(|token| token == &id)
+                    .is_some_and(|address| address.contains(peer))
         })
+        .filter(|replicator| !replicator.collections.is_empty())
+        .collect::<Vec<_>>();
+    if toward.iter().any(|replicator| {
+        id.as_ref()
+            .is_some_and(|id| replicator.collections.iter().any(|token| token == id))
+    }) {
+        Route::Carries
+    } else if toward.is_empty() {
+        Route::Absent
+    } else {
+        Route::StandsWithout
+    }
 }
 
 async fn assert_never_carried(node: &Arc<EmbeddedNode>, peer_id: &str, collection: &str) {
@@ -618,12 +635,21 @@ async fn change_note_texts(node: &Arc<EmbeddedNode>) -> Vec<String> {
         .collect()
 }
 
+/// Waiting for the collection to stop requires the base route to stand
+/// without it: an absent route is the gap inside a reinstall whose install may
+/// still carry the collection (`tla/PairingGrantRevocation.tla`,
+/// `MCPairingGrantRevocationGapObserver`).
 async fn wait_for_carry(node: &Arc<EmbeddedNode>, peer: &str, collection: &str, carried: bool) {
+    let expected = if carried {
+        Route::Carries
+    } else {
+        Route::StandsWithout
+    };
     wait_until(
         node,
         &["PeerPairingApplied"],
-        &format!("the route toward {peer} to carry {collection}: {carried}"),
-        || async { replicator_carries(node, peer, collection).await == carried },
+        &format!("the route toward {peer} to reach {expected:?} for {collection}"),
+        || async { route_toward(node, peer, collection).await == expected },
     )
     .await;
 }
@@ -632,6 +658,7 @@ async fn p2p_call(tool: &P2pTool, value: Value) -> Result<Value, String> {
     Tool::call(
         tool,
         serde_json::from_value(value).expect("valid p2p parameters"),
+        &gents_loop::tool::ToolCallEnvelope::default(),
     )
     .await
     .map(|output| serde_json::from_str(&output).expect("p2p replies with JSON"))
@@ -866,7 +893,7 @@ async fn start_runtime(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn application_documents_replicate_only_after_each_node_opts_in() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-collection-pairing-a").await;
@@ -1212,7 +1239,7 @@ async fn application_documents_replicate_only_after_each_node_opts_in() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authorless_overlay_is_skipped_and_control_route_stands() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-collection-soft-skip-a").await;
@@ -1414,7 +1441,7 @@ async fn fixture_moves(db: &crate::support::TestDb, id: &str) -> Vec<Value> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn document_pack_collections_pair_only_by_explicit_opt_in() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/packs/shared_fixture");
@@ -1517,7 +1544,7 @@ async fn document_pack_collections_pair_only_by_explicit_opt_in() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn application_pairing_replicates_only_while_its_author_holds_the_grant() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-pairing-authority-a").await;
@@ -1678,6 +1705,7 @@ async fn application_pairing_replicates_only_while_its_author_holds_the_grant() 
     let observer_tool = pairing_tool(&db_a, Some(observer.identity.clone()), false);
     pairer_a.configure(&db_a, false, true).await;
     wait_for_status(&db_a, &tool_a, &peer_b, Some("author_lacks_grant")).await;
+    wait_for_carry(&db_a.node, &peer_b, "ChangeProposed", false).await;
     let seen = p2p_call(&observer_tool, json!({"action":"pairings_list"}))
         .await
         .expect("observer pairings_list");
@@ -1694,6 +1722,7 @@ async fn application_pairing_replicates_only_while_its_author_holds_the_grant() 
     );
     pairer_a.configure(&db_a, true, true).await;
     wait_for_status(&db_a, &tool_a, &peer_b, None).await;
+    wait_for_carry(&db_a.node, &peer_b, "ChangeProposed", true).await;
 
     assert_eq!(
         operator

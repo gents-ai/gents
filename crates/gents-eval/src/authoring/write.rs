@@ -58,19 +58,37 @@ pub struct Staged {
     pack_name: String,
 }
 
+/// Why a draft was not staged. A draft defect goes back to the author, who can
+/// correct it; a host fault is not the author's to correct and ends the
+/// attempt.
+#[derive(Debug, thiserror::Error)]
+pub enum StageError {
+    #[error("{}", .0.join("\n"))]
+    Draft(Vec<String>),
+    #[error("staging the definition pack")]
+    Host(#[source] anyhow::Error),
+}
+
+impl From<Vec<String>> for StageError {
+    fn from(messages: Vec<String>) -> Self {
+        Self::Draft(messages)
+    }
+}
+
 pub async fn stage(
     assembled: &Assembled,
     interview_summary: &str,
     subject: &Dossier,
     pilot: Option<&PilotNote>,
     host: &dyn WriteHost,
-) -> Result<Staged, Vec<String>> {
+) -> Result<Staged, StageError> {
     let definition = &assembled.definition;
     let pack_name = pack_name(&definition.definition_id).map_err(|message| vec![message])?;
     let dir = tempfile::Builder::new()
         .prefix("gents-eval-init-")
         .tempdir()
-        .map_err(|error| vec![format!("creating a temporary directory: {error}")])?;
+        .context("creating a temporary directory")
+        .map_err(StageError::Host)?;
     write_files(
         dir.path(),
         &pack_name,
@@ -79,14 +97,17 @@ pub async fn stage(
         subject,
         pilot,
     )
-    .map_err(|error| vec![format!("writing the definition pack: {error:#}")])?;
-    round_trip(dir.path(), definition, host)
+    .context("writing the definition pack")
+    .map_err(StageError::Host)?;
+    let mut home = EmbeddedHome::create_temp("eval-init-roundtrip")
         .await
-        .map_err(|error| {
-            vec![format!(
-                "the definition pack does not load and install: {error:#}"
-            )]
-        })?;
+        .context("creating a scratch home")
+        .map_err(StageError::Host)?;
+    let installed = round_trip(&mut home, dir.path(), definition, host).await;
+    if let Err(error) = home.node.shutdown().await {
+        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down trial node");
+    }
+    installed?;
     Ok(Staged { dir, pack_name })
 }
 
@@ -571,31 +592,42 @@ fn write_files(
 }
 
 async fn round_trip(
+    home: &mut EmbeddedHome,
     dir: &Path,
     expected: &EvalDefinition,
     host: &dyn WriteHost,
-) -> Result<EvalDefinition> {
-    let (manifest, assets) = read_pack(dir)?;
-    let mut home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
-    let result = install_and_read_back(&mut home, &manifest, &assets, expected, host).await;
-    if let Err(error) = home.node.shutdown().await {
-        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down trial node");
-    }
-    result
+) -> Result<(), StageError> {
+    let does_not_install = |error: anyhow::Error| {
+        StageError::Draft(vec![format!(
+            "the definition pack does not load and install: {error:#}"
+        )])
+    };
+    let (manifest, assets) = read_pack(dir).map_err(does_not_install)?;
+    let loaded = load(home.did(), &manifest, &assets, expected).map_err(does_not_install)?;
+    let access = admit_caller(home, host)
+        .await
+        .context("admitting the operator's client to the scratch home")
+        .map_err(StageError::Host)?;
+    install_and_read_back(&access, home.did(), &loaded)
+        .await
+        .map_err(does_not_install)
 }
 
-async fn install_and_read_back(
-    home: &mut EmbeddedHome,
+struct Loaded {
+    config: gents_documents::PackConfig,
+    definition: EvalDefinition,
+}
+
+fn load(
+    owner: &str,
     manifest: &PackManifest,
     assets: &BTreeMap<String, Vec<u8>>,
     expected: &EvalDefinition,
-    host: &dyn WriteHost,
-) -> Result<EvalDefinition> {
-    let owner = home.did().to_owned();
+) -> Result<Loaded> {
     let config = load_pack_config(
         manifest,
         &PackInstallOptions {
-            node_did: owner.clone(),
+            node_did: owner.to_owned(),
         },
         &|path| {
             assets
@@ -612,26 +644,35 @@ async fn install_and_read_back(
         );
     };
     let mut as_drafted = expected.clone();
-    as_drafted.node_did = owner.clone();
+    as_drafted.node_did = owner.to_owned();
     anyhow::ensure!(
         *loaded == as_drafted,
         "the loaded definition differs from the validated draft"
     );
+    let definition = loaded.clone();
+    Ok(Loaded { config, definition })
+}
 
-    // The scratch home's runtime admits the operator's client as an operator;
-    // the client then installs through the home's client-signed endpoint, as
-    // every User write does.
+// The scratch home's runtime admits the operator's client as an operator;
+// the client then installs through the home's client-signed endpoint, as
+// every User write does.
+async fn admit_caller(home: &mut EmbeddedHome, host: &dyn WriteHost) -> Result<ConfigAccess> {
     let caller = host.caller_identity().await?;
     let capability = caller.client_signing_capability()?;
     home.set_evaluator(caller.clone(), capability);
-    gents_store::identity::GrantSet::OperatorUser
-        .grant(
-            &ConfigAccess::local_as(home.node.clone(), owner.parse()?),
-            &caller.did().parse()?,
-        )
-        .await?;
-    let access = home.client_access(caller.did())?;
-    let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
+    gents_store::identity::GrantSet::for_recipient(
+        gents_store::identity::Recipient::AuthoringOperator,
+    )
+    .grant_direct(
+        &ConfigAccess::local_as(home.node.clone(), home.did().parse()?),
+        &caller.did().parse()?,
+    )
+    .await?;
+    home.client_access(caller.did())
+}
+
+async fn install_and_read_back(access: &ConfigAccess, owner: &str, loaded: &Loaded) -> Result<()> {
+    let plan = DesiredStateApplyPlan::from_pack_config(&loaded.config)?;
     access
         .transact_write("eval.init.round_trip", |txn| {
             let plan = &plan;
@@ -647,10 +688,9 @@ async fn install_and_read_back(
         })
         .await
         .context("installing the definition pack into a scratch home")?;
-    let definition_id = loaded.definition_id.as_str();
+    let definition_id = loaded.definition.definition_id.as_str();
     let installed = access
         .transact_write("eval.init.round_trip_read", |txn| {
-            let owner = owner.as_str();
             Box::pin(async move {
                 read_desired_state_record_in_txn(
                     txn,
@@ -667,10 +707,10 @@ async fn install_and_read_back(
         serde_json::from_value(installed.1).context("decoding the installed definition")?;
     installed.validate()?;
     anyhow::ensure!(
-        installed.cases == loaded.cases,
+        installed.cases == loaded.definition.cases,
         "the installed definition's cases differ from the pack's"
     );
-    Ok(loaded.clone())
+    Ok(())
 }
 
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {

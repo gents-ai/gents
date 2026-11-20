@@ -581,6 +581,17 @@ async fn bind_agent_backend_chain(
 ) {
     let owner = db.node_identity.did();
     let user = super::managed_fixture_user(db).await;
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(owner).expect("valid runtime DID"),
+    );
+    gents_store::identity::GrantSet::OperatorUser
+        .grant(
+            &admin,
+            &identity::Did::new(user.did()).expect("valid user DID"),
+        )
+        .await
+        .expect("grant fixture User operator access");
     let access = db.client_access(&user);
     let read = |collection: gents_store::collection::Collection, id: String| {
         let access = access.clone();
@@ -604,17 +615,6 @@ async fn bind_agent_backend_chain(
         .await
         .is_none()
     {
-        let admin = gents_store::config_client::ConfigAccess::local_as(
-            db.node.clone(),
-            identity::Did::new(owner).expect("valid runtime DID"),
-        );
-        gents_store::identity::GrantSet::OperatorUser
-            .grant(
-                &admin,
-                &identity::Did::new(user.did()).expect("valid user DID"),
-            )
-            .await
-            .expect("grant fixture User operator access");
         let node = serde_json::json!({"node_did": owner});
         let plan = gents_documents::DesiredStateApplyPlan::new(vec![
             gents_documents::DesiredStateApplyDocument {

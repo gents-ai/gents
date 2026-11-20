@@ -4,12 +4,14 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use chrono::{DateTime, Local, Utc};
-use gents_desktop_core::client::canonical_output::CanonicalLiveText;
-use gents_desktop_core::client::{
+use gents_observe::client_file_review::tool_file_changes_on;
+use gents_observe::client_inference::{load_inference_setup_state, AgentView};
+use gents_observe::client_projection::canonical_output::CanonicalLiveText;
+use gents_observe::client_projection::query::{
     load_node_snapshot_on, load_session_compaction_entries_on, load_session_live_text_on,
-    load_session_transcript_window_on, tool_file_changes_on, ClientStore, TranscriptWindow,
+    load_session_transcript_window_on, TranscriptWindow,
 };
-use gents_desktop_core::inference::{load_inference_setup_state, AgentView};
+use gents_observe::client_projection::store::ClientStore;
 use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
 };
@@ -34,6 +36,7 @@ use serde_json::Value;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use super::sections::{self, new_id};
 use super::tree::git_changes;
@@ -113,7 +116,7 @@ pub(super) async fn run(
     // checkout during the session shows at the next start.
     if let Some(cwd) = cwd {
         let updates = source.updates.clone();
-        tokio::spawn(async move {
+        source.spawn(async move {
             if let Some(branch) = git::branch(&cwd).await {
                 let _ = updates.send(Input::Runtime(Update::Branch(branch)));
             }
@@ -141,7 +144,7 @@ pub(super) async fn run(
         tokio::select! {
             intent = intents.recv() => match intent {
                 Some(intent) => source.handle(intent).await,
-                None => return,
+                None => break,
             },
             Some(event) = watched.recv() => match event {
                 Watched::Ended(Feed::Chat(_), error) => return source.lost(closed(error)),
@@ -149,6 +152,14 @@ pub(super) async fn run(
             },
         }
     }
+    // The feeds end once nothing reads them, and a waiting sign-in once cancelled; the rest
+    // end with their reads.
+    drop(watched);
+    if let Some(waiting) = source.signing_in.take() {
+        waiting.cancel();
+    }
+    source.tasks.close();
+    source.tasks.wait().await;
 }
 
 /// The node's enabled agents, and those of them its readiness says are ready, as the shell
@@ -676,6 +687,8 @@ struct Source {
     /// Where the Working Tree is read.
     tree: Option<PathBuf>,
     runtime: Handle,
+    /// Everything the source starts, which the source's end waits for.
+    tasks: TaskTracker,
     watching: mpsc::UnboundedSender<Watched>,
     /// Whether the tool-call subscription is open, so the views need no reread until it says.
     live: bool,
@@ -744,6 +757,7 @@ impl Source {
             home,
             tree: None,
             runtime,
+            tasks: TaskTracker::new(),
             watching,
             live: false,
             reading: false,
@@ -767,6 +781,13 @@ impl Source {
         }
     }
 
+    fn spawn<F>(&self, task: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.tasks.spawn_on(task, &self.runtime);
+    }
+
     /// The shell aborts the source when it ends, so an update it no longer reads is dropped.
     fn tell(&self, update: Update) {
         let _ = self.updates.send(Input::Runtime(update));
@@ -781,8 +802,7 @@ impl Source {
         if let Some(Ok(changes)) = changes {
             self.readiness_live = true;
             let watching = self.watching.clone();
-            self.runtime
-                .spawn(forward(changes, Feed::Readiness, watching));
+            self.spawn(forward(changes, Feed::Readiness, watching));
         }
     }
 
@@ -840,7 +860,7 @@ impl Source {
         self.reading_agents = true;
         let (node, subscribe) = (self.principal.clone(), !self.readiness_live);
         let done = self.watching.clone();
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let read = read_agents(work, &node, subscribe).await;
             let _ = done.send(Watched::Agents(Box::new(read)));
         });
@@ -1137,7 +1157,7 @@ impl Source {
         let cancel = CancellationToken::new();
         self.signing_in = Some(cancel.clone());
         let done = self.watching.clone();
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let signed = login(cancel.clone(), cancel.child_token()).await;
             let _ = done.send(Watched::SignedIn(cancel, signed));
         });
@@ -1153,7 +1173,7 @@ impl Source {
         let (work, home) = (self.work.clone(), self.home.clone());
         let (principal, updates) = (self.principal.clone(), self.updates.clone());
         let configured = self.watching.clone();
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let done = match &work {
                 Ok(live) => menus::act(live, &home, &principal, &act).await,
                 Err(message) => Err(message.clone()),
@@ -1242,7 +1262,7 @@ impl Source {
             self.tell(Update::Notice(started));
         }
         let (updates, ended) = (self.updates.clone(), self.watching.clone());
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let done = change.await;
             // Released before the answer, so the question it asks can be answered at once.
             drop(one);
@@ -1262,7 +1282,7 @@ impl Source {
         R: Future<Output = Update> + Send + 'static,
     {
         let updates = self.updates.clone();
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let _ = updates.send(Input::Runtime(read.await));
         });
     }
@@ -1285,7 +1305,7 @@ impl Source {
         };
         let (runtime, home) = (self.runtime.clone(), self.home.clone());
         let updates = self.updates.clone();
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let done = packs::sign_in(runtime, home, token).await;
             drop(one);
             let _ = updates.send(Input::Runtime(saved(packs::signed_in(done))));
@@ -1314,7 +1334,7 @@ impl Source {
             self.pack_query.clone(),
             self.pack_page,
         );
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let (rows, notice) = match menu {
                 MenuId::Packs => {
                     match packs::read(&work, &home, &principal, &runtime, &query, page).await {
@@ -1343,7 +1363,7 @@ impl Source {
 
     fn save_keys(&self, keys: KeySet) {
         let (home, updates) = (self.home.clone(), self.updates.clone());
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let saved = tokio::task::spawn_blocking(move || prefs::save_keys(&home, keys)).await;
             let failed = saved.map_or_else(
                 |error| Some(error.to_string()),
@@ -1370,7 +1390,7 @@ impl Source {
         };
         self.reading_tree = true;
         let done = self.watching.clone();
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let read = git::diff_to_remote(&tree).await;
             let _ = done.send(Watched::Tree(read.map(|diff| git_changes(&diff))));
         });
@@ -1388,7 +1408,7 @@ impl Source {
         self.reading = true;
         let (work, subscribe, done) = (work.clone(), !self.live, self.watching.clone());
         let sessions = self.open.iter().cloned().collect();
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let read = read_work(work, subscribe, sessions).await;
             let _ = done.send(Watched::Read(Box::new(read)));
         });
@@ -1406,7 +1426,7 @@ impl Source {
         self.asking = true;
         let subscribe = !self.mailbox_live;
         let done = self.watching.clone();
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let asked = read_mailbox(work, subscribe).await;
             let _ = done.send(Watched::Asked(Box::new(asked)));
         });
@@ -1657,7 +1677,7 @@ impl Source {
         let asking = asking.collect();
         let (node, observed) = (self.principal.clone(), self.store.clone());
         let (edits, done) = (self.edits.clone(), self.watching.clone());
-        self.runtime.spawn(async move {
+        self.spawn(async move {
             let read = read_chat(work, node, stale, subscribe, observed, asking, edits).await;
             let _ = done.send(Watched::Chatted(Box::new(read)));
         });

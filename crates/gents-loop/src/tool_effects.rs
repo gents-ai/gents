@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::tool::BoxFuture;
 use crate::tool_call_lifecycle::ToolOutcome;
 
@@ -16,8 +14,10 @@ pub enum ToolEffectError {
 /// Each child runs under the parent tool call's own deadline and cancellation
 /// envelope; a child's managed terminal is that child's outcome only.
 pub trait ToolEffectDispatcher: Send + Sync {
+    /// `parent` is the envelope of the invocation whose child this is.
     fn call<'a>(
         &'a self,
+        parent: &'a crate::tool::ToolCallEnvelope,
         ordinal: u32,
         name: &'a str,
         arguments: &'a str,
@@ -30,19 +30,4 @@ pub trait ToolEffectDispatcher: Send + Sync {
     fn settle_stopped<'a>(&'a self, _stop: &'a ToolOutcome) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
-}
-
-tokio::task_local! {
-    static DISPATCHER: Option<Arc<dyn ToolEffectDispatcher>>;
-}
-
-pub fn current() -> Option<Arc<dyn ToolEffectDispatcher>> {
-    DISPATCHER.try_with(Clone::clone).ok().flatten()
-}
-
-pub async fn scope<T>(
-    dispatcher: Option<Arc<dyn ToolEffectDispatcher>>,
-    future: impl std::future::Future<Output = T>,
-) -> T {
-    DISPATCHER.scope(dispatcher, future).await
 }

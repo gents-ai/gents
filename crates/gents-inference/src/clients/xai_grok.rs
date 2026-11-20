@@ -5,9 +5,8 @@ use bytes::Bytes;
 use defra_node::Node as EmbeddedNode;
 use futures::StreamExt as _;
 use gents_loop::provider_patches::patch_store_false;
-use rig::http_client::{
-    self, HeaderMap, HeaderValue, Request, ReqwestClient, Response, StreamingResponse,
-};
+use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest_provider::Client as ReqwestClient;
 #[cfg(test)]
 use rig::http_client::{HttpClientExt, LazyBody, MultipartForm};
 #[cfg(test)]
@@ -20,6 +19,7 @@ use crate::auth::credential::{
     classify_oauth_auth_error, DbCredentialBearer, OAuthAuthProblem, OAuthRefreshKind,
     XAI_OAUTH_PRODUCT,
 };
+use crate::llm::rig_compat::http::{self as http_client, Request, Response, StreamingResponse};
 #[cfg(test)]
 use std::future::Future;
 
@@ -129,7 +129,11 @@ impl crate::auth::http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
         Ok(())
     }
 
-    fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
+    fn patch_request_body(
+        &self,
+        _call: &gents_loop::provider_call::ProviderCall,
+        req: Request<Bytes>,
+    ) -> Request<Bytes> {
         let (parts, body) = req.into_parts();
         let mut body = body;
         if parts.uri.path().ends_with("/responses") {
@@ -140,7 +144,11 @@ impl crate::auth::http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
         Request::from_parts(parts, body)
     }
 
-    fn patch_streaming(&self, response: StreamingResponse) -> StreamingResponse {
+    fn patch_streaming(
+        &self,
+        _call: &gents_loop::provider_call::ProviderCall,
+        response: StreamingResponse,
+    ) -> StreamingResponse {
         normalize_xai_usage_stream(response)
     }
 }
@@ -316,11 +324,11 @@ pub async fn build_responses_client(
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
-) -> Result<rig::providers::openai::Client<CapturingXaiGrokOAuthHttpClient>> {
+) -> Result<crate::llm::rig_compat::providers::ResponsesClient<CapturingXaiGrokOAuthHttpClient>> {
     let headers = build_xai_grok_oauth_headers()?;
     let endpoint = normalize_endpoint(endpoint);
     let http = build_authenticated_http(node, node_did, account_ref).await?;
-    crate::clients::inference_http::build_openai_responses_client(
+    crate::llm::rig_compat::providers::build_openai_responses_client(
         "xai-oauth-managed",
         &endpoint,
         http,
@@ -334,10 +342,11 @@ pub async fn build_chat_completions_client(
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
-) -> Result<rig::providers::openai::CompletionsClient<CapturingXaiGrokOAuthHttpClient>> {
+) -> Result<crate::llm::rig_compat::providers::ChatCompletionsClient<CapturingXaiGrokOAuthHttpClient>>
+{
     let endpoint = normalize_endpoint(endpoint);
     let http = build_authenticated_http(node, node_did, account_ref).await?;
-    crate::clients::inference_http::build_openai_chat_completions_client(
+    crate::llm::rig_compat::providers::build_openai_chat_completions_client(
         "xai-oauth-managed",
         &endpoint,
         http,
@@ -532,7 +541,12 @@ mod tests {
             .uri("https://cli-chat-proxy.grok.com/v1/files")
             .body(MultipartForm::default())
             .unwrap();
-        let _ = HttpClientExt::send_multipart::<Bytes>(&client, req).await;
+        let _ = gents_loop::rig_compat::http::Transport::send_multipart(
+            &client,
+            &Default::default(),
+            req,
+        )
+        .await;
         let headers = captured
             .lock()
             .expect("capture lock")
@@ -623,7 +637,7 @@ mod tests {
     /// only composing the real stack catches it.
     #[tokio::test]
     async fn the_captured_row_carries_the_store_false_grok_injects() {
-        use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
+        use crate::rendered_request::scope::{arm, test_scope, CaptureScopeKind};
         use crate::rendered_request::transport::CountingInner;
         use crate::rendered_request::{
             AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest,
@@ -661,8 +675,13 @@ mod tests {
             sink,
         );
 
-        scope_request(scope, async {
+        async {
+            let call = gents_loop::provider_call::ProviderCall {
+                capture: Some(scope),
+                ..Default::default()
+            };
             arm(
+                call.capture.as_ref(),
                 CaptureScopeKind::Inference,
                 0,
                 0,
@@ -680,10 +699,10 @@ mod tests {
                     .expect("assembled body"),
                 ))
                 .expect("request");
-            let _ = HttpClientExt::send_streaming(&client, req)
+            let _ = gents_loop::rig_compat::http::Transport::send_streaming(&client, &call, req)
                 .await
                 .expect("send");
-        })
+        }
         .await;
 
         let seen = seen.lock().expect("seen");

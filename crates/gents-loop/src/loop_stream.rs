@@ -38,10 +38,7 @@ use crate::output_obligation::OutputObligationCheck;
 use crate::provider_audit::ClaudeAuditEvent;
 use crate::session_hook::SessionHook;
 use crate::stream_processor::{AssistantTurnAccumulator, StreamProcessorError};
-use crate::tool_call_lifecycle::runtime::{
-    current_tool_runtime_context, deadline_remaining, scope_request_tool_execution_with_session,
-    ToolOutcome,
-};
+use crate::tool_call_lifecycle::runtime::{deadline_remaining, ToolOutcome};
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
 mod aggregate_budget;
@@ -68,7 +65,7 @@ pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
     OneShotNoVisibleOutput, OneShotProviderFailure,
 };
-pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
+pub use repeated_tool_failure::{REPEATED_TOOL_FAILURE_PREFIX, REPEATED_TOOL_SUCCESS_PREFIX};
 pub use request_assembly::dispatch::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
 };
@@ -81,8 +78,8 @@ pub use request_assembly::tagged_history::{
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
 pub use request_assembly::{assemble_provider_request, replay_compaction_prefix_bound};
 use tool_dispatch::admit_tool;
-pub use tool_dispatch::dispatch_tool;
 pub use tool_dispatch::tool_effect_dispatcher;
+pub use tool_dispatch::{child_envelope, dispatch_tool, foreground_envelope};
 
 use provider_idle::{within_provider_idle, ProviderAttemptFailure};
 use request_assembly::dispatch::{context_accounting_for_request, prepare_dispatch_attempt};
@@ -176,6 +173,7 @@ fn admission_work<H>(
     call_id: Option<String>,
     internal_id: String,
     arguments: String,
+    context: crate::tool::ToolCallEnvelope,
 ) -> (
     AdmissionWork,
     tokio::sync::oneshot::Receiver<ToolCallHookAction>,
@@ -185,7 +183,7 @@ where
 {
     let (reply, receiver) = tokio::sync::oneshot::channel();
     let future = Box::pin(async move {
-        hook.on_tool_call(&name, call_id, &internal_id, &arguments)
+        hook.on_tool_call(&name, call_id, &internal_id, &arguments, &context)
             .await
     });
     (AdmissionWork { future, reply }, receiver)
@@ -200,16 +198,20 @@ where
 {
     async_stream::stream! {
         futures::pin_mut!(stream);
+        let mut resumed = None;
         loop {
-            let item = tokio::select! {
-                item = stream.next() => item,
-                Some(work) = compactions.recv() => {
-                    // The summarizer runs another owned loop. Poll it after the
-                    // outer loop returns, while retaining the caller's task scope.
-                    let result = work.future.await;
-                    let _ = work.reply.send(result);
-                    continue;
-                }
+            let item = match resumed.take() {
+                Some(item) => item,
+                None => tokio::select! {
+                    item = stream.next() => item,
+                    Some(work) = compactions.recv() => {
+                        // The summarizer runs another owned loop. Poll it after the
+                        // outer loop returns, while retaining the caller's task scope.
+                        let result = work.future.await;
+                        let _ = work.reply.send(result);
+                        continue;
+                    }
+                },
             };
             let Some(item) = item else { break };
             match item {
@@ -229,7 +231,16 @@ where
                 }
                 // Admission and transport capture can enter native transactions;
                 // poll them outside the owned-loop frame on the calling task.
-                Ok(OwnedLoopItem::ProviderWork(work)) => work.await,
+                Ok(OwnedLoopItem::ProviderWork(work)) => {
+                    work.await;
+                    // Resume the loop directly: `select!` returns `Pending` on
+                    // a spent task budget, which would hold a chunk the
+                    // provider already delivered across the consumer's next
+                    // select, where an interrupt drops the stream (TLA+
+                    // `InterruptPartialOutput`). The loop is waiting on this
+                    // work's reply, so it has no compaction queued.
+                    resumed = Some(stream.next().await);
+                }
                 // Foreground execution carries its existing task scopes and
                 // is dropped with the owning stream on cancellation.
                 Ok(OwnedLoopItem::ForegroundWork(work)) => work.await,
@@ -265,8 +276,7 @@ fn owned_loop_stream<M, H>(
     config: LoopConfig,
 ) -> impl Stream<Item = Result<OwnedLoopItem, LoopStreamError>>
 where
-    M: CompletionModel + 'static,
-    M::StreamingResponse: 'static,
+    M: rig_compat::ProviderModel,
     H: SessionHook + 'static,
 {
     try_stream! {
@@ -303,7 +313,7 @@ where
             new_messages.extend(config.folded_prompts.iter().map(|row| TaggedMessage::unassociated(row.message.clone())));
         }
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
-        let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
+        let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolProgress::default();
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
@@ -453,6 +463,7 @@ where
                             pre_compaction_input_tokens,
                         ));
                         on_rendered_request(
+                            &config.provider_call,
                             turn_index,
                             attempt,
                             dispatch_request.clone(),
@@ -466,10 +477,18 @@ where
                             })?;
                     }
                     let audit_receiver =
-                        crate::rendered_request::scope::take_audit_receiver(turn_index, attempt);
+                        crate::rendered_request::scope::take_audit_receiver(
+                            config.provider_call.capture.as_ref(),
+                            turn_index,
+                            attempt,
+                        );
 
                     let activity =
-                        crate::rendered_request::scope::attempt_activity(turn_index, attempt);
+                        crate::rendered_request::scope::attempt_activity(
+                            config.provider_call.capture.as_ref(),
+                            turn_index,
+                            attempt,
+                        );
                     if let Some(hook) = &hook {
                         hook.observe_provider(crate::session_hook::ProviderObservation::Attempt {
                             turn: turn_index,
@@ -480,17 +499,16 @@ where
                     let advertised_tools = dispatch_request.tools.clone();
                     let dispatched_input_tokens =
                         prepared_dispatch.projection().estimated_input_tokens;
-                    let dispatch_model = Arc::clone(&model);
-                    let dispatch_affinity = routing_affinity.clone();
+                    let dispatch_model = model.for_call(&crate::provider_call::ProviderCall {
+                        routing_affinity: routing_affinity.clone(),
+                        ..config.provider_call.clone()
+                    });
                     let dispatch_activity = activity.clone();
                     let dispatch_idle_timeout = config.provider_idle_timeout;
                     let (reply, result) = tokio::sync::oneshot::channel();
                     yield OwnedLoopItem::ProviderWork(Box::pin(async move {
                         let dispatch = box_provider_call(move || async move {
-                            crate::provider_input::routing_affinity::scope(
-                                dispatch_affinity,
-                                dispatch_model.stream(dispatch_request),
-                            ).await
+                            dispatch_model.stream(dispatch_request).await
                         });
                         let outcome = within_provider_idle(
                             dispatch,
@@ -550,6 +568,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                                     attempt += 1;
                                 }
                                 PreStreamDirective::Repair => {
@@ -649,6 +668,7 @@ where
                 };
 
             let attempt_capture_scope = if let Some(scope) = crate::rendered_request::scope::armed_capture_scope(
+                config.provider_call.capture.as_ref(),
                 turn_index,
                 attempt,
             ) {
@@ -687,17 +707,16 @@ where
 
             loop {
                 let item = loop {
-                    let poll_affinity = routing_affinity.clone();
                     let poll_activity = activity.clone();
                     let poll_receiver = audit_receiver.clone();
                     let poll_idle_timeout = config.provider_idle_timeout;
                     let first_item = !saw_stream_item;
-                    let (reply, result) = tokio::sync::oneshot::channel();
+                    let (reply, mut result) = tokio::sync::oneshot::channel();
                     yield OwnedLoopItem::ProviderWork(Box::pin(async move {
                         let mut stream = stream;
                         let next = {
                             let next_item = within_provider_idle(
-                                crate::provider_input::routing_affinity::scope(poll_affinity, stream.next()),
+                                stream.next(),
                                 poll_idle_timeout,
                                 poll_activity.as_deref(),
                                 first_item,
@@ -715,7 +734,13 @@ where
                         };
                         let _ = reply.send((stream, next));
                     }));
-                    let (returned_stream, next) = result.await.map_err(|_| {
+                    // `drive_admissions` resumes this generator only after the
+                    // provider work finished, so the reply is already present.
+                    // Awaiting it would add a suspension point (a spent task
+                    // budget returns `Pending`) at which the consumer's
+                    // interrupt branch drops the stream with a chunk the
+                    // provider already delivered (TLA+ `InterruptPartialOutput`).
+                    let (returned_stream, next) = result.try_recv().map_err(|_| {
                         StreamingError::Completion(CompletionError::ProviderError(
                             "provider stream poll handoff closed".to_owned(),
                         ))
@@ -724,7 +749,7 @@ where
                     match next {
                         (Some(Some(observation)), _) => {
                             if !saw_stream_item {
-                                ensure_rendered_request_was_captured(turn_index, attempt)?;
+                                ensure_rendered_request_was_captured(config.provider_call.capture.as_ref(), turn_index, attempt)?;
                             }
                             saw_stream_item = true;
                             if let ClaudeAuditEvent::BlockStart { index, ref kind } = observation.event {
@@ -748,7 +773,7 @@ where
                         crate::provider_audit::try_recv_one(receiver)
                     {
                         if !saw_stream_item {
-                            ensure_rendered_request_was_captured(turn_index, attempt)?;
+                            ensure_rendered_request_was_captured(config.provider_call.capture.as_ref(), turn_index, attempt)?;
                         }
                         saw_stream_item = true;
                         if let ClaudeAuditEvent::BlockStart { index, ref kind } = observation.event {
@@ -764,7 +789,7 @@ where
                 let item = match item {
                     Ok(item) => {
                         if !saw_stream_item {
-                            ensure_rendered_request_was_captured(turn_index, attempt)?;
+                            ensure_rendered_request_was_captured(config.provider_call.capture.as_ref(), turn_index, attempt)?;
                         }
                         saw_stream_item = true;
                         item
@@ -814,6 +839,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                                     attempt += 1;
                                     continue 'attempts;
                                 }
@@ -949,6 +975,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                                 attempt += 1;
                                 continue 'attempts;
                             }
@@ -1035,7 +1062,7 @@ where
                         provider_request_id = rig_compat::observed_request_id(&raw);
                         let usage = raw.token_usage();
                         if let Some((observed, output)) = usage.as_ref().and_then(|usage| {
-                            crate::provider_usage::contract_usage_input_tokens(usage)
+                            rig_compat::contract_usage_input_tokens(usage)
                                 .map(|input| (input, usage.output_tokens))
                         }) {
                             config
@@ -1079,7 +1106,7 @@ where
             };
 
             if !saw_stream_item {
-                ensure_rendered_request_was_captured(turn_index, attempt)?;
+                ensure_rendered_request_was_captured(config.provider_call.capture.as_ref(), turn_index, attempt)?;
             }
 
             if let Some(budget) = aggregate_token_budget
@@ -1187,6 +1214,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                         attempt += 1;
                         continue 'attempts;
                     }
@@ -1248,6 +1276,7 @@ where
                                         });
                                     }
                                     sleep_retry_delay(delay, config.deadline).await?;
+                                    yield OwnedLoopItem::Output(LoopStreamItem::RetryWake);
                         attempt += 1;
                         continue 'attempts;
                     }
@@ -1319,7 +1348,8 @@ where
                 replay.required.push(tag.clone());
             }
 
-            let tool_scope = current_tool_runtime_context();
+            let tool_scope = config.tool_context.runtime();
+            let tool_context = config.tool_context.clone();
             let mut pending_calls: std::collections::VecDeque<_> = pending_calls.into();
             while let Some((first_call, _)) = pending_calls.front() {
                 let first_args = value_to_json_string(&first_call.function.arguments);
@@ -1328,17 +1358,18 @@ where
                     let name = call.function.name.as_str();
                     let args = value_to_json_string(&call.function.arguments);
                     let read = tools.iter().find(|tool| tool.name() == name)
-                        .is_some_and(|tool| tool.footprint(&args) == crate::tool::ToolFootprint::Read)
-                        && admit_tool(tools.as_slice(), name, &args).is_none();
+                        .is_some_and(|tool| tool.footprint(&args, &tool_context) == crate::tool::ToolFootprint::Read)
+                        && admit_tool(tools.as_slice(), name, &args, &tool_context).is_none();
                     (name, args, read)
                 }).collect();
-                let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch {
+                let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch
+                    && !repeated_tool_failure.success_may_stop(&first_call.function.name, &first_args) {
                     parallel::read_prefix(candidates.iter().map(|(name, args, read)| (*name, args.as_str(), *read)), invalid_tool_progress.remaining().min(4))
                 } else { 0 };
                 if batch_len > 1 {
                     let batch = (0..batch_len).map(|_| pending_calls.pop_front().expect("batch prefix exists")).collect();
                     let (admission_tx, mut admission_rx) = tokio::sync::mpsc::unbounded_channel();
-                    let batch_work = parallel::run_batch(batch, tools.clone(), hook.clone(), tool_scope.clone(), activity.as_ref().is_some_and(|activity| activity.token_limit_reached()), Some(admission_tx));
+                    let batch_work = parallel::run_batch(batch, tools.clone(), hook.clone(), tool_scope.clone(), tool_context.clone(), activity.as_ref().is_some_and(|activity| activity.token_limit_reached()), Some(admission_tx));
                     tokio::pin!(batch_work);
                     let (results, termination) = loop {
                         tokio::select! {
@@ -1366,10 +1397,11 @@ where
                         };
                         pending_results.push((rig_compat::from_rig_tool_call(&result.call), result.internal_id, bounded));
                     }
-                    if invalid_tool_progress.exhausted() {
+                    let stop_reason = repeated_tool_failure.success_stop_reason().or_else(|| invalid_tool_progress.exhausted().then(|| invalid_tool_progress.exhaustion_reason()));
+                    if let Some(reason) = stop_reason {
                         for item in close_streaming_turn(&mut new_messages, &mut accumulator, turn_ids.clone(), accepted_source.clone(), pending_results) { yield OwnedLoopItem::Output(item); }
-                        Err(StreamingError::Completion(CompletionError::ProviderError(invalid_tool_progress.exhaustion_reason())))?;
-                        unreachable!("invalid tool budget exhaustion ends the stream");
+                        Err(StreamingError::Completion(CompletionError::ProviderError(reason)))?;
+                        unreachable!("tool progress guard ends the stream");
                     }
                     continue;
                 }
@@ -1392,7 +1424,7 @@ where
                     )))?;
                     unreachable!("repeated tool failure ends the stream");
                 }
-                if let Some(outcome) = admit_tool(tools.as_slice(), &tool_name, &tool_args) {
+                if let Some(outcome) = admit_tool(tools.as_slice(), &tool_name, &tool_args, &tool_context) {
                     if let Some(hook) = hook.as_ref() {
                         let action = hook
                             .on_tool_admission_rejected(
@@ -1451,7 +1483,7 @@ where
                     Some(hook) => {
                         let (work, reply) = admission_work(
                             Arc::clone(hook), tool_name.clone(), tool_call.call_id.clone(),
-                            internal_call_id.clone(), tool_args.clone(),
+                            internal_call_id.clone(), tool_args.clone(), tool_context.clone(),
                         );
                         yield OwnedLoopItem::Admission(work);
                         reply.await.map_err(|_| StreamingError::Completion(
@@ -1509,11 +1541,12 @@ where
                             let execution_hook = hook.clone();
                             let execution_name = tool_name.clone();
                             let execution_id = internal_call_id.clone();
+                            let execution_context = tool_context.clone();
                             let (reply, result) = tokio::sync::oneshot::channel();
                             yield OwnedLoopItem::ForegroundWork(Box::pin(async move {
                                 let execution = match execution_hook {
-                                    Some(hook) => hook.run_foreground_tool(&execution_name, &execution_id, call).await,
-                                    None => crate::session_hook::ForegroundResult::Settled(call(Default::default(), None).await),
+                                    Some(hook) => hook.run_foreground_tool(&execution_name, &execution_id, call, &execution_context).await,
+                                    None => crate::session_hook::ForegroundResult::Settled(call(crate::tool::ToolCallEnvelope::default().with_extensions(execution_context.extensions().clone()), None).await),
                                 };
                                 let _ = reply.send(execution);
                             }));
@@ -1578,7 +1611,8 @@ where
                     internal_call_id,
                     bounded_result,
                 ));
-                if invalid_tool_progress.exhausted() {
+                let stop_reason = repeated_tool_failure.success_stop_reason().or_else(|| invalid_tool_progress.exhausted().then(|| invalid_tool_progress.exhaustion_reason()));
+                if let Some(reason) = stop_reason {
                     for item in close_streaming_turn(
                         &mut new_messages,
                         &mut accumulator,
@@ -1589,9 +1623,9 @@ where
                         yield OwnedLoopItem::Output(item);
                     }
                     Err(StreamingError::Completion(CompletionError::ProviderError(
-                        invalid_tool_progress.exhaustion_reason(),
+                        reason,
                     )))?;
-                    unreachable!("invalid tool budget exhaustion ends the stream");
+                    unreachable!("tool progress guard ends the stream");
                 }
             }
 
@@ -1762,10 +1796,11 @@ fn current_rag_text(prompt: &Message, history: &[Message], prior: &[Message]) ->
 }
 
 fn ensure_rendered_request_was_captured(
+    capture: Option<&Arc<crate::rendered_request::scope::RequestCaptureScope>>,
     turn_index: usize,
     attempt: u32,
 ) -> Result<(), StreamingError> {
-    if crate::rendered_request::scope::pending_is_armed() {
+    if crate::rendered_request::scope::pending_is_armed(capture) {
         return Err(StreamingError::Completion(CompletionError::ProviderError(
             format!(
                 "provider response for turn {turn_index} attempt {attempt} \
@@ -1791,7 +1826,9 @@ where
     let rag_text = current_rag_text(&prompt, history, prior);
     let mut tool_defs = Vec::with_capacity(tools.len());
     for tool in tools {
-        let native = tool.definition(rag_text.clone()).await;
+        let native = tool
+            .definition_for(rag_text.clone(), &config.tool_context)
+            .await;
         tool_defs.push(crate::rig_compat::to_rig_tool_definition(&native));
     }
 

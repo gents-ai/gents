@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{clamp_limit, SessionHistoryParams, SessionHistoryTool};
+use super::{clamp_limit, guided, SessionHistoryParams, SessionHistoryTool};
 use gents_session::session::TxnCanonicalReader;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::graphql::escape_graphql_string;
@@ -30,7 +30,7 @@ fn action_help(topic: Option<&str>) -> Result<&'static str> {
         Some("output") => {
             r#"{"action":"output","call_id":"<call_id>"}. Returns a tool call's full stored output, including bytes trimmed from the model's view, 16000 bytes per page. call_id comes from a tool result or a [tool: …] stub; session_id defaults to the current session. Continue with the returned next_call: its offset_bytes and expected_hash keep pages from mixing output versions. If a call_id is ambiguous, pass the tool_call_doc_id the error lists."#
         }
-        Some(_) => bail!("unknown help topic; next call: sessions {{\"action\":\"help\"}}"),
+        Some(_) => bail!(guided("unknown help topic", json!({"action":"help"}))),
     })
 }
 
@@ -54,7 +54,11 @@ fn missing_search_query(args: &SessionHistoryParams) -> anyhow::Error {
     if let Some(limit) = args.limit {
         next["limit"] = json!(limit);
     }
-    anyhow::anyhow!("search requires query; filter.text matches only titles and IDs; next call: sessions {next}")
+    guided(
+        "search requires query; filter.text matches only titles and IDs",
+        next,
+    )
+    .into()
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -109,7 +113,10 @@ fn page_view(
             Some("open") => Some(SessionState::Open),
             Some("closed") => Some(SessionState::Closed),
             Some(status) => {
-                bail!("invalid status '{status}'; next call: sessions {{\"action\":\"help\"}}")
+                bail!(guided(
+                    format!("invalid status '{status}'"),
+                    json!({"action":"help"})
+                ))
             }
         },
         tag: filter.tag.clone(),
@@ -243,17 +250,21 @@ impl Serialize for AnswerFirst<'_> {
 
 pub(super) async fn run(
     tool: &SessionHistoryTool,
+    call: &gents_loop::tool::ToolCallEnvelope,
     args: &SessionHistoryParams,
     action: &str,
 ) -> Result<Value> {
     if action == "help" {
         return Ok(json!({"help":action_help(args.topic.as_deref())?}));
     }
-    let current = crate::runtime_context::current_tool_runtime_context();
+    let current = crate::runtime_context::tool_runtime_context(call);
     if let Some(context) = &current {
         anyhow::ensure!(
             context.node_did.as_deref() == Some(tool.node_did.as_str()),
-            "sessions requires the running node; next call: sessions {{\"action\":\"help\"}}"
+            guided(
+                "sessions requires the running node",
+                json!({"action":"help"})
+            )
         );
     }
     let requester = current
@@ -302,7 +313,7 @@ async fn execute(
     let filter = args.filter.clone().unwrap_or_default();
     anyhow::ensure!(
         args.limit.is_none_or(|limit| (1..=100).contains(&limit)),
-        "limit must be 1 through 100; next call: sessions {{\"action\":\"help\"}}"
+        guided("limit must be 1 through 100", json!({"action":"help"}))
     );
     if action == "output" {
         return tool_output(txn, agent, current_session, args).await;
@@ -312,7 +323,7 @@ async fn execute(
             .session_id
             .as_deref()
             .filter(|id| !id.trim().is_empty())
-            .context("session_id required; next call: sessions {\"action\":\"list\"}")?;
+            .with_context(|| guided("session_id required", json!({"action":"list"})))?;
         let session = authorized_session(txn, agent, id).await?;
         let agent = session["node_did"]
             .as_str()
@@ -363,14 +374,14 @@ async fn execute(
     }
     anyhow::ensure!(
         action != "count" || args.cursor.is_none(),
-        "count does not accept cursor; next call: sessions {{\"action\":\"count\"}}"
+        guided("count does not accept cursor", json!({"action":"count"}))
     );
     let cursor = args
         .cursor
         .as_deref()
         .map(serde_json::from_str::<Cursor>)
         .transpose()
-        .context("invalid cursor; next call: sessions {\"action\":\"list\"}")?;
+        .with_context(|| guided("invalid cursor", json!({"action":"list"})))?;
     if action == "count" && filter.text.is_none() {
         let count = txn
             .read_view(&gents_session::views::SessionCount {
@@ -504,7 +515,10 @@ async fn authorized_session(txn: &ConfigApplyTxn<'_>, node_did: &str, id: &str) 
         .await?;
     anyhow::ensure!(
         sessions.len() == 1,
-        "session is unavailable or ambiguous under ACP; next call: sessions {{\"action\":\"list\"}}"
+        guided(
+            "session is unavailable or ambiguous under ACP",
+            json!({"action":"list"})
+        )
     );
     Ok(serde_json::to_value(sessions.remove(0))?)
 }
@@ -524,9 +538,12 @@ async fn tool_output(
     };
     let session_id = nonblank(&args.session_id)
         .or_else(|| current_session.map(str::to_owned))
-        .context(
-            "output needs session_id outside a session; next call: sessions {\"action\":\"list\"}",
-        )?;
+        .with_context(|| {
+            guided(
+                "output needs session_id outside a session",
+                json!({"action":"list"}),
+            )
+        })?;
     let call_id = nonblank(&args.call_id);
     let named_doc = nonblank(&args.tool_call_doc_id);
     let session = authorized_session(txn, node_did, &session_id).await?;
@@ -574,21 +591,25 @@ async fn tool_output(
                 }
             }
             match docs.len() {
-                0 => bail!(
-                    "no tool call with call_id {key} in session {session_id}; next call: sessions {transcript_call}"
-                ),
+                0 => bail!(guided(
+                    format!("no tool call with call_id {key} in session {session_id}"),
+                    transcript_call
+                )),
                 1 => docs.pop_first().unwrap(),
-                _ => bail!(
-                    "call_id {key} names {} tool calls in session {session_id}: {}; next call: sessions {}",
-                    docs.len(),
-                    docs.iter().cloned().collect::<Vec<_>>().join(", "),
+                _ => bail!(guided(
+                    format!(
+                        "call_id {key} names {} tool calls in session {session_id}: {}",
+                        docs.len(),
+                        docs.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ),
                     json!({"action":"output","session_id":session_id,"tool_call_doc_id":docs.first()})
-                ),
+                )),
             }
         }
-        (None, None) => bail!(
-            "output requires call_id; next call: sessions {{\"action\":\"help\",\"topic\":\"output\"}}"
-        ),
+        (None, None) => bail!(guided(
+            "output requires call_id",
+            json!({"action":"help","topic":"output"})
+        )),
     };
     let read = gents_session::tool_call::query::result::load_tool_call_read_in_txn(
         txn,
@@ -598,7 +619,7 @@ async fn tool_output(
         requester,
     )
     .await
-    .map_err(|error| anyhow::anyhow!("{error:#}; next call: sessions {transcript_call}"))?;
+    .map_err(|error| guided(format!("{error:#}"), transcript_call.clone()))?;
     let mut next = json!({"action":"output","session_id":session_id});
     match &call_id {
         Some(call_id) => next["call_id"] = json!(call_id),
@@ -606,14 +627,18 @@ async fn tool_output(
     }
     let Some(output) = read.raw_result.as_deref() else {
         if read.result.is_none() || !read.lifecycle_state.is_terminal() {
-            bail!(
-                "tool call {tool_call_doc_id} has no delivered output yet (state {:?}); next call: sessions {next}",
-                read.lifecycle_state
-            );
+            bail!(guided(
+                format!(
+                    "tool call {tool_call_doc_id} has no delivered output yet (state {:?})",
+                    read.lifecycle_state
+                ),
+                next
+            ));
         }
-        bail!(
-            "tool call {tool_call_doc_id} has no single text output to page; next call: sessions {transcript_call}"
-        );
+        bail!(guided(
+            format!("tool call {tool_call_doc_id} has no single text output to page"),
+            transcript_call
+        ));
     };
     let offset = args.offset_bytes.unwrap_or(0);
     let page = crate::builtin::defra_query::utf8_page(
@@ -634,7 +659,7 @@ async fn tool_output(
                 "offset_bytes is not a UTF-8 boundary within the output"
             }
         };
-        anyhow::anyhow!("{reason}; next call: sessions {next}")
+        guided(reason, next.clone())
     })?;
     let complete = page.end == output.len();
     let next_call = (!complete).then(|| {
@@ -674,8 +699,17 @@ async fn transcript(
     args: &SessionHistoryParams,
     limit: usize,
 ) -> Result<Value> {
-    let cursor = args.cursor.as_deref().map(serde_json::from_str::<TranscriptCursor>).transpose()
-        .context("invalid transcript cursor; next call: sessions {\"action\":\"transcript\",\"session_id\":\"<ID>\"}")?;
+    let cursor = args
+        .cursor
+        .as_deref()
+        .map(serde_json::from_str::<TranscriptCursor>)
+        .transpose()
+        .with_context(|| {
+            guided(
+                "invalid transcript cursor",
+                json!({"action":"transcript","session_id":"<ID>"}),
+            )
+        })?;
     let bounds = cursor
         .as_ref()
         .map(|cursor| {

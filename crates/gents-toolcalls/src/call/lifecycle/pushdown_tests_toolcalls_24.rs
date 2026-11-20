@@ -73,24 +73,46 @@ async fn committed_output(
     .into_text()
 }
 
+/// The deadline is the property here, so the test drives the cut itself
+/// (TLA+ `WallClockBound` `"driven"`): it waits until the child's output is
+/// committed, then advances the runtime's paused clock past the request
+/// deadline, which the real clock never reaches. A wall-clock deadline instead
+/// raced the child's writes and cut a loaded host's child before it printed.
 #[tokio::test]
 async fn request_deadline_presents_output_committed_before_the_cut() {
     let (node, mut tool, _registry, writer) = committed_run("cli-request-deadline").await;
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(CliTool::new(config(30)))];
+    let unreached = gents_store::test_support::UNREACHED_DEADLINE;
+    // The tool's own timeout outlives the advance, so only the request
+    // deadline is due when the clock moves.
+    let tools: Vec<Box<dyn ToolDyn>> =
+        vec![Box::new(CliTool::new(config(2 * unreached.as_secs())))];
     let args = serde_json::json!({"argv": ["-c",
         "printf 'partial stdout'; printf 'partial stderr' >&2; sleep 30"]})
     .to_string();
-    let started = std::time::Instant::now();
-    let outcome =
-        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
-            Some(chrono::Utc::now() + chrono::Duration::seconds(2)),
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            None,
-            gents_loop::loop_stream::dispatch_tool(&tools, "sh", args, Some(writer), None),
-        )
-        .await;
+    let envelope = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+        Some(gents_store::test_support::unreached_deadline_at()),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .call();
+    let dispatch =
+        gents_loop::loop_stream::dispatch_tool(&tools, "sh", args, Some(writer), None, &envelope);
+    tokio::pin!(dispatch);
+    let raw = tokio::select! {
+        outcome = &mut dispatch => panic!("the child ended before the cut: {outcome:?}"),
+        raw = gents_store::test_support::read_when_changed(
+            &node,
+            &["AgentOutputSegment"],
+            "the child's output is committed before the cut",
+            async || {
+                let raw = committed_output(&node, &tool).await;
+                (raw.contains("partial stdout") && raw.contains("partial stderr")).then_some(raw)
+            },
+        ) => raw,
+    };
+    tokio::time::pause();
+    tokio::time::advance(unreached + std::time::Duration::from_secs(1)).await;
+    tokio::time::resume();
+    let outcome = dispatch.await;
     assert!(
         matches!(
             outcome,
@@ -98,16 +120,14 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
         ),
         "{outcome:?}"
     );
-    assert!(started.elapsed() < std::time::Duration::from_secs(20));
-
-    let raw = committed_output(&node, &tool).await;
+    let committed = committed_output(&node, &tool).await;
     assert!(
-        raw.contains("partial stdout") && raw.contains("partial stderr"),
-        "captured output must be committed before the deadline: {raw:?}"
+        committed.starts_with(&raw),
+        "the cut keeps the output committed before it: {committed:?}"
     );
     assert!(tool.timeout().await.unwrap());
     let presented = presented(&node, &tool).await;
-    assert!(presented.starts_with(&raw), "{presented:?}");
+    assert!(presented.starts_with(&committed), "{presented:?}");
     assert!(
         presented.contains("\ntool call deadline exceeded at "),
         "{presented:?}"
@@ -136,25 +156,46 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
         ),
         (
             "cli-stopped",
-            1,
+            // Past any run: the owning request's cancellation stops the child.
+            gents_store::test_support::UNREACHED_DEADLINE.as_secs(),
             "printf '%17000s' ' '; printf 'last out'; printf 'last err' >&2; sleep 30",
         ),
     ] {
         let (node, mut tool, registry, writer) = committed_run(name).await;
         let cli = CliTool::new(config(timeout_secs));
         let args = serde_json::json!({"argv": ["-c", script]}).to_string();
-        let outcome = ToolOutcome::from_dispatch(
-            "sh",
-            gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
-                None,
-                tokio_util::sync::CancellationToken::new(),
-                None,
-                Some(writer),
-                None,
-                cli.call(args),
-            )
-            .await,
-        );
+        let stop = tokio_util::sync::CancellationToken::new();
+        let envelope = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            live_output: Some(writer),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(None, stop.clone())
+        }
+        .call();
+        let call = cli.call(args, &envelope);
+        let dispatched = if name == "cli-stopped" {
+            // The stop is driven, not raced (TLA+ `WallClockBound`
+            // `"driven"`): the owning request cancels once the child's last
+            // writes are committed. A 1 s CLI timeout raced those writes; a
+            // paused clock cannot drive that timeout, because the stop's own
+            // reap and drain timers would then fire at once.
+            tokio::pin!(call);
+            tokio::select! {
+                result = &mut call => panic!("{name}: the child ended before its stop: {result:?}"),
+                () = gents_store::test_support::read_when_changed(
+                    &node,
+                    &["AgentOutputSegment"],
+                    "the stopped child's output is committed",
+                    async || {
+                        let raw = committed_output(&node, &tool).await;
+                        (raw.contains("last out") && raw.contains("last err")).then_some(())
+                    },
+                ) => {}
+            }
+            stop.cancel();
+            call.await
+        } else {
+            call.await
+        };
+        let outcome = ToolOutcome::from_dispatch("sh", dispatched);
         let text = outcome.model_facing_text().to_owned();
         let presentation = registry
             .take_prepared_presentation(tool.doc_id().unwrap(), &text)
@@ -172,7 +213,10 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
                     .unwrap();
             }
             ToolOutcome::Failed { class, .. } => {
-                assert!(text.starts_with("timed out after 1s\n"), "{text}");
+                assert!(
+                    text.starts_with("command cancelled by the owning request\n"),
+                    "{text}"
+                );
                 assert!(
                     text.contains("[Showing last 16000 of 17008 bytes]"),
                     "{text}"

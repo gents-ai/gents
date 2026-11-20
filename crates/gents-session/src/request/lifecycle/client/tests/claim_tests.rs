@@ -30,7 +30,9 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
         let subject = ::identity::Did::new(binding.agent_did.as_str()).unwrap();
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
         ] {
@@ -193,8 +195,11 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 lifecycle.begin_owned_execution(&writer).await.unwrap();
                 lifecycle.validate_owned_execution().await.unwrap();
             }
-            // The runtime can see the Agent configuration but does not own this request.
-            let node_view = admin.execute("{ AgentRequest { _docID } }").await.unwrap();
+            let node_view = gents_store::test_support::unrelated_document_reader(&node)
+                .await
+                .execute("{ AgentRequest { _docID } }")
+                .await
+                .unwrap();
             assert!(node_view["data"]["AgentRequest"]
                 .as_array()
                 .unwrap()
@@ -350,7 +355,9 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     for did in [collaborator.did(), agent.did()] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
+            NodePermission::CollectionGet,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
         ] {

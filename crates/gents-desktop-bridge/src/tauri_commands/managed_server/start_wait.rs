@@ -1,5 +1,6 @@
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -32,6 +33,21 @@ impl StartWait {
 
     pub(super) fn cancel_message(&self) -> &'static str {
         self.reason.get().copied().unwrap_or(START_CANCELLED)
+    }
+}
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum StartDisposition {
+    Launch,
+    Observe,
+}
+
+pub(super) fn start_disposition(starting: bool) -> StartDisposition {
+    if starting {
+        StartDisposition::Observe
+    } else {
+        StartDisposition::Launch
     }
 }
 
@@ -72,13 +88,16 @@ pub(super) async fn finish_start_wait(state: &DesktopAppState, token: &StartWait
     }
 }
 
-pub(super) async fn wait_unlocked<T>(
+pub(super) async fn wait_unlocked<T, E>(
     token: &StartWait,
-    wait: impl Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T> {
+    wait: impl Future<Output = Result<T, E>>,
+) -> Result<T, E>
+where
+    E: From<anyhow::Error>,
+{
     tokio::select! {
         biased;
-        _ = token.cancelled() => anyhow::bail!(token.cancel_message()),
+        _ = token.cancelled() => Err(anyhow::anyhow!(token.cancel_message()).into()),
         result = wait => result,
     }
 }
@@ -109,4 +128,14 @@ pub(super) fn ensure_not_cancelled(token: &StartWait) -> anyhow::Result<()> {
         anyhow::bail!(token.cancel_message());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn repeated_start_disposition_matches_lean() {
+        gents_lean_vocab::families::service_lifecycle_start_disposition::replay(|input| {
+            super::start_disposition(input.starting)
+        });
+    }
 }

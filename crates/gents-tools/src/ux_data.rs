@@ -12,6 +12,9 @@
 //! tool with a runtime-filled field is refused: a page has no triggering
 //! document to fill it from.
 
+pub mod create_schema;
+
+use create_schema::trusted_ux_create_schema;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -118,86 +121,6 @@ fn manifest_allows_tool(listing: &UxListing, surface: &str, tool: &str) -> bool 
     })
 }
 
-async fn trusted_ux_create_schema(
-    home: &Path,
-    listing: &UxListing,
-    collection: &str,
-) -> Result<String> {
-    let home = home.to_owned();
-    let listing = listing.clone();
-    let collection = collection.to_owned();
-    let schema = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
-        let Some(coordinate) = listing.pack.as_deref() else {
-            return Ok(None);
-        };
-        let Some(record) = gents_pack::pack::read_home_install(&home, coordinate)? else {
-            return Ok(None);
-        };
-        let store = gents_pack::pack::store::PackStore::new(&home);
-        if !store.path(&record.digest)?.is_file() {
-            return Ok(None);
-        }
-        let archive = store.open(&record.digest)?;
-        let manifest_bytes = archive.asset("manifest.json")?.to_vec();
-        let manifest = gents_pack::pack::PackManifest::from_slice(&manifest_bytes)?;
-        let mut schemas = std::collections::BTreeMap::new();
-        for path in gents_pack::pack::document_pack_schema_paths(&manifest)? {
-            schemas.insert(path.to_owned(), archive.asset(path)?.to_vec());
-        }
-        let digest = gents_pack::pack::digest_declared_assets(&manifest, |path| {
-            if path == "manifest.json" {
-                Ok(manifest_bytes.as_slice())
-            } else if let Some(bytes) = schemas.get(path) {
-                Ok(bytes.as_slice())
-            } else {
-                archive.asset(path)
-            }
-        })?;
-        anyhow::ensure!(
-            digest == record.digest,
-            "installed pack content does not match its recorded digest"
-        );
-        anyhow::ensure!(
-            format!("{}/{}", manifest.metadata.namespace, manifest.name) == coordinate
-                && manifest.version == record.version
-                && manifest.metadata.kind == record.kind,
-            "installed UX record does not match its trusted pack"
-        );
-        let declared = manifest.metadata.ux.iter().any(|entry| {
-            format!("{coordinate}/{}", entry.name) == listing.id && entry.data == listing.data
-        });
-        anyhow::ensure!(
-            declared,
-            "installed UX declaration does not match its trusted pack"
-        );
-        let mut found = None;
-        for path in gents_pack::pack::document_pack_schema_paths(&manifest)? {
-            let bytes = schemas
-                .get(path)
-                .with_context(|| format!("installed schema {path:?} missing"))?;
-            let sdl = std::str::from_utf8(bytes)?;
-            let schemas = query::parse_sdl(sdl)?;
-            if schemas.iter().any(|schema| schema.name == collection) {
-                anyhow::ensure!(
-                    schemas.len() == 1,
-                    "client signing requires exactly one collection in the trusted schema"
-                );
-                anyhow::ensure!(
-                    found.is_none(),
-                    "installed pack declares the collection more than once"
-                );
-                found = Some(sdl.to_owned());
-            }
-        }
-        Ok(found)
-    })
-    .await
-    .context("reading trusted UX pack schema")??;
-    schema.ok_or_else(|| {
-        gents_store::config_client::ConfigClientError::ClientUnsignedMutationUnsupported.into()
-    })
-}
-
 /// The schema a page document's create is signed against: the application
 /// collection as the node the page was read from holds it, read again on each
 /// call. A page has no installed pack to verify against, so the node that
@@ -278,13 +201,23 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
                 };
                 tool = tool.with_ux_client_schema(schema);
             }
-            Tool::call(&tool, BoundedWriteParams(args)).await?
+            Tool::call(
+                &tool,
+                BoundedWriteParams(args),
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await?
         }
         SurfaceToolDecl::Query(decl) => {
             let tool = BoundedQueryTool::new(access.clone(), decl.clone())
                 .declared_by(Some(surface.clone()))
                 .with_visible_surface_owner(node_did.clone());
-            Tool::call(&tool, BoundedQueryParams(args)).await?
+            Tool::call(
+                &tool,
+                BoundedQueryParams(args),
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
+            .await?
         }
     };
     let output: Value = serde_json::from_str(&output)

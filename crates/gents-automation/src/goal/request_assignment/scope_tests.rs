@@ -223,8 +223,10 @@ async fn continuation_row(
         identity.did().into(),
         "goal-1",
         "continue",
-        1,
-        false,
+        gents_protocol::request_input::GoalContinuationInput {
+            sequence: 1,
+            wrapup: false,
+        },
         "2026-10-21T00:01:00Z",
         parent.request_hop,
     )

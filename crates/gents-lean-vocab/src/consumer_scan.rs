@@ -16,13 +16,6 @@ const DERIVED_FAMILIES: &str = "families";
 const DERIVED_VOCABULARIES: &str = "family_vocabularies";
 const DERIVED_LEDGER_CATEGORY: &str = "family";
 
-const UNSCANNED_CATEGORIES: &[&str] = &[
-    "follow_up_hook",
-    "state_machine",
-    "premise",
-    "Proofs.Conformance.",
-];
-
 const SOURCE_ROOTS: &[&str] = &["crates", "apps", "packages"];
 const SKIPPED_DIRECTORIES: &[&str] = &["target", "node_modules", "proofs", "dist", "gen"];
 
@@ -292,11 +285,20 @@ pub fn consumer_sites(
 mod tests {
     use super::*;
 
+    const UNSCANNED_CATEGORIES: &[&str] = &[
+        "follow_up_hook",
+        "state_machine",
+        "premise",
+        "Proofs.Conformance.",
+    ];
+
     fn workspace() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .expect("workspace root")
+        std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        )
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root")
     }
 
     #[test]

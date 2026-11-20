@@ -49,11 +49,16 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
         0,
     )
     .await?;
-    for permission in [NodePermission::DocumentRead, NodePermission::DocumentUpdate] {
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+    ] {
         node.add_nac_actor_relationship_as(&context, permission.as_str(), outsider.did())
             .await?;
     }
     for permission in [
+        NodePermission::CollectionGet,
         NodePermission::DocumentRead,
         NodePermission::DocumentUpdate,
         NodePermission::DacRelationAdd,
@@ -63,6 +68,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     }
     for actor in [managed.did(), runtime.did()] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,

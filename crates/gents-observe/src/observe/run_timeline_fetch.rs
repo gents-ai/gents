@@ -770,8 +770,8 @@ mod tests {
                     expires_in: Some(3600),
                     scope: None,
                     account_id: Some("IDENTITY".into()),
-                    organization_uuid: Some("org-KEY".into()),
-                    account_uuid: Some(format!("account-KEY-{who}")),
+                    organization_uuid: Some("org-KEY-SENTINEL".into()),
+                    account_uuid: Some(format!("account-KEY-SENTINEL-{who}")),
                 },
                 chrono::Utc::now(),
             )
@@ -826,7 +826,7 @@ mod tests {
                 .await
                 .expect("load timeline");
             let text = serde_json::to_string(&timeline).unwrap();
-            for secret in ["SECRET", "IDENTITY", "KEY"] {
+            for secret in ["SECRET", "IDENTITY", "KEY-SENTINEL"] {
                 assert!(!text.contains(secret), "{secret} in {text}");
             }
             timeline
@@ -912,13 +912,15 @@ mod tests {
             .transact_write("test.timeline_session", |txn| {
                 Box::pin(gents_session::session::ensure_session_in_txn(
                     txn,
-                    "session-goal-history",
-                    root.did(),
-                    agent.did(),
-                    Some(agent.did()),
-                    None,
-                    None,
-                    "2026-08-14T12:00:00Z",
+                    gents_session::session::NewAgentSession {
+                        session_id: "session-goal-history",
+                        node_did: root.did(),
+                        agent_did: agent.did(),
+                        requester_did: Some(agent.did()),
+                        title: None,
+                        provenance: None,
+                        created_at: "2026-08-14T12:00:00Z",
+                    },
                 ))
             })
             .await

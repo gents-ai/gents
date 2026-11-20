@@ -11,8 +11,9 @@ use tokio::task::JoinSet;
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::ClientUpdateEvent;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
 
 use super::protocol::{
     ClientCommand, ClientMessage, HostMessage, MAX_FRAME_BYTES, MAX_PENDING_CALLS, PROTOCOL_VERSION,
@@ -51,7 +52,7 @@ where
     // Subscribe before acknowledging initialization: a first snapshot can then
     // overlap updates without leaving a snapshot-to-live observation gap.
     let mut store = host.core.store_updates();
-    let mut health = host.core.sync_state_updates();
+    let mut health = host.core.runtime_connection_updates();
     frames
         .send(pack(HostMessage::Hello {
             version: PROTOCOL_VERSION,
@@ -89,7 +90,7 @@ where
     let mut calls = JoinSet::new();
     let mut pending = RapidHashMap::<u32, CancellationToken>::new();
     let mut sequence = 0_u64;
-    let mut retirement_accepted = false;
+    let mut retirement_accepted = None;
     let result: Result<()> = async {
         loop {
             tokio::select! {
@@ -105,17 +106,16 @@ where
                         }
                         ClientMessage::Retire { id, expected_build } => {
                             if pending.contains_key(&id) { bail!("duplicate pending request id {id}"); }
-                            let accepted = host.installation_build.as_deref() == Some(expected_build.as_str());
-                            let result = if accepted { Ok(serde_json::Value::Null) } else {
-                                Err(BridgeError::new(BridgeErrorCode::InvalidArgument,
-                                    "The shared client changed or does not support updates. Retry the update."))
-                            };
-                            publish(&out, &local_stop, HostMessage::response(id, result)).await?;
-                            if accepted {
-                                retirement_accepted = true;
+                            if host.installation_build.as_deref() == Some(expected_build.as_str()) {
+                                // Answered by the installation once its store is free.
+                                retirement_accepted = Some(id);
                                 stop.cancel();
                                 break;
                             }
+                            publish(&out, &local_stop, HostMessage::response(id, Err(
+                                BridgeError::new(BridgeErrorCode::InvalidArgument,
+                                    "The shared client changed or does not support updates. Retry the update."),
+                            ))).await?;
                         }
                         ClientMessage::Call { id, command } => {
                             if pending.contains_key(&id) { bail!("duplicate pending request id {id}"); }
@@ -197,10 +197,15 @@ where
             _ => {}
         }
     }
-    drop(out);
-    if !retirement_accepted {
-        writer.abort();
+    if let Some(id) = retirement_accepted {
+        host.hold_retirement(PendingRetirement { id, out, writer });
+        if let Some(error) = drain_error {
+            return Err(error.into());
+        }
+        return result;
     }
+    drop(out);
+    writer.abort();
     match writer.await {
         Ok(result) => result?,
         Err(error) if error.is_cancelled() => {}
@@ -210,6 +215,38 @@ where
         return Err(error.into());
     }
     result
+}
+
+/// The retiring attachment's open reply path, kept past the connection so the
+/// installation answers only after it has closed its store.
+pub(super) struct PendingRetirement {
+    id: u32,
+    out: mpsc::Sender<HostMessage>,
+    writer: tokio::task::JoinHandle<Result<()>>,
+}
+
+impl PendingRetirement {
+    pub(super) async fn acknowledge(self, closed: &Result<()>) {
+        let result = match closed {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(error) => Err(BridgeError::new(
+                BridgeErrorCode::Backend,
+                format!("the shared client did not close its history cleanly: {error:#}"),
+            )),
+        };
+        let Self { id, out, writer } = self;
+        if out.send(HostMessage::response(id, result)).await.is_err() {
+            tracing::debug!("the retiring attachment closed before its acknowledgement");
+        }
+        drop(out);
+        match writer.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::debug!(%error, "retirement acknowledgement was not delivered")
+            }
+            Err(error) => tracing::warn!(%error, "retirement acknowledgement writer failed"),
+        }
+    }
 }
 
 async fn publish(

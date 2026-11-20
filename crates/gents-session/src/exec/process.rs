@@ -52,6 +52,14 @@ pub struct ManagedExecRequest {
     pub environment: Option<RapidHashMap<String, String>>,
     pub tool_name: Option<String>,
     pub live_output: Option<LiveToolOutputWriter>,
+    /// Records the spawned process for the tool call or hook that owns it.
+    pub process_recorder: Option<super::ownership::ProcessRecorder>,
+}
+
+impl ManagedExecRequest {
+    fn recorder(&self) -> Option<super::ownership::ProcessRecorder> {
+        self.process_recorder.clone()
+    }
 }
 
 #[cfg(unix)]
@@ -62,7 +70,7 @@ pub async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExecOutcome
         };
     };
 
-    let recorder = super::ownership::current_process_recorder();
+    let recorder = request.recorder();
     super::ownership::record_spawn_attempt(recorder.as_ref());
     let mut child = match spawn_child(
         program,
@@ -225,7 +233,7 @@ pub async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExecOutcome
         command.env_clear().envs(environment);
     }
 
-    let recorder = super::ownership::current_process_recorder();
+    let recorder = request.recorder();
     super::ownership::record_spawn_attempt(recorder.as_ref());
     let fallback_owner = std::sync::Arc::new(std::sync::Mutex::new(None));
     let retained_fallback = fallback_owner.clone();

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::pack::archive::{write_pack, PackArchive, EXTENSION};
+use crate::pack::archive::{write_built_pack, PackArchive, EXTENSION};
 use crate::pack::store::PackStore;
 use anyhow::{Context, Result};
 
@@ -25,7 +25,8 @@ pub fn classify(argument: &str) -> Option<LocalName<'_>> {
 /// A path argument is opened once, no-follow, and that handle is carried
 /// into the store import: an admission-to-read window where the named path
 /// is swapped for a symlink or a different file cannot change which bytes
-/// are verified and stored.
+/// are verified and stored. A directory is packed as `pack build` packs it,
+/// so it opens with the digest its build and check report.
 pub fn open(name: &LocalName<'_>, home: &Path) -> Result<PackArchive> {
     let store = PackStore::new(home);
     match name {
@@ -36,8 +37,12 @@ pub fn open(name: &LocalName<'_>, home: &Path) -> Result<PackArchive> {
             let staged = tempfile::NamedTempFile::new().context("staging the pack")?;
             let header = {
                 let mut writer = std::io::BufWriter::new(staged.as_file());
-                let header = write_pack(path, &mut writer)
-                    .with_context(|| format!("packing {}", path.display()))?;
+                let header = write_built_pack(
+                    path,
+                    &mut writer,
+                    &crate::pack::core_packs::runtime_release(),
+                )
+                .with_context(|| format!("packing {}", path.display()))?;
                 std::io::Write::flush(&mut writer).context("writing the pack")?;
                 header
             };

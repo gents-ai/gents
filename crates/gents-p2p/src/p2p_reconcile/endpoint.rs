@@ -16,7 +16,7 @@ pub enum EndpointError {
     Unavailable(String),
     #[error("runtime {0} has an ambiguous or invalid signed GraphQL endpoint")]
     InvalidBinding(String),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] gents_store::config_client::ConfigClientError),
     #[error(transparent)]
     Identity(#[from] gents_store::identity::IdentityError),
@@ -160,7 +160,16 @@ async fn endpoint_heartbeat(
     graphql_url: Option<String>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let Some(p2p) = gents_store::identity::node_p2p(&node) else {
+    if crate::peer_publication::idles(
+        &node,
+        gents_store::local::document_acp::Periodic::EndpointHeartbeat,
+        &cancel,
+    )
+    .await
+    {
+        return Ok(());
+    }
+    let Some(p2p) = crate::node_access::operations(&node) else {
         tracing::debug!(
             "PeerRegistry endpoint heartbeat idle because embedded node has no P2P transport"
         );
@@ -465,7 +474,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(resolved.url(), record.graphql_url.as_deref().unwrap());
-            assert!(resolved.authorization().unwrap().is_some());
+            assert!(resolved.runtime_authorization().await.unwrap().is_some());
             let did_only =
                 gents_store::identity::RegisteredIdentity::from_registered_did(caller.did(), None)
                     .unwrap();
@@ -486,7 +495,11 @@ mod tests {
                     .as_deref(),
                 Some(agent.did())
             );
-            assert!(resolved_agent.authorization().unwrap().is_some());
+            assert!(resolved_agent
+                .runtime_authorization()
+                .await
+                .unwrap()
+                .is_some());
             assert_eq!(
                 ConfigAccess::Graphql(resolved).actor_did().as_deref(),
                 Some(caller.did())

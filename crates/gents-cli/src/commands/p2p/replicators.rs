@@ -10,7 +10,7 @@ use crate::cli::args::{
 };
 use crate::print_json;
 use crate::shared::{P2pReplicatorDeleteRequest, P2pReplicatorRequest};
-use gents_host::http_client::http_send;
+use gents_host::http_client::endpoint_send;
 use gents_host::p2p_status::P2pReplicatorRow;
 use gents_service::home_state::resolve_graphql_endpoint;
 use gents_service::home_state::resolve_home_dir;
@@ -39,10 +39,12 @@ pub(super) async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
-    let raw_replicators: Vec<P2pReplicatorRow> = gents_host::http_client::http_get_json(
-        graphql.authorize(client.get(format!("{api_base}/p2p/replicators")))?,
-    )
-    .await?;
+    let url = format!("{api_base}/p2p/replicators");
+    let raw_replicators: Vec<P2pReplicatorRow> =
+        gents_host::http_client::endpoint_get_json(&graphql, |graphql| {
+            graphql.authorize(client.get(&url))
+        })
+        .await?;
     let collection_names_by_id = load_collection_name_by_id(&client, &api_base).await;
     let replicators = p2p_replicator_rows(raw_replicators, &collection_names_by_id);
     let count = replicators.len();
@@ -70,13 +72,10 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
         addresses: vec![args.peer.clone()],
         filters: wire_filters,
     };
-    http_send(
-        graphql.authorize(
-            client
-                .post(format!("{api_base}/p2p/replicators"))
-                .json(&request),
-        )?,
-    )
+    let url = format!("{api_base}/p2p/replicators");
+    endpoint_send(&graphql, |graphql| {
+        graphql.authorize(client.post(&url).json(&request))
+    })
     .await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     let p2p = fetch_live_http_p2p_status(Some(&home_dir), &graphql).await?;
@@ -159,13 +158,10 @@ pub(super) async fn p2p_replicators_remove(args: P2pReplicatorRemoveArgs) -> Res
         id: args.peer.clone(),
         collections: collections.clone(),
     };
-    http_send(
-        graphql.authorize(
-            client
-                .delete(format!("{api_base}/p2p/replicators"))
-                .json(&request),
-        )?,
-    )
+    let url = format!("{api_base}/p2p/replicators");
+    endpoint_send(&graphql, |graphql| {
+        graphql.authorize(client.delete(&url).json(&request))
+    })
     .await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     print_json(&json!({

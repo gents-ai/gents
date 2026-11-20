@@ -127,10 +127,12 @@ impl ToolCallLifecycle {
                         session_id,
                         requester_did,
                         &accepted.request_doc_id,
-                        doc,
-                        &accepted.execution_generation,
-                        id,
-                        name,
+                        gents_session::session::plugin_effect_rows::PluginEffectCall {
+                            tool_call_doc_id: doc,
+                            tool_call_id: id,
+                            tool_name: name,
+                            execution_generation: &accepted.execution_generation,
+                        },
                     )?
                     .0;
             }

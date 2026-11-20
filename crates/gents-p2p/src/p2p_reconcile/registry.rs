@@ -197,7 +197,16 @@ async fn registry_heartbeat(
     network_id: String,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let Some(p2p) = gents_store::identity::node_p2p(&node) else {
+    if crate::peer_publication::idles(
+        &node,
+        gents_store::local::document_acp::Periodic::RegistryHeartbeat,
+        &cancel,
+    )
+    .await
+    {
+        return Ok(());
+    }
+    let Some(p2p) = crate::node_access::operations(&node) else {
         tracing::debug!("registry heartbeat idle because embedded node has no P2P transport");
         cancel.cancelled().await;
         return Ok(());

@@ -11,7 +11,7 @@ impl SelfConfigFixture {
         gents_toolcalls::test_support::grant_modeled_direct_sets(
             &db.node,
             db.node_identity.did(),
-            "default-agent",
+            gents_store::identity::Recipient::DefaultAgent,
             &binding.agent_did,
         )
         .await;

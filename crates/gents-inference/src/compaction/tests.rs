@@ -53,6 +53,7 @@ fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
 
 fn gate_test_loop_config() -> gents_loop::loop_stream::LoopConfig {
     gents_loop::loop_stream::LoopConfig {
+        provider_call: Default::default(),
         replay: gents_loop::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             gents_loop::provider_input::ProviderInputCounter::new(
@@ -86,6 +87,7 @@ fn gate_test_loop_config() -> gents_loop::loop_stream::LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
+        tool_context: gents_loop::tool::ToolCallEnvelope::default(),
     }
 }
 
@@ -275,7 +277,7 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(150);
     let client =
-        crate::clients::inference_http::build_openai_chat_completions_client(
+        crate::llm::rig_compat::providers::build_openai_chat_completions_client(
             "no-key",
             &endpoint,
             crate::clients::inference_http::SessionTaggingHttpClient::<
@@ -505,6 +507,12 @@ struct AdvancingFirstCheckpointModel {
     now: Arc<Mutex<chrono::DateTime<chrono::Utc>>>,
 }
 
+impl gents_loop::provider_call::ForCall for AdvancingFirstCheckpointModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
+    }
+}
+
 #[allow(refining_impl_trait)]
 impl CompletionModel for AdvancingFirstCheckpointModel {
     type Response = ();
@@ -560,6 +568,12 @@ impl SentinelCheckpointModel {
             "next_actions": ["Continue after rolling compaction."]
         })
         .to_string()
+    }
+}
+
+impl gents_loop::provider_call::ForCall for SentinelCheckpointModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
     }
 }
 
@@ -1106,6 +1120,12 @@ impl CountingFailModel {
 
     fn calls(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
         self.calls.clone()
+    }
+}
+
+impl gents_loop::provider_call::ForCall for CountingFailModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
     }
 }
 
@@ -2206,6 +2226,12 @@ impl OverflowingCheckpointModel {
             overflows: Arc::new(Mutex::new(overflows)),
             rejected: Arc::default(),
         }
+    }
+}
+
+impl gents_loop::provider_call::ForCall for OverflowingCheckpointModel {
+    fn for_call(&self, _call: &gents_loop::provider_call::ProviderCall) -> Self {
+        self.clone()
     }
 }
 

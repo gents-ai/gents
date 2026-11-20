@@ -30,9 +30,22 @@ pub struct ReplayEvidenceRow {
     pub evidence: ResolvedReplayEvidence,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct ReplayEvidenceViolation(pub String);
+
+impl ReplayEvidenceViolation {
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_map_source(error, |cause| {
+            cause.downcast_ref::<Self>().or_else(|| {
+                match cause.downcast_ref::<ReplayEvidenceResolveError>() {
+                    Some(ReplayEvidenceResolveError::Violation(violation)) => Some(violation),
+                    _ => None,
+                }
+            })
+        })
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayEvidenceResolveError {
@@ -142,6 +155,7 @@ impl Drop for EstimateSeedGuard {
 
 pub type RenderedRequestSink = Arc<
     dyn Fn(
+            &crate::provider_call::ProviderCall,
             usize,
             u32,
             CompletionRequest,
@@ -173,6 +187,9 @@ pub struct TurnCompactionRequest {
     pub admission: crate::compaction::ReductionAdmission,
     pub turn_index: usize,
     pub prior_reduction_keys: Vec<String>,
+    /// What the compacting loop's provider calls carry, from which the
+    /// reduction's own calls derive.
+    pub provider_call: crate::provider_call::ProviderCall,
 }
 
 #[derive(Debug)]
@@ -223,8 +240,8 @@ impl std::fmt::Debug for TurnReductionCommit {
 pub enum TurnCompactionError {
     #[error(transparent)]
     Compaction(#[from] CompactionError),
-    #[error(transparent)]
-    Compactor(Box<dyn std::error::Error + Send + Sync>),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Compactor(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl TurnCompactionError {
@@ -301,7 +318,6 @@ fn bounded_structured_output_preview(raw: &str) -> String {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum LoopStreamItem {
     Text(String),
     Reasoning(gents_protocol::message::Reasoning),
@@ -343,6 +359,10 @@ pub enum LoopStreamItem {
         will_retry: bool,
         backoff: std::time::Duration,
     },
+    /// A retry's backoff ended. The consumer authorizes the retry's dispatch
+    /// against the execution lease before it polls the stream again (Lean
+    /// `RequestExecutionLease.retryWakeDispatches`).
+    RetryWake,
     OutputObligationPending {
         reminder: Message,
     },
@@ -392,6 +412,12 @@ pub struct LoopConfig {
     pub output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
     pub folded_prompts: Vec<FoldedPrompt>,
     pub authored_input: Option<AuthoredInput>,
+    /// The envelope of the request this loop runs for: the context its
+    /// foreground tool calls are derived from.
+    pub tool_context: crate::tool::ToolCallEnvelope,
+    /// What this loop's provider calls carry; each dispatch adds its routing
+    /// affinity.
+    pub provider_call: crate::provider_call::ProviderCall,
 }
 
 #[derive(Clone, Debug)]

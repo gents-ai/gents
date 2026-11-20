@@ -7,17 +7,12 @@ const OWNER: &str = "did:key:zPackInstallOwner";
 
 #[test]
 fn pack_cleanup_observation_matches_model() {
-    let modeled = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration policy model");
-    assert_eq!(modeled.configuration_pack_cleanup_cases.len(), 4);
-    for case in &modeled.configuration_pack_cleanup_cases {
-        let observed = case["visible"].as_array().unwrap().iter().all(|visible| {
-            require_owned_document_visible("Tools", "tool", visible.as_bool().unwrap()).is_ok()
-        });
-        assert_eq!(observed, case["expected"].as_bool().unwrap(), "{case}");
-    }
+    gents_lean_vocab::families::household_pack_cleanup_visible::replay(|input| {
+        input
+            .visible
+            .iter()
+            .all(|visible| require_owned_document_visible("Tools", "tool", *visible).is_ok())
+    });
 }
 
 #[test]
@@ -114,6 +109,61 @@ async fn install_source_is_recorded_and_retained_across_updates() {
     assert_eq!(read.source, listed[0].source);
 }
 
+#[tokio::test]
+async fn foreign_pack_install_cannot_take_over_or_orphan_owned_documents() {
+    for coordinate in ["other/demo", "acme/other"] {
+        for label in ["Original", "Replacement"] {
+            let access = access().await;
+            install(
+                &access,
+                "1",
+                &config(&[("shared", "Original")]),
+                DriftPolicy::Refuse,
+            )
+            .await
+            .unwrap();
+            let before = access
+                .execute("{ Tools { tools_id display_name tags } PackInstallation { coordinate digest documents } }")
+                .await
+                .unwrap();
+            let mut foreign = identity("1");
+            foreign.coordinate = coordinate.into();
+            foreign.plugins.clear();
+            let mut desired = config(&[("shared", label)]);
+            desired.tools[0].tags = vec![format!("gents:pack:{coordinate}")];
+            let result = super::super::install_pack_documents(
+                &access,
+                OWNER,
+                &foreign,
+                &desired,
+                DriftPolicy::Refuse,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await;
+            assert!(result.is_err(), "{coordinate}: {label}");
+            let after = access
+                .execute("{ Tools { tools_id display_name tags } PackInstallation { coordinate digest documents } }")
+                .await
+                .unwrap();
+            assert_eq!(after, before, "{coordinate}: {label}");
+            assert!(read_installed_pack(&access, OWNER, coordinate)
+                .await
+                .unwrap()
+                .is_none());
+            remove_pack(
+                &access,
+                OWNER,
+                "acme/demo",
+                DriftPolicy::Refuse,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
+            assert!(tools_ids(&access).await.is_empty());
+        }
+    }
+}
+
 #[test]
 fn install_source_selection_matches_lean() {
     let raw = gents_lean_contract::run_prepared_generator(
@@ -180,8 +230,8 @@ fn pack_change_errors_keep_conflict_retry() {
         assert!(is_classified_transaction_conflict(&error.into_anyhow()));
     }
     assert!(
-        !is_classified_transaction_conflict(&anyhow::Error::from(other())),
-        "a transparent wrapper hides its inner error from the chain"
+        is_classified_transaction_conflict(&anyhow::Error::from(other())),
+        "Other sources its application error, so the conflict stays on the chain"
     );
     let edited = PackChangeError::Edited {
         coordinate: "acme/demo".into(),
@@ -203,12 +253,14 @@ fn pack_change_errors_keep_conflict_retry() {
 
 #[test]
 fn other_renders_as_its_anyhow_error() {
+    use gents_protocol::error_chain::ErrorChain;
     let error = anyhow::anyhow!("root").context("ctx");
     let rendered = format!("{error:#}");
-    assert_eq!(
-        format!("{:#}", anyhow::Error::from(PackChangeError::Other(error))),
-        rendered
-    );
+    let other = PackChangeError::Other(error);
+    assert_eq!(format!("{other:#}"), rendered);
+    let other = anyhow::Error::from(other);
+    assert_eq!(other.to_string(), "ctx");
+    assert_eq!(ErrorChain(other.as_ref()).to_string(), rendered);
 }
 
 #[test]
@@ -1163,6 +1215,63 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     assert!(
         format!("{error:#}").contains("has more than one installation record"),
         "{error:#}"
+    );
+    node.shutdown().await.expect("node shutdown");
+}
+
+/// The concurrent write changes `installed_at`, a field of the installation
+/// record the removal reads and deletes but never selects, so the rebuilt
+/// attempt plans the same removal the conflicted one did.
+#[tokio::test]
+async fn signed_removal_rebuilds_after_a_concurrent_installation_record_write() {
+    use gents_store::config_client::ConfigApplyTxn;
+    use gents_store::identity::NodeIdentity;
+
+    let (_directory, root, node, access) = crate::pack::agent_bindings::tests::fixture().await;
+    let owner = root.did();
+    install_owned(
+        &access,
+        owner,
+        "1",
+        &config_owned(owner, &[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    assert_eq!(tools_ids(&access).await, vec!["alpha"]);
+    let doc_id = installation_doc_id(&access).await;
+
+    let (removed, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+        remove_pack(
+            &access,
+            owner,
+            "acme/demo",
+            DriftPolicy::Refuse,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        ),
+        corrupt_installation_field(
+            &access,
+            &doc_id,
+            "installed_at",
+            json!("2000-01-01T00:00:00Z"),
+        ),
+    )
+    .await;
+    let removed = removed.unwrap();
+
+    assert!(paused, "the removal never reached its first mutation");
+    assert_eq!(removed.documents.removed, vec!["Tools/alpha"]);
+    assert_eq!(tools_ids(&access).await, Vec::<String>::new());
+    let record = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(record["data"]["PackInstallation"], json!([]));
+    assert_eq!(
+        read_installed_pack(&access, owner, "acme/demo")
+            .await
+            .unwrap(),
+        None
     );
     node.shutdown().await.expect("node shutdown");
 }
@@ -4707,3 +4816,6 @@ fn a_recorded_document_carries_the_installer_root_mark_only_when_set() {
         marked
     );
 }
+
+#[path = "tests/host_roots.rs"]
+mod root_preservation;

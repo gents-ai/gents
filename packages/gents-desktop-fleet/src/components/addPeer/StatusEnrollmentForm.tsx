@@ -30,7 +30,7 @@ export function StatusEnrollmentForm({
         <p className="muted">
           Enter a node&apos;s IP address, hostname, or URL. Gents reads its
           <code> /status</code> offer, authenticates the server, and requests
-          enrollment. The server must approve the request before chat opens.
+          access. The administrator must approve the request before chat opens.
         </p>
       </div>
       <div className="fleet-discovery-row">
@@ -59,7 +59,7 @@ export function StatusEnrollmentForm({
               ? "Adding..."
               : disabled
                 ? "Preparing..."
-                : "Request enrollment"}
+                : "Request access"}
         </button>
       </div>
       {discovery.importStatus ? (

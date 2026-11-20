@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
 
-use gents_loop::live_output::LiveToolOutputWriter;
+use gents_loop::tool::ToolCallEnvelope;
+use gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry;
 use gents_loop::tool_policy::WorkspaceAuthority;
 
 #[derive(Clone, Default)]
@@ -29,10 +30,6 @@ impl ToolWorkspaceScope {
     }
 }
 
-tokio::task_local! {
-    static WORKSPACE_OVERLAY: ToolWorkspaceScope;
-}
-
 #[derive(Clone)]
 pub struct CurrentToolRuntimeContext {
     pub runtime_home: Option<PathBuf>,
@@ -52,65 +49,76 @@ pub struct CurrentToolRuntimeContext {
     pub(crate) request_id: Option<String>,
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors the gents-loop scope entry point; called from toolset, hook, plugin and workspace tests"
-)]
-pub async fn scope_request_tool_execution_with_workspace_overlay<F, T>(
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
+/// The per-request host values the tool surface reads. The default, every value
+/// absent, is what a call outside any request sees.
+#[derive(Clone, Default)]
+pub struct ToolHostContext {
+    pub workspace: ToolWorkspaceScope,
+    pub interactive: bool,
+    pub approval: Option<crate::plugin::approval::workspace::Context>,
+}
+
+impl ToolHostContext {
+    /// A call envelope that carries only these host values.
+    pub fn call(self) -> ToolCallEnvelope {
+        ToolCallEnvelope::default().with_extension(self)
+    }
+}
+
+/// The host values of the call `envelope` serves.
+pub fn host(envelope: &ToolCallEnvelope) -> ToolHostContext {
+    envelope
+        .extensions()
+        .get::<ToolHostContext>()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The runtime context of the call `envelope` serves, with its workspace.
+pub fn tool_runtime_context(envelope: &ToolCallEnvelope) -> Option<CurrentToolRuntimeContext> {
+    let scope = envelope.runtime()?;
+    Some(with_workspace(scope, host(envelope).workspace))
+}
+
+/// The envelope of a call entered with `workspace` and `entry` inside
+/// `enclosing`. `entry.workspace_cwd` is replaced by the workspace's working
+/// directory, or its root.
+pub fn entered_with_workspace_overlay(
+    enclosing: &ToolCallEnvelope,
     workspace: ToolWorkspaceScope,
-    live_output: Option<LiveToolOutputWriter>,
-    session_id: Option<String>,
-    correlation: Option<String>,
-    source_fields: std::collections::BTreeMap<String, String>,
-    background: bool,
-    future: F,
-) -> T
-where
-    F: std::future::Future<Output = T>,
-{
-    let cwd = workspace
+    entry: ToolScopeEntry,
+) -> ToolCallEnvelope {
+    let mut entry = entry;
+    entry.workspace_cwd = workspace
         .workspace_cwd
         .clone()
         .or_else(|| workspace.workspace_root.clone());
-    WORKSPACE_OVERLAY
-        .scope(
-            workspace,
-            gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-                deadline_at,
-                cancellation_token,
-                cwd,
-                live_output,
-                session_id,
-                correlation,
-                source_fields,
-                background,
-                future,
-            ),
-        )
-        .await
+    let runtime = gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext::entered(
+        enclosing.runtime().as_ref(),
+        entry,
+    );
+    let host = ToolHostContext {
+        workspace,
+        ..host(enclosing)
+    };
+    enclosing
+        .clone()
+        .with_runtime(Some(runtime))
+        .with_extension(host)
 }
 
-pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
-    let scope = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()?;
-    let overlay = WORKSPACE_OVERLAY.try_with(Clone::clone).ok();
-    Some(CurrentToolRuntimeContext {
-        runtime_home: overlay
-            .as_ref()
-            .and_then(|overlay| overlay.runtime_home.clone()),
+fn with_workspace(
+    scope: gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext,
+    overlay: ToolWorkspaceScope,
+) -> CurrentToolRuntimeContext {
+    CurrentToolRuntimeContext {
+        runtime_home: overlay.runtime_home,
         deadline_at: scope.deadline_at,
         cancellation_token: scope.cancellation_token,
         workspace_cwd: scope.workspace_cwd,
-        workspace_root: overlay
-            .as_ref()
-            .and_then(|overlay| overlay.workspace_root.clone()),
-        workspace_authority: overlay
-            .as_ref()
-            .and_then(|overlay| overlay.workspace_authority),
-        workspace_artifact: overlay
-            .as_ref()
-            .and_then(|overlay| overlay.workspace_artifact.clone()),
+        workspace_root: overlay.workspace_root,
+        workspace_authority: overlay.workspace_authority,
+        workspace_artifact: overlay.workspace_artifact,
         session_id: scope.session_id,
         background: scope.background,
         correlation: scope.correlation,
@@ -119,86 +127,10 @@ pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
         node_did: scope.node_did,
         agent_did: scope.agent_did,
         request_id: scope.request_id,
-    })
+    }
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session;
+#[cfg(test)]
+pub(crate) use gents_loop::tool_call_lifecycle::runtime::call_tool_managed;
 pub(crate) use gents_loop::tool_call_lifecycle::runtime::tool_execution_bounds;
-#[cfg(test)]
-pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
-    call_tool_managed, scope_request_tool_execution_with_trigger_context,
-    scope_tool_request_identity,
-};
-
-#[cfg(any(test, feature = "test-fixtures"))]
-pub async fn scope_request_tool_execution<F, T>(
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    future: F,
-) -> T
-where
-    F: std::future::Future<Output = T>,
-{
-    let workspace_cwd = current_tool_runtime_context().and_then(|scope| scope.workspace_cwd);
-    scope_request_tool_execution_with_workspace(
-        deadline_at,
-        cancellation_token,
-        workspace_cwd,
-        future,
-    )
-    .await
-}
-
-#[cfg(any(test, feature = "test-fixtures"))]
-pub async fn scope_request_tool_execution_with_workspace<F, T>(
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    workspace_cwd: Option<PathBuf>,
-    future: F,
-) -> T
-where
-    F: std::future::Future<Output = T>,
-{
-    scope_request_tool_execution_with_session(
-        deadline_at,
-        cancellation_token,
-        workspace_cwd,
-        None,
-        current_tool_runtime_context().and_then(|scope| scope.session_id),
-        future,
-    )
-    .await
-}
-
-#[cfg(test)]
-pub(crate) async fn scope_background_tool_execution<F, T>(
-    deadline_at: Option<DateTime<Utc>>,
-    cancellation_token: CancellationToken,
-    workspace_cwd: Option<PathBuf>,
-    live_output: Option<LiveToolOutputWriter>,
-    future: F,
-) -> T
-where
-    F: std::future::Future<Output = T>,
-{
-    let inherited = current_tool_runtime_context();
-    scope_request_tool_execution_with_trigger_context(
-        deadline_at,
-        cancellation_token,
-        workspace_cwd,
-        live_output,
-        inherited
-            .as_ref()
-            .and_then(|scope| scope.session_id.clone()),
-        inherited
-            .as_ref()
-            .and_then(|scope| scope.correlation.clone()),
-        inherited
-            .map(|scope| scope.source_fields)
-            .unwrap_or_default(),
-        true,
-        future,
-    )
-    .await
-}
+pub use gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity;

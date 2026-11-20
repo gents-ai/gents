@@ -1,0 +1,22 @@
+{
+ "ok": true,
+ "problems": [],
+ "per_key": {
+  "request_input_cases": []
+ },
+ "notes": [
+  "request_input_cases: declared dropped fields (justified): {'agent': \"no old reader read the case's agent: the word occurs in reader files' production code and as the binding flag carried by request_input_contracts_goal_claim_binding; it is an admission input folded into accepted\", 'admission_kind': 'no old reader read it: the word occurs in admission.rs production code; it is an admission input folded into accepted', 'expected': \"the nested client_goal_claim_binding_cases element's expectation, now the Bool output of request_input_contracts_goal_claim_binding\", 'role': 'a key inside the native_input Json value, carried whole', 'type': 'a key inside the native_input and attachment_parts Json values, carried whole', 'value': 'a key inside the native_input Json value, carried whole', 'detail': 'a key inside the native_input and attachment_parts Json values, carried whole', 'prefix': 'a key inside the attachment_parts Json value, carried whole', 'encoded_text': 'a key inside the attachment_parts Json value, carried whole', 'expected_has_authored_input': 'carried as has_authored_input in request_input_contracts_derivation (the gate strips expected_ and has_ once each, so the names normalise differently)'}",
+  "request_input_cases: subset_fields (carried only for the named scenario families' cases): {'expected_accepted': ['request_input_contracts_admitted_capture'], 'expected_provider_parts': ['request_input_contracts_provider'], 'expected_attachment_parts': ['request_input_contracts_provider']}",
+  "request_input_contracts_derivation: consumer crates/gents-protocol/src/request_input/tests.rs",
+  "request_input_contracts_signed_fields: consumer crates/gents-protocol/src/request_input/tests.rs",
+  "request_input_contracts_provider: consumer crates/gents-loop/src/provider_input/pushdown_tests.rs",
+  "request_input_contracts_provider_refusal: consumer crates/gents-loop/src/provider_input/pushdown_tests.rs",
+  "request_input_contracts_goal_claim_binding: consumer crates/gents-automation/src/goal/controller.rs",
+  "request_input_contracts_claim_queue_candidate: consumer crates/gents-session/src/request/admission.rs",
+  "request_input_contracts_workspace_source: consumer crates/gents-session/src/request/lifecycle.rs",
+  "request_input_contracts_edit_directory: consumer crates/gents-session/src/request/lifecycle/queue/management.rs",
+  "request_input_contracts_replacement: consumer crates/gents-session/src/request/lifecycle/queue/management.rs",
+  "request_input_contracts_admitted_capture: consumer crates/gents-session/src/request/admission/captured_context_tests.rs",
+  "request_input_contracts_published_capture: consumer crates/gents-session/src/request/streaming/canonical_tests.rs"
+ ]
+}

@@ -68,10 +68,10 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
         one_openai_completion(client).await;
 
         let account = crate::usage_observation::UsageAccount::for_agent(&behavior).unwrap();
-        let stored =
-            crate::clients::provider_http::tests::stored_usage_eventually(&cache, &node, &account)
-                .await
-                .unwrap_or_else(|| panic!("usage recorded for {backend_id}"));
+        let stored = crate::clients::provider_http::tests::stored_usage_when_recorded(
+            &cache, &node, &account,
+        )
+        .await;
         let window = &stored.report.windows[0];
         assert_eq!((window.label.as_str(), window.used_pct), ("requests", 25.0));
     }

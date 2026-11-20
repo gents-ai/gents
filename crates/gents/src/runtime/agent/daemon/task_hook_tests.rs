@@ -29,9 +29,19 @@ const WORKSPACE_ID: &str = "task-hook-workspace";
 
 #[derive(Clone)]
 struct ScriptedModel {
+    call: gents_loop::provider_call::ProviderCall,
     calls: Arc<AtomicUsize>,
     fail: bool,
     hang: bool,
+}
+
+impl gents_loop::provider_call::ForCall for ScriptedModel {
+    fn for_call(&self, call: &gents_loop::provider_call::ProviderCall) -> Self {
+        Self {
+            call: call.clone(),
+            ..self.clone()
+        }
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -55,8 +65,10 @@ impl CompletionModel for ScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
-            .await?;
+        gents_inference::test_support::capture_scripted_provider_request(
+            &self.call, &request, "scripted",
+        )
+        .await?;
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.fail {
             return Err(CompletionError::ProviderError("agent refused".into()));
@@ -371,7 +383,7 @@ impl Harness {
             tool_config: self.tool_config.clone(),
             agent_config: self.agent_config.clone(),
             provider_family: None,
-            model: Arc::new(ScriptedModel {
+            model: Arc::new(ScriptedModel { call: Default::default(),
                 calls: self.calls.clone(),
                 fail,
                 hang,
@@ -597,9 +609,8 @@ async fn passing_hooks_leave_a_manual_task_run_completed() {
     );
     let selected = harness.agent_access.execute(&fire_query).await.unwrap();
     assert_eq!(selected["data"]["TriggerFire"][0]["task_id"], TASK_ID);
-    let node_view = ConfigAccess::local(harness.node.clone())
-        .execute(&fire_query)
-        .await;
+    let reader = gents_store::test_support::unrelated_document_reader(&harness.node).await;
+    let node_view = reader.execute(&fire_query).await;
     assert!(node_view.is_err() || node_view.unwrap()["data"]["TriggerFire"] == json!([]));
     let row = harness.run(request, false).await;
     assert_eq!(harness.calls(), 1, "{row}");

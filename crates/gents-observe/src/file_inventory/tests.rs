@@ -388,12 +388,27 @@ async fn plugin_file_effect_entries_are_ordered() -> bool {
         effect.start_running().await.unwrap();
         let document = effect.doc_id().unwrap().to_owned();
         let writer = registry.writer_for(document.clone()).await;
-        let output = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
-            Default::default(), false,
-            writer_tool.call(WriteFileArgs {path: "file.txt".into(), content: after.into(),
-                expected_content_hash: None, overwrite: true, raw_json: true}),
-        ).await.unwrap();
+        let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+            live_output: Some(writer),
+            ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            )
+        }
+        .call();
+        let output = writer_tool
+            .call(
+                WriteFileArgs {
+                    path: "file.txt".into(),
+                    content: after.into(),
+                    expected_content_hash: None,
+                    overwrite: true,
+                    raw_json: true,
+                },
+                &scope_call,
+            )
+            .await
+            .unwrap();
         effect.stage_deferred_writes(registry.deferred_writes(&document).await);
         effect.complete(&output).await.unwrap();
         let replayed = parent
@@ -531,14 +546,27 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     let registry = LiveToolOutputRegistry::default();
     let writer = registry.writer_for(doc_id.clone()).await;
     let tool = WriteFileTool::new(ToolContext::new(root_path.clone(), false).unwrap());
-    let output = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-        None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
-        Default::default(), false,
-        tool.call(WriteFileArgs {
-            path: "file.bin".into(), content: "replacement bytes".into(), raw_json: true,
-            expected_content_hash: None, overwrite: true,
-        }),
-    ).await.unwrap();
+    let scope_call = gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+        live_output: Some(writer),
+        ..gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry::new(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        )
+    }
+    .call();
+    let output = tool
+        .call(
+            WriteFileArgs {
+                path: "file.bin".into(),
+                content: "replacement bytes".into(),
+                raw_json: true,
+                expected_content_hash: None,
+                overwrite: true,
+            },
+            &scope_call,
+        )
+        .await
+        .unwrap();
     assert!(
         !output.contains("file_changes") && !output.contains("AP+A"),
         "{output}"
@@ -759,6 +787,73 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         .as_array()
         .unwrap()
         .is_empty());
+    let mut inherited = inventory.entries()[0].clone();
+    inherited.scope.session_id = "fork-file-images".into();
+    let copied = access.transact_write("test.file_inventory.inherited_images", |txn| {
+        let inherited = inherited.clone();
+        Box::pin(async move {
+            let response = txn.execute_with_variables(
+                "mutation($input: ToolFileInventoryMutationInputArg!) { create_ToolFileInventory(input: $input) { _docID } }",
+                &serde_json::json!({"input": {
+                    "tool_call_doc_id": inherited.tool_call_doc_id,
+                    "observation_doc_id": inherited.observation_doc_id,
+                    "request_doc_id": inherited.request_doc_id,
+                    "node_did": inherited.scope.node_did,
+                    "session_id": inherited.scope.session_id,
+                    "requester_did": inherited.scope.requester_did,
+                    "changes": [inherited.change],
+                }}),
+            ).await?;
+            gents_store::graphql::created_doc_id(&response, "ToolFileInventory")
+        })
+    }).await.unwrap();
+    inherited.projection_doc_id = copied;
+    let copy_reader: identity::Did = requester_did.as_ref().unwrap().parse().unwrap();
+    access
+        .transact_write("test.file_inventory.copy_reader", |txn| {
+            let doc = inherited.projection_doc_id.clone();
+            let reader = copy_reader.clone();
+            Box::pin(async move {
+                txn.add_actor_relationship("ToolFileInventory", &doc, "reader", &reader)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    let copy_access = ConfigAccess::local_as(admission.node.clone(), copy_reader);
+    assert!(matches!(
+        gents_session::tool_call::query::inventory_images::load_inventory_images(
+            &copy_access,
+            &inherited
+        )
+        .await
+        .unwrap(),
+        gents_session::tool_call::query::result::ToolFileChangeRead::Missing
+    ));
+    let inherited_images =
+        gents_session::tool_call::query::inventory_images::load_inventory_images(
+            &access, &inherited,
+        )
+        .await
+        .unwrap();
+    let gents_session::tool_call::query::result::ToolFileChangeRead::Retained { changes, .. } =
+        inherited_images
+    else {
+        panic!("copied inventory lost readable source versions");
+    };
+    assert_eq!(serde_json::to_value(changes).unwrap(), wire);
+    let mut mismatched = inherited.clone();
+    mismatched.observation_doc_id = "another-observation".into();
+    assert!(matches!(
+        gents_session::tool_call::query::inventory_images::load_inventory_images(
+            &access,
+            &mismatched
+        )
+        .await,
+        Err(
+            gents_session::tool_call::query::inventory_images::InventoryImageError::BindingMismatch
+        )
+    ));
     let content_doc_id = row["ToolFileChange"][0]["file_changes"]["changes"][0]["content_doc_id"]
         .as_str()
         .unwrap()

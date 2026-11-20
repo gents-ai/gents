@@ -1,5 +1,3 @@
-#![cfg(feature = "test-fixtures")]
-
 use anyhow::{Context, Result};
 use gents_inference::views::backends::{BackendList, ObservationList};
 use gents_inference::views::profiles::ProfileList;

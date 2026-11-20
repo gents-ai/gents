@@ -10,7 +10,7 @@ pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
     usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW,
 };
-use rig::http_client::HeaderMap;
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -177,6 +177,7 @@ pub fn usage_view(
 pub struct UsageCache {
     endpoints: UsageEndpoints,
     entries: tokio::sync::Mutex<rapidhash::RapidHashMap<CacheKey, UsageObservation>>,
+    recorded: tokio::sync::watch::Sender<u64>,
     claude_accounts: gents_claude::pool::AccountPool<String>,
 }
 
@@ -204,6 +205,14 @@ impl UsageCache {
         &self.claude_accounts
     }
 
+    /// Counts the observations recorded so far and changes after each one.
+    /// A reporter records off the response path (`UsageReporter::observe`),
+    /// so a reader that expects an observation subscribes before it reads
+    /// (TLA+ `UsageRecordObservation`).
+    pub fn subscribe_records(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.recorded.subscribe()
+    }
+
     async fn load(&self, target: &Target) -> Option<UsageObservation> {
         self.entries.lock().await.get(&target.key).cloned()
     }
@@ -226,6 +235,8 @@ impl UsageCache {
         let mut entries = self.entries.lock().await;
         let previous = entries.remove(&target.key).unwrap_or_default();
         entries.insert(target.key.clone(), previous.merge(observation));
+        drop(entries);
+        self.recorded.send_modify(|count| *count += 1);
     }
 }
 
@@ -808,7 +819,11 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<String, Self::Error> {
+    async fn call(
+        &self,
+        _args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<String, Self::Error> {
         let reads = read_node_usage(
             &self.cache,
             self.node.clone(),

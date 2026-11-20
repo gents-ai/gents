@@ -1,0 +1,3 @@
+---- MODULE MCClientRequestCredentialsGlobal ----
+EXTENDS ClientRequestCredentials
+====

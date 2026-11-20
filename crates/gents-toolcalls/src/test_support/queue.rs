@@ -89,7 +89,7 @@ pub async fn insert_runtime_queue_request(
 ) -> String {
     let signer = db.agent_identity.managed_agent_signer().unwrap();
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = gents_session::request::lifecycle::queue::mutation::session_request_create_mutation_at_hop_with_signer(
+    let mutation = gents_session::request::lifecycle::queue::mutation::build_session_request_at_hop_with_signer(
         parent,
         parent.request_hop,
         SessionRequestFields {
@@ -104,7 +104,7 @@ pub async fn insert_runtime_queue_request(
         Some(&signer),
     )
     .await
-    .unwrap();
+    .unwrap().graphql_mutation().unwrap();
     let agent = escape_graphql_string(db.agent_did());
     let session = escape_graphql_string(&parent.session_id);
     let node = escape_graphql_string(db.node_did());
@@ -149,6 +149,9 @@ pub struct CanonicalBackgroundFixture {
     pub lifecycle: RequestLifecycle,
     pub writer: DefraStreamWriter,
     pub next_turn: usize,
+    /// Read before the parent's claim, so it precedes the accepted deadline
+    /// every fixture tool inherits from that claim.
+    pub claimed_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub async fn canonical_background_fixture(
@@ -216,6 +219,7 @@ pub async fn canonical_background_fixture_with_input(
         .bind_managed_agent(db.agent_identity.as_ref())
         .unwrap();
     lifecycle.set_client_claim_admission(admission);
+    let claimed_at = chrono::Utc::now();
     assert_eq!(
         lifecycle
             .claim_with_identity()
@@ -237,6 +241,7 @@ pub async fn canonical_background_fixture_with_input(
         lifecycle,
         writer,
         next_turn: 0,
+        claimed_at,
     }
 }
 
@@ -324,8 +329,17 @@ impl CanonicalBackgroundFixture {
         let binding = tool
             .tool_output_binding()
             .context("accepted fixture tool has output binding")?;
-        crate::call::lifecycle::delivery::append_tool_output(&binding, notification_content)
-            .await?;
+        // The append checks its observation time against the accepted deadline,
+        // which the claim set from the wall clock. Observing it at the claim
+        // instant keeps fixture setup time out of the deadline the test
+        // does not exercise.
+        crate::call::lifecycle::delivery::append_tool_output_at(
+            &binding,
+            notification_content,
+            self.claimed_at,
+            self.claimed_at,
+        )
+        .await?;
         anyhow::ensure!(
             tool.complete_owned(notification_content, None).await?,
             "fixture tool terminal CAS lost"
@@ -355,13 +369,15 @@ impl CanonicalBackgroundFixture {
             &self.access,
             &self.node,
             &self.parent,
-            notification_content,
-            message_key,
-            wake_content,
-            queue,
-            existing_notification_doc_id,
+            gents_session::request::lifecycle::queue::BackgroundCompletionNotification {
+                content: notification_content,
+                message_key,
+                wake_content,
+                queue,
+                existing_notification_doc_id,
+                wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
+            },
             publication,
-            gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         )
         .await
     }

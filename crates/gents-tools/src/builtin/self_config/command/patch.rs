@@ -54,7 +54,7 @@ impl ConfigCommandTool {
                         gents_protocol::operations::skill::SkillOperationError::Document(error) => {
                             error
                         }
-                        other => DocumentOperationError::Passthrough(other.into()),
+                        other => DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::error(other)),
                     })
                 }),
             ),
@@ -79,7 +79,7 @@ impl ConfigCommandTool {
                         gents_protocol::operations::mcp_service::McpServiceOperationError::Document(
                             error,
                         ) => error,
-                        other => DocumentOperationError::Passthrough(other.into()),
+                        other => DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::error(other)),
                     }
                     })
                 }),

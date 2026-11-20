@@ -3,8 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
-use gents_desktop_core::client::{ClientStoreKeyProvider, DesktopPaths};
+use gents_desktop_core::client::journal::ClientStoreKeyProvider;
+use gents_store::client_error::BridgeError;
+use gents_store::client_error::BridgeErrorCode;
+use gents_store::client_journal::paths::DesktopPaths;
 use gents_store::local::store_key::{StoreEncryption, StoreKey, StoreKeyCustody};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -76,7 +78,15 @@ where
 }
 
 #[derive(Debug)]
-struct HistoryUnlockRequired;
+pub(crate) struct HistoryUnlockRequired;
+
+impl HistoryUnlockRequired {
+    /// The marker reaches `Provider::failed` through the store-open path as an
+    /// erased error, so it is asked for there rather than matched.
+    pub(crate) fn occurs_in(error: &anyhow::Error) -> bool {
+        gents_protocol::error_chain::find_source::<Self>(error.as_ref()).is_some()
+    }
+}
 
 impl std::fmt::Display for HistoryUnlockRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -123,7 +133,7 @@ where
     }
 
     pub async fn failed(&self, error: &anyhow::Error) -> Result<()> {
-        let (code, message) = if error.downcast_ref::<HistoryUnlockRequired>().is_some()
+        let (code, message) = if HistoryUnlockRequired::occurs_in(error)
             || gents_store::local::store_key::store_key_unavailable(error.as_ref()).is_some()
         {
             (
@@ -347,12 +357,9 @@ mod tests {
             Message::Store { .. }
         ));
         reply(&mut editor, Reply::Use { bytes: None }).await;
-        assert!(load
-            .await
-            .unwrap()
-            .unwrap_err()
-            .downcast_ref::<HistoryUnlockRequired>()
-            .is_some());
+        assert!(HistoryUnlockRequired::occurs_in(
+            &load.await.unwrap().unwrap_err()
+        ));
     }
 
     #[tokio::test]

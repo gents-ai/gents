@@ -5,21 +5,26 @@ use anyhow::Result;
 use super::{context, BindingAction};
 use crate::native::{CommandExecutionMode, CommandExecutionPolicy};
 
-pub(crate) fn guard_home() -> Result<Option<PathBuf>> {
-    let Some(home) = context::current_home() else {
+/// `context` is the approval context of the request the command serves.
+pub(crate) fn guard_home(context: Option<&super::Context>) -> Result<Option<PathBuf>> {
+    let Some(home) = context::current_home(context) else {
         return Ok(None);
     };
-    Ok(context::settings(&home)?.map(|_| home))
+    Ok(context::settings(context, &home)?.map(|_| home))
 }
 
-pub fn writable_root(root: &Path, policy: &CommandExecutionPolicy) -> Result<PathBuf> {
+pub fn writable_root(
+    context: Option<&super::Context>,
+    root: &Path,
+    policy: &CommandExecutionPolicy,
+) -> Result<PathBuf> {
     if policy.mode != CommandExecutionMode::WorkspaceWrite {
         return Ok(root.to_owned());
     }
-    let Some(home) = context::current_home() else {
+    let Some(home) = context::current_home(context) else {
         return Ok(root.to_owned());
     };
-    let Some(settings) = context::settings(&home)? else {
+    let Some(settings) = context::settings(context, &home)? else {
         return Ok(root.to_owned());
     };
     if settings.selection.mode != super::Mode::FullAccess
@@ -40,16 +45,19 @@ pub fn writable_root(root: &Path, policy: &CommandExecutionPolicy) -> Result<Pat
 /// by the shared launch owner. A supplied but unavailable approval home is an
 /// error at request setup, never evidence of an unconfigured workspace.
 pub async fn authorize_command(
+    call: &gents_loop::tool::ToolCallEnvelope,
     argv: &[String],
     cwd: &Path,
     root: &Path,
     writable_root: Option<&Path>,
     policy: &CommandExecutionPolicy,
 ) -> Result<()> {
-    let Some(home) = context::current_home() else {
+    let approval = crate::runtime_context::host(call).approval;
+    let Some(home) = context::current_home(approval.as_ref()) else {
         return Ok(());
     };
     let Some(decision) = super::binding_route(
+        approval.as_ref(),
         &home,
         || {
             Ok(BindingAction::Command {
@@ -67,6 +75,7 @@ pub async fn authorize_command(
         return Ok(());
     };
     super::authorize_binding(
+        call,
         &home,
         decision,
         "The command was not approved for this workspace.",
@@ -103,14 +112,16 @@ mod tests {
                     session,
                 )
                 .unwrap();
-                workspace::scope(
-                    context,
-                    crate::plugin::approval::scope_interactive(false, async move {
-                        let policy = CommandExecutionPolicy::write_capable();
-                        let argv = vec!["printf".to_owned(), "gated".to_owned()];
-                        authorize_command(&argv, &project, &project, None, &policy).await
-                    }),
-                )
+                let call = crate::runtime_context::ToolHostContext {
+                    approval: context.clone(),
+                    ..Default::default()
+                }
+                .call();
+                async move {
+                    let policy = CommandExecutionPolicy::write_capable();
+                    let argv = vec!["printf".to_owned(), "gated".to_owned()];
+                    authorize_command(&call, &argv, &project, &project, None, &policy).await
+                }
                 .await
             }
         };
@@ -173,9 +184,7 @@ mod tests {
             )
             .unwrap();
             let policy = CommandExecutionPolicy::write_capable().with_mode(case.input.mode);
-            let selected = workspace::scope(scope, async { writable_root(&root, &policy) })
-                .await
-                .unwrap();
+            let selected = writable_root(scope.as_ref(), &root, &policy).unwrap();
             assert!(
                 selected.starts_with(&root),
                 "selected workspace {} escapes the tool root {}",

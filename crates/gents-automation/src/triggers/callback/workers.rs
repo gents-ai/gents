@@ -184,6 +184,7 @@ impl CallbackEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_store::test_support::STALL_CEILING;
     use std::time::Duration;
     use tokio::sync::oneshot;
 
@@ -202,7 +203,7 @@ mod tests {
             }));
         }
         for _ in 0..2 {
-            tokio::time::timeout(Duration::from_secs(5), entered.recv())
+            tokio::time::timeout(STALL_CEILING, entered.recv())
                 .await
                 .unwrap()
                 .unwrap();
@@ -217,13 +218,16 @@ mod tests {
         assert_eq!(workers.permits.available_permits(), 0);
         assert!(entered.try_recv().is_err());
         releases.remove(0).send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while workers.contains("one") {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        // The finished attempt returns its permit and leaves the active set in
+        // one synchronous drop on this current-thread runtime, so the permit
+        // coming back is the event that it has left.
+        drop(
+            tokio::time::timeout(STALL_CEILING, workers.permits.acquire())
+                .await
+                .expect("the released attempt returns its permit")
+                .unwrap(),
+        );
+        assert!(!workers.contains("one"));
         let entered_tx = entered_tx.clone();
         assert!(
             workers.schedule("three".into(), "other".into(), async move {
@@ -231,7 +235,7 @@ mod tests {
             })
         );
         assert_eq!(
-            tokio::time::timeout(Duration::from_secs(5), entered.recv())
+            tokio::time::timeout(STALL_CEILING, entered.recv())
                 .await
                 .unwrap()
                 .unwrap(),
@@ -260,15 +264,15 @@ mod tests {
         assert!(!workers.contains("pending"));
         let drained = workers.drain();
         tokio::pin!(drained);
+        // A negative check without a settled point: a drain cannot finish
+        // while its attempt is held, so load can only make this pass.
         assert!(
             tokio::time::timeout(Duration::from_millis(20), &mut drained)
                 .await
                 .is_err()
         );
         release.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), drained)
-            .await
-            .unwrap();
+        tokio::time::timeout(STALL_CEILING, drained).await.unwrap();
         assert!(!workers.contains("running"));
     }
 }

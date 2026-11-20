@@ -197,24 +197,26 @@ async fn enqueue_generated_wake(
         access,
         node,
         parent,
-        &format!("notification {}", entry.request_id),
-        &format!(
-            "background-completion-notification:{}:{}",
-            case.name, entry.request_id
-        ),
-        "review notifications",
-        RequestQueue {
-            delivery: Default::default(),
-            position: None,
-            source,
-            policy,
-            key: Some(format!("background_completion:{key}")),
-            queued_after_request_id: entry.queued_after.map(|id| id.to_string()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
+        crate::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: &format!("notification {}", entry.request_id),
+            message_key: &format!(
+                "background-completion-notification:{}:{}",
+                case.name, entry.request_id
+            ),
+            wake_content: "review notifications",
+            queue: RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source,
+                policy,
+                key: Some(format!("background_completion:{key}")),
+                queued_after_request_id: entry.queued_after.map(|id| id.to_string()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            },
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         },
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap()
@@ -314,7 +316,8 @@ fn assert_generated_queue_row_metadata(
 
 #[tokio::test]
 async fn generated_interrupt_queue_events_bind_to_native_rows() {
-    for modeled in gents_lean_vocab::families::interrupt_queue_contracts_sequential::cases() {
+    let cases = gents_lean_vocab::families::interrupt_queue_contracts_sequential::cases();
+    for modeled in &cases {
         let case = &modeled.input;
         let mut observations = Vec::new();
         for use_http in [false, true] {
@@ -478,6 +481,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
         );
         modeled.check(Some(local));
     }
+    signed_interrupt_rebuilds_after_an_execution_renewal_conflict(&cases[0].input).await;
 }
 
 #[tokio::test]
@@ -724,21 +728,23 @@ async fn interrupted_queue_drain_rolls_back_with_latch(case: &ModeledCase) {
         &fixture.agent_access,
         &node,
         parent,
-        "notification",
-        "background-completion-notification:rollback:tool",
-        "review notifications",
-        RequestQueue {
-            delivery: Default::default(),
-            position: None,
-            source: QueueSource::BackgroundCompletion,
-            policy: QueuePolicy::Coalesce,
-            key: Some("background_completion:900".into()),
-            queued_after_request_id: Some(parent.request_id.clone()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
+        crate::request::lifecycle::queue::BackgroundCompletionNotification {
+            content: "notification",
+            message_key: "background-completion-notification:rollback:tool",
+            wake_content: "review notifications",
+            queue: RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source: QueueSource::BackgroundCompletion,
+                policy: QueuePolicy::Coalesce,
+                key: Some("background_completion:900".into()),
+                queued_after_request_id: Some(parent.request_id.clone()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            },
+            existing_notification_doc_id: None,
+            wake: gents_protocol::request_lifecycle::RequestHopCause::Continuation,
         },
-        None,
-        gents_protocol::request_lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap()
@@ -817,11 +823,14 @@ async fn desktop_interrupt_observation(
     .unwrap();
     let first = latch(&fixture.agent_access, parent).await;
     assert_eq!(
-        fetch_interrupt_requested_at_by_doc_id(&fixture.db.node, &parent.doc_id)
-            .await
-            .unwrap(),
+        fetch_interrupt_requested_at_by_doc_id_with_access(
+            &gents_store::test_support::unrelated_document_reader(&fixture.db.node).await,
+            &parent.doc_id
+        )
+        .await
+        .unwrap(),
         None,
-        "the Node's default read cannot observe the User-owned request"
+        "an unrelated reader cannot observe the User-owned request"
     );
     assert_eq!(
         fetch_interrupt_requested_at_by_doc_id_with_access(&fixture.agent_access, &parent.doc_id)
@@ -871,4 +880,60 @@ async fn desktop_interrupt_observation(
         .shutdown()
         .await
         .expect("shut down test node");
+}
+
+async fn signed_interrupt_rebuilds_after_an_execution_renewal_conflict(case: &ModeledCase) {
+    let fixture = fixture(case).await;
+    let access = fixture.db.client_access(fixture.agent.as_ref());
+    let parent = &fixture.parent;
+    let reached = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let interrupt = ConfigApplyTxn::with_successful_mutation_pause_and_count(
+        1,
+        Arc::clone(&reached),
+        Arc::clone(&release),
+        interrupt_request_by_doc_id_with_access(
+            &access,
+            &parent.doc_id,
+            &parent.node_did,
+            parent.requester_did.as_deref(),
+        ),
+    );
+    let stream = async {
+        tokio::time::timeout(Duration::from_secs(10), reached.notified())
+            .await
+            .unwrap();
+        let physical = escape_graphql_string(&parent.doc_id);
+        fixture.agent_access.transact_write("test.interrupt.execution_renewal_overlap", |txn| {
+            let physical = &physical;
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(r#"mutation($input: AgentRequestMutationInputArg!) {{ update_AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}}, input: $input) {{_docID}} }}"#),
+                    &json!({"input": {"execution_lease_expires_at": "2026-12-01T00:00:00Z"}}),
+                    gents_protocol::schemas::AGENT_REQUEST,
+                ).await
+            })
+        }).await.unwrap();
+        release.notify_one();
+    };
+    let ((result, paused, mutations), ()) = tokio::join!(interrupt, stream);
+    result.unwrap();
+    assert!(paused);
+    assert!(
+        mutations >= 2,
+        "confirmed conflict must rebuild the signed latch"
+    );
+    assert!(latch(&fixture.agent_access, parent).await.is_some());
+    let observed = fixture
+        .agent_access
+        .execute(&format!(
+            r#"{{AgentRequest(filter:{{_docID:{{_eq:"{}"}}}}){{execution_lease_expires_at}}}}"#,
+            escape_graphql_string(&parent.doc_id),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        observed["data"]["AgentRequest"][0]["execution_lease_expires_at"],
+        "2026-12-01T00:00:00Z"
+    );
 }

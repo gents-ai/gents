@@ -34,6 +34,7 @@ mod observe;
 mod pack;
 mod patch;
 mod policy;
+mod policy_names;
 mod reads;
 mod skill;
 mod trigger_explain;
@@ -113,6 +114,13 @@ Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batc
 pub(super) struct CommandGuidance {
     pub(super) message: String,
     pub(super) next_call: Value,
+}
+
+impl CommandGuidance {
+    /// The declared next call an erased error carries as its root or as a context value.
+    pub(super) fn in_error(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -382,6 +390,8 @@ pub struct ConfigCommandTool {
     pub(super) selected_plugins: Vec<gents_documents::PluginToolRef>,
     /// The plugin tool names the process ceiling admits; `None` is all.
     pub(super) ceiling_plugins: Option<BTreeSet<String>>,
+    /// The call this copy serves; [`Tool::call`] sets it on its own copy.
+    pub(super) envelope: gents_loop::tool::ToolCallEnvelope,
 }
 
 impl Tool for ConfigCommandTool {
@@ -416,9 +426,14 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         let call = Self {
             execution: Arc::new(super::execution::ExecutionObservation::default()),
+            envelope: context.clone(),
             ..self.clone()
         };
         let mut previewing = false;
@@ -446,7 +461,7 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
                 let (message, recovery) = call.failure_guidance(&error, &words, deleting);
                 let failure = ordered! {
                     "error": message,
-                    "batch": error.downcast_ref::<crud::BatchFailure>().map(|failure| json!({"atomic":false,"results":failure.results,"failed_index":failure.failed_index,"unattempted":failure.unattempted})),
+                    "batch": crud::BatchFailure::in_error(&error).map(|failure| json!({"atomic":false,"results":failure.results,"failed_index":failure.failed_index,"unattempted":failure.unattempted})),
                     "recovery": recovery,
                     "config_execution": receipt,
                 };

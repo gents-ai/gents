@@ -22,9 +22,12 @@ mod application_failure;
 mod application_pairing;
 pub mod authored_document;
 mod client_agent_publication;
+pub mod client_authentication;
 mod client_pack_evidence;
 pub mod client_request_input;
 pub mod client_signed_agent;
+pub mod runtime_access;
+pub mod runtime_endpoints;
 pub use client_pack_evidence::{
     prepare_pack_evidence, prepare_pack_evidence_from_history, prepare_pack_evidence_in_txn,
     prepare_pack_relationship, prepare_pack_schema_approval, verify_pack_schema_approval,
@@ -42,6 +45,9 @@ pub mod agent_session;
 #[cfg(test)]
 mod client_signed_agent_conformance;
 mod common;
+mod delegation;
+#[cfg(test)]
+mod delegation_conformance;
 mod destructive_decision;
 pub mod document_decide;
 #[cfg(test)]
@@ -50,10 +56,15 @@ mod error;
 #[cfg(test)]
 mod event_policy_conformance;
 mod graphql;
+mod held_audience;
+pub mod home_status;
 pub mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
 pub mod node_readiness;
+pub mod owed;
+#[cfg(test)]
+mod owed_conformance;
 mod owed_delivery;
 mod owner_staged_route;
 mod pack_effect;
@@ -68,9 +79,13 @@ pub mod schema_introspection;
 mod schema_management;
 mod self_config_permission;
 pub mod session_children;
+mod stored_create;
 mod subscription;
 pub mod transport_publication;
 mod txn;
+pub mod user_write;
+#[cfg(test)]
+mod user_write_conformance;
 pub use acp::nac::NodePermission;
 pub use pack_effect::{PackApprovalError, PackEffectApprover, PackReplayTransport};
 pub use subscription::{GraphqlSubscription, SubscriptionEnd, SUBSCRIPTION_RENEWAL_PERIOD};
@@ -95,10 +110,28 @@ where
     retry::classified_transaction_conflict(error).is_some()
 }
 
+/// For a typed DefraDB transaction conflict that outlasted the transaction
+/// owner's attempts, whether a client may repeat the failed operation (Lean
+/// `TransactionReplay.clientMayRepeat`); `None` when `error` is no conflict.
+pub fn classified_conflict_repeatable<E>(error: &E) -> Option<bool>
+where
+    E: TransactionFailure + ?Sized,
+{
+    error.config_client_error()?.conflict_repeatable()
+}
+
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn classified_conflict_for_test() -> ConfigClientError {
     retry::transaction_conflict(write_telemetry::ConflictSource::StructuredCode)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn unconfirmed_commit_conflict_for_test() -> ConfigClientError {
+    let mut error = classified_conflict_for_test();
+    error.mark_unconfirmed_commit();
+    error
 }
 
 pub use authored_document::{
@@ -137,11 +170,20 @@ pub use txn::{
     TransactionFinalityError,
 };
 
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub use delegation::mint_with_lifetime_for_test;
+pub use delegation::{
+    DelegationError, RequestBoundAudience, VERA_DELEGATION_LIFETIME, VERA_REQUEST_BOUND_LIFETIME,
+};
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
+pub use held_audience::ResolveAudience;
 pub use relationships::ConfigRelationshipGrant;
+pub(crate) use retry::access_owner;
 pub use retry::TransactionFailure;
 pub use self_config_permission::{AgentSelfConfigPermission, AgentSelfConfigPermissionError};
+pub use stored_create::StoredCreateCommands;
 pub use write_telemetry::WriteTelemetryError;
 
 use std::collections::BTreeSet;
@@ -163,9 +205,11 @@ pub(crate) enum WriteRoute<'a> {
 pub struct GraphqlEndpoint {
     url: String,
     principal_did: Option<String>,
+    client_authentication: Arc<runtime_endpoints::EndpointAuthentication>,
     delegated_authorization: Option<reqwest::header::HeaderValue>,
     client_signed_agent_creates: bool,
     client_signing_capability: Option<ClientSigningCapability>,
+    delegation_audience: held_audience::HeldAudienceCell,
     pack_replay: Option<pack_effect::PackReplayHandle>,
     extensions: crate::node_extension::Extensions,
 }
@@ -175,9 +219,13 @@ impl GraphqlEndpoint {
         Self {
             url: url.into(),
             principal_did: None,
+            client_authentication: Arc::new(runtime_endpoints::EndpointAuthentication::Fixed(
+                gents_protocol::client_authentication::ClientAuthentication::Local,
+            )),
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
+            delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
         }
@@ -187,9 +235,13 @@ impl GraphqlEndpoint {
         Self {
             url: url.into(),
             principal_did: Some(principal_did.into()),
+            client_authentication: Arc::new(runtime_endpoints::EndpointAuthentication::Fixed(
+                gents_protocol::client_authentication::ClientAuthentication::Local,
+            )),
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
+            delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
         }
@@ -209,9 +261,13 @@ impl GraphqlEndpoint {
         Ok(Self {
             url: url.into(),
             principal_did: None,
+            client_authentication: Arc::new(runtime_endpoints::EndpointAuthentication::Fixed(
+                gents_protocol::client_authentication::ClientAuthentication::Local,
+            )),
             delegated_authorization: Some(header),
             client_signed_agent_creates: false,
             client_signing_capability: None,
+            delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
         })
@@ -268,6 +324,24 @@ impl GraphqlEndpoint {
             return Err(ConfigClientError::ClientSignerMismatch);
         }
         Ok(capability)
+    }
+
+    /// Hold the delegation audience the endpoint's node reported in its
+    /// status, so that a held key mints a Vera delegation for it; a node that
+    /// reports none keeps the identity token
+    /// (`Identity.UserDelegation.resolve`). An endpoint is resolved when it
+    /// is built and again after its node refuses its credential.
+    pub fn with_reported_delegation_audience(
+        mut self,
+        reported: gents_protocol::delegation_audience::ReportedDelegationAudience,
+    ) -> Result<Self> {
+        use gents_protocol::delegation_audience::ReportedDelegationAudience as Reported;
+        self.delegation_audience = held_audience::HeldAudienceCell::new(match reported {
+            Reported::Absent => None,
+            Reported::Named(audience) => Some(audience),
+            Reported::Unavailable => return Err(DelegationError::AudienceUnavailable.into()),
+        });
+        Ok(self)
     }
 
     /// Bind the existing client actor to one runtime-hosted pack interpreter.
@@ -332,6 +406,14 @@ impl GraphqlEndpoint {
         })
     }
 
+    /// Whether `authorization` mints a Vera delegation, which lapses within
+    /// minutes, rather than forwarding a bearer or minting an identity token.
+    pub fn mints_delegations(&self) -> bool {
+        self.delegated_authorization.is_none()
+            && self.client_signing_capability.is_some()
+            && self.delegation_audience.get().is_some()
+    }
+
     pub fn authorization(&self) -> Result<Option<String>> {
         if let Some(value) = &self.delegated_authorization {
             return Ok(Some(value.to_str()?.to_owned()));
@@ -339,15 +421,22 @@ impl GraphqlEndpoint {
         let Some(did) = self.principal_did.as_deref() else {
             return Ok(None);
         };
-        let audience = self.audience()?;
-        let authorization = if let Some(capability) = &self.client_signing_capability {
-            crate::identity::defradb_bearer_authorization_with_config(
-                did,
-                &audience,
-                &capability.config,
-            )?
-        } else {
+        let Some(capability) = &self.client_signing_capability else {
             return Err(ConfigClientError::ClientAgentSignerRequired);
+        };
+        let authorization = match &self.delegation_audience.get() {
+            Some(node) => {
+                let (home, clock) = self.delegation_audience.minting_clock();
+                format!(
+                    "Bearer {}",
+                    delegation::mint(capability, node, home.as_ref(), clock)?
+                )
+            }
+            None => crate::identity::defradb_bearer_authorization_with_config(
+                did,
+                &self.audience()?,
+                &capability.config,
+            )?,
         };
         Ok(Some(authorization))
     }
@@ -360,6 +449,17 @@ impl GraphqlEndpoint {
             .map_err(ConfigClientError::BearerHeader)?;
         value.set_sensitive(true);
         Ok(Some(value))
+    }
+
+    /// Authorize a request inside the transaction `id`. Its transaction
+    /// recovers a refusal of its credential as a unit
+    /// (`Identity.HeldAudience.resendUnit`), never the request alone.
+    pub(crate) fn authorize_in_transaction(
+        &self,
+        request: reqwest::RequestBuilder,
+        id: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        Ok(self.authorize(request)?.header("x-defradb-tx", id))
     }
 
     pub fn authorize(&self, request: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
@@ -469,6 +569,22 @@ impl ConfigAccess {
         Self::Local(Box::new(
             LocalConfigAccess::new(node).with_identity(identity),
         ))
+    }
+
+    /// Carry the Vera delegation the direct request this access serves
+    /// presented, for the writes it makes in this process as its User
+    /// (`Identity.UserDelegation.admitPresented`); a non-local access is
+    /// unchanged.
+    pub fn with_presented_delegation(
+        self,
+        presented: Option<user_write::PresentedDelegation>,
+    ) -> Self {
+        match (self, presented) {
+            (Self::Local(local), Some(presented)) => {
+                Self::Local(Box::new(local.with_presented_delegation(presented)))
+            }
+            (access, _) => access,
+        }
     }
 
     /// The runtime host's own access as its node: it holds the runtime key,
@@ -611,6 +727,13 @@ impl ConfigAccess {
         }
     }
 
+    pub fn client_signer(&self) -> Result<ClientSigningCapability> {
+        match self.write_route() {
+            WriteRoute::Http(endpoint) => endpoint.held_client_signing_capability().cloned(),
+            WriteRoute::Local(_) => Err(ConfigClientError::ClientAgentSignerRequired),
+        }
+    }
+
     pub fn with_client_signed_configuration(mut self) -> Self {
         match &mut self {
             Self::Local(local) => local.require_client_signed_writes(),
@@ -623,6 +746,21 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => local.agent_signer(),
             Self::Graphql(_) => None,
+        }
+    }
+
+    /// See [`LocalConfigAccess::begin_store_release`].
+    pub fn begin_store_release(&self) -> Option<crate::local::home::StoreRelease> {
+        match self {
+            Self::Local(local) => local.begin_store_release(),
+            Self::Graphql(_) => None,
+        }
+    }
+
+    /// See [`LocalConfigAccess::release_store`].
+    pub fn release_store(&self) {
+        if let Self::Local(local) = self {
+            local.release_store();
         }
     }
 
@@ -726,11 +864,13 @@ impl ConfigAccess {
                 let url = format!("{api_base}/collections");
                 let client = graphql::http_client().await?;
                 let response = graphql
-                    .authorize(client.post(&url))?
-                    .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                    .body(sdl.to_owned())
-                    .send()
-                    .await
+                    .send_resolving(|graphql| {
+                        Ok(graphql
+                            .authorize(client.post(&url))?
+                            .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                            .body(sdl.to_owned()))
+                    })
+                    .await?
                     .map_err(|source| ConfigClientError::PostSchema {
                         url: url.clone(),
                         source,
@@ -753,15 +893,11 @@ impl ConfigAccess {
             }
             Self::Local(local) => {
                 let sdl = sdl.to_owned();
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        match actor {
-                            Some(actor) => {
-                                let context = defra_core::RequestContext::default()
-                                    .with_identity(Some(actor.to_string()));
-                                node.add_collection_as(&context, &sdl).await.map(|_| ())
-                            }
+                        match context.identity() {
+                            Some(_) => node.add_collection_as(&context, &sdl).await.map(|_| ()),
                             None => node.add_collection(&sdl).await,
                         }
                         .map_err(|error| ConfigClientError::AddSchema(Box::new(error)))
@@ -799,9 +935,8 @@ impl ConfigAccess {
                 let url = format!("{api_base}/collections?get_inactive=true");
                 let client = graphql::http_client().await?;
                 let versions: Value = graphql
-                    .authorize(client.get(&url))?
-                    .send()
-                    .await
+                    .send_resolving(|graphql| graphql.authorize(client.get(&url)))
+                    .await?
                     .map_err(|source| ConfigClientError::FetchCollectionVersions {
                         url: url.clone(),
                         source,
@@ -839,11 +974,9 @@ impl ConfigAccess {
         match self {
             Self::Local(local) if local.identity().is_some() => {
                 let collection = collection.to_owned();
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(actor.map(|did| did.to_string()));
                         let selector = schema::CollectionSelector::with_names(vec![collection]);
                         node.get_collections_as(&context, &selector)
                             .await?
@@ -866,9 +999,8 @@ impl ConfigAccess {
                 let url = format!("{api_base}/collections?get_inactive=true");
                 let client = graphql::http_client().await?;
                 let versions: Value = graphql
-                    .authorize(client.get(&url))?
-                    .send()
-                    .await
+                    .send_resolving(|graphql| graphql.authorize(client.get(&url)))
+                    .await?
                     .map_err(|source| ConfigClientError::FetchCollectionVersions {
                         url: url.clone(),
                         source,
@@ -923,8 +1055,26 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
 }
 
 /// Operator guidance appended to HTTP GraphQL errors; CLI-flavored and stripped by non-CLI consumers.
-pub fn graphql_diagnostic_hint(graphql: &str) -> String {
-    if is_probably_local_graphql_endpoint(graphql) {
+/// What a person reads of a failed query: an update of Gents when the edge
+/// of a Vera home asked for a delegation this client cannot present
+/// (`Identity.HeldAudience.told`), otherwise the failure and its next steps.
+fn graphql_query_failure(graphql: &str, source: &ConfigClientError) -> String {
+    if source.edge_requires_delegation() {
+        crate::local::document_acp::DocumentAcpError::DelegationRequired.to_string()
+    } else {
+        format!(
+            "{source}\n{}",
+            graphql_diagnostic_hint(graphql, source.refused_by_runtime())
+        )
+    }
+}
+
+pub fn graphql_diagnostic_hint(graphql: &str, refused: bool) -> String {
+    if refused {
+        format!(
+            "Next:\n  1. The runtime at {graphql} does not admit this identity; run the command from the home that runtime serves\n  2. Or have that home's owner admit this identity\n  3. If the runtime was updated more recently than this device, update Gents on this device"
+        )
+    } else if is_probably_local_graphql_endpoint(graphql) {
         "Next:\n  1. If this home is not initialized, run `gents init`\n  2. Start the runtime with `gents runtime server`\n  3. Inspect it with `gents status`".to_string()
     } else {
         format!(
@@ -943,11 +1093,7 @@ pub async fn post_graphql_with_variables(
         graphql,
         query,
         Some(variables),
-        GraphqlRequestOptions {
-            timeout: std::time::Duration::from_secs(30),
-            max_attempts: 5,
-            retry_backoff: std::time::Duration::from_millis(100),
-        },
+        GraphqlRequestOptions::default(),
     )
     .await
     .map_err(|error| ConfigClientError::HttpQuery {
@@ -957,16 +1103,7 @@ pub async fn post_graphql_with_variables(
 }
 
 pub async fn post_graphql(graphql: &GraphqlEndpoint, query: &str) -> Result<Value> {
-    query_graphql_with_options(
-        graphql,
-        query,
-        GraphqlRequestOptions {
-            timeout: std::time::Duration::from_secs(30),
-            max_attempts: 5,
-            retry_backoff: std::time::Duration::from_millis(100),
-        },
-    )
-    .await
+    query_graphql_with_options(graphql, query, GraphqlRequestOptions::default()).await
 }
 
 /// Execute one HTTP GraphQL read; mutations are rejected before network I/O.

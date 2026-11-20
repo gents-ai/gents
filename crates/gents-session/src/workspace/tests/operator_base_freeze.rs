@@ -185,7 +185,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
         let result = {
             let mut ctx = fx.ctx(&mut docs, caps);
             if wrong_owner {
-                ctx.owner_node_did = "foreign-owner".into();
+                ctx.provenance.owner_node_did = "foreign-owner".into();
             }
             execute_freeze_workspace_base_plan(&plan, &mut journal, &mut ctx)
         };
@@ -370,7 +370,14 @@ fn freeze_fault_context<'a>(
     docs: &'a mut dyn WorkspaceDocuments,
 ) -> HostExecutorContext<'a> {
     HostExecutorContext {
-        owner_node_did: "did:key:zWorkspaceOwner".into(),
+        provenance: crate::workspace::WorkspaceProvenance {
+            owner_node_did: "did:key:zWorkspaceOwner".into(),
+            writer_principal: "did:key:zWriter".into(),
+            integrator_principal: "did:key:zIntegrator".into(),
+            caused_by_invocation_id: "inv-1".into(),
+            caused_by_correlation: "corr-1".into(),
+            route: Default::default(),
+        },
         repository: RepositoryPlacementRef {
             repository_id: "repo-1".into(),
             owner_node_did: "did:key:zWorkspaceOwner".into(),
@@ -379,12 +386,7 @@ fn freeze_fault_context<'a>(
         },
         ceiling: Some(&fx.repo),
         capabilities: seal_caps(),
-        writer_principal: "did:key:zWriter".into(),
-        integrator_principal: "did:key:zIntegrator".into(),
-        caused_by_invocation_id: "inv-1".into(),
-        caused_by_correlation: "corr-1".into(),
         documents: docs,
-        route: Default::default(),
     }
 }
 

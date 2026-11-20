@@ -102,8 +102,10 @@ pub async fn dismiss(access: &ConfigAccess, doc_id: &str) -> Result<MailboxItem>
     if access.actor_did().is_none() {
         return Err(MailboxOperationError::ActorRequired);
     }
+    // The callback re-reads the item and decides on that read; its update is
+    // guarded on the open status, so a confirmed conflict is rebuilt.
     access
-        .transact_write("mailbox.dismiss", |txn| {
+        .transact_signed_conflict_rebuild("mailbox.dismiss", |txn| {
             Box::pin(async move {
                 let response = txn.run(&item_query(doc_id)).await?;
                 let item = single(decode_items(&response)?)?;
@@ -318,11 +320,11 @@ fn passthrough<E>(error: E) -> MailboxOperationError
 where
     E: Into<anyhow::Error>,
 {
-    MailboxOperationError::Passthrough(
+    MailboxOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(Into::<
+        anyhow::Error,
+    >::into(
         error
-            .into()
-            .reallocate_into_boxed_dyn_error_without_backtrace(),
-    )
+    )))
 }
 
 enum ApplyError {
@@ -333,9 +335,7 @@ enum ApplyError {
 impl From<MailboxOperationError> for ApplyError {
     fn from(error: MailboxOperationError) -> Self {
         match error {
-            MailboxOperationError::Passthrough(error) => {
-                Self::Other(anyhow::Error::from_boxed(error))
-            }
+            MailboxOperationError::Passthrough(error) => Self::Other(anyhow::Error::new(error)),
             error => Self::Operation(error),
         }
     }

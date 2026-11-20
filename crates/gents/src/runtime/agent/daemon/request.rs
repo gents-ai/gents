@@ -2,8 +2,8 @@ use anyhow::Result;
 use tracing::Instrument;
 
 use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
-use gents_inference::admission::{self, AdmissionCallContext};
 use gents_loop::loop_stream::TaggedMessage;
+use gents_loop::provider_call::admission::AdmissionCallContext;
 use gents_observe::observe::runtime_trace::RequestTraceAttrs;
 
 mod prepare;
@@ -40,10 +40,13 @@ pub(super) async fn prepare_unless_interrupted<T>(
     }
 }
 
-pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<()> {
+pub(super) async fn flush_received_preparation_partial(
+    capture: Option<&std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
+    context: &str,
+) -> Result<()> {
     match tokio::time::timeout(
         gents_store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        gents_inference::rendered_request::scope::flush_received_auxiliary_partial(),
+        gents_inference::rendered_request::scope::flush_received_auxiliary_partial(capture),
     ).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(super::ShutdownDrainFailure {
@@ -154,19 +157,25 @@ where
                 RequestInterruptionSource::Claimed,
             ));
         };
-        let (resume_from_history, resume_same_request, aggregate_token_budget, context_calibration) =
-            admitted?;
+        let prepare::LoadedAdmission {
+            resume_from_history,
+            resume_same_request,
+            aggregate_token_budget,
+            context_calibration,
+            last_call_seq,
+        } = admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let agent_name = self.agent_config.agent_did.clone();
         let admission_context = AdmissionCallContext::for_request(
             &request,
             lifecycle.agent_did(),
             lifecycle.backend_id(),
-        );
+        )
+        .resumed_after(last_call_seq);
         // One capture scope for the whole request: the pre-request compaction
         // summarizer issues real provider calls whose input is the entire
-        // pre-truncated transcript, so scoping only the inference block left
-        // those calls with no ambient scope and no durable record. It must
+        // pre-truncated transcript, so capturing only the inference loop left
+        // those calls with no capture scope and no durable record. It must
         // stay a single scope instance: the per-kind sequence keeping the
         // inference loop, the summarizer, and its JSON fallback from colliding
         // on `(turn 0, attempt 0)` lives in the scope.
@@ -182,7 +191,7 @@ where
         let capture_scope = self
             .request_capture_scope(&request, lifecycle, stream_writer, &request_commit_cid)
             .await?;
-        let handled = admission::scope_request(admission_context, async {
+        let handled = async {
             let response_agent_did = lifecycle.agent_did().to_string();
             lifecycle
                 .begin_owned_execution(stream_writer)
@@ -206,10 +215,16 @@ where
                 effective_seed,
                 resume_from_history,
                 resume_same_request,
+                admission: &admission_context,
+                capture: capture_scope.as_ref(),
             });
             let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
             else {
-                flush_received_preparation_partial("interrupted request preparation").await?;
+                flush_received_preparation_partial(
+                    capture_scope.as_ref(),
+                    "interrupted request preparation",
+                )
+                .await?;
                 return Ok(HandleRequestOutcome::Interrupted(
                     RequestInterruptionSource::Preparation,
                 ));
@@ -248,6 +263,8 @@ where
                     consumed_prompts,
                     folded_prompts,
                     context_calibration,
+                    &admission_context,
+                    capture_scope.as_ref(),
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",
@@ -276,14 +293,9 @@ where
 
             resolve_inference_outcome(lifecycle, &request, &request_token, &interrupt_rx, result)
                 .await
-        });
+        };
 
-        match capture_scope {
-            Some(scope) => {
-                gents_inference::rendered_request::scope::scope_request(scope, handled).await
-            }
-            None => handled.await,
-        }
+        Box::pin(handled).await
     }
 }
 
@@ -368,11 +380,4 @@ async fn resolve_inference_outcome(
     }
 
     result
-}
-
-fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
-    gents_protocol::error_chain::find_source::<gents_session::session::StaleCompactionGeneration>(
-        error.as_ref(),
-    )
-    .is_some()
 }

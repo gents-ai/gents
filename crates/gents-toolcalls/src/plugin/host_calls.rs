@@ -17,33 +17,63 @@ use gents_pack::{
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod live {
-    //! Which guests still occupy a worker thread, by artifact digest.
-    static GUESTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    //! Which guests still occupy a worker thread, by artifact digest, with
+    //! the compute allowance each was given. Waiters subscribe to a watch,
+    //! which checks the current value first, so no start or release is missed.
+    use std::sync::LazyLock;
+    use std::time::Duration;
+
+    use tokio::sync::watch;
+
+    type Guests = Vec<(String, Duration)>;
+
+    static GUESTS: LazyLock<watch::Sender<Guests>> =
+        LazyLock::new(|| watch::Sender::new(Vec::new()));
 
     pub(super) struct Guard(String);
 
     impl Guard {
-        pub fn new(digest: String) -> Self {
-            GUESTS.lock().unwrap().push(digest.clone());
+        pub fn new(digest: String, allowance: Duration) -> Self {
+            GUESTS.send_modify(|guests| guests.push((digest.clone(), allowance)));
             Self(digest)
         }
     }
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            let mut guests = GUESTS.lock().unwrap();
-            if let Some(index) = guests.iter().position(|digest| digest == &self.0) {
-                guests.swap_remove(index);
-            }
+            GUESTS.send_modify(|guests| {
+                if let Some(index) = guests.iter().position(|(digest, _)| digest == &self.0) {
+                    guests.swap_remove(index);
+                }
+            });
         }
     }
 
-    pub fn count(digest: &str) -> usize {
-        let guests = GUESTS.lock().unwrap();
+    fn allowances(guests: &Guests, digest: &str) -> Vec<Duration> {
         guests
             .iter()
-            .filter(|guest| guest.as_str() == digest)
-            .count()
+            .filter(|(guest, _)| guest == digest)
+            .map(|(_, allowance)| *allowance)
+            .collect()
+    }
+
+    /// The allowances of the guests of `digest`, once one occupies a worker.
+    pub async fn started(digest: &str) -> Vec<Duration> {
+        let mut guests = GUESTS.subscribe();
+        let guests = guests
+            .wait_for(|guests| !allowances(guests, digest).is_empty())
+            .await
+            .expect("the registry's sender is static");
+        allowances(&guests, digest)
+    }
+
+    /// Resolves once no guest of `digest` occupies a worker thread.
+    pub async fn released(digest: &str) {
+        GUESTS
+            .subscribe()
+            .wait_for(|guests| allowances(guests, digest).is_empty())
+            .await
+            .expect("the registry's sender is static");
     }
 }
 
@@ -82,9 +112,11 @@ fn wall_clock_for_invocation(
 /// A background invocation already has an admitted lifetime on its tool row.
 /// Host-call guests use that bound, including time spent awaiting host tools;
 /// the manifest wall-clock allowance continues to bound foreground execution.
-pub fn budget_for_invocation(mut budget: PluginBudget) -> PluginBudget {
-    if let Some(context) = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()
-    {
+pub fn budget_for_invocation(
+    call: &gents_loop::tool::ToolCallEnvelope,
+    mut budget: PluginBudget,
+) -> PluginBudget {
+    if let Some(context) = call.runtime() {
         let remaining = context
             .deadline_at
             .map(|deadline| (deadline - chrono::Utc::now()).to_std().unwrap_or_default());
@@ -151,7 +183,7 @@ pub async fn run(
     };
     let mut worker = tokio::task::spawn_blocking(move || {
         #[cfg(any(test, feature = "test-fixtures"))]
-        let _live = live::Guard::new(runner.artifact_digest());
+        let _live = live::Guard::new(runner.artifact_digest(), guest_budget.wall_clock);
         let (input, manifold) = match bound {
             Some(bound) => runner.prepare_bound(&input, &bound)?,
             None => (input, runner.manifold.clone()),
@@ -221,10 +253,11 @@ mod tests {
         record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
         gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
         let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
-        let call = executor.call_data_bound_for(&record, json!({"script": "let sum=0; for(let i=0;i<3;i++) sum += (await tools.query({})).ordinal; await sleep(1); return {sum};"}), None, true, None);
-        let result = gents_loop::tool_effects::scope(Some(Arc::new(Tools)), call)
-            .await
-            .unwrap();
+        let context = gents_loop::tool::ToolCallEnvelope::default()
+            .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
+        let call = executor.call_data_bound_for(
+&record, json!({"script": "let sum=0; for(let i=0;i<3;i++) sum += (await tools.query({})).ordinal; await sleep(1); return {sum};"}), crate::plugin::executor::ToolInvocation { tool_root: None, own_folder: None, tool_calls: true, context: &context }, None);
+        let result = call.await.unwrap();
         assert_eq!(
             result.outcome.verdict,
             PluginVerdict::Success,
@@ -236,8 +269,12 @@ mod tests {
             .call_data_bound_for(
                 &record,
                 json!({"script":"return typeof tools", "tool_calls":true}),
-                None,
-                false,
+                crate::plugin::executor::ToolInvocation {
+                    tool_root: None,
+                    own_folder: None,
+                    tool_calls: false,
+                    context: &gents_loop::tool::ToolCallEnvelope::default(),
+                },
                 None,
             )
             .await
@@ -248,12 +285,12 @@ mod tests {
     impl ToolEffectDispatcher for Tools {
         fn call<'a>(
             &'a self,
+            _parent: &'a gents_loop::tool::ToolCallEnvelope,
             ordinal: u32,
             name: &'a str,
             arguments: &'a str,
         ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
             Box::pin(async move {
-                assert!(gents_loop::tool_effects::current().is_none());
                 assert_eq!(name, "query");
                 assert_eq!(arguments, "{}");
                 Ok(ToolOutcome::Completed(
@@ -264,6 +301,16 @@ mod tests {
     }
 
     async fn execute(request: Value, count: u32, grant: bool, input: Value) -> PluginOutcome {
+        execute_in(None, request, count, grant, input).await
+    }
+
+    async fn execute_in(
+        runtime: Option<gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext>,
+        request: Value,
+        count: u32,
+        grant: bool,
+        input: Value,
+    ) -> PluginOutcome {
         let (home, mut record) = gents_pack::plugin::test_fixtures::installed_plugin(
             &crate::plugin::tests::executor::host_call_plugin_wat(&request, count),
             None,
@@ -271,13 +318,23 @@ mod tests {
         record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
         gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
         let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
-        gents_loop::tool_effects::scope(
-            Some(Arc::new(Tools)),
-            executor.call_data_bound_for(&record, input, None, grant, None),
-        )
-        .await
-        .unwrap()
-        .outcome
+        let context = gents_loop::tool::ToolCallEnvelope::new(runtime)
+            .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
+        executor
+            .call_data_bound_for(
+                &record,
+                input,
+                crate::plugin::executor::ToolInvocation {
+                    tool_root: None,
+                    own_folder: None,
+                    tool_calls: grant,
+                    context: &context,
+                },
+                None,
+            )
+            .await
+            .unwrap()
+            .outcome
     }
 
     #[tokio::test]
@@ -348,10 +405,9 @@ mod tests {
             let tool =
                 crate::plugin::tool::PluginTool::for_run(executor.clone(), &coordinate, &selected)
                     .unwrap();
-            let (output, unserved, _) =
-                gents_loop::tool_effects::scope(Some(Arc::new(Tools)), tool.run_once(json!({})))
-                    .await
-                    .unwrap();
+            let context = gents_loop::tool::ToolCallEnvelope::default()
+                .with_effects(Some(Arc::new(Tools) as Arc<dyn ToolEffectDispatcher>));
+            let (output, unserved, _) = tool.run_once(json!({}), &context).await.unwrap();
             assert_eq!(output, expected, "tool_calls {tool_calls}");
             assert_eq!(unserved, None);
         }
@@ -370,12 +426,30 @@ mod tests {
 
     #[tokio::test]
     async fn background_sleep_uses_the_admitted_tool_lifetime() {
-        let outcome = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            Some(chrono::Utc::now() + chrono::Duration::seconds(30)),
-            tokio_util::sync::CancellationToken::new(), None, None, None, None,
-            Default::default(), true,
-            execute(json!({"sleep_ms": 6000}), 1, false, json!({})),
-        ).await;
+        let deadline = Some(chrono::Utc::now() + chrono::Duration::seconds(30));
+        let token = tokio_util::sync::CancellationToken::new();
+        let runtime = gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext::entered(
+            None,
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+                identity: None,
+                deadline_at: deadline,
+                cancellation_token: token.clone(),
+                workspace_cwd: None,
+                live_output: None,
+                session_id: None,
+                correlation: None,
+                source_fields: Default::default(),
+                background: true,
+            },
+        );
+        let outcome = execute_in(
+            Some(runtime),
+            json!({"sleep_ms": 6000}),
+            1,
+            false,
+            json!({}),
+        )
+        .await;
         assert_eq!(
             outcome.verdict,
             PluginVerdict::Success,

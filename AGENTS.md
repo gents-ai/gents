@@ -1,235 +1,212 @@
 # Repository instructions
 
-## What Gents is
+## You are here
 
-Gents is a modular agent framework. A small core runs the agent loop and keeps
-its state; almost everything else is a plugin.
+Gents is an agent runtime: a small Rust core runs the owned agent loop and keeps
+its state as documents in DefraDB ([defradb.rs](https://github.com/sourcenetwork/defradb.rs)),
+which supplies storage, transactions, DID identity, access control (ACP) and
+peer-to-peer sync. Capabilities are plugins in packs; clients are adapters.
 
-- **State is documents.** Configuration, agents, sessions, requests, tool
-  calls, tasks and triggers are documents in DefraDB, embedded through
-  [defradb.rs](https://github.com/sourcenetwork/defradb.rs). DefraDB supplies
-  the distributed-systems pieces: storage, transactions, DID identity, document
-  access control (ACP) and peer-to-peer synchronization. Gents does not rebuild
-  any of them.
-- **Capabilities are plugins.** Tools, workflow languages and domain features
-  ship as WASM plugins in packs ([gents-ai/packs](https://github.com/gents-ai/packs)).
-  Features that need the request lifecycle (Goals, Mailbox) are bundled plugins
-  on the lifecycle hook seam. Core adds the seam a plugin needs, never the
-  capability.
-- **The Engineer is how people approach it.** The Engineer is the agent a new
-  node starts with. It configures the node on the user's behalf through the
-  same operations every client uses, and it administers its Node: if a user
-  asks it to do something, it can.
-- **Clients are adapters.** The CLI, the desktop app, the editor host, the
-  Engineer's tools and the runtime's HTTP surface all call the same handlers.
+Crates are layered: each names only crates below it
+(`crate_dependencies_follow_the_layers`). Put code in the lowest crate that
+owns everything it uses.
 
-## How a change is made
-
-Behavior is specified in Lean, enforced by tests the models drive, and
-implemented in Rust. Work in that order:
-
-1. **Model.** Change the Lean model under `crates/gents/proofs/Proofs` and keep
-   it free of `sorry`. The model is the truth: when model and Rust disagree,
-   decide which is right in the model first.
-2. **Conformance.** The model emits the cases; a conformance test replays them
-   against the production function that owns the behavior. Expectations come
-   only from executing the model. Do not write fixture constants or a Rust
-   re-implementation of a model's policy.
-3. **Rust.** Make the implementation satisfy the contract.
-
-Plumbing that preserves semantics needs no model change. Read versions from
-`Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`, and the check matrix from
-`.github/workflows/`; do not restate them here.
-
-## Structure
-
-The runtime is layered crates. A crate depends only on crates below it, and
-Cargo enforces that.
-
-| Layer | Crate | Owns |
+| Layer (bottom up) | Crate | Owns |
 | --- | --- | --- |
-| Vocabulary | `gents-protocol`, `gents-loop`, `gents-schemas` | Wire types, operation contracts, typed queries; the provider turn loop; the SDL, the access policy and generated field constants |
-| Store | `gents-store` | Database access, transactions, identity, ACP |
-| Documents | `gents-documents` | Configuration documents and desired state |
-| Inference, P2P | `gents-inference`, `gents-p2p` | Backends, profiles, accounts; peers, enrollment, sync |
-| Packs | `gents-pack` | Packs and plugin wiring |
-| Session | `gents-session` | Requests, sessions, workspace, the lifecycle hook seam |
-| Tools | `gents-tools` | The tool surface, built-in tools, the Engineer's self-config |
-| Tool calls | `gents-toolcalls` | Tool-call execution, background jobs, the plugin executor |
-| Automation | `gents-automation` | Triggers and tasks (core); Goals (bundled plugin) |
-| Observe | `gents-observe` | Traces and timelines |
-| Root | `gents` | The runtime, the daemon, operation entry points, composition |
-| Clients | `gents-cli`, `gents-shell`, `gents-desktop-*`, `gents-client-host`, `apps/gents-desktop`, `packages/` | Adapters and presentation |
+| Vocabulary | `gents-schemas`, `gents-protocol`, `gents-lean-vocab`, `gents-loop` | SDL and access policy; wire types, operation contracts, typed queries; Lean case decoders; the provider turn loop and provider input |
+| Store | `gents-store` | DefraDB access, transactions, identity, ACP |
+| Documents | `gents-documents` | Configuration documents, desired state |
+| Inference, P2P | `gents-inference`, `gents-p2p` | Backends and accounts; peers, enrollment, sync |
+| Packs | `gents-pack` | Packs, the plugin runner |
+| Session | `gents-session` | Requests, sessions, the lifecycle hook seam |
+| Tools | `gents-tools` | The tool surface, the Engineer's self-config |
+| Tool calls | `gents-toolcalls` | Tool-call lifecycle, background jobs |
+| Automation | `gents-automation` | Triggers, tasks, callbacks, Goals |
+| Observe | `gents-observe` | Timelines, trace export |
+| Root | `gents` | The runtime and its composition |
+| Host, clients | `gents-host`, `gents-service`, `gents-cli`, `gents-eval`, `gents-desktop-*`, `gents-client-host`, `apps/`, `packages/` | Serving, service supervision, adapters, presentation |
 
-Lean models live under `Proofs/<Layer>/` in the same order and import only
-downward. `Proofs/Conformance` holds what turns models into cases;
-`gents-lean-vocab` decodes them for Rust tests. Evals live in `gents-eval`.
+Lean models live in `crates/gents/proofs/Proofs/`, one directory per layer,
+and import only downward; TLA+ specs live in `crates/gents/proofs/tla/`. The
+[proof map](crates/gents/proofs/README.md) names the modelled surfaces. Read
+versions from `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`.
 
-## Identity and authorization
+**Worktrees.** One tree per change, created from the main checkout with
+`git fetch origin && make worktree BRANCH=<branch> BASE=origin/main`. Build
+with `PROFILE=fast-dev` (Make) or `--profile fast-dev` (Cargo); direct test
+runs need the `RUST_MIN_STACK` the Makefile exports. Never change a checkout while a build or test runs in it; a
+timed-out observation is not a stopped process. Remove the worktree once its
+branch merges; `make sweep` clears stale artifacts.
 
-Authorization is DefraDB's ACP and nothing else. Understand this model before
-touching anything that reads or writes a document.
+## Model first
 
-**Who acts**
-- A **User** is a DID whose key stays on the client. Users sign user
-  configuration, plugin installs and agent creation.
-- A **Node** has its own key. It authenticates peer admission and
-  synchronization and owns node-local operational documents that no Agent
-  caused.
-  Peer admission grants no document access. Approving a client's enrollment
-  does: it grants that User Node administration (`approve_enrollment`).
-- An **Agent** has a DID managed by the runtime that hosts it, and owns the
-  data it creates. Clients connect to that hosting runtime. One active runtime
-  per node is the operating convention.
+The Lean owners are the truth: when model and Rust disagree, decide in the
+model. For a transition, invariant, access rule or provider input:
 
-Every transaction runs as exactly one of these identities. Request context
-carries the actor explicitly; nothing acts on someone's behalf by borrowing
-another identity.
+1. **Model.** Change the Lean owner; no `sorry`. Interleavings of concurrent
+   actors go in TLA+: a spec, a correct configuration, and one broken
+   configuration per safeguard that fails as expected
+   (`crates/gents/proofs/tla/scripts/run-tlc.sh <config>`).
+2. **Conformance.** Mark the owner `@[conformance_function]` (its whole domain
+   becomes cases) or `@[conformance_family]` (chosen cases), run
+   `make lean-regen`, and replay it against the production function in exactly
+   one test (`every_emitted_family_has_a_consumer_or_a_ledger_reason`).
+   Expectations come only from running the model: no fixture constants, no
+   Rust mirror of its policy.
+3. **Rust.** Make the owner satisfy the contract.
 
-**How access is decided**
-- One access policy (the Household policy) covers every collection. It is
-  written as a Lean model in `Proofs/Store/Identity`, and the checked-in
-  `crates/gents-schemas/schemas/agent/agent_ownership_policy.yaml` is generated
-  from that model. Change the model, regenerate the file, never edit the YAML.
-- Each collection binds to a policy **resource**. A resource has **relations**
-  (who stands in what relationship to a document: owner, `administrator`,
-  `reader`, `writer`, `working_agent`, a `parent` document) and
-  **permissions** (read, update, delete and a few named ones) defined as
-  expressions over those relations.
-- Permissions flow down a hierarchy through `parent`: a Node is the parent of
-  its Agents and configuration, an Agent of its sessions, a session of its
-  requests, tool calls and other children. `parent->read` on a child means
-  "whoever can read the parent".
-- Access is granted by writing a relationship, and revoked by deleting it.
-  There is no other switch.
+Lean and TLA+ divide the work: Lean owns every decision (a pure function from
+observed state to action, with its theorems); TLA+ owns the interleaving of the
+actors that call it. A spec names the Lean owner of each decision it uses and
+takes the decision's cases from that owner rather than restating the policy;
+each configuration records its expected result (holds, or fails with the
+property it names), so a spec that stops catching its bug is visible.
 
-**What follows from that**
-- No second identity or authorization layer, and no trusted write path that
-  checks a rule in Rust and then bypasses ACP. If ACP cannot express a rule,
-  change the policy model.
-- A permission category shown to a user or a model is a named grouping of ACP
-  grants, checked by ACP.
-- Agent operations (create, clone, edit, disable, choose the default) have one
-  admission for every actor and client, decided from grants alone. No Agent is
-  protected by name or role. Two lockout rules hold for everyone: the default
-  Agent stays enabled, and an actor cannot disable itself.
-- The Engineer holds `administrator` on its Node. `agent_manager` is the
-  narrow relation for an actor who should manage the Agent catalog and nothing
-  else.
-- Every new document type gets a deliberate place in this hierarchy, modelled
-  first: its resource, its parent, who may create, read, update and delete it,
-  and why it cannot widen what an Agent or a plugin can see.
-- DefraDB authorizes a document update as a whole, not per field. A field that
-  needs different writers from the rest of its document belongs in its own
-  document.
+Generated files (decoders, the family schema, the access policy YAML) are
+regenerated, never edited. Decisions and external premises are docstrings on
+the Lean definitions they justify. Semantics-preserving plumbing needs no model
+change.
 
-## Rules for code
+## Flaky tests are defects
 
-**Layering**
-- Put code in the lowest crate that owns everything it uses. Plain vocabulary
-  sinks; a caller that needs a higher layer moves up.
-- When a lower layer must reach behavior above it, define a small trait where
-  it is called, implement it above, and hand it in or register it at the root.
-- No aliases and no re-exports from an old location. A move repoints every
-  user.
-- Keep crates and files small. Split at an ownership seam instead of growing.
-- Reuse the existing owner. Do not add a parallel interpretation, a side
-  channel, a legacy conversion or a compatibility shim.
+An intermittent failure is an interleaving nobody wrote down. Never answer one
+with a sleep, retry, larger deadline or looser assertion.
 
-**Plugins and the lifecycle**
-- Request state is only `lifecycle_state`
-  (`gents_protocol::request_lifecycle::RequestLifecycleState`). Claimed work
-  runs through the owned completion loop, which is the sole provider-input
-  boundary.
-- Lifecycle points belong to the hook seam in `gents-session`. A hook declares
-  what it reads, receives rows and returns effects as data. No transaction
-  handle crosses the interface, and a hook narrows authority, never widens it.
-- A plugin may refuse work from starting or continuing and may request a stop.
-  It can never prevent an interrupt, a stop or a terminal.
+1. State the property the test asserts over named actors and steps; if it
+   cannot be stated, the test asserts an accident.
+2. Model the interleaving in TLA+ from the code's real atomic steps.
+3. Fix the side the model says is wrong: the product if the checker finds a
+   violating trace, the test or its observer if the model exonerates the
+   product. The owner's decision goes in Lean with a conformance family.
+4. Keep the test as the regression and show it passing under the contention
+   that broke it. Report what was verified by execution, by model checking and
+   only by reading.
 
-**Clients**
-- An operation's contract (typed input, receipt, errors that name the next
-  call) lives in `gents_protocol::operations`; its handler lives in the crate
-  that owns the documents. A client does not re-implement validation, defaults
-  or permission decisions.
-- An edit is a patch. A busy session queues by default and steers on request.
-- Clients may keep their own verbs and rendering.
-- Text a model reads uses progressive disclosure: a small core, help that adds
-  detail per resource, and errors that name the next call. Results read answer
-  first, then how to proceed, then metadata.
+An intermittent correctness assertion (a lost update, message or stop) is a
+possible product defect until the model says otherwise.
 
-**Database access**
-- Build queries with `gents_protocol::document_query`; values travel as
-  variables. Where a query is still a string, escape every interpolated value
-  with `graphql::escape_graphql_string()`.
-- Never emit `[]` in a mutation; use `null` for an empty nillable list.
-- All access goes through the store's owners (`ConfigAccess`, its
-  transactions, the typed read and write entry points). Do not call the
-  embedded node directly and do not add a retry loop or an access wrapper.
-- Preserve DefraDB's execution boundaries: autocommit prepares remote inputs on
-  the caller and routes only prepared attempts; worker-affine cache-only
-  commits stay on their native I/O queue through `commit_nowait`. Fix missing
-  asynchronous mechanics upstream, not with a Gents retry.
+Waits follow events: subscribe to the documents watched (`rows_when` in
+`crates/gents/tests/support/live_inference.rs`) or await the owner's
+notification, and fail with the last state seen once nothing changes for the
+suite-wide `STALL_CEILING`. Assert the order of events, never a per-test
+wall-clock budget.
 
-**Rust**
-- Owner interfaces return module-owned `thiserror` enums, and callers match on
-  them. Do not decide behavior from error text. Print chains with
-  `gents_protocol::error_chain::ErrorChain`.
-- One Tokio runtime per process, built at its entry point. Never block a
-  runtime thread: waits are `.await`, synchronous work goes to
-  `spawn_blocking`.
-- Request context is an explicit argument, never thread-local or task-local.
-- Maps and sets are `rapidhash`. Trait bounds live in `where` clauses. Log with
-  `tracing`, never `println!`.
-- Provider client types stay behind `gents_loop`'s owners.
+## Code shape
 
-## Tests
+- **No duplication.** Reuse the owner: no parallel interpretation, side
+  channel, alias or re-export from an old location. Do not hand-maintain a list
+  a scan can derive.
+- **Modular and small.** One responsibility per module; split files and crates
+  at an ownership seam instead of growing them. No size limit is enforced;
+  Clippy's complexity thresholds are pinned in `clippy.toml`, fixed by
+  restructuring, never raised.
+- **Point dependencies down.** When a lower layer needs behavior above it,
+  define a small trait where it is called and implement it above.
+- **No comments** except a constraint code and proofs cannot express (safety,
+  ordering, external behavior), stated once on the item.
+- **No prose documents** (design notes, plans, status reports) in this
+  repository; user documentation lives in the docs repository.
+- **No backwards compatibility before 1.0**: no upgrade paths, conversions or
+  aliases. An incompatible home is refused clearly and left untouched.
 
-Tests exist to hold the Rust to the models.
+## Enforced rules
 
-- **Do not write unit tests.** A behavior worth testing is worth modelling:
-  add it to the model and let the generated cases drive the production code.
-  When a hand-written test covers a situation the model lacks, deepen the
-  model and delete the test.
-- What else belongs: end-to-end tests through real owners; tests that pin text
-  a model or person reads; tests that are the evidence for a premise the
-  models assume about the database, filesystem, processes or a wire format.
-- Never assert how something is done (query text, call counts, internal
-  order, a fake's interactions).
-- A test lives in the lowest crate that owns everything it uses. Shared
-  fixtures sit in that crate's `test_support`, behind `test-fixtures` when
-  crates above need them.
-- Coverage, decoders and registries are generated or checked by a scan. Do not
-  hand-maintain a list a scan can derive.
-- A flaky test is a defect: reproduce it, file it, fix it. Never retry, extend
-  a deadline or loosen an assertion to hide one.
+Unless noted, the ratchets live in `crates/gents/tests/write_owner_structure.rs`;
+their allowlists only shrink.
 
-## Comments and documents
+| Rule | Enforced by |
+| --- | --- |
+| DefraDB access goes through `gents-store`: writes `ConfigAccess::write`/`write_local`, multi-statement or DID-scoped work `ConfigAccess::transact_*`, reads `graphql_with_transaction_retry` or `ConfigAccess::execute`. Never the embedded node, raw HTTP GraphQL, or another retry loop or wrapper. | `production_defradb_writes_have_one_owner`, `production_defradb_node_execution_only_shrinks` |
+| A User-signed transaction that can lose its read to a concurrent write uses `transact_signed_conflict_rebuild` (or `_with_finality`); its callback re-reads its inputs and has no outside effects, and only a confirmed abort is rebuilt. | Lean `clientSignedWriteMayRetry` |
+| Queries use `gents_protocol::document_query` with variables; any interpolated string goes through `graphql::escape_graphql_string()`. A mutation never emits `[]`; use `null`. | review |
+| Owner interfaces return `thiserror` enums. An erased error is classified by asking the owner through `error_chain::find_map_source`, and only an owner asks for its own type, in a classifier beside that type; an owner passing an application error through wraps it in `error_chain::PassedThrough`. A store conflict is the typed `TransactionConflict`. Error text is decided, and a third-party error type asked for, only in an adapter classifier whose docstring states its `External premise:`; every other downcast or text decision is debt that only shrinks. | `owner_interfaces_use_thiserror`, `downcast_classifiers_only_shrink`, `error_text_classification_only_shrinks` |
+| Request context (identity, signing, transaction, requester, trace) is an explicit argument, never thread- or task-local. | `ambient_request_context_only_shrinks` |
+| One Tokio runtime per process, built at its entry point; handles come from the caller (`DropCleanup::current` in drop guards). Never block a runtime thread: `.await`, `spawn_blocking`, `drive_unsendable`. | `disallowed-methods` in `clippy.toml` |
+| Maps and sets are `rapidhash`; trait bounds live in `where` clauses. | `hash_maps_use_rapidhash`, `trait_bounds_live_in_where_clauses` |
+| Rig types stay behind `gents_loop::rig_compat` and `provider_input`. | `rig_types_stay_behind_their_owners` |
+| OAuth credentials are picked through the resolver. | `oauth_credential_picks_go_through_the_resolver` |
+| Test fixtures never reach a production build. | `gents_test_fixtures_stay_dev_only` |
+| Tests never touch the host's service manager: whatever reaches `gents-service` or spawns `gents` enables its `test-home-guard` from dev-dependencies. | `service_isolation_stays_test_only`, `tests_reaching_the_service_manager_are_isolated` |
+| One integration binary per crate (`tests/integration.rs` with `#[path]` modules); separate binaries only for process-wide state, listed with the reason. | `integration_tests_share_one_binary_per_crate` |
+| Log with `tracing`, never `println!`. | review |
 
-- Do not write comments. Code says what it does; the models say why.
-- The one exception is a constraint that neither code nor proofs can express
-  (safety, ordering, the behavior of an external system), stated once on the
-  item it constrains. Decisions and external premises go in docstrings on the
-  Lean definitions and theorems they justify.
-- Do not add prose documentation, design notes, plans or status reports to
-  this repository. User documentation lives in the docs repository.
+DefraDB's execution boundaries hold: autocommit prepares remote inputs on the
+caller and routes only prepared attempts; cache-only commits stay on their
+native I/O queue (Regolith's `commit_nowait`). Missing transaction mechanics
+are fixed in defradb.rs or Regolith, not hidden by a Gents retry.
 
-## Working in the repository
+## Identity and ownership
 
-- Read the issue's acceptance, the owning model and its callers before
-  editing.
-- Use an isolated worktree (`make worktree BRANCH=<branch>`), build with
-  `PROFILE=fast-dev` or `--profile fast-dev`, and remove the worktree when its
-  branch merges. Do not change a checkout while its build or test is running.
-- Iterate on the crate you changed: `cargo check -p <crate>`,
-  `cargo test -p <crate>`. The crates are small so that this loop is fast.
-- Before merging: `cargo fmt --all --check`,
-  `cargo check --workspace --all-targets`, `make lint`, `lake build` for model
-  changes, and the tests of every crate from the one you changed upward,
-  including the clients. A lower crate is not verified until its consumers
-  pass.
-- Diagnose a failure before rerunning it. Report what was actually checked and
-  what was not.
-- Describe a change by the problem, the delivered behavior, the checks that
-  ran and the limits that remain. Close an issue only when its whole
-  acceptance is delivered.
+- **ACP is the only authorization.** Actors are DIDs: a **User** (key stays on
+  the client; signs user configuration, plugin installs and agent creation), a
+  **Node** (peer admission and sync; owns operational documents no Agent
+  caused) and an **Agent** (runtime-managed; owns what it creates). Each
+  transaction runs as exactly one. No second identity layer or Rust check that
+  bypasses ACP; if ACP cannot express a rule, change the policy model.
+- **One policy, in Lean** (`crates/gents/proofs/Proofs/Store/Identity/`).
+  Permissions flow down `parent` (Node, Agent, session, its children); access
+  is granted by writing a relationship and revoked by deleting it. Every
+  document type gets its resource, parent and create/read/update/delete rule
+  in the model first. ACP authorizes whole documents: a field with different
+  writers is its own document.
+- **Core is the loop and its state.** Capabilities ship as WASM plugins in packs
+  ([gents-ai/packs](https://github.com/gents-ai/packs)); core adds only the
+  seam. Hooks on the `gents-session` seam receive rows and return effects as
+  data, never a transaction, and cannot prevent an interrupt, stop or terminal.
+  A plugin job is an ordinary background tool call.
+- **Request state is only `lifecycle_state`** (`RequestLifecycleState`).
+  Claimed work runs through the owned completion loop, the sole provider-input
+  boundary. `AgentSession` is the one session document; `Agent` is its only
+  configuration selection. Tools, MCP services, skills, tasks, callbacks and
+  schedules are documents reconciled by their owners.
+- **Clients are adapters.** An operation's contract lives in
+  `gents_protocol::operations`, its handler with the documents; clients never
+  re-implement validation, defaults or permissions. Clients retain only their
+  private journal and configured HTTP runtime connections. Their held User key
+  signs short-lived native delegations; runtime access and revocation are ACP
+  operations. P2P discovery and enrollment belong only to runtime peers.
+- **Model-facing text** discloses progressively: a small core, help per
+  resource, errors naming the next call; answer first, then next steps, then
+  metadata.
+
+## Tests and CI
+
+- Tests hold the Rust to the models; prefer generated cases to hand-written
+  unit tests. Keep end-to-end tests through real owners, tests pinning text a
+  person or model reads, and tests evidencing a premise about the database,
+  filesystem, processes or a wire format. Never assert how something is done.
+- End-to-end tests drive live inference and assert behavior (states, documents,
+  tool calls), not wording. Never pin temperature 0.
+- A Cargo filter matching nothing exits 0: read the test count.
+
+**The gate** (`scripts/ci/gate.py`, run by `.github/workflows/ci.yml`) maps a
+change to its crates and their reverse dependents and selects `fmt`, `lint`
+(clippy `-D warnings`, live suites compiled), `contract` (no `sorry`, Lean
+layers and build, generated files current, the consumer scan, the ratchets),
+the TypeScript jobs, and the test groups `foundation`, `store`, `session`,
+`runtime`, `cli` and `desktop`, each crate built and tested alone.
+
+```bash
+make gate-plan                  # what this change selects
+make gate                       # run it against BASE=origin/main
+make gate-run JOB=test:session  # one job
+```
+
+A draft tests the crates it changes; a ready pull request and the merge queue
+add their dependents; a push to `main` runs everything, and main's runs are the
+measurement for flakes and speed. Native changes pass `make gate` before
+pushing: a lower crate is not verified until its consumers, clients included,
+pass.
+
+**Runners** are chosen by role from `.github/ci-runners.json` (capability
+labels, never host names); a machine joins by registering with a role's labels.
+A fork pull request never runs on a self-hosted runner; a maintainer pushes it
+to a branch here to test it.
+
+## Delivering a change
+
+Read the issue's acceptance, the owning model and its callers first. Diagnose a
+failure before rerunning it. For performance, compare equivalent workloads at
+the owner and record revision, scope and result. Describe the problem, the
+delivered behavior, the checks actually run and the limits that remain; close
+an issue only when its whole acceptance is delivered.
