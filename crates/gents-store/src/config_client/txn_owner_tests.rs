@@ -685,13 +685,17 @@ async fn cancelled_after_begin_trace(steps: usize) -> Vec<NativeObservation> {
                 let native_operations = Arc::new(super::NativeOperationTracker::default());
                 *lock(&tracker) = Some(Arc::clone(&native_operations));
                 let (rollback_on_drop, handle) = super::begin_embedded_owned(
-                    node.clone(),
-                    Arc::clone(&gate),
-                    false,
-                    operation,
-                    Some(write_guard),
-                    Arc::clone(&native_operations),
-                    rollback_scheduled,
+                    super::rollback::EmbeddedOwnerHandles {
+                        node: node.clone(),
+                        native_gate: Arc::clone(&gate),
+                        native_operations: Arc::clone(&native_operations),
+                        cancellation_rollback_scheduled: rollback_scheduled,
+                    },
+                    super::rollback::EmbeddedBegin {
+                        read_only: false,
+                        operation,
+                        write_guard: Some(write_guard),
+                    },
                     move |handle| async move {
                         *lock(&registered) = Some(handle);
                         registered_notify.notify_one();
