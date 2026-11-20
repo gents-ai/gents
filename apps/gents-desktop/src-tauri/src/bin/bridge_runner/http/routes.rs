@@ -181,19 +181,9 @@ pub(super) async fn handle_request(
             let home = fixture.node_home().to_path_buf();
             json(
                 run_pack(runtime, move || async move {
-                    packs::install(
-                        home,
-                        request.package,
-                        request.registry,
-                        request.inference_slots,
-                        request.edited,
-                        request.grant_authority,
-                        request.preview,
-                        request.expect_digest,
-                        request.root_agents,
-                    )
-                    .await
-                    .map_err(gents_pack::pack::PackChangeError::into_anyhow)
+                    packs::install(home, request.into())
+                        .await
+                        .map_err(gents_pack::pack::PackChangeError::into_anyhow)
                 })
                 .await?,
             )

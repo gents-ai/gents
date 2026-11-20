@@ -552,14 +552,12 @@ async fn a_plugins_pack_asking_for_authority_is_a_typed_refusal() {
     let install = |grant_authority| {
         crate::packs::install(
             home.path().to_owned(),
-            pack.path().to_str().unwrap().to_owned(),
-            None,
-            Vec::new(),
-            EditedDocuments::Refuse,
-            grant_authority,
-            false,
-            None,
-            None,
+            crate::packs::PackInstall {
+                package: pack.path().to_str().unwrap().to_owned(),
+                edited: EditedDocuments::Refuse,
+                grant_authority,
+                ..Default::default()
+            },
         )
     };
 

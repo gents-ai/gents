@@ -389,14 +389,13 @@ pub(super) async fn install(
     let install = move |home| {
         crate::packs::install(
             home,
-            pack,
-            None,
-            slots,
-            documents(edited),
-            grant,
-            false,
-            None,
-            None,
+            crate::packs::PackInstall {
+                package: pack,
+                inference_slots: slots,
+                edited: documents(edited),
+                grant_authority: grant,
+                ..Default::default()
+            },
         )
     };
     change(&runtime, &home, install).await

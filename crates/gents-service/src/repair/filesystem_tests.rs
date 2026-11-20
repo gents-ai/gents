@@ -150,17 +150,19 @@ async fn prepare_staged(home: &Path, lock: &Path) -> super::RepairReceipt {
             http_addr: std::net::Ipv4Addr::LOCALHOST.into(),
             http_port: port,
         },
-        &HomeChoice {
-            home: home.to_path_buf(),
-            explicit: false,
-        },
-        false,
-        &super::ServiceProgram::new(super::current_program),
-        ServiceMove::AfterSetup,
-        RepairOperation::Run,
-        super::Asked {
-            interactive: true,
-            answer: RepairAnswer::SetAside,
+        &super::RepairRequest {
+            choice: &HomeChoice {
+                home: home.to_path_buf(),
+                explicit: false,
+            },
+            was_serving: false,
+            program: &super::ServiceProgram::new(super::current_program),
+            service_move: ServiceMove::AfterSetup,
+            operation: RepairOperation::Run,
+            asked: super::Asked {
+                interactive: true,
+                answer: RepairAnswer::SetAside,
+            },
         },
         &mut Silent,
     )
@@ -289,15 +291,17 @@ async fn settle_answered(
             explicit: true,
         },
         facts,
-        false,
-        super::Asked {
-            interactive: true,
-            answer,
-        },
-        None,
-        None,
-        None,
         &super::ServiceProgram::new(super::current_program),
+        super::Settling {
+            busy: false,
+            asked: super::Asked {
+                interactive: true,
+                answer,
+            },
+            refusal: None,
+            manager: None,
+            serving_home: None,
+        },
         &mut steps,
     )
     .await;

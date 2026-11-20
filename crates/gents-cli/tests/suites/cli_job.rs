@@ -94,22 +94,28 @@ fn run_job(cwd: &Path, args: &[&str]) -> Result<(Option<i32>, String, String)> {
     ))
 }
 
-/// Seeds one plugin job row and returns its doc id. `lifecycle` and `state`
-/// are the row's persisted values (`job_state` reads both).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "test seed helper takes the seeded row's fields"
-)]
+pub(crate) struct JobSeed<'a> {
+    pub(crate) request_doc_id: &'a str,
+    pub(crate) session: &'a str,
+    pub(crate) call: &'a str,
+    pub(crate) lifecycle: &'a str,
+    pub(crate) state: JobState,
+    pub(crate) pause_reason: Option<JobPauseReason>,
+}
+
 pub(crate) async fn seed_job(
     access: &ConfigAccess,
     node_did: &str,
-    request_doc_id: &str,
-    session: &str,
-    call: &str,
-    lifecycle: &str,
-    state: JobState,
-    pause_reason: Option<JobPauseReason>,
+    seed: JobSeed<'_>,
 ) -> Result<String> {
+    let JobSeed {
+        request_doc_id,
+        session,
+        call,
+        lifecycle,
+        state,
+        pause_reason,
+    } = seed;
     let key = format!("{session}:{call}");
     let mut pin = JobPin {
         script_id: "fixture-script".into(),
@@ -225,12 +231,14 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
     let done = seed_job(
         &access,
         did,
-        "",
-        "job-s1",
-        "call-done",
-        "completed",
-        JobState::Completed,
-        None,
+        JobSeed {
+            request_doc_id: "",
+            session: "job-s1",
+            call: "call-done",
+            lifecycle: "completed",
+            state: JobState::Completed,
+            pause_reason: None,
+        },
     )
     .await?;
     for slot in ["alpha", "beta"] {
@@ -239,23 +247,27 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
     seed_job(
         &access,
         did,
-        "",
-        "job:s2",
-        "call-paused",
-        "completed",
-        JobState::Paused,
-        Some(JobPauseReason::User),
+        JobSeed {
+            request_doc_id: "",
+            session: "job:s2",
+            call: "call-paused",
+            lifecycle: "completed",
+            state: JobState::Paused,
+            pause_reason: Some(JobPauseReason::User),
+        },
     )
     .await?;
     seed_job(
         &access,
         did,
-        "",
-        "job-s1",
-        "call-cancelled",
-        "cancelled",
-        JobState::Cancelled,
-        None,
+        JobSeed {
+            request_doc_id: "",
+            session: "job-s1",
+            call: "call-cancelled",
+            lifecycle: "cancelled",
+            state: JobState::Cancelled,
+            pause_reason: None,
+        },
     )
     .await?;
 
