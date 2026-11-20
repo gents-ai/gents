@@ -2348,6 +2348,8 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
+            max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+            repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
             stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(
                 gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,

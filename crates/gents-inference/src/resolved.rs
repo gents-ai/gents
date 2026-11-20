@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::backends::provider::BackendProviderKind;
 use crate::backends::registry::backend_fields;
@@ -99,6 +99,8 @@ pub struct ResolvedAgent {
     pub compaction: Option<gents_documents::CompactionConfig>,
     pub compaction_inference: Option<ResolvedInference>,
     pub max_total_tokens: Option<u64>,
+    pub max_invalid_tool_calls: usize,
+    pub repeated_tool_failure_limit: usize,
     pub stream_batch_ms: u64,
     pub stream_liveness_timeout: Duration,
     pub provider_idle_timeout: Duration,
@@ -169,6 +171,22 @@ impl ResolvedInference {
                 .as_ref()
                 .and_then(|execution| execution.max_turns),
         )
+    }
+
+    pub fn max_invalid_tool_calls(&self) -> Result<usize> {
+        self.execution
+            .clone()
+            .unwrap_or_default()
+            .invalid_tool_call_allowance()
+            .context("max_invalid_tool_calls must be positive")
+    }
+
+    pub fn repeated_tool_failure_limit(&self) -> Result<usize> {
+        self.execution
+            .clone()
+            .unwrap_or_default()
+            .repeated_failure_limit()
+            .context("repeated_tool_failure_limit must be positive")
     }
 
     pub fn sampling_config(&self) -> Result<SamplingConfig> {
@@ -380,6 +398,11 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("compaction", &self.compaction)
             .field("compaction_inference", &self.compaction_inference)
             .field("max_total_tokens", &self.max_total_tokens)
+            .field("max_invalid_tool_calls", &self.max_invalid_tool_calls)
+            .field(
+                "repeated_tool_failure_limit",
+                &self.repeated_tool_failure_limit,
+            )
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("stream_liveness_timeout", &self.stream_liveness_timeout)
             .field("provider_idle_timeout", &self.provider_idle_timeout)
@@ -936,6 +959,8 @@ mod tests {
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
+            max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+            repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
