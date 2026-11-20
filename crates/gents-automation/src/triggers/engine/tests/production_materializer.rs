@@ -1232,10 +1232,12 @@ async fn goal_task_fire_recovery_matches_the_lean_recovery_model() {
                 let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
                     gents_protocol::request_admission::RequestPurpose::Normal,
                     &identity.request_id,
-                    foreign.node_did(),
-                    &agent_did,
-                    &agent_did,
-                    &identity.session_id,
+                    gents_protocol::request_admission::RequestScope::new(
+                        foreign.node_did(),
+                        &agent_did,
+                        &agent_did,
+                        &identity.session_id,
+                    ),
                     "foreign collision",
                     "interactive",
                     "2026-11-04T00:00:00Z",

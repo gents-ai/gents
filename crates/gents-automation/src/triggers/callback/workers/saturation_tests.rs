@@ -18,7 +18,9 @@ use gents_pack::plugin::store;
 use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 use gents_store::config_client::ConfigAccess;
 use gents_store::subscription_source::UpdateSubscriptionSource;
-use gents_store::test_support::STALL_CEILING;
+use gents_store::test_support::{
+    fixture_agent_access, fixture_agent_did, FIXTURE_AGENT_NONCE, STALL_CEILING,
+};
 use gents_toolcalls::plugin::executor::PluginExecutor;
 
 const CALLBACK: &str = "saturation";
@@ -167,7 +169,7 @@ async fn snapshot(node: &Arc<defra_node::Node>, row: &Value, owner: &str) -> Cal
         node,
         row["invocation_id"].as_str().unwrap(),
         owner,
-        &crate::triggers::callback::test_agent_did(),
+        &fixture_agent_did(FIXTURE_AGENT_NONCE),
     )
     .await
     .unwrap()
@@ -255,7 +257,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             )
             .await
             .unwrap();
-        let access = crate::triggers::callback::test_agent_access(&node);
+        let access = fixture_agent_access(&node, FIXTURE_AGENT_NONCE);
         let documents = [
             (
                 gents_store::collection::Collection::Callback,
@@ -275,7 +277,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             ),
             (
                 gents_store::collection::Collection::CallbackBinding,
-                json!({"binding_id": "saturation", "agent_did":crate::triggers::callback::test_agent_did(),"event_source_id": "saturation",
+                json!({"binding_id": "saturation", "agent_did":fixture_agent_did(FIXTURE_AGENT_NONCE),"event_source_id": "saturation",
                     "callback_id": CALLBACK, "input_fields": ["item", "correlation"]}),
             ),
         ]

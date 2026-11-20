@@ -128,7 +128,7 @@ pub async fn spawn_observed_server(
     use std::time::Duration;
     const LOG: &str = "warn,p2p::iroh::endpoint_config=info";
     let registered_home = home.to_owned();
-    let registered_gents_home = support::process::served_home_dir(home, args, &[("RUST_LOG", LOG)]);
+    let registered_gents_home = support::process::served_home_dir(home, args);
     let owned_home = home.to_owned();
     let owned_args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
     let mut serve = tokio::task::spawn_blocking(move || {

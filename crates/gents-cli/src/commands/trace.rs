@@ -10,7 +10,8 @@ use gents_observe::observe::adapter_projection::{
     validate_adapter_projection_contract, ProjectionContext, ProjectionRedactionMode,
 };
 use gents_observe::observe::run_timeline::{
-    build_run_timeline, RunTimelineRows, TimelineToolCallRow,
+    build::build_run_timeline,
+    rows::{RunTimelineRows, TimelineToolCallRow},
 };
 use gents_observe::observe::run_timeline_fetch::{
     load_run_timeline, load_settled_run_timeline_rows, RUN_TIMELINE_SETTLE_BOUND,
@@ -20,7 +21,7 @@ use gents_observe::observe::trace_export::{
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
 use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
-use gents_session::session::tool_call_state::ToolCallState;
+use gents_protocol::tool_call::ToolCallState;
 use gents_store::graphql::escape_graphql_string;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -112,7 +113,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     let mut entries = raw_rows
         .into_iter()
         .map(|raw| {
-            let row: gents_observe::observe::run_timeline::TimelineRenderedRequestRow =
+            let row: gents_observe::observe::run_timeline::rows::TimelineRenderedRequestRow =
                 serde_json::from_value(raw.clone()).context("decoding RenderedRequest row")?;
             Ok((row, raw))
         })
@@ -238,11 +239,11 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
 }
 
 fn capture_metadata_value(
-    row: &gents_observe::observe::run_timeline::TimelineRenderedRequestRow,
+    row: &gents_observe::observe::run_timeline::rows::TimelineRenderedRequestRow,
     raw: &Value,
     include_body: bool,
 ) -> Value {
-    let event = gents_observe::observe::run_timeline::rendered_request_event(row);
+    let event = gents_observe::observe::run_timeline::rendered::rendered_request_event(row);
     let mut value = serde_json::to_value(&event).unwrap_or_else(|_| json!({}));
     value["doc_id"] = json!(row.doc_id);
     if include_body {
@@ -257,7 +258,7 @@ fn capture_metadata_value(
 }
 
 fn capture_order_padded(
-    row: &gents_observe::observe::run_timeline::TimelineRenderedRequestRow,
+    row: &gents_observe::observe::run_timeline::rows::TimelineRenderedRequestRow,
 ) -> String {
     use gents_protocol::rendered_request::{CaptureOrderKey, CaptureScope};
 

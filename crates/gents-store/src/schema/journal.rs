@@ -1,12 +1,12 @@
 use std::sync::{Arc, LazyLock};
 
+use super::catalog::{BaselineCollection, Catalog, SchemaError, BASELINE};
 use defra_node::Node;
-use gents_migration::{BaselineCollection, Registry};
 
 use crate::config_client::{ConfigAccess, ConfigClientError};
 
 static COLLECTIONS: LazyLock<Vec<BaselineCollection<'static>>> = LazyLock::new(|| {
-    let baseline = &gents_migration::DEFAULT_BASELINE;
+    let baseline = &BASELINE;
     let sdl = baseline
         .iter()
         .map(|entry| entry.sdl)
@@ -36,7 +36,7 @@ pub enum JournalSchemaError {
     #[error("reading the client journal schema")]
     Read(#[source] defra_node::Error),
     #[error("initializing the client journal schema")]
-    Initialize(#[source] gents_migration::Error),
+    Initialize(#[source] SchemaError),
     #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
 }
@@ -58,14 +58,12 @@ pub async fn ensure_journal_schemas(node: Arc<Node>) -> Result<(), JournalSchema
                     });
                 }
             }
-            let registry = Registry {
+            let catalog = Catalog {
                 baseline: COLLECTIONS.as_slice(),
-                steps: &[],
                 ordinary_indexes: &[],
             };
-            gents_migration::ensure_migrations_with_registry(node.as_ref(), &registry)
+            super::catalog::ensure(node.as_ref(), &catalog)
                 .await
-                .map(|_| ())
                 .map_err(JournalSchemaError::Initialize)
         })
         .await

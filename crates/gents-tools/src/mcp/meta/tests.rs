@@ -184,7 +184,10 @@ async fn service_enablement_at_use_matches_model() {
             current.configuration = gents_inference::resolved::ResolvedConfiguration::Documents(
                 gents_inference::resolved::SelectedConfiguration::new(
                     node.clone(),
-                    identity::Did::new(crate::test_support::test_agent_did()).unwrap(),
+                    identity::Did::new(gents_store::test_support::fixture_agent_did(
+                        gents_store::test_support::FIXTURE_AGENT_NONCE,
+                    ))
+                    .unwrap(),
                     vec![],
                 ),
             );
@@ -343,18 +346,14 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                 ..
             }
         ));
-        let built = super::build_meta_tools(
-            node.clone(),
-            pool.clone(),
-            context.health,
-            "local".into(),
-            None,
-            context.node_did,
-            context.actor,
-            context.allowed_mcp_service_ids,
-            context.remote_tools,
-            gents_inference::resolved::ResolvedConfiguration::Static,
-        )
+        let built = super::build_meta_tools(super::MetaToolContext {
+            node: node.clone(),
+            mcp_pool: pool.clone(),
+            local_hostname: "local".into(),
+            local_subnet: None,
+            configuration: gents_inference::resolved::ResolvedConfiguration::Static,
+            ..context
+        })
         .await
         .unwrap();
         match style {

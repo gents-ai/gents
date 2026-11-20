@@ -2354,13 +2354,15 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
         &gents_loop::tool::ToolCallEnvelope::default(),
         &context,
         "bash",
-        "/bin/sh",
-        &["-c".into(), "touch escaped".into()],
-        None,
-        Duration::from_secs(5),
+        super::shared::CommandRequest {
+            command_name: "/bin/sh",
+            args: &["-c".into(), "touch escaped".into()],
+            cwd: None,
+            timeout: Duration::from_secs(5),
+            raw_json: false,
+            max_output_chars: DEFAULT_MAX_COMMAND_CHARS,
+        },
         &policy,
-        false,
-        DEFAULT_MAX_COMMAND_CHARS,
     )
     .await
     .unwrap_err();
@@ -2432,13 +2434,15 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
                     &scope_call,
                     &context,
                     "bash",
-                    "/bin/sh",
-                    &["-c".into(), script],
-                    None,
-                    Duration::from_secs(10),
+                    super::shared::CommandRequest {
+                        command_name: "/bin/sh",
+                        args: &["-c".into(), script],
+                        cwd: None,
+                        timeout: Duration::from_secs(10),
+                        raw_json: false,
+                        max_output_chars: DEFAULT_MAX_COMMAND_CHARS,
+                    },
                     &policy,
-                    false,
-                    DEFAULT_MAX_COMMAND_CHARS,
                 )
                 .await
             }

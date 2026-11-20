@@ -87,6 +87,7 @@ pub struct ClientRuntime {
     >,
     request_patch_signatures: Mutex<RapidHashMap<String, (usize, usize, u64)>>,
     context_details: context_details::ContextDetailsCache,
+    starters: crate::snapshot::runtime_tasks::StarterCache,
     shutdown_completion: Mutex<Option<watch::Receiver<Option<ShutdownOutcome>>>>,
     last_mutation_error: StdRwLock<Option<String>>,
 }
@@ -116,6 +117,9 @@ impl ClientRuntime {
     }
     pub fn runtime_connection_updates(&self) -> watch::Receiver<Vec<RuntimeConnection>> {
         self.directory.subscribe()
+    }
+    pub(crate) fn starters(&self) -> &crate::snapshot::runtime_tasks::StarterCache {
+        &self.starters
     }
     pub fn stores(&self) -> &Arc<ObservedStores> {
         &self.stores

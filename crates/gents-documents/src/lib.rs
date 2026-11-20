@@ -113,9 +113,6 @@ pub(crate) use references::RequiredReference;
 pub use references::{ConfigReferences, MissingReference};
 pub use unattended_admission::observe_unattended_agent_in_txn;
 
-#[allow(unused_imports)]
-pub(crate) use behavior::list_agent_records;
-#[allow(unused_imports)]
 pub use behavior::load_agent_record;
 pub use behavior::{list_agents, load_agent, write_agent_document, Agent};
 
@@ -132,8 +129,6 @@ pub use inference_execution::{
 };
 pub use inference_sampling::InferenceSampling;
 
-#[allow(unused_imports)]
-pub(crate) use inference_profile::load_inference_profile_record;
 pub use inference_profile::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
     list_inference_profile_records, list_inference_profiles_in_txn, load_inference_profile,
@@ -143,14 +138,10 @@ pub use inference_profile::{
 pub use serde_helpers::deserialize_dual_shape;
 pub(crate) use serde_helpers::string_list_schema;
 pub use serde_helpers::{accepts_null, deserialize_default_on_null, noted, widen_schema};
-#[allow(unused_imports)]
+pub(crate) use surface_tool::deserialize_optional_surface_tools;
 pub use surface_tool::validate_surface_tool_names;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use surface_tool::{confirm_visible_datastore_tool, revalidate_datastore_tool_in_txn};
-#[allow(unused_imports)]
-pub(crate) use surface_tool::{
-    deserialize_optional_surface_tools, validate_query_tool_declarations,
-};
 pub use surface_tool::{
     merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
 };
@@ -184,14 +175,12 @@ pub use skill::{SkillDocument, SKILL_FIELDS};
 
 #[cfg(test)]
 pub use event_trigger::count_trigger_cursor_batch_queries;
-#[allow(unused_imports)]
 pub use event_trigger::{
     load_trigger_next_run_at_batch, record_trigger_command_run, stop_trigger_for_budget,
     update_trigger_runtime_fields, TriggerRuntimeUpdate, TRIGGER_CURSOR_BATCH_SIZE,
 };
 pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
-#[allow(unused_imports)]
 pub use task::{Task, TaskCommand, TaskHook, TaskHookPhase};
 pub use trigger::{
     CommandRun, CommandRunState, ConcurrencyMode, Trigger, TriggerObservation, TriggerSource,

@@ -347,8 +347,8 @@ where
             // Boxed: the listing holds a second transport future, which inlined
             // here would double the send state machine.
             let id = Box::pin(bedrock::resolve_model(
+                route,
                 runtime,
-                route.signing.as_ref(),
                 &plan,
                 &token,
                 fixture.is_none(),
@@ -375,7 +375,7 @@ where
         let send = send_capturing(
             call,
             fixture.clone(),
-            ClaudeHttpClient::new(usage.clone()),
+            ClaudeHttpClient::new(usage.clone(), route.gzip_off.clone()),
             http_request,
         );
         replay.sent();

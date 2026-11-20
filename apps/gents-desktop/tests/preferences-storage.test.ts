@@ -31,6 +31,7 @@ const defaults: Preferences = {
   notify: { finished: true, failed: true, question: true, mailbox: true },
   pluginNotify: [],
   starterPacksDismissed: [],
+  thingsToTrySeen: [],
 };
 
 describe("preferences read back from storage", () => {
@@ -75,6 +76,7 @@ describe("preferences read back from storage", () => {
       notify: { finished: true, failed: true, question: true, mailbox: true },
       pluginNotify: [],
       starterPacksDismissed: [],
+      thingsToTrySeen: [],
     });
     expect(restorePreferences({ sentTurn: "anchor" }, defaults).sentTurn).toBe(
       "anchor",

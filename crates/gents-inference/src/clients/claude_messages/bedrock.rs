@@ -5,19 +5,18 @@
 //! SSE bytes in `sse`. The rules themselves are `gents_claude::bedrock`. This
 //! module names no Rig type: the transport and the SSE adapter own those.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use gents_claude::bedrock as rules;
 use gents_claude::headers::HeaderValue;
 use gents_claude::sigv4::{escape_uri, SigV4Error};
 use gents_loop::claude_messages_body::ClaudeRequestPlan;
-use kovan_map::HopscotchMap;
-use rapidhash::fast::RandomState;
 use tokio::sync::OnceCell;
 
 use super::aws::sign_request;
-use super::route::{AwsSigning, BedrockRoute};
+use super::route::{AwsSigning, BedrockRoute, ClaudeRoute};
 use super::transport::{url_parts, ClaudeHttpClient, ClaudeTransportError};
 
 /// How long a listed profile set is trusted before it is read again.
@@ -28,8 +27,6 @@ const PROFILE_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_PROFILE_PAGES: usize = 20;
 /// Largest page body read; a hostile peer cannot grow memory past it.
 const MAX_PROFILE_PAGE_BYTES: usize = 4 * 1024 * 1024;
-/// Backends whose profile lists are remembered before the cache starts over.
-const PROFILE_CACHE_CAP: usize = 64;
 
 /// Why the inference profiles could not be read.
 #[derive(Debug, thiserror::Error)]
@@ -48,21 +45,32 @@ pub(crate) enum ProfileError {
 
 /// One listing of a backend's profiles; empty when the listing failed, which
 /// Claude Code also remembers rather than asking again on every request.
+#[derive(Debug)]
 struct Listing {
     ids: Arc<[String]>,
     fetched: Instant,
 }
 
-type ProfileCache = HopscotchMap<String, Arc<OnceCell<Listing>>, RandomState>;
+/// The current listing of one route's profiles. Clones share it; a stale
+/// listing is replaced by a fresh slot, never refilled in place.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProfileCache(Arc<Mutex<Arc<OnceCell<Listing>>>>);
 
-static PROFILES: LazyLock<ProfileCache> =
-    LazyLock::new(|| HopscotchMap::with_hasher(RandomState::new()));
-
-fn cache_key(bedrock: &BedrockRoute) -> String {
-    format!("{}\n{}", bedrock.backend_id, bedrock.control_url)
+impl ProfileCache {
+    /// The slot to read or fill: the current one while it is unfilled or fresh.
+    fn slot(&self) -> Arc<OnceCell<Listing>> {
+        let mut current = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if current
+            .get()
+            .is_some_and(|listing| listing.fetched.elapsed() >= PROFILE_TTL)
+        {
+            *current = Arc::default();
+        }
+        current.clone()
+    }
 }
 
-/// The Anthropic inference profiles of the account, listed once per backend
+/// The Anthropic inference profiles of the account, listed once per route
 /// while fresh (concurrent first requests share one listing, as Claude Code's
 /// cached promise does). A listing that fails is logged and remembered as
 /// empty, so the request falls back to the rewritten catalog id.
@@ -70,52 +78,39 @@ async fn profiles(
     bedrock: &BedrockRoute,
     signing: Option<&AwsSigning>,
     token: &str,
+    gzip_off: &Arc<AtomicBool>,
 ) -> Arc<[String]> {
-    let key = cache_key(bedrock);
-    let slot = match PROFILES.get(&key) {
-        Some(slot)
-            if slot
-                .get()
-                .is_none_or(|listing| listing.fetched.elapsed() < PROFILE_TTL) =>
-        {
-            slot
-        }
-        stale => {
-            if stale.is_none() && PROFILES.len() >= PROFILE_CACHE_CAP {
-                PROFILES.clear();
+    bedrock
+        .profiles
+        .slot()
+        .get_or_init(|| async {
+            let ids = fetch_profiles(bedrock, signing, token, gzip_off)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(
+                        region = %bedrock.region,
+                        error = %error,
+                        "Amazon Bedrock inference profiles could not be listed; the catalog model ids are used"
+                    );
+                    Vec::new()
+                });
+            Listing {
+                ids: ids.into(),
+                fetched: Instant::now(),
             }
-            let fresh = Arc::new(OnceCell::new());
-            PROFILES.insert(key, fresh.clone());
-            fresh
-        }
-    };
-    slot.get_or_init(|| async {
-        let ids = fetch_profiles(bedrock, signing, token)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(
-                    region = %bedrock.region,
-                    error = %error,
-                    "Amazon Bedrock inference profiles could not be listed; the catalog model ids are used"
-                );
-                Vec::new()
-            });
-        Listing {
-            ids: ids.into(),
-            fetched: Instant::now(),
-        }
-    })
-    .await
-    .ids
-    .clone()
+        })
+        .await
+        .ids
+        .clone()
 }
 
 async fn fetch_profiles(
     bedrock: &BedrockRoute,
     signing: Option<&AwsSigning>,
     token: &str,
+    gzip_off: &Arc<AtomicBool>,
 ) -> Result<Vec<String>, ProfileError> {
-    let client = ClaudeHttpClient::new(None);
+    let client = ClaudeHttpClient::new(None, gzip_off.clone());
     let mut ids = Vec::new();
     let mut next: Option<String> = None;
     for _ in 0..MAX_PROFILE_PAGES {
@@ -187,8 +182,8 @@ async fn fetch_page(
 /// prefix, else the catalog id with that prefix (`ED`), which is also the id
 /// when the listing fails.
 pub(super) async fn resolve_model(
+    route: &ClaudeRoute,
     bedrock: &BedrockRoute,
-    signing: Option<&AwsSigning>,
     plan: &ClaudeRequestPlan,
     token: &str,
     discover: bool,
@@ -202,7 +197,7 @@ pub(super) async fn resolve_model(
     if !discover {
         return rewritten;
     }
-    let listed = profiles(bedrock, signing, token).await;
+    let listed = profiles(bedrock, route.signing.as_ref(), token, &route.gzip_off).await;
     rules::select_profile(&listed, first_party, prefix).map_or(rewritten, str::to_owned)
 }
 
@@ -213,9 +208,4 @@ pub(super) fn invoke_uri(endpoint: &str, model: &str) -> Result<String, rules::B
         endpoint.strip_suffix('/').unwrap_or(endpoint),
         rules::invoke_path(model)?
     ))
-}
-
-#[cfg(test)]
-pub(super) fn clear_profile_cache_for_test() {
-    PROFILES.clear();
 }

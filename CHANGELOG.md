@@ -22,6 +22,47 @@ source consistency checks, not a separate runtime compatibility version.
   Task, or changes one's command, installs only under the operator's grant:
   `--grant-authority`, on the local and the hosted install alike, or the pack
   authority an installing Agent holds (#3951).
+- Breaking: `GENTS_REGISTRY` is no longer read. `gents server --registry URL`
+  chooses the registry an Agent's `config pack` commands resolve and search
+  from; a tool call still names none. `gents init`, bare `gents` setup,
+  `gents config pack starter`, `pack prune` and `automation job promote` gain
+  `--registry`, as every other pack and plugin command has. Without the flag
+  the public registry is used (#1764).
+- Breaking: `GENTS_DESKTOP_HOME` is no longer read. The desktop app takes a
+  `--desktop-home PATH` launch argument, and `gents-desktop init`,
+  `gents-client-host --home` and `gents runtime desktop reset --desktop-home`
+  keep theirs; without one the platform's application data folder is used.
+  `gents init --desktop-home PATH` keeps the CLI client identity that
+  administers the new home in `PATH/cli` and records that folder in the home's
+  `init.json` (`client_identity`), so every later command given that home
+  signs with it on any platform. Desktop provisioning passes its own desktop
+  home this way instead of refusing a root the process did not resolve (#1764).
+- Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
+  node home; without it commands use the folder chosen at setup, then `~/.gents`
+  (Lean `HomeResolution`). The macOS uninstall script takes `--home DIR` and
+  otherwise removes the folder chosen at setup (#1764).
+- Breaking: `gents runtime service install`, `stop`, `restart` and
+  `uninstall`, and a managed update's helper, refuse to run when the service's
+  running job is an ancestor of the calling process, which they observe from
+  the service manager and the operating system instead of
+  `GENTS_CALLER_RUNTIME_HOME`. Where that ancestry cannot be read (a sandboxed
+  command, a platform other than macOS or Linux) they refuse while the job
+  runs. Agent commands no longer receive `GENTS_CALLER_RUNTIME_HOME`,
+  `GENTS_CALLER_SESSION_ID` or `GENTS_CALLER_REQUEST_ID`, and a managed update
+  submitted from an Agent's shell no longer posts "Runtime update complete" or
+  "Runtime update failed" to the submitting session; read
+  `gents runtime service update-status` instead. Update plans and receipts no
+  longer carry `session_id` or `request_id` (#3922).
+- Breaking: no home is converted in place. A home from a development build
+  between v1.0.0-rc1 and v1.0.0-rc2 whose `Task`, `RepositoryPlacement`,
+  `ToolServiceRegistry`, `CallbackResult`, `IsolatedWorkspace`,
+  `WorkspaceReceipt`, `PackInstallation` or `Trigger` predates its current
+  fields, including one rc2 upgraded, is refused as an older home (exit code
+  65) and left unchanged; start a new home. The schema-migration engine
+  (`gents-migration`) is removed.
+- `gents server --pack-watch-limit` (default 16) bounds the pack UX
+  observation streams (`/packs/ux/watch`) one runtime serves at once; the
+  bound was a fixed count shared by every runtime in the process (#1764).
 - Tools `host.max_background_tool_calls` (1 to 8, unset 8) bounds the
   background calls one request holds at once: Bash runs, remote service calls
   and plugin jobs together. The refusal reports the configured limit.
@@ -79,6 +120,10 @@ source consistency checks, not a separate runtime compatibility version.
 - Breaking: `gents init` and the interactive backend setup take the inference
   endpoint only from `--inference-url` (or a preset); `INFERENCE_ENDPOINT` is
   no longer read.
+- Breaking: `gents server --fs-runner PATH` replaces `GENTS_FS_RUNNER` to run
+  the native filesystem tools through a standalone `gents-fs-runner`. Without
+  it the serving executable runs them, and builds plugin source, through its
+  own hidden commands (#1764).
 
 ## 1.0.0-rc2 - 2026-11-10
 

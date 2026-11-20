@@ -165,8 +165,6 @@ pub(super) fn prepare(
         id,
         home,
         node_did: init.node_did,
-        session_id: std::env::var("GENTS_CALLER_SESSION_ID").ok(),
-        request_id: std::env::var("GENTS_CALLER_REQUEST_ID").ok(),
         endpoint: state.graphql,
         prior_build: digest(&old_executable)?,
         intent,
@@ -181,8 +179,6 @@ pub(super) fn prepare(
     let receipt = Receipt {
         operation_id: id,
         node_did: plan.node_did.clone(),
-        session_id: plan.session_id.clone(),
-        request_id: plan.request_id.clone(),
         phase: Phase::Staged,
         message: "Verified candidate staged; runtime unchanged".into(),
         updated_at: chrono::Utc::now().to_rfc3339(),

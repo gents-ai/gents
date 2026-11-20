@@ -2122,7 +2122,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "family"
       "mailbox_access_claimed_recipient_served"
-      "Connects a native User-authored client claim to the mailbox tool and recipient relationship, and after restart to the runtime notice; unattended provenance remains unavailable.")
+      "Connects a native User-authored client claim to the mailbox tool and recipient relationship; unattended provenance remains unavailable.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
@@ -2144,13 +2144,8 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
-      "mailbox_access_notice_publication"
-      "delegated_http_claim_routes_mailbox_to_immediate_signer publishes a notice for a missing request, an admitted but unclaimed request and a claimed request; acknowledgement replay after the claim remains scenario evidence.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "family"
       "mailbox_access_native"
-      "Tests native mailbox publication and recipient revocation; authenticated producer provenance and durable runtime notices remain separate obligations.")
+      "Tests native mailbox publication and recipient revocation; authenticated producer provenance remains a separate obligation.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "family"

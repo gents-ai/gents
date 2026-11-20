@@ -530,7 +530,7 @@ mod tests {
         let user =
             gents_store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
                 .unwrap();
-        gents_session::test_support::grant_operator_user(&node, identity.as_ref(), &user).await;
+        gents_store::test_support::grant_operator_user(&node, identity.as_ref(), &user).await;
         let binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
         let agent =
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();

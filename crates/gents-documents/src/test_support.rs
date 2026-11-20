@@ -30,6 +30,19 @@ pub async fn ensure_test_node(node: &std::sync::Arc<defra_node::Node>, node_did:
     bootstrap_signed_test_node(&access, node_did).await;
 }
 
+/// Enrols `user` as the runtime's operator and publishes the runtime's Node
+/// through the User's client-signed `access`, as `gents init` does: the Node
+/// is User configuration, and provisioning an Agent requires it.
+pub async fn enroll_test_user(
+    node: &std::sync::Arc<defra_node::Node>,
+    runtime: &dyn gents_store::identity::NodeIdentity,
+    user: &gents_store::identity::KeyIdentity,
+    access: &gents_store::config_client::ConfigAccess,
+) {
+    gents_store::test_support::grant_operator_user(node, runtime, user).await;
+    bootstrap_signed_test_node(access, runtime.did()).await;
+}
+
 pub async fn bootstrap_signed_test_node(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,

@@ -340,11 +340,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
 
         let stages = await_stages(
             &graphql,
-            &manifest.expect.trigger_ids,
-            &manifest.expect.trigger_request_counts,
-            &manifest.expect.trigger_request_count_sources,
-            &manifest.expect.stage_tool_sequences,
-            manifest.expect.workspace_receipt_paths.as_ref(),
+            &manifest.expect,
             &job_id,
             Duration::from_secs(manifest.await_timeout_secs),
         )

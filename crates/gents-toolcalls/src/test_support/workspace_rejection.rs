@@ -1,6 +1,6 @@
 use anyhow::Result;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_session::workspace::WorkspaceBindingDoc;
 use gents_store::config_client::ConfigAccess;
@@ -148,10 +148,7 @@ impl Fixture {
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "workspace-rejected-request",
-            identity.did(),
-            user.did(),
-            agent.did(),
-            "session",
+            RequestScope::new(identity.did(), user.did(), agent.did(), "session"),
             "work",
             "interactive",
             "2026-09-01T00:00:00Z",

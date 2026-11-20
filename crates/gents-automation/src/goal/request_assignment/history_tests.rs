@@ -3,7 +3,7 @@ use super::*;
 use gents_lean_vocab::families::goal_request_assignment_contracts_history as history;
 use gents_lean_vocab::families::goal_request_assignment_contracts_persisted_history as persisted;
 use gents_protocol::request_admission::{
-    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose, RequestScope,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_store::config_client::ConfigAccess;
@@ -144,10 +144,12 @@ async fn persist_request(
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         format!("history-request-{id}"),
-        identity.did(),
-        identity.did(),
-        "history-agent",
-        "session-10",
+        RequestScope::new(
+            identity.did(),
+            identity.did(),
+            "history-agent",
+            "session-10",
+        ),
         "assignment input",
         "interactive",
         "2026-10-21T00:00:00Z",

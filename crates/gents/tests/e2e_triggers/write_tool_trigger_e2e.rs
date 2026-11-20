@@ -1,4 +1,4 @@
-use crate::support::snapshots::SnapshotReader;
+use gents_store::test_support::snapshot_reader::SnapshotReader;
 use std::time::Duration;
 
 use gents::{DocumentRuntimeOptions, Gents};
