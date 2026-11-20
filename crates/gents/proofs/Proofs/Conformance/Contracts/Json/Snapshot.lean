@@ -211,6 +211,7 @@ import Proofs.Conformance.SessionQueueOrderCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
+import Proofs.Conformance.EditorUndoCheckpoint
 import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.EnrollmentInvite
 import Proofs.Conformance.WorkspacePermissionResolution
