@@ -866,15 +866,21 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
     let selected = crate::identity::resolve_agent_identity(&runtime, &selected_binding)?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+    let runtime = Arc::new(runtime);
+    let grants = crate::config_client::OwnerStagedRoute::new();
     let node = Arc::new(
         defra_node::Node::builder()
             .enable_signing()
             .with_node_identity_did(runtime.did())
             .with_node_acp_owner(user.did().to_owned())
-            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .with_http(
+                defra_node::HttpConfig::with_listener(listener)?
+                    .with_authenticated_routes(grants.router()),
+            )
             .build()
             .await?,
     );
+    grants.serve(&node, runtime.clone());
     let owner_context =
         defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
     let policy = node

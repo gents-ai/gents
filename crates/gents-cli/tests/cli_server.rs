@@ -1808,7 +1808,6 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
 
     let port = allocate_port()?;
     let agent_name = format!("cli-p2p-ready-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
@@ -1823,7 +1822,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     )?;
     let node_did = node_did_from_init(&init)?;
     let default_agent_did = agent_did_from_init(&init)?;
-    let (mut serve, readiness) = p2p_bind::spawn_observed_server(
+    let (mut serve, port, readiness) = p2p_bind::spawn_observed_server(
         &home_dir,
         port,
         &[
@@ -1839,6 +1838,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         "127.0.0.1:0".parse()?,
     )
     .await?;
+    let graphql = graphql_url(port);
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
@@ -1989,7 +1989,7 @@ async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
         }))?,
     )?;
 
-    let (mut serve, readiness) = p2p_bind::spawn_observed_server(
+    let (mut serve, port, readiness) = p2p_bind::spawn_observed_server(
         &home_dir,
         port,
         &[],
@@ -2215,7 +2215,6 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
 
     let port = allocate_port()?;
     let agent_name = format!("cli-auth-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
 
     let init = run_init_json(
         &home_dir,
@@ -2243,12 +2242,13 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         .to_string();
     let tools_id = generated_tools_id_for_agent(&agent_did_from_init(&init)?);
 
-    let (_serve, readiness) = spawn_server_with_ready_json(
+    let (_serve, port, readiness) = spawn_server_with_ready_json_recovering(
         &home_dir,
         port,
         &[],
         &[("GENTS_TEST_CLI_BACKEND_KEY", "backend-key")],
     )?;
+    let graphql = graphql_url(port);
     assert_eq!(
         readiness.get("graphql").and_then(Value::as_str),
         Some(graphql.as_str()),

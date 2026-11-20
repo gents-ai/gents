@@ -635,7 +635,10 @@ async fn sweep_enrollment(
         }
     };
     publish_ready(sender, projection.clone());
-    if let Err(error) = store.withdraw_lapsed_memberships().await {
+    if let Err(error) = store
+        .withdraw_lapsed_memberships(|| Utc::now().timestamp())
+        .await
+    {
         tracing::warn!(%error, "a lapsed enrollment grant was not withdrawn; will retry");
     }
     if member_renewal.due() {
@@ -1398,6 +1401,32 @@ mod tests {
             after,
             "a repeated sweep preserves the witness"
         );
+        let runtime = ConfigAccess::local_as(receiver.clone(), admin.did().parse().unwrap());
+        let grant = serde_json::json!({
+            "request_id": projection.active[0].request.request_id,
+            "member_did": member.did(),
+            "tuples": ["node-administrator"],
+            "granted_at": chrono::Utc::now().to_rfc3339(),
+        });
+        runtime.write_with_variables(
+            "test.enrollment.sweep_receipt",
+            "mutation($input: NetworkEnrollmentGrantMutationInputArg!) { create_NetworkEnrollmentGrant(input: $input) { _docID } }",
+            &serde_json::json!({"input": grant}),
+        ).await.unwrap();
+        let expiry = chrono::DateTime::parse_from_rfc3339(&signed.authorization_expires_at)
+            .unwrap()
+            .timestamp();
+        for (wall, lapsed) in [(expiry - 1, false), (expiry, true)] {
+            store.withdraw_lapsed_memberships(|| wall).await.unwrap();
+            let receipts =
+                gents_store::identity::load_enrollment_grant_receipts(&runtime, member.did())
+                    .await
+                    .unwrap();
+            let [receipt] = receipts.as_slice() else {
+                panic!("expected one enrollment receipt")
+            };
+            assert_eq!((receipt.withdrawn, receipt.owed), (lapsed, lapsed));
+        }
         receiver.shutdown().await.expect("node shutdown");
     }
 

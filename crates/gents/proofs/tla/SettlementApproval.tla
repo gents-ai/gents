@@ -41,7 +41,8 @@ TypeOK ==
 
 Init ==
   /\ held = TRUE /\ owed = TRUE /\ live = FALSE
-  /\ approver = "idle" /\ seen = [held |-> TRUE, owed |-> TRUE, live |-> FALSE]
+  /\ \/ approver = "idle" /\ seen = [held |-> TRUE, owed |-> TRUE, live |-> FALSE]
+     \/ approver = "read" /\ seen = [held |-> TRUE, owed |-> FALSE, live |-> TRUE]
   /\ settler = "idle" /\ decision = "none" /\ restore = FALSE
 
 ApproverRead ==
@@ -51,7 +52,7 @@ ApproverRead ==
   /\ UNCHANGED <<held, owed, live, settler, decision, restore>>
 
 \* Lean `record`: the relation is recorded unless held independently.
-Records == ~seen.held \/ seen.live \/ seen.owed
+Records == ~seen.held \/ seen.live \/ seen.owed \/ live \/ owed
 
 ApproverRecord ==
   /\ approver = "read"

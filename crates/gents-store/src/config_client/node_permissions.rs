@@ -275,20 +275,15 @@ impl ConfigAccess {
                     .identity()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?
                     .clone();
-                if !delete {
-                    let owed =
-                        crate::identity::owed_removal_receipts(local.node(), target.as_str())
-                            .await?;
-                    if !crate::identity::permission_grant_admitted(!owed.is_empty()) {
-                        return Err(ConfigClientError::AdministrationRemovalPending {
-                            member: target.as_str().to_owned(),
-                        });
-                    }
-                }
                 let context = local.request_context();
                 let target = target.clone();
                 local
                     .run_owned(move |node| async move {
+                        let _guard = if delete {
+                            None
+                        } else {
+                            Some(admit_permission_grant(&node, &target).await?)
+                        };
                         let context = match node.node_identity_did() == Some(actor.as_str()) {
                             true => defra_core::RequestContext::default().with_identity(Some(
                                 node.nac_manager()
@@ -315,10 +310,12 @@ impl ConfigAccess {
                     .await
             }
             WriteRoute::Http(endpoint) => {
-                let url = format!(
-                    "{}/acp/node/relationship",
-                    graphql_api_base(endpoint.url())?
-                );
+                let path = if delete {
+                    "/acp/node/relationship"
+                } else {
+                    super::owner_staged_route::PERMISSION_GRANT_PATH
+                };
+                let url = format!("{}{path}", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
                 let body = serde_json::json!({
                     "Relation": relation, "TargetActor": target.as_str(),
@@ -344,4 +341,20 @@ impl ConfigAccess {
             }
         }
     }
+}
+
+pub(super) async fn admit_permission_grant(
+    node: &std::sync::Arc<defra_node::Node>,
+    target: &identity::Did,
+) -> Result<tokio::sync::OwnedMutexGuard<()>, ConfigClientError> {
+    let guard = crate::identity::enrollment_decision_gate(node)
+        .lock_owned()
+        .await;
+    let owed = crate::identity::owed_removal_receipts(node, target.as_str()).await?;
+    if !crate::identity::permission_grant_admitted(!owed.is_empty()) {
+        return Err(ConfigClientError::AdministrationRemovalPending {
+            member: target.to_string(),
+        });
+    }
+    Ok(guard)
 }

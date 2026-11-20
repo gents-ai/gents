@@ -642,6 +642,8 @@ enum Standing {
 async fn administrator_observation_replays_the_lean_model() -> anyhow::Result<()> {
     use crate::config_client::TransactionFailure as _;
     use gents_lean_vocab::families::identity_enrollment_grant_observe_member_administrator as family;
+    let cases = family::cases::<Standing>();
+    assert_eq!(cases.len(), 16);
     let fixture = vera_runtime().await?;
     let runtime = ConfigAccess::local_as(fixture.node.clone(), fixture.runtime.did().parse()?);
     let (approver_key, approver) = held_client()?;
@@ -656,8 +658,6 @@ async fn administrator_observation_replays_the_lean_model() -> anyhow::Result<()
     let other_approver = ConfigAccess::local_as(fixture.node.clone(), approver_did.clone())
         .with_client_authorization(credential(&approver_endpoint, &approver).await?)?;
     let member: identity::Did = fixture.candidate.did().parse()?;
-    let cases = family::cases::<Standing>();
-    assert_eq!(cases.len(), 16);
     for case in cases {
         let mut relations = Vec::new();
         match case.input.standing {

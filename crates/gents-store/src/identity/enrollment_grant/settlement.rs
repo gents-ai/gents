@@ -319,18 +319,26 @@ pub(crate) async fn owed_removal_receipts(
     node: &std::sync::Arc<defra_node::Node>,
     member: &str,
 ) -> Result<Vec<String>, ConfigClientError> {
+    removal_receipts(node, member, None).await
+}
+
+async fn removal_receipts(
+    node: &std::sync::Arc<defra_node::Node>,
+    member: &str,
+    document: Option<&str>,
+) -> Result<Vec<String>, ConfigClientError> {
     use gents_protocol::document_query::{
         fields::network_enrollment_grant as fields, Filter, Query, Selection,
     };
     let Some(runtime) = receipt_reader(node) else {
         return Ok(Vec::new());
     };
-    let rendered = Query::select(Selection::doc_id())
-        .filter(
-            Filter::eq(fields::MEMBER_DID, member)
-                .and(Filter::not_null(fields::WITHDRAWAL_OWED_AT)),
-        )
-        .render();
+    let mut filter =
+        Filter::eq(fields::MEMBER_DID, member).and(Filter::not_null(fields::WITHDRAWAL_OWED_AT));
+    if let Some(doc) = document {
+        filter = filter.and(Filter::eq(fields::NODE_DOC_ID, doc));
+    }
+    let rendered = Query::select(Selection::doc_id()).filter(filter).render();
     let response = runtime.read(&rendered).await?;
     Ok(
         gents_protocol::graphql::graphql_rows_from_response(&response, super::RECEIPT_COLLECTION)
@@ -344,9 +352,10 @@ pub(crate) async fn owed_removal_receipts(
 /// the relation (Lean `grantOther`, `takeOver`).
 pub(crate) async fn close_owed_removal(
     node: &std::sync::Arc<defra_node::Node>,
+    doc: &str,
     member: &str,
 ) -> Result<(), ConfigClientError> {
-    let owed = owed_removal_receipts(node, member).await?;
+    let owed = removal_receipts(node, member, Some(doc)).await?;
     let Some(runtime) = receipt_reader(node) else {
         return Ok(());
     };

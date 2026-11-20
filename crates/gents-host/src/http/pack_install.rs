@@ -273,8 +273,11 @@ pub async fn install_handler(
         Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
         Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
-    if let Err(refusal) = wiring_admitted(state.document_acp, &received.request) {
-        return refused(StatusCode::CONFLICT, refusal);
+    if !received.request.wire.is_empty() && !received.request.preview {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "a remote install carries no wiring; the client wires its plugins after it, signing each write itself",
+        );
     }
     if received.root.manifest().metadata.kind != PackKind::Documents {
         return refused(
@@ -304,20 +307,6 @@ pub async fn install_handler(
         )
             .into_response(),
     }
-}
-
-/// An install that wires its plugins has the runtime sign the wiring with
-/// the User key its home holds, which a home whose access control runs on
-/// Vera refuses (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`); the
-/// refusal comes before anything is installed or signed.
-fn wiring_admitted(
-    document_acp: gents_store::local::document_acp::DocumentAcp,
-    request: &InstallRequest,
-) -> Result<(), gents_store::local::document_acp::DocumentAcpError> {
-    if request.wire.is_empty() || request.preview {
-        return Ok(());
-    }
-    gents_store::local::document_acp::runtime_signs_with_held_user_key(document_acp)
 }
 
 fn delegated_install_access(
@@ -448,7 +437,7 @@ async fn install_owned(
         grant_authority: request.grant_authority,
         wire: request.wire,
     };
-    let mut result = gents_pack::pack::install_flow::install_documents_pack_resolved(
+    let result = gents_pack::pack::install_flow::install_documents_pack_resolved(
         &access,
         &state.node_did,
         &root,
@@ -459,19 +448,6 @@ async fn install_owned(
     )
     .await
     .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
-    if !args.wire.is_empty() && !args.preview {
-        let held = crate::http::pack_wire::held_user_access(&state, &home).await?;
-        result["wired"] = gents_pack::pack::plugin_wire::wire_pack_plugins(
-            &held,
-            &state.node_did,
-            &home,
-            &root,
-            &args.wire,
-            crate::http::pack_wire_client::SIGNERS,
-        )
-        .await?
-        .into();
-    }
     Ok(result)
 }
 
