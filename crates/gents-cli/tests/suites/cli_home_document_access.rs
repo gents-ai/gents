@@ -1,8 +1,3 @@
-//! A home is initialized, served, used by its client and served again, with
-//! its document access control in the node's own store or, in a build that
-//! carries it, on an embedded Vera node: `gents init`, `gents runtime server`
-//! and the client's prompt are the processes a person runs.
-
 use crate::support::*;
 
 use std::fs;
