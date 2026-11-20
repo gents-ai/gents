@@ -30,7 +30,8 @@ mod route_receipt;
 pub use canonical::{
     authorization_lease_is_fresh_at, canonical_domain_payload, canonical_enrollment_digest,
     canonical_enrollment_payload, derive_enrollment_id, enrollment_schema_fingerprint,
-    frame_enrollment_field,
+    frame_enrollment_field, signed_command_staleness, SignedCommandStaleness,
+    SIGNED_COMMAND_MAX_AGE_SECS, SIGNED_COMMAND_MAX_FUTURE_SKEW_SECS,
 };
 pub use decision::{
     derive_decision_id, EnrollmentDecisionKind, EnrollmentDecisionRecord,

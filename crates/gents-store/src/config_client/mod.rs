@@ -149,6 +149,7 @@ pub use node_deferred_operation::{
 pub use node_document_publication::publish_node_managers_in_txn;
 pub use owner_staged_route::{
     consume_signed_command_nonce, OwnerStagedRoute, SignedCommandNonceError,
+    NONCE_RETENTION_SECONDS,
 };
 pub use pairing_reader::{PairingObservation, PairingReadReason};
 pub use schema_contract::collection_schema_contract_digest;
