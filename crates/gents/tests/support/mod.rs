@@ -521,11 +521,9 @@ pub async fn create_retry_request(node: &EmbeddedNode, spec: &RetryRequestSpec<'
                 execution_origin: "interactive",
                 created_at: "{created_at_escaped}",
                 {valid_until}
-                retry_count: 0,
-                max_retries: {max_retries}
+                retry_count: 0
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(

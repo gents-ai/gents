@@ -225,7 +225,6 @@ mod tests {
             parent_request_doc_id: Some(root_doc.clone()),
             root_request_id: "root".into(),
             retry_count: 1,
-            max_retries: 3,
         });
         let child = build_signed_client_request(&client, child, RequestSigner::Identity(&user))
             .await

@@ -152,7 +152,6 @@ pub struct RequestSnapshot {
     pub retry_root_request: String,
     pub superseded_by_request: String,
     pub retry_count: i64,
-    pub max_retries: i64,
     pub claimed_at_present: bool,
     pub deadline_present: bool,
     pub failure_reason: String,
@@ -171,7 +170,6 @@ impl From<AgentRequestRow> for RequestSnapshot {
             retry_root_request: row.retry_root_request.unwrap_or_default(),
             superseded_by_request: row.superseded_by_request.unwrap_or_default(),
             retry_count: row.retry_count.unwrap_or_default(),
-            max_retries: row.max_retries.unwrap_or_default(),
             claimed_at_present: row
                 .claimed_at
                 .as_deref()
@@ -239,7 +237,6 @@ where
                 retry_root_request
                 superseded_by_request
                 retry_count
-                max_retries
                 claimed_at
                 deadline
                 failure_reason

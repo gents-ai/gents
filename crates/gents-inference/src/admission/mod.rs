@@ -26,6 +26,7 @@ pub use slot_accounting::call_state_holds_backend_slot;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod recovery_fixtures {
     pub use super::controller::{InferenceCallRecord, PendingCallMetadata};
+    pub use super::permit::recorded_failure;
     pub use super::persistence::{persist_existing_call_terminal, ProviderCallUsage};
     pub use super::recovery::{
         load_stale_inference_calls, lookup_parent_request, recover_inference_call_row,

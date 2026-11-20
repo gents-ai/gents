@@ -1,4 +1,4 @@
-type InferenceRetryPolicy @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "configuration") @index(fields: ["node_did", "retry_policy_id"], unique: true) {
+type InferenceRetryPolicy @policy(id: "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961", resource: "configuration") @index(fields: ["node_did", "retry_policy_id"], unique: true) {
     retry_policy_id: String
     node_did: String @index
     display_name: String
@@ -7,6 +7,7 @@ type InferenceRetryPolicy @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f7
     max_resample_retries: Int
     allow_repair: Boolean
     interactive_max_retries: Int
+    max_rate_limit_wait_ms: Int
     tags: [String!]
     updated_at: DateTime @index(direction: DESC)
 }

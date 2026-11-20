@@ -322,6 +322,7 @@ impl BackendAdmissionController {
                     "cancelled",
                     Some("BackendGone"),
                     None,
+                    None,
                     gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
                 )
                 .await
@@ -398,6 +399,7 @@ impl BackendAdmissionController {
             requester_did: pending.requester_did,
             model_name: pending.model_name,
             profile_id: pending.profile_id,
+            max_rate_limit_wait: pending.max_rate_limit_wait,
             call_seq: pending.call_seq,
             backend_id: pending.backend_id,
             agent_did: pending.agent_did,
@@ -492,7 +494,7 @@ impl Drop for QueuedCallGuard {
                 &call,
                 &doc_id,
                 "cancelled",
-                Some("Cancelled"),
+                Some("Cancelled"), None,
                 None,
                 gents_loop::rig_compat::CachedInputTokensObservation::NotAvailable,
             )
@@ -515,6 +517,9 @@ pub struct PendingCallMetadata {
     pub requester_did: Option<String>,
     pub model_name: Option<String>,
     pub profile_id: Option<String>,
+    /// The rate-limit wait cap of the admitted model's agent: the call's
+    /// terminal records a throttle beyond it as the provider's usage limit.
+    pub max_rate_limit_wait: std::time::Duration,
     pub call_seq: u64,
     pub backend_id: String,
     pub agent_did: String,
@@ -535,6 +540,7 @@ pub struct InferenceCallRecord {
     pub requester_did: Option<String>,
     pub model_name: Option<String>,
     pub profile_id: Option<String>,
+    pub max_rate_limit_wait: std::time::Duration,
     pub call_seq: u64,
     pub backend_id: String,
     pub agent_did: String,
@@ -559,6 +565,7 @@ impl InferenceCallRecord {
             requester_did: pending.requester_did,
             model_name: pending.model_name,
             profile_id: pending.profile_id,
+            max_rate_limit_wait: pending.max_rate_limit_wait,
             call_seq: pending.call_seq,
             backend_id: pending.backend_id,
             agent_did: pending.agent_did,

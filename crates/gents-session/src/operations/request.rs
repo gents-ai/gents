@@ -19,7 +19,7 @@ use gents_store::identity::NodeIdentity;
 use crate::request::lifecycle::{
     build_signed_client_request, client_request_key, held_client_request, queue_user_message_input,
     send_client_request, ClientRequestScope, ExecutionOrigin, RequestIdentity, RequestSigner,
-    RequestSpec, RetryLink, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES,
+    RequestSpec, RetryLink, TriggerLineage,
 };
 use crate::session::CanonicalRequestOutput;
 
@@ -71,10 +71,6 @@ pub fn reissue_decision(
         }
         _ => ReissueDecision::RefuseParentState,
     }
-}
-
-pub fn budget_remains(retry_count: i64, max_retries: i64) -> bool {
-    retry_count < max_retries
 }
 
 pub async fn get(
@@ -275,7 +271,6 @@ where
                 parent_request_doc_id: None,
                 root_request_id: request_id.clone(),
                 retry_count: 0,
-                max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
             }),
             ..RequestSpec::new(
                 RequestPurpose::Normal,
@@ -335,9 +330,9 @@ pub async fn reissue(
     let node_did = input.parent.node_did.trim().to_owned();
     let parent_doc_id = target::row_field("_docID", parent.doc_id.clone())?;
     let retry_count = parent.retry_count.unwrap_or(0);
-    let max_retries = parent
-        .max_retries
-        .unwrap_or(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
+    let max_retries = crate::request::retry_budget::read_pin(access, &node_did, &parent_doc_id)
+        .await
+        .map_err(RequestOperationError::passthrough_error)?;
     let lineage = reissue::Lineage {
         node_did,
         parent_request_id: parent.request_id.clone(),
@@ -351,7 +346,11 @@ pub async fn reissue(
         class: ReissueParent::of(parent.lifecycle_state, parent.failure_reason.as_deref()),
         interactive: parent.execution_origin.as_deref()
             == Some(ExecutionOrigin::Interactive.as_str()),
-        budget_remains: budget_remains(retry_count, max_retries),
+        budget_remains: crate::request::retry_budget::successor_budget_remains(
+            false,
+            retry_count,
+            max_retries,
+        ),
         deadline_open: reissue::deadline_open(parent.deadline.as_deref())?,
     };
     match input.kind {

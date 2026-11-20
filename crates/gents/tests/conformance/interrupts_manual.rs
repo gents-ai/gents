@@ -588,7 +588,6 @@ async fn create_pending_queue_row(
         "execution_origin": execution_origin,
         "created_at": "2026-03-23T00:00:00Z",
         "retry_count": 0,
-        "max_retries": 3,
     });
     let agent = ::identity::Did::new(actors.agent_did()).unwrap();
     gents_store::config_client::ConfigAccess::local_as(

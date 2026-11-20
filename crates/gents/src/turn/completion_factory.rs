@@ -38,15 +38,13 @@ where
         client,
         admission,
         agent_connection_fingerprint(agent_config),
-        &agent_config.model_name,
-        agent_config.profile_id.as_deref(),
+        agent_config,
         agent_config.openai_wire_api == OpenAiWireApi::ChatCompletions
             && (agent_config.backend_provider_kind == BackendProviderKind::XaiGrokOAuth
                 || (agent_config.backend_provider_kind == BackendProviderKind::OpenAiCompatible
                     && gents_inference::backends::setup::is_xai_api_endpoint(
                         &agent_config.backend_endpoint,
                     ))),
-        agent_config.agent_identity.managed_agent_signer(),
     )
 }
 
@@ -129,7 +127,10 @@ pub(crate) fn loop_config(
         context_window: agent_config.context_window,
         compaction_threshold: agent_config.compaction_threshold(),
         context_calibration,
-        retry_policy: CompletionRetryPolicy::scheduled_default(),
+        retry_policy: CompletionRetryPolicy {
+            max_rate_limit_wait: agent_config.completion_retry.max_rate_limit_wait(),
+            ..CompletionRetryPolicy::scheduled_default()
+        },
         provider_idle_timeout: Some(agent_config.provider_idle_timeout),
         deadline: None,
         max_turns: agent_config.max_turns,

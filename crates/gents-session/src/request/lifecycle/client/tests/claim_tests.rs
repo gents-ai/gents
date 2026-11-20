@@ -70,9 +70,6 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             "2026-11-04T00:00:00Z",
             AgentRequestAdmissionRecord::client(user.did()),
         );
-        if scheduled {
-            create.max_retries = 1;
-        }
         if steer {
             create.input.queue = Some(gents_protocol::request_input::RequestQueue {
                 delivery: gents_protocol::request_input::QueueDelivery::Steer,

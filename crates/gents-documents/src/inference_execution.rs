@@ -28,6 +28,12 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub repeated_tool_failure_limit: Option<i64>,
+    /// Successors (operator reissues, background wake redrives) one request
+    /// lineage may take; the first claim pins it on the request, so a change
+    /// reaches only lineages claimed after it. Zero allows none; default 3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_request_retries: Option<i64>,
     /// Persistence batching cadence, not provider latency; default 1,000ms.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -84,10 +90,19 @@ pub struct InferenceRetryPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub allow_repair: Option<bool>,
-    /// Default interactive successor ceiling; not a human approval gate.
+    /// Provider transport retries for interactive requests, in place of
+    /// `max_transport_retries`; not a successor-request ceiling (that is
+    /// `InferenceExecution.max_request_retries`).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub interactive_max_retries: Option<i64>,
+    /// Longest provider rate-limit wait the owned loop holds; a longer wait
+    /// fails the request as the provider's usage limit, and a failed call
+    /// records that verdict. Default 300,000ms; `backoff_ms` steps may not
+    /// exceed it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_rate_limit_wait_ms: Option<i64>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -142,6 +157,9 @@ impl InferenceExecution {
                 ));
             }
         }
+        if let Err(error) = self.request_retry_budget() {
+            violations.push(format!("InferenceExecution {execution_id} {error}"));
+        }
         if self
             .deadline_duration_secs
             .is_some_and(|value| value > MAX_DEADLINE_DURATION_SECS)
@@ -180,6 +198,17 @@ impl InferenceExecution {
         )
     }
 
+    /// The successor budget a request's first claim pins (Lean
+    /// `Request.PinnedRetryBudget.resolveConfigured`): unset takes
+    /// `DEFAULT_REQUEST_MAX_RETRIES`, zero allows no successors, and a
+    /// negative value is refused.
+    pub fn request_retry_budget(&self) -> Result<u64, RequestRetryBudgetError> {
+        match self.max_request_retries {
+            None => Ok(crate::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES),
+            Some(value) => u64::try_from(value).map_err(|_| RequestRetryBudgetError::Negative),
+        }
+    }
+
     /// The owned loop's identical-failure limit; `None` is refused.
     pub fn repeated_failure_limit(&self) -> Option<usize> {
         configured_loop_limit(
@@ -187,6 +216,12 @@ impl InferenceExecution {
             gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RequestRetryBudgetError {
+    #[error("max_request_retries must be non-negative")]
+    Negative,
 }
 
 /// A loop-guard limit as configured (Lean `InvalidToolProgress.configuredLimit`):
@@ -219,6 +254,12 @@ impl InferenceRetryPolicy {
             }
         }
 
+        if self.max_rate_limit_wait_ms.is_some_and(|value| value <= 0) {
+            violations.push(format!(
+                "InferenceRetryPolicy {retry_policy_id} max_rate_limit_wait_ms must be positive"
+            ));
+        }
+
         if self
             .backoff_ms
             .as_ref()
@@ -226,6 +267,19 @@ impl InferenceRetryPolicy {
         {
             violations.push(format!(
                 "InferenceRetryPolicy {retry_policy_id} backoff_ms entries must be positive"
+            ));
+        }
+        let max_wait_ms = self
+            .completion_retry_fields()
+            .max_rate_limit_wait()
+            .as_millis();
+        if self.backoff_ms.as_ref().is_some_and(|values| {
+            values
+                .iter()
+                .any(|value| u128::try_from(*value).is_ok_and(|value| value > max_wait_ms))
+        }) {
+            violations.push(format!(
+                "InferenceRetryPolicy {retry_policy_id} backoff_ms entries must not exceed max_rate_limit_wait_ms ({max_wait_ms})"
             ));
         }
 
@@ -238,6 +292,21 @@ impl InferenceRetryPolicy {
             Ok(())
         } else {
             anyhow::bail!(violations.join("; "))
+        }
+    }
+
+    /// The owned loop's view of this policy; unset fields keep the loop's
+    /// origin defaults.
+    pub fn completion_retry_fields(
+        &self,
+    ) -> gents_loop::completion_retry::CompletionRetryProfileFields {
+        gents_loop::completion_retry::CompletionRetryProfileFields {
+            retry_max_transport: self.max_transport_retries,
+            retry_backoff_ms: self.backoff_ms.clone(),
+            retry_max_resample: self.max_resample_retries,
+            retry_allow_repair: self.allow_repair,
+            retry_interactive_max: self.interactive_max_retries,
+            retry_max_rate_limit_wait_ms: self.max_rate_limit_wait_ms,
         }
     }
 }

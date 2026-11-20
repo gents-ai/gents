@@ -46,7 +46,7 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
         r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}",
         agent_did: "{}", session_id: "{}", content: "head", lifecycle_state: "pending",
-        execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
+        execution_origin: "interactive", created_at: "{}", retry_count: 0, request_hop: 0
     }}) {{ _docID }} }}"#,
         escape_graphql_string(&head_id),
         escape_graphql_string(did),

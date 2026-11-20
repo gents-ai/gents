@@ -25,6 +25,9 @@ pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.gra
 pub const AGENT_REQUEST_BACKEND_WAIT_NAME: &str = "AgentRequestBackendWait";
 pub const AGENT_REQUEST_BACKEND_WAIT: &str =
     include_str!("../schemas/agent/agent_request_backend_wait.graphql");
+pub const AGENT_REQUEST_RETRY_BUDGET_NAME: &str = "AgentRequestRetryBudget";
+pub const AGENT_REQUEST_RETRY_BUDGET: &str =
+    include_str!("../schemas/agent/agent_request_retry_budget.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
@@ -32,7 +35,7 @@ pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.gra
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
 pub const AGENT_OWNERSHIP_POLICY_ID: &str =
-    "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c";
+    "d323c1bbd2491661b9fbe4667b64d6d7a596f4ddc57346a41d90c10733ab3961";
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
@@ -258,6 +261,7 @@ pub const ALL: &[&str] = &[
     CALLBACK_RESULT,
     AGENT_REQUEST,
     AGENT_REQUEST_BACKEND_WAIT,
+    AGENT_REQUEST_RETRY_BUDGET,
     AGENT_OUTPUT_SEGMENT,
     AGENT_SESSION,
     GOAL,
@@ -346,6 +350,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_RESULT_NAME,
     AGENT_REQUEST_NAME,
     AGENT_REQUEST_BACKEND_WAIT_NAME,
+    AGENT_REQUEST_RETRY_BUDGET_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,

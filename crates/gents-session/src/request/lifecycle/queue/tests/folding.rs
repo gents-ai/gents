@@ -116,7 +116,6 @@ async fn enqueue_with_ttl(
             "created_at": format!("2026-09-01T00:00:{arrival:02}Z"),
             "request_hop": 0,
             "retry_count": 0,
-            "max_retries": 3,
         }),
     )
     .await

@@ -2,7 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use defra_node::Node as EmbeddedNode;
 use futures::future::BoxFuture;
+use gents_loop::provider_limit::ProviderLimit;
 use gents_loop::rig_compat::CachedInputTokensObservation;
+use gents_protocol::provider_limit::RecordedProviderLimit;
 use tokio_util::sync::CancellationToken;
 
 use super::client::AdmissionError;
@@ -28,8 +30,46 @@ pub struct AdmissionPermit {
 struct PermitTerminal {
     call_state: &'static str,
     failure_reason: Option<String>,
+    provider_limit: Option<RecordedProviderLimit>,
     usage: Option<ProviderCallUsage>,
     cached_input_tokens: CachedInputTokensObservation,
+}
+
+impl PermitTerminal {
+    fn completed(
+        usage: Option<ProviderCallUsage>,
+        cached_input_tokens: CachedInputTokensObservation,
+    ) -> Self {
+        Self {
+            call_state: "completed",
+            failure_reason: None,
+            provider_limit: None,
+            usage,
+            cached_input_tokens,
+        }
+    }
+
+    fn failed(reason: &str, max_rate_limit_wait: std::time::Duration) -> Self {
+        let (failure_reason, provider_limit) =
+            recorded_failure(reason, chrono::Utc::now(), max_rate_limit_wait);
+        Self {
+            call_state: "failed",
+            failure_reason: Some(failure_reason),
+            provider_limit,
+            usage: None,
+            cached_input_tokens: CachedInputTokensObservation::NotAvailable,
+        }
+    }
+
+    fn cancelled() -> Self {
+        Self {
+            call_state: "cancelled",
+            failure_reason: Some("Cancelled".to_string()),
+            provider_limit: None,
+            usage: None,
+            cached_input_tokens: CachedInputTokensObservation::NotAvailable,
+        }
+    }
 }
 
 impl AdmissionPermit {
@@ -82,22 +122,15 @@ impl AdmissionPermit {
         usage: Option<ProviderCallUsage>,
         cached_input_tokens: CachedInputTokensObservation,
     ) -> Result<(), AdmissionError> {
-        self.terminal = Some(PermitTerminal {
-            call_state: "completed",
-            failure_reason: None,
-            usage,
-            cached_input_tokens,
-        });
+        self.terminal = Some(PermitTerminal::completed(usage, cached_input_tokens));
         self.finish().await
     }
 
     pub(crate) async fn finish_failure(&mut self, reason: &str) -> Result<(), AdmissionError> {
-        self.terminal = Some(PermitTerminal {
-            call_state: "failed",
-            failure_reason: Some(recorded_failure_reason(reason)),
-            usage: None,
-            cached_input_tokens: CachedInputTokensObservation::NotAvailable,
-        });
+        self.terminal = Some(PermitTerminal::failed(
+            reason,
+            self.call.max_rate_limit_wait,
+        ));
         self.finish().await
     }
 
@@ -105,30 +138,24 @@ impl AdmissionPermit {
         if self.finished {
             return;
         }
-        self.terminal = Some(PermitTerminal {
-            call_state: "cancelled",
-            failure_reason: Some("Cancelled".to_string()),
-            usage: None,
-            cached_input_tokens: CachedInputTokensObservation::NotAvailable,
-        });
+        self.terminal = Some(PermitTerminal::cancelled());
     }
 
     async fn finish(&mut self) -> Result<(), AdmissionError> {
         if self.finished {
             return Ok(());
         }
-        let terminal = self.terminal.clone().unwrap_or(PermitTerminal {
-            call_state: "completed",
-            failure_reason: None,
-            usage: None,
-            cached_input_tokens: CachedInputTokensObservation::NotAvailable,
-        });
+        let terminal = self.terminal.clone().unwrap_or(PermitTerminal::completed(
+            None,
+            CachedInputTokensObservation::NotAvailable,
+        ));
         if let Err(error) = persist_existing_call_terminal(
             self.node.clone(),
             &self.call,
             &self.doc_id,
             terminal.call_state,
             terminal.failure_reason.as_deref(),
+            terminal.provider_limit,
             terminal.usage,
             terminal.cached_input_tokens,
         )
@@ -156,23 +183,13 @@ impl StreamGuardLifecycle for AdmissionPermit {
         cached_input_tokens: CachedInputTokensObservation,
     ) {
         if self.terminal.is_none() {
-            self.terminal = Some(PermitTerminal {
-                call_state: "completed",
-                failure_reason: None,
-                usage,
-                cached_input_tokens,
-            });
+            self.terminal = Some(PermitTerminal::completed(usage, cached_input_tokens));
         }
     }
 
     fn mark_stream_error(&mut self, error: &str) {
         if self.terminal.is_none() {
-            self.terminal = Some(PermitTerminal {
-                call_state: "failed",
-                failure_reason: Some(recorded_failure_reason(error)),
-                usage: None,
-                cached_input_tokens: CachedInputTokensObservation::NotAvailable,
-            });
+            self.terminal = Some(PermitTerminal::failed(error, self.call.max_rate_limit_wait));
         }
     }
 
@@ -229,21 +246,14 @@ impl Drop for AdmissionPermit {
                 .as_ref()
                 .is_some_and(|t| t.is_cancelled());
             match dropped_terminal(cancelled, terminal_failure_reason) {
-                DroppedTerminal::Cancelled => PermitTerminal {
-                    call_state: "cancelled",
-                    failure_reason: Some("Cancelled".to_string()),
-                    usage: None,
-                    cached_input_tokens: CachedInputTokensObservation::NotAvailable,
-                },
-                DroppedTerminal::Observed(reason) => PermitTerminal {
-                    call_state: "failed",
-                    failure_reason: Some(recorded_failure_reason(&reason)),
-                    usage: None,
-                    cached_input_tokens: CachedInputTokensObservation::NotAvailable,
-                },
+                DroppedTerminal::Cancelled => PermitTerminal::cancelled(),
+                DroppedTerminal::Observed(reason) => {
+                    PermitTerminal::failed(&reason, self.call.max_rate_limit_wait)
+                }
                 DroppedTerminal::StreamDropped => PermitTerminal {
                     call_state: "failed",
                     failure_reason: Some("StreamDroppedBeforeTerminalResponse".to_string()),
+                    provider_limit: None,
                     usage: None,
                     cached_input_tokens: CachedInputTokensObservation::NotAvailable,
                 },
@@ -262,6 +272,7 @@ impl Drop for AdmissionPermit {
                 &doc_id,
                 terminal.call_state,
                 terminal.failure_reason.as_deref(),
+                terminal.provider_limit,
                 terminal.usage,
                 terminal.cached_input_tokens,
             )
@@ -301,10 +312,26 @@ pub(super) fn dropped_terminal(cancelled: bool, observed: Option<String>) -> Dro
     }
 }
 
+/// A failed call's recorded reason and provider-limit verdict (Lean:
+/// `InferenceCall.ProviderLimit.verdict`). The verdict is the owned loop's
+/// `provider_limit_verdict` under the admitted model's cap, which the loop
+/// driving the model holds, so readers of the row never reclassify its text.
 /// InferenceCall rows replicate like the request's own reason, so their text
 /// goes through the same redaction and bound.
-pub(super) fn recorded_failure_reason(reason: &str) -> String {
-    gents_protocol::failure_text::bounded_text(
-        &gents_loop::provider_limit::persisted_failure_reason(reason, chrono::Utc::now()),
+pub fn recorded_failure(
+    reason: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    max_rate_limit_wait: std::time::Duration,
+) -> (String, Option<RecordedProviderLimit>) {
+    let limit = gents_loop::completion_retry::provider_limit_verdict(
+        &gents_loop::error::classify_provider_failure(reason, now),
+        now,
+        max_rate_limit_wait,
+    );
+    (
+        gents_protocol::failure_text::bounded_text(
+            &gents_loop::provider_limit::recorded_failure_reason(reason, limit.as_ref()),
+        ),
+        limit.as_ref().map(ProviderLimit::recorded),
     )
 }

@@ -340,7 +340,7 @@ pub(crate) async fn goal_request(
 ) -> anyhow::Result<gents_protocol::request_admission::AgentRequestCreate> {
     use gents_session::request::lifecycle::{
         build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
-        RetryLink, DEFAULT_REQUEST_MAX_RETRIES,
+        RetryLink,
     };
     let signer = client_signer(access)?;
     let actor = gents_store::identity::NodeIdentity::did(&signer).to_owned();
@@ -370,7 +370,6 @@ pub(crate) async fn goal_request(
             parent_request_doc_id: None,
             root_request_id: request_id.clone(),
             retry_count: 0,
-            max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
         }),
         ..RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,

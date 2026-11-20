@@ -77,6 +77,7 @@ async fn active_agents(
         max_total_tokens: None,
         max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
         repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+        max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         stream_batch_ms: 0,
         stream_liveness_timeout: std::time::Duration::from_secs(5),
         title_timeout: std::time::Duration::from_secs(

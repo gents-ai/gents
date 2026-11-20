@@ -415,7 +415,7 @@ async fn drive_redrive(
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",
-        created_at: "2026-07-15T00:00:00Z", retry_count: {source_retry_count}, max_retries: {max_retries},
+        created_at: "2026-07-15T00:00:00Z", retry_count: {source_retry_count},
         retry_root_request: "{}", terminal_redrive_attempts: 0,
         request_hop: {source_depth}, {deadline}
         caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}"
@@ -432,6 +432,15 @@ async fn drive_redrive(
     let source = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#,
         escape_graphql_string(&failed_wake)), "AgentRequest").await;
     assert_eq!(source.len(), 1);
+    gents_session::request::retry_budget::write_pin(
+        node.clone(),
+        admission.runtime.clone(),
+        did,
+        source[0]["_docID"].as_str().unwrap(),
+        max_retries,
+    )
+    .await
+    .unwrap();
     seed_session_head(&access, session, &source[0]).await;
     if !wake.latest {
         let newer = format!(
@@ -439,7 +448,7 @@ async fn drive_redrive(
             request_id: "newer-interactive", purpose: "normal", node_did: "{}", requester_did: "{}",
             agent_did: "{agent_did}", session_id: "{}", content: "newer input",
             execution_origin: "interactive", lifecycle_state: "processing",
-            created_at: "2026-07-15T00:00:01Z", retry_count: 0, max_retries: {max_retries},
+            created_at: "2026-07-15T00:00:01Z", retry_count: 0,
             retry_root_request: "newer-interactive", terminal_redrive_attempts: 0, request_hop: 0
         }}) {{ _docID }} }}"#,
             escape_graphql_string(did),
@@ -470,7 +479,7 @@ async fn drive_redrive(
         &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
-        _docID request_id retry_count retry_parent_request retry_parent_request_doc_id max_retries
+        _docID request_id retry_count retry_parent_request retry_parent_request_doc_id
         backend_id caused_by_parent_request_id caused_by_parent_request_doc_id request_hop
         deadline lifecycle_state
     }} }}"#,
@@ -509,7 +518,20 @@ async fn drive_redrive(
         );
         assert_eq!(successor["retry_parent_request"], failed_wake);
         assert_eq!(successor["retry_parent_request_doc_id"], source["_docID"]);
-        assert_eq!(successor["max_retries"], max_retries);
+        // The successor's first claim pins the budget it inherits from its
+        // source's Node-signed pin.
+        let source_pin = gents_session::request::retry_budget::read_pin(
+            &access,
+            did,
+            source["_docID"].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            gents_session::request::retry_budget::claim_pin(true, 0, true, source_pin).unwrap(),
+            max_retries,
+            "{name}"
+        );
         assert!(successor["backend_id"].is_null(), "{name}");
     }
     let after = canonical_goal(&access, did, session).await;
@@ -1105,7 +1127,10 @@ async fn claim_selected_continuation(
 }
 
 #[tokio::test]
-async fn a_retried_over_bound_wake_is_refused_again() {
+/// A wake refused before it ran never reached a claim, so it has no pin and
+/// automated redrive does not follow it (Lean
+/// `Request.PinnedRetryBudget.successorBudgetRemains`).
+async fn an_over_bound_wake_that_never_ran_is_not_redriven() {
     let admission = admitted_parent(None, "over-bound-redrive").await;
     let node = &admission.node;
     let access = admission.tool.access().unwrap();
@@ -1185,7 +1210,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "AgentRequest causal hop exceeds the target node's max_request_hop",
-        terminalized_at: "2026-07-15T00:00:00Z", created_at: "2026-07-15T00:00:00Z", retry_count: 0, max_retries: 3,
+        terminalized_at: "2026-07-15T00:00:00Z", created_at: "2026-07-15T00:00:00Z", retry_count: 0,
         retry_root_request: "{refused_wake}", terminal_redrive_attempts: 0,
         request_hop: {}, deadline: "{}",
         caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}"
@@ -1209,7 +1234,8 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     )
     .await
     .unwrap();
-    assert_eq!(report.redriven, 1, "{report:?}");
+    assert_eq!(report.redriven, 0, "{report:?}");
+    assert_eq!(report.ineligible, 1, "{report:?}");
     let successor = rows(
         &access,
         &format!(
@@ -1218,10 +1244,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         "AgentRequest",
     )
     .await;
-    assert_eq!(successor.len(), 1);
-    let hop = successor[0]["request_hop"].as_u64().unwrap() as u32;
-    assert_eq!(hop, over_bound);
-    assert!(!gents_protocol::request_lifecycle::request_hop_within_bound(Some(bound), hop));
+    assert!(successor.is_empty(), "{successor:?}");
     admission
         .node
         .shutdown()

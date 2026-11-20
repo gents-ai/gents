@@ -198,7 +198,6 @@ pub fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFi
         caused_by_trigger_doc_id: row.caused_by_trigger_doc_id.as_deref(),
         created_at: required(row.created_at.as_deref(), "created_at")?,
         retry_count: row.retry_count,
-        max_retries: row.max_retries,
         valid_until: row.valid_until.as_deref(),
         request_hop,
         caused_by_parent_request_id: row.caused_by_parent_request_id.as_deref(),
@@ -254,7 +253,6 @@ pub fn verify_auxiliary_request_shape(
             && row.retry_root_request.as_deref() == Some(row.request_id.as_str())
             && row.retry_key.is_none()
             && row.retry_count == Some(0)
-            && row.max_retries == Some(0)
             && row.caused_by_trigger_id.is_none()
             && row.caused_by_trigger_doc_id.is_none()
             && row.caused_by_trigger_kind.is_none()

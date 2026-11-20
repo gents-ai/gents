@@ -1224,7 +1224,6 @@ pub(crate) mod tests {
                 "failure_reason": "",
                 "created_at": "2026-01-01T00:00:00Z",
                 "retry_count": 0,
-                "max_retries": 3,
                 "request_hop": 1,
                 "retry_key": retry_key,
                 "caused_by_parent_tool_call_doc_id": chain,

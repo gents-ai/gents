@@ -1,5 +1,8 @@
 use super::*;
 
+/// The lineage's successor budget is a Node-signed pin this projection does
+/// not hold, so the budget is decided by the reissue operation, whose refusal
+/// names it (`RequestOperationError::RetryBudgetExhausted`).
 pub(super) fn project_retry_eligibility(request: Option<&AgentRequestRow>) -> RetryEligibilityView {
     let Some(request) = request else {
         return RetryEligibilityView {
@@ -17,12 +20,6 @@ pub(super) fn project_retry_eligibility(request: Option<&AgentRequestRow>) -> Re
         return RetryEligibilityView {
             eligible: false,
             denial_reason: Some("nonInteractiveOrigin".to_string()),
-        };
-    }
-    if request.retry_count.unwrap_or_default() >= request.max_retries.unwrap_or(3) {
-        return RetryEligibilityView {
-            eligible: false,
-            denial_reason: Some("retryBudgetExhausted".to_string()),
         };
     }
     if let Some(deadline) = normalize_optional(request.deadline.as_deref()) {

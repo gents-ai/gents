@@ -372,7 +372,6 @@ pub(crate) fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestR
         caused_by_source_doc_id: create.caused_by_source_doc_id.clone(),
         created_at: Some(create.created_at.clone()),
         retry_count: Some(create.retry_count),
-        max_retries: Some(create.max_retries),
         valid_until: create.valid_until.clone(),
         request_hop: Some(i64::from(create.request_hop)),
         caused_by_parent_request_id: create.caused_by_parent_request_id.clone(),

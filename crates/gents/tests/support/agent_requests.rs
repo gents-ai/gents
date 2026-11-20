@@ -239,7 +239,6 @@ impl RequestActors {
             seed.created_at,
             AgentRequestAdmissionRecord::local_self(agent),
         );
-        create.max_retries = gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES.into();
         create.valid_until = seed.valid_until.map(str::to_owned);
         if let Some(input) = seed.input {
             create.input = serde_json::from_str(input).expect("request input JSON");

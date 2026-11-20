@@ -539,7 +539,7 @@ where
                             dispatched_input_tokens,
                         ),
                         Err(failure) => {
-                            let failure = failure.classify();
+                            let failure = retry.read_failure(failure.classify(), Utc::now());
                             let directive =
                                 retry.on_pre_stream_failure(&failure, Utc::now(), config.deadline);
                             let backend_unavailable = crate::completion_retry::failure_class(&failure)
@@ -800,7 +800,7 @@ where
                         item
                     }
                     Err(failure) => {
-                        let failure = failure.classify();
+                        let failure = retry.read_failure(failure.classify(), Utc::now());
                         drop(stream);
                         // A usage limit or a model refusal is permanent while
                         // streaming too: resampling after partial output earns
