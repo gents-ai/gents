@@ -1316,7 +1316,7 @@ mod path_capability_tests {
     fn builtin_requires_capability_in_frozen_projected_input() {
         let callback: gents_documents::Callback = serde_json::from_value(json!({
             "callback_id":"path-contract", "node_did":"did:key:writer", "handler":{"kind":"built_in","emitter":"create_workspace",
-                "workspace_agents":{"writer_agent_did":crate::triggers::callback::test_agent_did(), "integrator_agent_did":crate::triggers::callback::test_agent_did()}}
+                "workspace_agents":{"writer_agent_did":gents_store::test_support::fixture_agent_did(gents_store::test_support::FIXTURE_AGENT_NONCE), "integrator_agent_did":gents_store::test_support::fixture_agent_did(gents_store::test_support::FIXTURE_AGENT_NONCE)}}
         })).unwrap();
         let mut source = json!({"work_unit_id":"unit","repository_id":"repo","base_sha":"base","branch":"branch"});
         assert!(plan_from_callback(&callback, &source, None).is_err());

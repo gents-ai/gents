@@ -20,6 +20,9 @@ use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use gents_session::request::streaming::{auxiliary, canonical, native_encoding, DefraStreamWriter};
 use gents_store::config_client::ConfigAccess;
+use gents_store::test_support::{
+    fixture_agent, fixture_agent_access, fixture_agent_did, FIXTURE_AGENT_NONCE,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -121,7 +124,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let request_id = format!("auxiliary-{name}-{}", uuid::Uuid::new_v4());
     let session_id = format!("session-{request_id}");
     let now = chrono::Utc::now().to_rfc3339();
-    let agent_did = crate::triggers::callback::test_agent_did();
+    let agent_did = fixture_agent_did(FIXTURE_AGENT_NONCE);
     let node_did = node
         .node_identity_did()
         .expect("fixture node identity")
@@ -155,7 +158,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         })
         .await
         .unwrap();
-    let access = crate::triggers::callback::test_agent_access(node);
+    let access = fixture_agent_access(node, FIXTURE_AGENT_NONCE);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         gents_store::graphql::escape_graphql_string(&request_id),
@@ -167,7 +170,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let mut lifecycle =
         RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
     lifecycle
-        .bind_managed_agent(crate::triggers::callback::test_agent_identity().as_ref())
+        .bind_managed_agent(fixture_agent(FIXTURE_AGENT_NONCE).as_ref())
         .unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
@@ -245,7 +248,7 @@ fn native_raw(
 
 async fn output_state(node: &Arc<EmbeddedNode>, request_doc_id: &str) -> serde_json::Value {
     let request_doc_id = gents_store::graphql::escape_graphql_string(request_doc_id);
-    let response = crate::triggers::callback::test_agent_access(node)
+    let response = fixture_agent_access(node, FIXTURE_AGENT_NONCE)
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
         ))
@@ -282,11 +285,8 @@ async fn auxiliary_owned_guards_follow_the_lean_model() {
         )
         .await;
         let node = db.node.clone();
-        crate::triggers::callback::seed_test_agent(
-            &node,
-            gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
-        )
-        .await;
+        crate::triggers::callback::seed_test_agent(&node, gents_store::test_support::PIN_FIXED_DID)
+            .await;
         let mut lifecycle = claimed(&node, &input.name).await;
         let writer = DefraStreamWriter::new_for_lifecycle(
             node.clone(),
@@ -301,7 +301,7 @@ async fn auxiliary_owned_guards_follow_the_lean_model() {
         let before = native_raw(&input.name, &modeled_raw, &lifecycle, &generation);
         let claimed_append = canonical::append_provider_segment_with_signer(
             &node,
-            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE)).unwrap(),
             lifecycle.managed_agent_signer(),
             &generation,
             &before,
@@ -332,7 +332,7 @@ async fn auxiliary_owned_guards_follow_the_lean_model() {
         let raw = native_raw(&input.name, &modeled_raw, &lifecycle, &generation);
         let append = canonical::append_provider_segment_with_signer(
             &node,
-            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE)).unwrap(),
             lifecycle.managed_agent_signer(),
             &generation,
             &raw,
@@ -454,7 +454,7 @@ async fn auxiliary_owned_guards_follow_the_lean_model() {
         });
         let publication = canonical::publish_provider_turn_with_signer(
             &node,
-            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE)).unwrap(),
             lifecycle.managed_agent_signer(),
             &generation,
             canonical::ProviderPublicationPlan {
@@ -487,7 +487,7 @@ async fn auxiliary_owned_guards_follow_the_lean_model() {
         let close_kind = close_kind(&input.name, &input.outcome);
         let close = canonical::close_provider_attempt_with_signer(
             &node,
-            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE)).unwrap(),
             lifecycle.managed_agent_signer(),
             &generation,
             &raw,
@@ -505,7 +505,7 @@ async fn auxiliary_owned_guards_follow_the_lean_model() {
         };
         let stale_replay = canonical::close_provider_attempt_with_signer(
             &node,
-            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(fixture_agent_did(FIXTURE_AGENT_NONCE)).unwrap(),
             lifecycle.managed_agent_signer(),
             &stale_generation,
             &stale,
@@ -555,11 +555,8 @@ async fn auxiliary_sink_audit_follows_the_lean_model() {
         )
         .await;
         let node = db.node.clone();
-        crate::triggers::callback::seed_test_agent(
-            &node,
-            gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
-        )
-        .await;
+        crate::triggers::callback::seed_test_agent(&node, gents_store::test_support::PIN_FIXED_DID)
+            .await;
         let mut lifecycle = claimed(&node, &input.name).await;
         let writer = DefraStreamWriter::new_for_lifecycle(
             node.clone(),
@@ -624,7 +621,7 @@ async fn auxiliary_sink_audit_follows_the_lean_model() {
         .unwrap();
 
         let request_doc_id = gents_store::graphql::escape_graphql_string(&request.doc_id);
-        let response = crate::triggers::callback::test_agent_access(&node).execute(&format!(
+        let response = fixture_agent_access(&node, FIXTURE_AGENT_NONCE).execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#,
         )).await.unwrap();
         let data = &response["data"];

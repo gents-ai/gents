@@ -67,8 +67,10 @@ impl PolicyDeniedOwner {
                 tools: vec![Box::new(gents_tools::mcp::meta::CallToolTool::new(
                     gents_tools::mcp::meta::MetaToolContext {
                         configuration: gents_inference::resolved::ResolvedConfiguration::Static,
-                        actor: identity::Did::new(crate::triggers::callback::test_agent_did())
-                            .unwrap(),
+                        actor: identity::Did::new(gents_store::test_support::fixture_agent_did(
+                            gents_store::test_support::FIXTURE_AGENT_NONCE,
+                        ))
+                        .unwrap(),
                         node: node.clone(),
                         mcp_pool: gents_tools::mcp::pool::McpPool::new().for_agent(
                             node.node_identity_did()

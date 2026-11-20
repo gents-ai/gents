@@ -4,6 +4,7 @@ use gents_loop::tool::Tool;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::row::AgentRequestRow;
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::fixture_root;
 use gents_tools::builtin::defra_write::{BoundedWriteParams, BoundedWriteTool};
 
 #[tokio::test]
@@ -13,8 +14,8 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     node.add_collection("type ResumedGoalOutput { run_id: String @index summary: String }")
         .await
         .unwrap();
-    let identity = crate::triggers::callback::test_root_identity();
-    let agent = crate::triggers::callback::test_agent_identity();
+    let identity = fixture_root();
+    let agent = fixture_agent(FIXTURE_AGENT_NONCE);
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         ::identity::Did::new(agent.did()).unwrap(),

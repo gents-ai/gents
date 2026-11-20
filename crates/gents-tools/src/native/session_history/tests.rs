@@ -3,8 +3,8 @@ use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
-use gents_session::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
 use super::inference::aggregate_inference_usage;
 use super::*;

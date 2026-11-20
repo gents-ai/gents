@@ -123,7 +123,7 @@ async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &st
 /// relations are kept.
 fn modeled_agent(label: &str) -> Arc<dyn NodeIdentity> {
     let home = tempfile::tempdir().unwrap();
-    let root = crate::request::lifecycle::test_support::pin_fixed_signing_identity(home.path());
+    let root = gents_store::test_support::pin_fixed_signing_identity(home.path());
     gents_store::identity::derive_agent_identity(&root, &modeled_nonce(label))
         .expect("derive modeled agent identity")
 }
@@ -152,10 +152,10 @@ fn modeled_agent_did(label: &str) -> String {
 
 async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
     let temp = tempfile::tempdir().expect("temporary identity directory");
-    crate::request::lifecycle::test_support::pin_fixed_signing_identity(temp.path());
+    gents_store::test_support::pin_fixed_signing_identity(temp.path());
     let node_db = gents_inference::test_support::test_db_as(
         "title-generated-case-node",
-        crate::request::lifecycle::test_support::PIN_FIXED_DID,
+        gents_store::test_support::PIN_FIXED_DID,
         crate::test_support::no_lifecycle_plugins(),
     )
     .await;
