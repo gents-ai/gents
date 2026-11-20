@@ -62,8 +62,7 @@ pub async fn desktop_goal_submission_acknowledge(
         .await
         .map_err(BridgeError::classify_transport_error)
 }
-use crate::host::protocol::SessionLiveDeltaArgs;
-use crate::snapshot::build_session_live_delta;
+use crate::snapshot::{build_session_live_delta, LiveDeltaBase};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
     ChatSendRequest, ChatSendResult, DesktopSessionSnapshot, SessionLiveDeltaView,
@@ -143,24 +142,38 @@ pub async fn desktop_session_reload(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn desktop_session_live_delta(
-    request: SessionLiveDeltaArgs,
+    session_id: String,
+    node_did: Option<String>,
+    request_id: String,
+    base_live_cursor: String,
+    base_content_byte_len: usize,
+    base_content_hash: String,
+    base_reasoning_byte_len: usize,
+    base_reasoning_hash: String,
     state: State<'_, DesktopAppState>,
 ) -> Result<Option<SessionLiveDeltaView>, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
     let node_did = Some(crate::commands::session::resolve_session_node(
-        &request.session_id,
-        request.node_did.clone(),
+        &session_id,
+        node_did,
     )?);
     Ok(Some(
         build_session_live_delta(
             core.as_ref(),
-            &request.session_id,
+            &session_id,
             node_did.as_deref(),
-            &request.request_id,
-            request.base(),
+            &request_id,
+            LiveDeltaBase {
+                cursor: &base_live_cursor,
+                content_byte_len: base_content_byte_len,
+                content_hash: &base_content_hash,
+                reasoning_byte_len: base_reasoning_byte_len,
+                reasoning_hash: &base_reasoning_hash,
+            },
         )
         .await
         .map_err(BridgeError::classify_transport_error)?,

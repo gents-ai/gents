@@ -278,7 +278,7 @@ pub enum ClientCommand {
         request: crate::types::SessionContextDetailsRequest,
     },
     #[serde(rename = "desktop_session_live_delta")]
-    SessionLiveDelta { request: SessionLiveDeltaArgs },
+    SessionLiveDelta(SessionLiveDeltaArgs),
     #[serde(rename = "desktop_session_rows")]
     SessionRows(SessionRowsArgs),
     #[serde(rename = "desktop_session_goal")]
@@ -428,7 +428,7 @@ impl ClientCommand {
                 | Self::InventoryFileChange { .. }
                 | Self::SessionSnapshot(_)
                 | Self::SessionContextDetails { .. }
-                | Self::SessionLiveDelta { .. }
+                | Self::SessionLiveDelta(_)
                 | Self::SessionGoal(_)
                 | Self::SessionProvenance { .. }
                 | Self::SessionHistory { .. }
@@ -470,8 +470,7 @@ pub struct SessionGoalArgs {
 #[serde(deny_unknown_fields)]
 pub struct SessionLiveDeltaArgs {
     pub session_id: String,
-    #[ts(optional = nullable)]
-    pub node_did: Option<String>,
+    pub node_did: String,
     pub request_id: String,
     pub base_live_cursor: String,
     pub base_content_byte_len: usize,
