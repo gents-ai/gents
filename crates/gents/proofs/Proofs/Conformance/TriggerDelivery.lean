@@ -746,6 +746,7 @@ structure FireBudgetOutput where
 structure FireBudgetConfigInput where
   configured : Option Nat
   receipted : Bool
+  command : Bool := false
   deriving Lean.ToJson
 
 structure NoInput where
@@ -787,8 +788,11 @@ def fireBudgetConfig : Family FireBudgetConfigInput Bool where
   inputs := [
     { configured := none, receipted := false }, { configured := none, receipted := true },
     { configured := some 1, receipted := true }, { configured := some 1, receipted := false },
-    { configured := some 5000, receipted := true }, { configured := some 0, receipted := true }]
-  model := fun i => Triggers.FireBudget.configValid i.configured i.receipted
+    { configured := some 5000, receipted := true }, { configured := some 0, receipted := true },
+    { configured := none, receipted := false, command := true },
+    { configured := some 1, receipted := false, command := true },
+    { configured := some 0, receipted := false, command := true }]
+  model := fun i => Triggers.FireBudget.configValid i.configured i.receipted i.command
 
 @[conformance_family]
 def fireBudgetDefault : Family NoInput Nat where

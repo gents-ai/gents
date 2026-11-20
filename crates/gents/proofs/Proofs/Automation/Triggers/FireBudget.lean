@@ -27,11 +27,20 @@ def defaultMaxPerHour : Nat := 1000
 
 def effective (configured : Option Nat) : Nat := configured.getD defaultMaxPerHour
 
-/-- The budget counts receipts, so it is valid only where a fire writes one: an
-event source or a targeted schedule. An untargeted schedule is bound by its
-cadence and cannot amplify itself. -/
-def configValid (configured : Option Nat) (receipted : Bool) : Bool :=
-  configured.all (0 < ·) && (configured.isNone || receipted)
+/-- The budget counts admissions, so it is valid only where a fire is counted:
+an event source or a targeted schedule writes a receipt, and a command Task's
+fire is counted by the engine that runs it. An untargeted schedule of an Agent's
+Task is bound by its cadence and cannot amplify itself. A command Task's schedule
+takes the same budget as an Agent's: its command runs as trusted Node code, so a
+misfiring schedule there is more dangerous, not less (decided on
+gents-ai/gents#3955). -/
+def configValid (configured : Option Nat) (receipted command : Bool) : Bool :=
+  configured.all (0 < ·) && (configured.isNone || receipted || command)
+
+/-- A command Task's schedule may set its budget whether or not it is targeted. -/
+theorem command_schedule_takes_a_budget (budget : Nat) (positive : 0 < budget)
+    (receipted : Bool) : configValid (some budget) receipted true = true := by
+  simp [configValid, positive]
 
 def exhaustedStatus : String := "budget_exhausted"
 

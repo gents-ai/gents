@@ -458,12 +458,12 @@ impl ConfigReferences {
             }
             Collection::Trigger => {
                 let doc: Trigger = decode(value)?;
-                doc.validate_options()?;
                 let task: Task = decode(
                     self.documents
                         .get(&(Collection::Task, doc.task_id.clone()))
                         .context("trigger task missing")?,
                 )?;
+                doc.validate_options(task.command.is_some())?;
                 if task.command.is_some() {
                     let kind = match &doc.source {
                         TriggerSource::Schedule { .. } => {

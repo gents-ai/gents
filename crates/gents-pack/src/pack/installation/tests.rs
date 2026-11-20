@@ -2140,6 +2140,30 @@ async fn a_prepared_install_ships_a_command_task_only_under_the_grant() {
     install(false)
         .await
         .expect("reinstalling the same command needs no new grant");
+    prepared.config.tasks[0].command = serde_json::from_value(json!({"argv": ["false"]})).unwrap();
+    let refusal = format!(
+        "{:#}",
+        install_prepared_document_pack(
+            &target,
+            &archive,
+            &[],
+            &prepared,
+            false,
+            InstalledVia::SelfConfig,
+            crate::pack::DocumentGraphPolicy {
+                drift: DriftPolicy::Refuse,
+                profiles: &gents_inference::resolved::ProviderProfilePolicy,
+            },
+        )
+        .await
+        .unwrap_err()
+    );
+    assert!(refusal.contains("ships command Tasks (tick)"), "{refusal}");
+    assert_eq!(
+        tasks().await,
+        json!([{"task_id": "tick", "command": {"argv": ["true"]}}]),
+        "an upgrade changing the command needs the grant and writes nothing without it"
+    );
 }
 
 #[tokio::test]

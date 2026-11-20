@@ -279,6 +279,9 @@ fn publication_refuses_a_command_trigger_whose_every_fire_is_refused() {
         .validate()
     };
     validate(base.clone()).unwrap();
+    let mut budgeted = base.clone();
+    budgeted["triggers"][0]["max_fires_per_hour"] = json!(30);
+    validate(budgeted).unwrap();
     let mut targeted = base.clone();
     targeted["triggers"][0]["session_id_template"] = json!("tick");
     let error = format!("{:#}", validate(targeted.clone()).unwrap_err());

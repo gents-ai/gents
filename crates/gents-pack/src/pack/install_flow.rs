@@ -548,6 +548,15 @@ pub async fn install_documents_pack_resolved_inner(
             }
             preview["host_tool_roots"] = review;
         }
+        let command_tasks =
+            crate::pack::command_authority::command_tasks_needing_grant(access, owner, &prepared)
+                .await?;
+        if !command_tasks.is_empty() {
+            preview["command_tasks"] = json!({
+                "tasks": command_tasks,
+                "granted_with": "--grant-authority",
+            });
+        }
         return Ok(preview);
     }
     // A dependency installed on its own behalf (`explicit` false) writes no

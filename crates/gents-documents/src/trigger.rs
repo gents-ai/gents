@@ -77,8 +77,9 @@ impl Trigger {
             .unwrap_or(DEFAULT_MAX_FIRES_PER_HOUR)
     }
 
-    /// Lean: `Triggers.SessionKey.configValid` and `Triggers.FireBudget.configValid`.
-    pub fn validate_options(&self) -> anyhow::Result<()> {
+    /// Lean: `Triggers.SessionKey.configValid` and `Triggers.FireBudget.configValid`;
+    /// `command_task` is whether the Trigger's Task runs a host command.
+    pub fn validate_options(&self, command_task: bool) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.create_session != Some(true) || self.session_id_template.is_some(),
             "create_session requires session_id_template: render the session key to get or create"
@@ -90,8 +91,9 @@ impl Trigger {
         anyhow::ensure!(
             self.max_fires_per_hour.is_none()
                 || matches!(self.source, TriggerSource::Event { .. })
-                || self.session_id_template.is_some(),
-            "max_fires_per_hour needs an event source or a scheduled session_id_template; an untargeted schedule is limited by its cadence"
+                || self.session_id_template.is_some()
+                || command_task,
+            "max_fires_per_hour needs an event source, a scheduled session_id_template or a command Task; an untargeted schedule of an Agent's Task is limited by its cadence"
         );
         Ok(())
     }

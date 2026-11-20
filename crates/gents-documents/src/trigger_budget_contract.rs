@@ -18,7 +18,7 @@ fn trigger_with_budget(budget: Option<u32>, receipted: bool) -> Trigger {
 fn fire_budget_config_matches_the_lean_model() {
     gents_lean_vocab::families::trigger_delivery_fire_budget_config::replay(|input| {
         trigger_with_budget(input.configured.map(|value| value as u32), input.receipted)
-            .validate_options()
+            .validate_options(input.command)
             .is_ok()
     });
 }

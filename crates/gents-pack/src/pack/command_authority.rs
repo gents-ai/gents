@@ -25,6 +25,23 @@ pub async fn require_command_task_grant(
     if grant_authority {
         return Ok(());
     }
+    let unapproved = command_tasks_needing_grant(access, owner, prepared).await?;
+    anyhow::ensure!(
+        unapproved.is_empty(),
+        "{coordinate} ships command Tasks ({}) that run host commands on this node each time their Triggers fire, with no agent in between. Nothing was installed. Install it with --grant-authority to allow that",
+        unapproved.join(", ")
+    );
+    Ok(())
+}
+
+/// The `task_id`s of the command Tasks `prepared` and its dependencies bring
+/// that the node does not already run with the same command: what an install
+/// without the grant refuses and what a preview lists.
+pub async fn command_tasks_needing_grant(
+    access: &ConfigAccess,
+    owner: &str,
+    prepared: &PreparedDocumentPackInstall,
+) -> Result<Vec<String>> {
     let configs = std::iter::once(&prepared.config)
         .chain(
             prepared
@@ -33,13 +50,7 @@ pub async fn require_command_task_grant(
                 .map(|dependency| &dependency.config),
         )
         .collect::<Vec<_>>();
-    let unapproved = unapproved_command_tasks(access, owner, &configs).await?;
-    anyhow::ensure!(
-        unapproved.is_empty(),
-        "{coordinate} ships command Tasks ({}) that run host commands on this node each time their Triggers fire, with no agent in between. Nothing was installed. Install it with --grant-authority to allow that",
-        unapproved.join(", ")
-    );
-    Ok(())
+    unapproved_command_tasks(access, owner, &configs).await
 }
 
 /// The command Tasks among `configs` whose command the node does not already

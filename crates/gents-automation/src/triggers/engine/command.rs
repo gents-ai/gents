@@ -229,13 +229,16 @@ impl TriggerEngine {
         let superseded = {
             let mut runs = self.command_runs.lock().await;
             let now = Utc::now();
+            runs.admitted.retain(|_, window| {
+                while window
+                    .front()
+                    .is_some_and(|fire| fire.at <= now - chrono::Duration::hours(1))
+                {
+                    window.pop_front();
+                }
+                !window.is_empty()
+            });
             let window = runs.admitted.entry(key.clone()).or_default();
-            while window
-                .front()
-                .is_some_and(|fire| fire.at <= now - chrono::Duration::hours(1))
-            {
-                window.pop_front();
-            }
             if let Some(prior) = window
                 .iter()
                 .find(|fire| fire.fire_key == intent.durable_fire_key)

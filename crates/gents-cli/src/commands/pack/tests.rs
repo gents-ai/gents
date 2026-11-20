@@ -1638,7 +1638,20 @@ async fn a_pack_shipping_a_command_task_installs_only_with_grant_authority() {
         access.local_node().unwrap().shutdown().await.unwrap();
         tasks
     };
+    let preview = || async {
+        let mut args = document_install_args(home.path(), dir.path(), Vec::new());
+        args.preview = true;
+        crate::request_helpers::capture_report(install(args))
+            .await
+            .expect("a preview needs no grant")
+    };
 
+    let previewed = preview().await;
+    assert_eq!(
+        previewed["command_tasks"],
+        json!({"tasks": ["tick"], "granted_with": "--grant-authority"}),
+        "the preview names what the install will need the grant for: {previewed}"
+    );
     let refusal = install_from(home.path(), dir.path(), Vec::new())
         .await
         .unwrap_err();
@@ -1662,6 +1675,8 @@ async fn a_pack_shipping_a_command_task_installs_only_with_grant_authority() {
         tasks().await,
         json!([{ "task_id": "tick", "command": { "argv": ["true"] } }])
     );
+    let previewed = preview().await;
+    assert_eq!(previewed.get("command_tasks"), None, "{previewed}");
     install_from(home.path(), dir.path(), Vec::new())
         .await
         .expect("reinstalling the same command needs no new grant");
