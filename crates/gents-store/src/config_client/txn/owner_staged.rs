@@ -148,6 +148,17 @@ impl StagedRelation {
                     callback_doc_id: callback_doc_id.clone(),
                 }),
             },
+            OwnerStagedChange::ConfigurationReader {
+                configuration,
+                doc_id,
+                agent_did,
+            } => Self {
+                collection: configuration.collection(),
+                doc_id: doc_id.clone(),
+                relation: "reader",
+                target: actor(agent_did)?,
+                authority: Authority::Configuration(TargetKind::ControlledAgent),
+            },
             OwnerStagedChange::PairingReader {
                 observation,
                 doc_id,

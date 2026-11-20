@@ -272,6 +272,26 @@ fn node_publication_matches_the_lean_model() {
     );
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Route {
+    Direct,
+    OwnerStaged,
+}
+
+#[test]
+fn configuration_grant_route_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_owner_staged_configuration_grant_route::replay::<
+        Provider,
+        Route,
+    >(|input| {
+        match super::configuration_grant_route(document_acp(input.provider), input.actor_owns) {
+            super::ConfigurationGrantRoute::Direct => Route::Direct,
+            super::ConfigurationGrantRoute::OwnerStaged => Route::OwnerStaged,
+        }
+    });
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Periodic {
