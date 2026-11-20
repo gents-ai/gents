@@ -674,6 +674,8 @@ mod owed;
 mod owner_staged;
 mod parallel_owed;
 mod publication;
+mod quickstart;
+mod rebinding;
 mod restart;
 mod stored_create;
 mod stored_edit;
