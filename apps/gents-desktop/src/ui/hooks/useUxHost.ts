@@ -11,9 +11,12 @@ import { fleetNodes } from "@/lib/scope";
 import { navigate, useRoute, type Route } from "@/lib/router";
 import {
   confirmPluginMessage,
+  inNativeShell,
+  onWindowFocused,
   pickDirectory,
   revealInFolder,
 } from "../../lib/nativeShell";
+import { supportsLocalManagedServer } from "../../lib/shellPlatform";
 import { discoverBundledUxPlugins } from "@/contrib/bundled";
 import { emitClientUpdated } from "@/contrib/events";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
@@ -200,12 +203,13 @@ export function useUxHost(
     installUxHost(buildUxHost(app, () => routeRef.current));
     openUxDoors(app);
   }, [app]);
-  /* a pack reinstalled from the CLI changes nothing this window hears of;
-     coming back to the window is when its user expects the new pages */
+  /* A pack reinstalled from the CLI changes nothing this window hears of;
+     coming back to the window is when its user expects the new pages. Only a
+     shell with a local home has packs to reinstall, so mobile adds no bridge
+     call per foreground. */
   useEffect(() => {
-    const onFocus = () => rescanRuntimeUxPluginsSoon();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    if (!inNativeShell() || !supportsLocalManagedServer()) return;
+    return onWindowFocused(rescanRuntimeUxPluginsSoon);
   }, []);
   useEffect(() => {
     let unlisten: (() => void) | null = null;

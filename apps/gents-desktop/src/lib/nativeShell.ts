@@ -79,6 +79,22 @@ export function onMaximizedChange(handler: (maximized: boolean) => void): () => 
   };
 }
 
+/** The native window gaining focus. Focus moving between the shell and a
+    plugin's frame inside it is not this, unlike the DOM's window focus. */
+export function onWindowFocused(handler: () => void): () => void {
+  let unlisten: (() => void) | undefined;
+  let stopped = false;
+  void getCurrentWindow()
+    .onFocusChanged(({ payload: focused }) => {
+      if (focused) handler();
+    })
+    .then((stop) => (stopped ? stop() : (unlisten = stop)));
+  return () => {
+    stopped = true;
+    unlisten?.();
+  };
+}
+
 export async function showAndFocusWindow() {
   const appWindow = getCurrentWindow();
   await appWindow.show();

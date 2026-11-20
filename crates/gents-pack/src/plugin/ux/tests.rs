@@ -104,30 +104,7 @@ fn lists_pack_plugins_with_their_declaration_and_namespaced_id() {
 }
 
 #[test]
-fn a_pack_plugin_listing_digest_changes_with_its_code_or_css() {
-    let home = tempfile::tempdir().unwrap();
-    let mut plugin = ux("board", Some("ux/board/plugin.js"), None);
-    plugin.css = Some("ux/board/plugin.css".into());
-    let dir = install_record(home.path(), "acme/board", vec![plugin], vec![]);
-    std::fs::create_dir_all(dir.join("ux/board")).unwrap();
-    let write = |js: &str, css: &str| {
-        std::fs::write(dir.join("ux/board/plugin.js"), js).unwrap();
-        std::fs::write(dir.join("ux/board/plugin.css"), css).unwrap();
-        find(home.path(), "acme/board/board").unwrap().digest
-    };
-    let first = write("export default 1", ".b{}");
-    assert!(first.as_deref().unwrap().starts_with("sha256:"));
-    assert_eq!(
-        write("export default 1", ".b{}"),
-        first,
-        "same bytes, same digest"
-    );
-    assert_ne!(write("export default 2", ".b{}"), first, "new code reloads");
-    assert_ne!(write("export default 1", ".c{}"), first, "new css reloads");
-}
-
-#[test]
-fn an_unreadable_pack_entry_lists_without_a_digest() {
+fn a_pack_plugin_listing_carries_the_digest_of_the_archive_it_was_installed_from() {
     let home = tempfile::tempdir().unwrap();
     install_record(
         home.path(),
@@ -135,7 +112,36 @@ fn an_unreadable_pack_entry_lists_without_a_digest() {
         vec![ux("board", Some("ux/board/plugin.js"), None)],
         vec![],
     );
-    assert_eq!(find(home.path(), "acme/board/board").unwrap().digest, None);
+    install_record(
+        home.path(),
+        "acme/clock",
+        vec![ux("clock", None, Some("clock_producer"))],
+        vec![InstalledPackPlugin {
+            name: "clock_producer".into(),
+            digest: format!("sha256:{}", "c".repeat(64)),
+        }],
+    );
+    let digest = |id: &str| find(home.path(), id).unwrap().digest;
+    let installed = Some(format!("sha256:{}", "b".repeat(64)));
+    assert_eq!(digest("acme/board/board"), installed, "file-produced");
+    assert_eq!(digest("acme/clock/clock"), installed, "afb-produced");
+
+    let mut reinstall = crate::pack::read_home_install(home.path(), "acme/board")
+        .unwrap()
+        .unwrap();
+    reinstall.digest = format!("sha256:{}", "d".repeat(64));
+    reinstall.assets = "packs/.materialized/acme/board/dddd".into();
+    write_home_install(home.path(), &reinstall).unwrap();
+    assert_eq!(
+        digest("acme/board/board"),
+        Some(reinstall.digest),
+        "a reinstall from a new archive lists its digest"
+    );
+    assert_eq!(
+        digest("acme/clock/clock"),
+        installed,
+        "other packs keep theirs"
+    );
 }
 
 #[test]
@@ -146,7 +152,7 @@ fn a_pack_plugin_lists_its_declared_data_surfaces_and_a_dev_plugin_none() {
         surface: "board".into(),
         tools: vec!["list_tasks".into(), "add_task".into()],
     }];
-    install_record(home.path(), "acme/board", vec![plugin.clone()], vec![]);
+    install_record(home.path(), "acme/board", vec![plugin], vec![]);
     dev_plugin(home.path(), "loose", "export default {}", None);
 
     let listed = list(home.path()).unwrap();

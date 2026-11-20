@@ -96,9 +96,9 @@ pub struct UxListing {
     /// (`crate::observe::ux_data`); empty for a dev plugin, which declares nothing.
     #[serde(default)]
     pub data: Vec<UxDataSurface>,
-    /// `sha256:<hex>` of a page document's content or a pack plugin's code,
-    /// so a reader learns of an edit or a reinstall from the listing alone;
-    /// absent for dev plugins.
+    /// `sha256:<hex>` of a page document's content, or of the archive a pack
+    /// plugin was installed from, so a reader learns of an edit or a
+    /// reinstall from the listing alone; absent for dev plugins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
 }
@@ -190,14 +190,8 @@ pub fn list(home: &Path) -> Result<Vec<UxListing>> {
 
 fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Result<UxListing> {
     let id = format!("{}/{}", record.coordinate, ux.name);
-    let (producer, file, digest) = match (&ux.entry, &ux.plugin) {
-        (Some(entry), _) => {
-            let assets = home.join(&record.assets);
-            let file = assets.join(entry);
-            let css = ux.css.as_ref().map(|css| assets.join(css));
-            let digest = file_digest(&file, css.as_deref());
-            (UxProducer::File, file, digest)
-        }
+    let (producer, file) = match (&ux.entry, &ux.plugin) {
+        (Some(entry), _) => (UxProducer::File, home.join(&record.assets).join(entry)),
         (None, Some(plugin)) => {
             let installed = record
                 .plugins
@@ -216,7 +210,6 @@ fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Res
             (
                 UxProducer::Afb,
                 crate::plugin::store::artifact_path(home, digest_hex)?,
-                Some(installed.digest.clone()),
             )
         }
         (None, None) => anyhow::bail!("ux plugin {id} names neither entry nor plugin"),
@@ -231,20 +224,8 @@ fn pack_listing(home: &Path, record: &HomePackInstall, ux: &PackUxPlugin) -> Res
         contributes: Some(ux.contributes.clone()),
         default_enabled: ux.default_enabled,
         data: ux.data.clone(),
-        digest,
+        digest: Some(record.digest.clone()),
     })
-}
-
-/// `sha256:<hex>` over a file-produced pack plugin's entry and css bytes;
-/// `None` when either is unreadable, so the plugin loads and reports the
-/// read error itself.
-fn file_digest(entry: &Path, css: Option<&Path>) -> Option<String> {
-    let mut hasher = Sha256::new();
-    hasher.update(std::fs::read(entry).ok()?);
-    if let Some(css) = css {
-        hasher.update(std::fs::read(css).ok()?);
-    }
-    Some(format!("sha256:{:x}", hasher.finalize()))
 }
 
 /// The listing for `id`, or an error naming what is missing.

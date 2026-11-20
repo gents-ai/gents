@@ -159,7 +159,7 @@ it("reloads a pack plugin on a plain scan only when its listing digest changes (
   expect(chips()).toEqual(["first:chip"]);
 });
 
-it("never rereads a pack plugin listed without a digest on a plain scan", async () => {
+it("never rereads a pack plugin listed without a digest, and follows one once listed", async () => {
   const p = packed("first", true);
   listings = [p];
   sources.set(p.id, chipPlugin("first"));
@@ -167,6 +167,16 @@ it("never rereads a pack plugin listed without a digest on a plain scan", async 
   call.mockClear();
   await scanRuntimeUxPlugins();
   expect(reads()).toEqual([]);
+
+  listings = [{ ...p, digest: "sha256:a" }];
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: p.id }]]);
+  call.mockClear();
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([]);
+  listings = [{ ...p, digest: "sha256:b" }];
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: p.id }]]);
 });
 
 it("reports an explicit pack refresh failure without retiring the current pages", async () => {
