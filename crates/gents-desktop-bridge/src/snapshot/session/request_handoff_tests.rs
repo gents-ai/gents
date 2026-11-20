@@ -87,19 +87,21 @@ fn project(
     live: bool,
 ) -> DesktopSessionSnapshot {
     build_session_snapshot_from_store_for_node_with_transcript(
-        &store(),
-        page,
-        context,
-        None,
-        Some(facts),
-        true,
-        false,
-        false,
-        live,
+        SessionProjection {
+            store: &store(),
+            transcript_store: page,
+            context_store: context,
+            canonical_dependencies: None,
+            prompt_ownership: Some(facts),
+            request_projection: Some(requests),
+            transcript_is_bounded: true,
+            context_totals_exact: false,
+            pending_owner_known: false,
+            include_live_tail: live,
+        },
         Some("did:test:amy"),
         "session-1",
         Some("head"),
-        Some(requests),
     )
     .unwrap()
 }

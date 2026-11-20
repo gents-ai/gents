@@ -102,14 +102,16 @@ export function createDesktopApiAdapter(
       }),
     fetchSessionLiveDelta: (request) =>
       invokeDesktop("desktop_session_live_delta", {
-        sessionId: request.sessionId,
-        nodeDid: request.nodeDid ?? null,
-        requestId: request.requestId,
-        baseLiveCursor: request.baseLiveCursor,
-        baseContentByteLen: request.baseContentByteLen,
-        baseContentHash: request.baseContentHash,
-        baseReasoningByteLen: request.baseReasoningByteLen,
-        baseReasoningHash: request.baseReasoningHash,
+        request: {
+          sessionId: request.sessionId,
+          nodeDid: request.nodeDid ?? null,
+          requestId: request.requestId,
+          baseLiveCursor: request.baseLiveCursor,
+          baseContentByteLen: request.baseContentByteLen,
+          baseContentHash: request.baseContentHash,
+          baseReasoningByteLen: request.baseReasoningByteLen,
+          baseReasoningHash: request.baseReasoningHash,
+        },
       }),
     sendChatMessage: (request) =>
       invokeDesktop("desktop_chat_send", { request }),

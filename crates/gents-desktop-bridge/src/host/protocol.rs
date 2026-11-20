@@ -278,7 +278,7 @@ pub enum ClientCommand {
         request: crate::types::SessionContextDetailsRequest,
     },
     #[serde(rename = "desktop_session_live_delta")]
-    SessionLiveDelta(SessionLiveDeltaArgs),
+    SessionLiveDelta { request: SessionLiveDeltaArgs },
     #[serde(rename = "desktop_session_rows")]
     SessionRows(SessionRowsArgs),
     #[serde(rename = "desktop_session_goal")]
@@ -428,7 +428,7 @@ impl ClientCommand {
                 | Self::InventoryFileChange { .. }
                 | Self::SessionSnapshot(_)
                 | Self::SessionContextDetails { .. }
-                | Self::SessionLiveDelta(_)
+                | Self::SessionLiveDelta { .. }
                 | Self::SessionGoal(_)
                 | Self::SessionProvenance { .. }
                 | Self::SessionHistory { .. }
@@ -470,13 +470,26 @@ pub struct SessionGoalArgs {
 #[serde(deny_unknown_fields)]
 pub struct SessionLiveDeltaArgs {
     pub session_id: String,
-    pub node_did: String,
+    #[ts(optional = nullable)]
+    pub node_did: Option<String>,
     pub request_id: String,
     pub base_live_cursor: String,
     pub base_content_byte_len: usize,
     pub base_content_hash: String,
     pub base_reasoning_byte_len: usize,
     pub base_reasoning_hash: String,
+}
+
+impl SessionLiveDeltaArgs {
+    pub fn base(&self) -> crate::snapshot::LiveDeltaBase<'_> {
+        crate::snapshot::LiveDeltaBase {
+            cursor: &self.base_live_cursor,
+            content_byte_len: self.base_content_byte_len,
+            content_hash: &self.base_content_hash,
+            reasoning_byte_len: self.base_reasoning_byte_len,
+            reasoning_hash: &self.base_reasoning_hash,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, TS)]

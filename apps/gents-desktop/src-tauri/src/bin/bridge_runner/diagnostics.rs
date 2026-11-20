@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::live_fixture::LiveBridgeFixture;
 use gents_desktop_bridge::snapshot::{
     apply_session_timeline_page_with_query, build_runtime_snapshot,
-    build_session_snapshot_for_node_with_transcript,
+    build_session_snapshot_for_node_with_transcript, SessionReadInputs,
 };
 use gents_desktop_bridge::types::{
     turn_state_label, DesktopClientSnapshot, DesktopSessionSnapshot, RenderedTimelineItem,
@@ -182,13 +182,15 @@ pub(crate) async fn build_desktop_session_snapshot(
         node_did,
         session_id,
         request_id,
-        Some(&page.store),
-        Some(&page.canonical_dependencies),
-        context_store.as_ref(),
-        None,
-        context_store.is_some(),
-        true,
-        None,
+        SessionReadInputs {
+            transcript_store: Some(&page.store),
+            canonical_dependencies: Some(&page.canonical_dependencies),
+            context_store: context_store.as_ref(),
+            prompt_ownership: None,
+            context_totals_exact: context_store.is_some(),
+            include_live_tail: true,
+            request_projection: None,
+        },
     )
     .await
     .ok()??;
@@ -364,13 +366,15 @@ async fn build_request_diagnostics(
         resolved_node_did.as_deref(),
         session_id,
         Some(request_id),
-        transcript_store,
-        None,
-        None,
-        None,
-        false,
-        true,
-        None,
+        SessionReadInputs {
+            transcript_store,
+            canonical_dependencies: None,
+            context_store: None,
+            prompt_ownership: None,
+            context_totals_exact: false,
+            include_live_tail: true,
+            request_projection: None,
+        },
     )
     .await
     .ok()

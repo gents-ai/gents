@@ -1,8 +1,8 @@
 use super::*;
 use anyhow::Context;
 use gents_protocol::{
-    goal_control::GoalOperation, operations::request::MessageSendInput,
-    runtime_connection::RuntimeConnection,
+    authored_submission::AuthoredGoal, goal_control::GoalOperation,
+    operations::request::MessageSendInput, runtime_connection::RuntimeConnection,
 };
 use gents_store::client_journal::outbox;
 use gents_store::client_journal::paths::DesktopPaths;
@@ -73,14 +73,16 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
     };
     let retained = core
         .control_session_goal_correlated(
-            "offline-goal-command",
-            runtime.node_did(),
-            "offline-goal-session",
-            None,
-            None,
-            goal,
-            Some(&agent.agent_did),
-            Default::default(),
+            AuthoredGoal {
+                node_did: runtime.node_did().into(),
+                command_id: "offline-goal-command".into(),
+                session_id: "offline-goal-session".into(),
+                session_doc_id: None,
+                expected: None,
+                operation: goal,
+                agent_did: Some(agent.agent_did.clone()),
+                input: Default::default(),
+            },
             None,
         )
         .await

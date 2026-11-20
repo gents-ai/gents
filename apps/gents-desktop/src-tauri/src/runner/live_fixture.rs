@@ -548,7 +548,9 @@ mod tests {
     use gents_desktop_bridge::commands::{
         delete_skill_config, save_skill_config, send_chat_message,
     };
-    use gents_desktop_bridge::snapshot::build_session_snapshot_for_node_with_transcript;
+    use gents_desktop_bridge::snapshot::{
+        build_session_snapshot_for_node_with_transcript, SessionReadInputs,
+    };
     use gents_desktop_bridge::types::{ChatSendRequest, SkillDeleteRequest, SkillSaveRequest};
 
     const MODEL_NAME: &str = "desktop-live-skill-mock";
@@ -751,13 +753,15 @@ mod tests {
             Some(&node_did),
             &submitted.session_id,
             Some(&submitted.request_id),
-            Some(&transcript_page.store),
-            Some(&transcript_page.canonical_dependencies),
-            Some(&context_store),
-            None,
-            true,
-            true,
-            None,
+            SessionReadInputs {
+                transcript_store: Some(&transcript_page.store),
+                canonical_dependencies: Some(&transcript_page.canonical_dependencies),
+                context_store: Some(&context_store),
+                prompt_ownership: None,
+                context_totals_exact: true,
+                include_live_tail: true,
+                request_projection: None,
+            },
         )
         .await?
         .context("desktop session snapshot missing after skill chat submit")?;

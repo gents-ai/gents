@@ -280,18 +280,20 @@ pub(crate) async fn assert_copied_opening(
         });
         let mut snapshot =
             super::super::projection::build_session_snapshot_from_store_for_node_with_transcript(
-                &store,
-                &store,
-                &store,
-                Some(&dependencies),
-                None,
-                true,
-                true,
-                true,
-                false,
+                super::super::projection::SessionProjection {
+                    store: &store,
+                    transcript_store: &store,
+                    context_store: &store,
+                    canonical_dependencies: Some(&dependencies),
+                    prompt_ownership: None,
+                    request_projection: None,
+                    transcript_is_bounded: true,
+                    context_totals_exact: true,
+                    pending_owner_known: true,
+                    include_live_tail: false,
+                },
                 Some(&child.node_did),
                 "child",
-                None,
                 None,
             )
             .unwrap();
